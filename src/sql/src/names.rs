@@ -26,8 +26,8 @@ use crate::ast::fold::{Fold, FoldNode};
 use crate::ast::visit::{Visit, VisitNode};
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    self, AstInfo, Cte, Ident, Query, Raw, RawClusterName, RawDataType, RawObjectName, Statement,
-    UnresolvedObjectName,
+    self, AstInfo, Cte, CteBlock, CteMutRec, Ident, Query, Raw, RawClusterName, RawDataType,
+    RawObjectName, Statement, UnresolvedObjectName,
 };
 use crate::catalog::{CatalogItemType, CatalogTypeDetails, SessionCatalog};
 use crate::normalize;
@@ -806,30 +806,72 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     fn fold_query(&mut self, q: Query<Raw>) -> Query<Aug> {
         // Retain the old values of various CTE names so that we can restore them after we're done
         // planning this SELECT.
-        let mut old_cte_values = Vec::new();
-        // A single WITH block cannot use the same name multiple times.
-        let mut used_names = HashSet::new();
-        let mut ctes = Vec::new();
-        for cte in q.ctes {
-            let cte_name = normalize::ident(cte.alias.name.clone());
+        let mut shadowed_cte_ids = Vec::new();
 
-            if used_names.contains(&cte_name) {
-                self.status = Err(sql_err!(
-                    "WITH query name \"{}\" specified more than once",
-                    cte_name
-                ));
-            }
-            used_names.insert(cte_name.clone());
-
-            let id = LocalId::new(self.ctes.len() as u64);
-            ctes.push(Cte {
-                alias: cte.alias,
-                id,
-                query: self.fold_query(cte.query),
-            });
-            let old_val = self.ctes.insert(cte_name.clone(), id);
-            old_cte_values.push((cte_name, old_val));
+        // A reused identifier indicates a reused name.
+        use itertools::Itertools;
+        if let Some(ident) = q.ctes.bound_identifiers().duplicates().next() {
+            self.status = Err(sql_err!(
+                "WITH query name \"{}\" specified more than once",
+                normalize::ident_ref(ident),
+            ));
         }
+
+        let ctes: CteBlock<Aug> = match q.ctes {
+            CteBlock::Simple(ctes) => {
+                let mut result_ctes = Vec::<Cte<Aug>>::new();
+
+                let initial_id = self.ctes.len();
+
+                for (offset, cte) in ctes.into_iter().enumerate() {
+                    let cte_name = normalize::ident(cte.alias.name.clone());
+                    use mz_ore::cast::CastFrom;
+                    let local_id = LocalId::new((u64::cast_from(initial_id + offset)) as u64);
+
+                    result_ctes.push(Cte {
+                        alias: cte.alias,
+                        id: local_id,
+                        query: self.fold_query(cte.query),
+                    });
+
+                    let shadowed_id = self.ctes.insert(cte_name.clone(), local_id);
+                    shadowed_cte_ids.push((cte_name, shadowed_id));
+                }
+                CteBlock::Simple(result_ctes)
+            }
+            CteBlock::MutuallyRecursive(ctes) => {
+                let mut result_ctes = Vec::<CteMutRec<Aug>>::new();
+
+                let initial_id = self.ctes.len();
+
+                // The identifiers for each CTE will be `initial_id` plus their offset in `q.ctes`.
+                for (offset, cte) in ctes.iter().enumerate() {
+                    let cte_name = normalize::ident(cte.name.clone());
+                    let local_id = LocalId::new((initial_id + offset) as u64);
+                    let shadowed_id = self.ctes.insert(cte_name.clone(), local_id);
+                    shadowed_cte_ids.push((cte_name, shadowed_id));
+                }
+
+                for (offset, cte) in ctes.into_iter().enumerate() {
+                    let local_id = LocalId::new((initial_id + offset) as u64);
+
+                    let columns = cte
+                        .columns
+                        .into_iter()
+                        .map(|column| self.fold_column_def(column))
+                        .collect();
+                    let query = self.fold_query(cte.query);
+                    result_ctes.push(CteMutRec {
+                        name: cte.name,
+                        columns,
+                        id: local_id,
+                        query,
+                    });
+                }
+                CteBlock::MutuallyRecursive(result_ctes)
+            }
+        };
+
         let result = Query {
             ctes,
             body: self.fold_set_expr(q.body),
@@ -843,7 +885,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         };
 
         // Restore the old values of the CTEs.
-        for (name, value) in old_cte_values.iter() {
+        for (name, value) in shadowed_cte_ids.iter() {
             match value {
                 Some(value) => {
                     self.ctes.insert(name.to_string(), value.clone());

@@ -113,6 +113,8 @@ pub enum PlanError {
     UnexpectedDuplicateReference {
         name: UnresolvedObjectName,
     },
+    /// Declaration of a recursive type did not match the inferred type.
+    RecursiveTypeMismatch(String, mz_repr::RelationType, mz_repr::RelationType),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -301,6 +303,9 @@ impl fmt::Display for PlanError {
             Self::DropSubsource{subsource, source: _} => write!(f, "SOURCE {subsource} is a subsource and cannot be dropped independently of its primary source"),
             Self::InvalidOptionValue { option_name, err } => write!(f, "invalid {} option value: {}", option_name, err),
             Self::UnexpectedDuplicateReference { name } => write!(f, "unexpected multiple references to {}", name.to_ast_string()),
+            Self::RecursiveTypeMismatch(name, declared, inferred) => {
+                write!(f, "declared type of WITH MUTUALLY RECURSIVE query {} did not match inferred type: {:?}, {:?}", name, declared, inferred)
+            },
         }
     }
 }

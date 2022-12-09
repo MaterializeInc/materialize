@@ -58,7 +58,7 @@ use mz_repr::{
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AsOf, Assignment, AstInfo, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
+    AsOf, Assignment, AstInfo, CteBlock, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
     HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
     Limit, OrderByExpr, Query, Select, SelectItem, SelectOption, SelectOptionName, SetExpr,
     SetOperator, ShowStatement, SubscriptPosition, TableAlias, TableFactor, TableFunction,
@@ -1006,42 +1006,10 @@ fn plan_query_inner(
     qcx: &mut QueryContext,
     q: &Query<Aug>,
 ) -> Result<(HirRelationExpr, Scope, RowSetFinishing), PlanError> {
-    // Retain the old values of various CTE names so that we can restore them
-    // after we're done planning this SELECT.
-    let mut old_cte_values = Vec::new();
-    // A single WITH block cannot use the same name multiple times.
-    let mut used_names = HashSet::new();
-    for cte in &q.ctes {
-        let cte_name = normalize::ident(cte.alias.name.clone());
+    // Plan CTEs and introduce bindings to `qcx.ctes`. Returns shadowed bindings
+    // for the identifiers, so that they can be re-installed before returning.
+    let cte_bindings = plan_ctes(qcx, q)?;
 
-        if used_names.contains(&cte_name) {
-            sql_bail!(
-                "WITH query name {} specified more than once",
-                cte_name.quoted()
-            )
-        }
-        used_names.insert(cte_name.clone());
-
-        // Plan CTE.
-        let (val, scope) = plan_nested_query(qcx, &cte.query)?;
-        let typ = qcx.relation_type(&val);
-        let mut val_desc = RelationDesc::new(typ, scope.column_names());
-        plan_utils::maybe_rename_columns(
-            format!("CTE {}", cte.alias.name),
-            &mut val_desc,
-            &cte.alias.columns,
-        )?;
-
-        let old_val = qcx.ctes.insert(
-            cte.id,
-            CteDesc {
-                val,
-                name: cte_name,
-                val_desc,
-            },
-        );
-        old_cte_values.push((cte.id, old_val));
-    }
     let limit = match &q.limit {
         None => None,
         Some(Limit {
@@ -1097,21 +1065,126 @@ fn plan_query_inner(
         }
     }?;
 
-    for (id, old_val) in old_cte_values.into_iter().rev() {
+    // Both introduce `Let` bindings atop `result` and re-install shadowed bindings.
+    for (id, value, shadowed_val) in cte_bindings.into_iter().rev() {
         if let Some(cte) = qcx.ctes.remove(&id) {
             result = HirRelationExpr::Let {
                 name: cte.name,
                 id: id.clone(),
-                value: Box::new(cte.val),
+                value: Box::new(value),
                 body: Box::new(result),
             };
         }
-        if let Some(old_val) = old_val {
-            qcx.ctes.insert(id, old_val);
+        if let Some(shadowed_val) = shadowed_val {
+            qcx.ctes.insert(id, shadowed_val);
         }
     }
 
     Ok((result, scope, finishing))
+}
+
+/// Creates plans for CTEs and introduces them to `qcx.ctes`.
+///
+/// Returns for each identifier a planned `HirRelationExpr` value, and an optional
+/// shadowed value that can be reinstalled once the planning has completed.
+pub fn plan_ctes(
+    qcx: &mut QueryContext,
+    q: &Query<Aug>,
+) -> Result<Vec<(LocalId, HirRelationExpr, Option<CteDesc>)>, PlanError> {
+    // Accumulate planned expressions and shadowed descriptions.
+    let mut result = Vec::new();
+    // Retain the old descriptions of CTE bindings so that we can restore them
+    // after we're done planning this SELECT.
+    let mut shadowed_descs = HashMap::new();
+
+    // A reused identifier indicates a reused name.
+    if let Some(ident) = q.ctes.bound_identifiers().duplicates().next() {
+        sql_bail!(
+            "WITH query name {} specified more than once",
+            normalize::ident_ref(ident).quoted()
+        )
+    }
+
+    match &q.ctes {
+        CteBlock::Simple(ctes) => {
+            // Plan all CTEs, introducing the types for non-recursive CTEs as we go.
+            for cte in ctes.iter() {
+                let cte_name = normalize::ident(cte.alias.name.clone());
+                let (val, scope) = plan_nested_query(qcx, &cte.query)?;
+                let typ = qcx.relation_type(&val);
+                let mut desc = RelationDesc::new(typ, scope.column_names());
+                plan_utils::maybe_rename_columns(
+                    format!("CTE {}", cte.alias.name),
+                    &mut desc,
+                    &cte.alias.columns,
+                )?;
+                // Capture the prior value if it exists, so that it can be re-installed.
+                let shadowed = qcx.ctes.insert(
+                    cte.id,
+                    CteDesc {
+                        name: cte_name,
+                        desc,
+                    },
+                );
+
+                result.push((cte.id, val, shadowed));
+            }
+        }
+        CteBlock::MutuallyRecursive(ctes) => {
+            qcx.scx.require_unsafe_mode("WITH MUTUALLY_RECURSIVE")?;
+
+            // Insert column types into `qcx.ctes` first for recursive bindings.
+            for cte in ctes.iter() {
+                let cte_name = normalize::ident(cte.name.clone());
+                let mut desc_columns = Vec::with_capacity(cte.columns.capacity());
+                for column in cte.columns.iter() {
+                    desc_columns.push((
+                        normalize::column_name(column.name.clone()),
+                        ColumnType {
+                            scalar_type: scalar_type_from_sql(qcx.scx, &column.data_type)?,
+                            nullable: true,
+                        },
+                    ));
+                }
+                let desc = RelationDesc::from_names_and_types(desc_columns);
+                let shadowed = qcx.ctes.insert(
+                    cte.id,
+                    CteDesc {
+                        name: cte_name,
+                        desc,
+                    },
+                );
+                // Capture the prior value if it exists, so that it can be re-installed.
+                if let Some(shadowed) = shadowed {
+                    shadowed_descs.insert(cte.id, shadowed);
+                }
+            }
+
+            // Plan all CTEs and validate the proposed types.
+            for cte in ctes.iter() {
+                let cte_name = normalize::ident(cte.name.clone());
+                let (val, _scope) = plan_nested_query(qcx, &cte.query)?;
+                // Validate that the derived and proposed types are the same.
+                let typ = qcx.relation_type(&val);
+                // TODO: Use implicit casts to convert among types rather than error.
+                if !typ.subtypes(qcx.ctes[&cte.id].desc.typ()) {
+                    Err(PlanError::RecursiveTypeMismatch(
+                        cte_name,
+                        qcx.ctes[&cte.id].desc.typ().clone(),
+                        typ,
+                    ))?;
+                }
+
+                result.push((cte.id, val, shadowed_descs.remove(&cte.id)));
+            }
+
+            Err(PlanError::Unstructured(
+                "recursive query planned, but not supported in HIR".to_string(),
+            ))?;
+        }
+    }
+
+    Ok(result)
 }
 
 pub fn plan_nested_query(
@@ -4946,13 +5019,11 @@ pub enum QueryLifetime<'a> {
     Static,
 }
 
-/// Stores planned CTEs for later use.
+/// Description of a CTE sufficient for query planning.
 #[derive(Debug, Clone)]
 pub struct CteDesc {
-    /// The CTE's expression.
-    val: HirRelationExpr,
     name: String,
-    val_desc: RelationDesc,
+    desc: RelationDesc,
 }
 
 /// The state required when planning a `Query`.
@@ -5046,10 +5117,10 @@ impl<'a> QueryContext<'a> {
                 let cte = self.ctes.get(&id).unwrap();
                 let expr = HirRelationExpr::Get {
                     id: Id::Local(id),
-                    typ: cte.val_desc.typ().clone(),
+                    typ: cte.desc.typ().clone(),
                 };
 
-                let scope = Scope::from_source(Some(name), cte.val_desc.iter_names());
+                let scope = Scope::from_source(Some(name), cte.desc.iter_names());
 
                 Ok((expr, scope))
             }
