@@ -825,7 +825,8 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 
                 for (offset, cte) in ctes.into_iter().enumerate() {
                     let cte_name = normalize::ident(cte.alias.name.clone());
-                    let local_id = LocalId::new((initial_id + offset) as u64);
+                    use mz_ore::cast::CastFrom;
+                    let local_id = LocalId::new((u64::cast_from(initial_id + offset)) as u64);
 
                     result_ctes.push(Cte {
                         alias: cte.alias,
