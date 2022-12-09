@@ -46,11 +46,7 @@ pub struct Query<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for Query<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        if !self.ctes.is_empty() {
-            f.write_str("WITH ");
-            f.write_node(&self.ctes);
-            f.write_str(" ");
-        }
+        f.write_node(&self.ctes);
         f.write_node(&self.body);
         if !self.order_by.is_empty() {
             f.write_str(" ORDER BY ");
@@ -333,38 +329,39 @@ impl<T: AstInfo> CteBlock<T> {
             CteBlock::MutuallyRecursive(list) => list.is_empty(),
         }
     }
-    /// Returns a duplicate name if one exists. `None` means there are none.
-    pub fn reused_ident(&self) -> Option<&Ident> {
-        let mut used_names = std::collections::HashSet::new();
+    /// Iterates through the identifiers used in bindings.
+    pub fn bound_identifiers(&self) -> impl Iterator<Item = &Ident> {
+        let mut names = Vec::new();
         match self {
             CteBlock::Simple(list) => {
                 for cte in list.iter() {
-                    if !used_names.insert(&cte.alias.name) {
-                        return Some(&cte.alias.name);
-                    }
+                    names.push(&cte.alias.name);
                 }
             }
             CteBlock::MutuallyRecursive(list) => {
                 for cte in list.iter() {
-                    if !used_names.insert(&cte.name) {
-                        return Some(&cte.name);
-                    }
+                    names.push(&cte.name);
                 }
             }
         }
-        None
+        names.into_iter()
     }
 }
 
 impl<T: AstInfo> AstDisplay for CteBlock<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            CteBlock::Simple(list) => {
-                f.write_node(&display::comma_separated(list));
+        if !self.is_empty() {
+            match self {
+                CteBlock::Simple(list) => {
+                    f.write_str("WITH ");
+                    f.write_node(&display::comma_separated(list));
+                }
+                CteBlock::MutuallyRecursive(list) => {
+                    f.write_str("WITH MUTUALLY RECURSIVE ");
+                    f.write_node(&display::comma_separated(list));
+                }
             }
-            CteBlock::MutuallyRecursive(list) => {
-                f.write_node(&display::comma_separated(list));
-            }
+            f.write_str(" ");
         }
     }
 }

@@ -304,7 +304,7 @@ impl fmt::Display for PlanError {
             Self::InvalidOptionValue { option_name, err } => write!(f, "invalid {} option value: {}", option_name, err),
             Self::UnexpectedDuplicateReference { name } => write!(f, "unexpected multiple references to {}", name.to_ast_string()),
             Self::RecursiveTypeMismatch(name, declared, inferred) => {
-                write!(f, "declared type of recursive CTE {} did not match inferred type: {:?}, {:?}", name, declared, inferred)
+                write!(f, "declared type of WITH MUTUALLY RECURSIVE query {} did not match inferred type: {:?}, {:?}", name, declared, inferred)
             },
         }
     }

@@ -1098,7 +1098,7 @@ pub fn plan_ctes(
     let mut shadowed_descs = HashMap::new();
 
     // A reused identifier indicates a reused name.
-    if let Some(ident) = q.ctes.reused_ident() {
+    if let Some(ident) = q.ctes.bound_identifiers().duplicates().next() {
         sql_bail!(
             "WITH query name {} specified more than once",
             normalize::ident_ref(ident).quoted()
@@ -1107,7 +1107,7 @@ pub fn plan_ctes(
 
     match &q.ctes {
         CteBlock::Simple(ctes) => {
-            // Plann all CTEs, introducing the types for non-recursive CTEs as we go.
+            // Plan all CTEs, introducing the types for non-recursive CTEs as we go.
             for cte in ctes.iter() {
                 let cte_name = normalize::ident(cte.alias.name.clone());
                 let (val, scope) = plan_nested_query(qcx, &cte.query)?;
@@ -1131,7 +1131,7 @@ pub fn plan_ctes(
             }
         }
         CteBlock::MutuallyRecursive(ctes) => {
-            qcx.scx.require_unsafe_mode("MUTUALLY_RECURSIVE")?;
+            qcx.scx.require_unsafe_mode("WITH MUTUALLY_RECURSIVE")?;
 
             // Insert column types into `qcx.ctes` first for recursive bindings.
             for cte in ctes.iter() {
@@ -1166,7 +1166,8 @@ pub fn plan_ctes(
                 let (val, _scope) = plan_nested_query(qcx, &cte.query)?;
                 // Validate that the derived and proposed types are the same.
                 let typ = qcx.relation_type(&val);
-                if !typ.as_strict_as(qcx.ctes[&cte.id].desc.typ()) {
+                // TODO: Use implicit casts to convert among types rather than error.
+                if !typ.subtypes(qcx.ctes[&cte.id].desc.typ()) {
                     Err(PlanError::RecursiveTypeMismatch(
                         cte_name,
                         qcx.ctes[&cte.id].desc.typ().clone(),

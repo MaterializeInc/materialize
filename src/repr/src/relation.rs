@@ -209,8 +209,12 @@ impl RelationType {
         }
     }
 
-    /// True if the column types match, and keys / nullability are at least as strict.
-    pub fn as_strict_as(&self, other: &RelationType) -> bool {
+    /// True if any collection described by `self` could safely be described by `other`.
+    ///
+    /// In practice this means checking that the scalar types match exactly, and that the
+    /// nullability of `self` is at least as strict as `other`, and that all keys of `other`
+    /// contain some key of `self` (as a set of key columns is less strict than any subset).
+    pub fn subtypes(&self, other: &RelationType) -> bool {
         let all_keys = other.keys.iter().all(|key1| {
             self.keys
                 .iter()

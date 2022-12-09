@@ -4382,7 +4382,7 @@ impl<'a> Parser<'a> {
                 if parser.parse_keyword(MUTUALLY) {
                     parser.expect_keyword(RECURSIVE)?;
                     CteBlock::MutuallyRecursive(
-                        parser.parse_comma_separated(Parser::parse_mut_rec_cte)?,
+                        parser.parse_comma_separated(Parser::parse_cte_mut_rec)?,
                     )
                 } else {
                     // TODO: optional RECURSIVE
@@ -4531,7 +4531,7 @@ impl<'a> Parser<'a> {
     /// The main distinction from `parse_cte` is that the column names and types are mandatory.
     /// This is not how SQL works for `WITH RECURSIVE`, but we are doing it for now to make the
     /// query interpretation that much easier.
-    fn parse_mut_rec_cte(&mut self) -> Result<CteMutRec<Raw>, ParserError> {
+    fn parse_cte_mut_rec(&mut self) -> Result<CteMutRec<Raw>, ParserError> {
         let name = self.parse_identifier()?;
         self.expect_token(&Token::LParen)?;
         let columns = self.parse_comma_separated(|parser| {

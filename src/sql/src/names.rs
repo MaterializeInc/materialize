@@ -809,7 +809,8 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         let mut shadowed_cte_ids = Vec::new();
 
         // A reused identifier indicates a reused name.
-        if let Some(ident) = q.ctes.reused_ident() {
+        use itertools::Itertools;
+        if let Some(ident) = q.ctes.bound_identifiers().duplicates().next() {
             self.status = Err(sql_err!(
                 "WITH query name \"{}\" specified more than once",
                 normalize::ident_ref(ident),
