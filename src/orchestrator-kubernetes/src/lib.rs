@@ -397,7 +397,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }
             };
             let memory = match parse_k8s_quantity(mem_str) {
-                Ok(q) => match q.try_to_integer(3, false) {
+                Ok(q) => match q.try_to_integer(0, false) {
                     Some(i) => Some(i),
                     None => {
                         tracing::error!("Memory value {q:?} out of range");

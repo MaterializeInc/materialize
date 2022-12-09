@@ -9,20 +9,22 @@
 
 //! Logic for the Avro representation of the CDCv2 protocol.
 
-use mz_avro::schema::{FullName, SchemaNode};
-use mz_repr::{Diff, Row, Timestamp};
-use serde_json::json;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use anyhow::anyhow;
 use differential_dataflow::capture::{Message, Progress};
+use serde_json::json;
+
 use mz_avro::error::{DecodeError, Error as AvroError};
-use mz_avro::schema::Schema;
+use mz_avro::schema::{FullName, Schema, SchemaNode};
+use mz_avro::types::Scalar;
 use mz_avro::{
     define_unexpected, ArrayAsVecDecoder, AvroDecodable, AvroDecode, AvroDeserializer, AvroRead,
     StatefulAvroDecodable,
 };
 use mz_avro_derive::AvroDecodable;
-use std::{cell::RefCell, rc::Rc};
+use mz_repr::{Diff, Row, Timestamp};
 
 use super::decode::RowWrapper;
 
@@ -39,17 +41,27 @@ pub fn extract_data_columns<'a>(schema: &'a Schema) -> anyhow::Result<SchemaNode
     })
 }
 
+fn make_timestamp_decoder() -> impl AvroDecode<Out = Timestamp> {
+    TimestampDecoder
+}
+
+fn make_timestamp_vec_decoder() -> impl AvroDecode<Out = Vec<Timestamp>> {
+    ArrayAsVecDecoder::new(|| TimestampDecoder)
+}
+
 #[derive(AvroDecodable)]
 #[state_type(Rc<RefCell<Row>>, Rc<RefCell<Vec<u8>>>)]
 struct MyUpdate {
     #[state_expr(Rc::clone(&self._STATE.0), Rc::clone(&self._STATE.1))]
     data: RowWrapper,
+    #[decoder_factory(make_timestamp_decoder)]
     time: Timestamp,
     diff: Diff,
 }
 
 #[derive(AvroDecodable)]
 struct Count {
+    #[decoder_factory(make_timestamp_decoder)]
     time: Timestamp,
     count: usize,
 }
@@ -62,7 +74,9 @@ fn make_counts_decoder() -> impl AvroDecode<Out = Vec<(Timestamp, usize)>> {
 
 #[derive(AvroDecodable)]
 struct MyProgress {
+    #[decoder_factory(make_timestamp_vec_decoder)]
     lower: Vec<Timestamp>,
+    #[decoder_factory(make_timestamp_vec_decoder)]
     upper: Vec<Timestamp>,
     #[decoder_factory(make_counts_decoder)]
     counts: Vec<(Timestamp, usize)>,
@@ -186,6 +200,30 @@ pub fn build_schema(row_schema: serde_json::Value) -> Schema {
     let message_schema = json!([updates_schema, progress_schema,]);
 
     Schema::parse(&message_schema).expect("schema construction failed")
+}
+
+#[derive(Debug)]
+pub struct TimestampDecoder;
+
+impl mz_avro::AvroDecode for TimestampDecoder {
+    type Out = Timestamp;
+
+    define_unexpected! {
+        array, record, union_branch, map, enum_variant, decimal, bytes, string, json, uuid, fixed
+    }
+
+    fn scalar(self, scalar: mz_avro::types::Scalar) -> Result<Self::Out, mz_avro::error::Error> {
+        let out = match scalar {
+            Scalar::Int(inner) => i64::from(inner).try_into()?,
+            Scalar::Long(inner) => inner.try_into()?,
+            other => {
+                return Err(mz_avro::error::Error::Decode(
+                    DecodeError::UnexpectedScalarKind(other.into()),
+                ))
+            }
+        };
+        Ok(out)
+    }
 }
 
 #[cfg(test)]

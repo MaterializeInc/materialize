@@ -3294,6 +3294,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "bytesize",
  "chrono",
  "const_format",
  "criterion",
@@ -4273,7 +4274,6 @@ dependencies = [
  "fast-float",
  "hex",
  "itertools",
- "mz-avro",
  "mz-lowertest",
  "mz-ore",
  "mz-persist-types",

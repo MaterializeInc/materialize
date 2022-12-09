@@ -24,11 +24,12 @@ class PgCdc(Check):
                 > CREATE CONNECTION pg1 FOR POSTGRES
                   HOST 'postgres-source',
                   DATABASE postgres,
-                  USER postgres,
+                  USER postgres1,
                   PASSWORD SECRET pgpass1
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
-                ALTER USER postgres WITH replication;
+                CREATE USER postgres1 WITH SUPERUSER PASSWORD 'postgres';
+                ALTER USER postgres1 WITH replication;
                 DROP PUBLICATION IF EXISTS postgres_source;
 
                 DROP TABLE IF EXISTS postgres_source_table;
@@ -57,13 +58,12 @@ class PgCdc(Check):
                 INSERT INTO postgres_source_table SELECT 'B', 1, REPEAT('X', 1024) FROM generate_series(1,100);
                 UPDATE postgres_source_table SET f2 = f2 + 1;
 
-
                 > CREATE SECRET pgpass2 AS 'postgres';
 
                 > CREATE CONNECTION pg2 FOR POSTGRES
                   HOST 'postgres-source',
                   DATABASE postgres,
-                  USER postgres,
+                  USER postgres1,
                   PASSWORD SECRET pgpass1
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
@@ -94,7 +94,7 @@ class PgCdc(Check):
                 > CREATE CONNECTION pg3 FOR POSTGRES
                   HOST 'postgres-source',
                   DATABASE postgres,
-                  USER postgres,
+                  USER postgres1,
                   PASSWORD SECRET pgpass3
 
                 > CREATE SOURCE postgres_source3
@@ -159,14 +159,15 @@ class PgCdcMzNow(Check):
                 """
                 > CREATE SECRET postgres_mz_now_pass AS 'postgres';
 
-                > CREATE CONNECTION posgres_mz_now_conn FOR POSTGRES
+                > CREATE CONNECTION postgres_mz_now_conn FOR POSTGRES
                   HOST 'postgres-source',
                   DATABASE postgres,
-                  USER postgres,
+                  USER postgres2,
                   PASSWORD SECRET postgres_mz_now_pass
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
-                ALTER USER postgres WITH replication;
+                CREATE USER postgres2 WITH SUPERUSER PASSWORD 'postgres';
+                ALTER USER postgres2 WITH replication;
                 DROP PUBLICATION IF EXISTS postgres_mz_now_publication;
 
                 DROP TABLE IF EXISTS postgres_mz_now_table;
@@ -183,7 +184,7 @@ class PgCdcMzNow(Check):
                 CREATE PUBLICATION postgres_mz_now_publication FOR ALL TABLES;
 
                 > CREATE SOURCE postgres_mz_now_source
-                  FROM POSTGRES CONNECTION posgres_mz_now_conn
+                  FROM POSTGRES CONNECTION postgres_mz_now_conn
                   (PUBLICATION 'postgres_mz_now_publication')
                   FOR ALL TABLES;
 

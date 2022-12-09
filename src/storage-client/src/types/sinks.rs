@@ -223,11 +223,18 @@ pub enum StorageSinkConnection {
 }
 
 impl StorageSinkConnection {
-    // returns an option to not constrain ourselves in the future
+    /// returns an option to not constrain ourselves in the future
     pub fn connection_id(&self) -> Option<GlobalId> {
         use StorageSinkConnection::*;
         match self {
             Kafka(KafkaSinkConnection { connection_id, .. }) => Some(*connection_id),
+        }
+    }
+
+    /// Returns the name of the sink connection.
+    pub fn name(&self) -> &'static str {
+        match self {
+            StorageSinkConnection::Kafka(_) => "kafka",
         }
     }
 }
@@ -415,26 +422,25 @@ impl RustType<ProtoPublishedSchemaInfo> for PublishedSchemaInfo {
     }
 }
 
-impl StorageSinkConnection {
-    /// Returns the name of the sink connection.
-    pub fn name(&self) -> &'static str {
-        match self {
-            StorageSinkConnection::Kafka(_) => "kafka",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum StorageSinkConnectionBuilder {
     Kafka(KafkaSinkConnectionBuilder),
 }
 
 impl StorageSinkConnectionBuilder {
-    // returns an option to not constrain ourselves in the future
+    /// returns an option to not constrain ourselves in the future
     pub fn connection_id(&self) -> Option<GlobalId> {
         use StorageSinkConnectionBuilder::*;
         match self {
             Kafka(KafkaSinkConnectionBuilder { connection_id, .. }) => Some(*connection_id),
+        }
+    }
+
+    /// Returns the name of the sink connection.
+    pub fn name(&self) -> &'static str {
+        use StorageSinkConnectionBuilder::*;
+        match self {
+            Kafka(_) => "kafka",
         }
     }
 }
