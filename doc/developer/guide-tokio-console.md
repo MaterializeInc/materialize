@@ -1,32 +1,45 @@
 # Developer guide: `tokio-console`
 
-This guide details how to run `tokio-console` with `materialized`
+This guide details how to run `tokio-console` with Materialize.
 
 ## Overview
 
-First, install `tokio-console`:
+First, install `tokio-console`. We require support for Unix domain sockets, [which is still pending
+upstream][uds-pr], so we need to install from a fork for now.
 
-```
-cargo install tokio-console
+```text
+cargo install tokio-console --git https://github.com/MaterializeInc/console.git
 ```
 
 Then run `environmentd`:
 
-```
+```text
 ./bin/environmentd --tokio-console
 ```
 
-(note that this may slow down `environmentd` a lot, as it increases the amount of tracing by a lot,
-and may inadvertently turn on debug logging for `rdkafka`)
+(Note that this may slow down `environmentd` a lot, as it increases the amount of tracing by a lot,
+and may inadvertently turn on debug logging for `rdkafka`.)
 
-Then, in a different tmux pane/terminal, run:
+In the output of the above command, take note of the `tokio-console` listen addresses for the
+different processes, e.g.:
 
+```text
+environmentd: [...]  INFO mz_ore::tracing: starting tokio console on http://127.0.0.1:6669
+compute-cluster-u1-replica-1: [...]  INFO mz_ore::tracing: starting tokio console on /var/folders/30/[...]3ee9
+compute-cluster-s1-replica-2: [...]  INFO mz_ore::tracing: starting tokio console on /var/folders/30/[...]f5b6
+compute-cluster-s2-replica-3: [...]  INFO mz_ore::tracing: starting tokio console on /var/folders/30/[...]7af2
 ```
-tokio-console
+
+Then, in a different tmux pane/terminal, run the `tokio-console` command with the listen address of
+your process of interest:
+
+```text
+tokio-console <listen-address>
 ```
 
 This [README] has some docs on how to navigate the ui.
 
+[uds-pr]: https://github.com/tokio-rs/console/pull/388
 [README]: https://github.com/tokio-rs/console/tree/main/tokio-console
 
 ### Notes on compilation times:

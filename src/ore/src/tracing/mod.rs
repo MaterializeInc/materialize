@@ -381,7 +381,7 @@ where
     if let Some(console_config) = config.tokio_console {
         let endpoint = match console_config.listen_addr {
             SocketAddr::Inet(addr) => format!("http://{addr}"),
-            SocketAddr::Unix(addr) => addr.to_string(),
+            SocketAddr::Unix(addr) => format!("file://localhost{addr}"),
         };
         tracing::info!("starting tokio console on {endpoint}");
     }
