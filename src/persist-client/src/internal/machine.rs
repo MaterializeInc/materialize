@@ -1188,7 +1188,7 @@ pub mod datadriven {
 
         let mut states = datadriven
             .state_versions
-            .fetch_live_states::<String, (), u64, i64>(&datadriven.shard_id)
+            .fetch_all_live_states::<String, (), u64, i64>(&datadriven.shard_id)
             .await
             .expect("shard codecs should not change");
         let mut s = String::new();
@@ -1801,18 +1801,18 @@ pub mod tests {
         let live_diffs = write
             .machine
             .state_versions
-            .fetch_live_diffs(&write.machine.shard_id())
+            .fetch_all_live_diffs(&write.machine.shard_id())
             .await;
         // Make sure we constructed the key correctly.
-        assert!(live_diffs.len() > 0);
+        assert!(live_diffs.0.len() > 0);
         // Make sure the number of entries is bounded. (I think we could work
         // out a tighter bound than this, but the point is only that it's
         // bounded).
         let max_live_diffs = 2 * usize::cast_from(NUM_BATCHES.next_power_of_two().trailing_zeros());
         assert!(
-            live_diffs.len() < max_live_diffs,
+            live_diffs.0.len() < max_live_diffs,
             "{} vs {}",
-            live_diffs.len(),
+            live_diffs.0.len(),
             max_live_diffs
         );
     }

@@ -57,12 +57,14 @@ pub async fn force_compaction(
     ));
 
     // Prime the K V codec magic
-    let versions = state_versions.fetch_live_diffs(&shard_id).await;
+    let versions = state_versions
+        .fetch_recent_live_diffs::<u64>(&shard_id)
+        .await;
     loop {
         let state_res = state_versions
             .fetch_current_state::<crate::inspect::K, crate::inspect::V, u64, i64>(
                 &shard_id,
-                versions.clone(),
+                versions.0.clone(),
             )
             .await;
         let state = match state_res {
