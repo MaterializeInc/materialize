@@ -75,6 +75,7 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::explain_new::optimizer_trace::OptimizerTrace;
+use crate::metrics;
 use crate::notice::AdapterNotice;
 use crate::session::vars::{IsolationLevel, CLUSTER_VAR_NAME, DATABASE_VAR_NAME};
 use crate::session::{
@@ -519,13 +520,10 @@ impl<S: Append + 'static> Coordinator<S> {
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => {
                 for (source_id, source) in sources {
-                    let source_status_collection_id = if self.catalog.config().unsafe_mode {
+                    let source_status_collection_id =
                         Some(self.catalog.resolve_builtin_storage_collection(
                             &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                        ))
-                    } else {
-                        None
-                    };
+                        ));
 
                     let (data_source, status_collection_id) = match source.data_source {
                         DataSourceDesc::Ingestion(ingestion) => {
@@ -1831,9 +1829,13 @@ impl<S: Append + 'static> Coordinator<S> {
 
         self.catalog_transact(Some(session), ops).await?;
 
+        fail::fail_point!("after_catalog_drop_replica");
+
         for (compute_id, replica_id) in replicas_to_drop {
             self.drop_replica(compute_id, replica_id).await.unwrap();
         }
+
+        fail::fail_point!("after_sequencer_drop_replica");
 
         Ok(ExecuteResponse::DroppedComputeReplica)
     }
@@ -2172,52 +2174,6 @@ impl<S: Append + 'static> Coordinator<S> {
             self.txn_reads.insert(session.conn_id(), txn_reads);
         }
 
-        if in_immediate_multi_stmt_txn {
-            // Verify that the references and indexes for this query are in the
-            // current read transaction.
-            let allowed_id_bundle = &self
-                .txn_reads
-                .get(&session.conn_id())
-                .unwrap()
-                .read_holds
-                .id_bundle();
-            // Find the first reference or index (if any) that is not in the transaction. A
-            // reference could be caused by a user specifying an object in a different
-            // schema than the first query. An index could be caused by a CREATE INDEX
-            // after the transaction started.
-            let outside = peek_plan.id_bundle.difference(allowed_id_bundle);
-            if !outside.is_empty() {
-                let mut names: Vec<_> = allowed_id_bundle
-                    .iter()
-                    // This could filter out a view that has been replaced in another transaction.
-                    .filter_map(|id| self.catalog.try_get_entry(&id))
-                    .map(|item| item.name())
-                    .map(|name| {
-                        self.catalog
-                            .resolve_full_name(name, Some(session.conn_id()))
-                            .to_string()
-                    })
-                    .collect();
-                let mut outside: Vec<_> = outside
-                    .iter()
-                    .filter_map(|id| self.catalog.try_get_entry(&id))
-                    .map(|item| item.name())
-                    .map(|name| {
-                        self.catalog
-                            .resolve_full_name(name, Some(session.conn_id()))
-                            .to_string()
-                    })
-                    .collect();
-                // Sort so error messages are deterministic.
-                names.sort();
-                outside.sort();
-                return Err(AdapterError::RelationOutsideTimeDomain {
-                    relations: outside,
-                    names,
-                });
-            }
-        }
-
         // We only track the peeks in the session if the query doesn't use AS
         // OF or we're inside an explicit transaction. The latter case is
         // necessary to support PG's `BEGIN` semantics, whose behavior can
@@ -2312,6 +2268,56 @@ impl<S: Append + 'static> Coordinator<S> {
             self.determine_timestamp(session, &id_bundle, when, compute_instance, timeline)?
                 .timestamp
         };
+
+        if in_immediate_multi_stmt_txn {
+            // If there are no `txn_reads`, then this must be the first query in the transaction
+            // and we can skip timedomain validations.
+            if let Some(txn_reads) = self.txn_reads.get(&session.conn_id()) {
+                // Verify that the references and indexes for this query are in the
+                // current read transaction.
+                let allowed_id_bundle = txn_reads.read_holds.id_bundle();
+                // If `txn_read` is empty and timestamp independent, then we'll throw out the
+                // current timestamp and get a new one along with new read holds. So we can skip
+                // timedomain validations.
+                if !allowed_id_bundle.is_empty() || !txn_reads.timestamp_independent {
+                    // Find the first reference or index (if any) that is not in the transaction. A
+                    // reference could be caused by a user specifying an object in a different
+                    // schema than the first query. An index could be caused by a CREATE INDEX
+                    // after the transaction started.
+                    let outside = id_bundle.difference(&allowed_id_bundle);
+                    if !outside.is_empty() {
+                        let mut names: Vec<_> = allowed_id_bundle
+                            .iter()
+                            // This could filter out a view that has been replaced in another transaction.
+                            .filter_map(|id| self.catalog.try_get_entry(&id))
+                            .map(|item| item.name())
+                            .map(|name| {
+                                self.catalog
+                                    .resolve_full_name(name, Some(session.conn_id()))
+                                    .to_string()
+                            })
+                            .collect();
+                        let mut outside: Vec<_> = outside
+                            .iter()
+                            .filter_map(|id| self.catalog.try_get_entry(&id))
+                            .map(|item| item.name())
+                            .map(|name| {
+                                self.catalog
+                                    .resolve_full_name(name, Some(session.conn_id()))
+                                    .to_string()
+                            })
+                            .collect();
+                        // Sort so error messages are deterministic.
+                        names.sort();
+                        outside.sort();
+                        return Err(AdapterError::RelationOutsideTimeDomain {
+                            relations: outside,
+                            names,
+                        });
+                    }
+                }
+            }
+        }
 
         // before we have the corrected timestamp ^
         // TODO(guswynn&mjibson): partition `sequence_peek` by the response to
@@ -2481,9 +2487,20 @@ impl<S: Append + 'static> Coordinator<S> {
             });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
-        self.metrics.active_subscribes.inc();
-        self.pending_subscribes
-            .insert(*sink_id, PendingSubscribe::new(tx, emit_progress, arity));
+        let session_type = metrics::session_type_label_value(session);
+        self.metrics
+            .active_subscribes
+            .with_label_values(&[session_type])
+            .inc();
+        self.pending_subscribes.insert(
+            *sink_id,
+            PendingSubscribe {
+                session_type,
+                channel: tx,
+                emit_progress,
+                arity,
+            },
+        );
         self.ship_dataflow(dataflow, compute_instance_id).await;
 
         let resp = ExecuteResponse::Subscribing { rx };
@@ -2673,7 +2690,12 @@ impl<S: Append + 'static> Coordinator<S> {
                     .into_iter()
                     .find(|entry| entry.path == stage.path())
                     .map(|entry| Row::pack_slice(&[Datum::from(entry.plan.as_str())]))
-                    .unwrap_or_else(|| panic!("plan at {}", stage.path()));
+                    .ok_or_else(|| {
+                        AdapterError::Internal(format!(
+                            "a plan at stage {} does not exist in the collected optimizer trace",
+                            stage.path(),
+                        ))
+                    })?;
                 vec![row]
             }
         };
@@ -2851,7 +2873,7 @@ impl<S: Append + 'static> Coordinator<S> {
         mut session: Session,
         plan: InsertPlan,
     ) {
-        let optimized_mir = if let MirRelationExpr::Constant { .. } = &plan.values {
+        let optimized_mir = if let Some(..) = &plan.values.as_const() {
             // We don't perform any optimizations on an expression that is already
             // a constant for writes, as we want to maximize bulk-insert throughput.
             OptimizedMirRelationExpr(plan.values)
@@ -2866,8 +2888,8 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         match optimized_mir.into_inner() {
-            constants @ MirRelationExpr::Constant { .. } if plan.returning.is_empty() => tx.send(
-                self.sequence_insert_constant(&mut session, plan.id, constants),
+            selection if selection.as_const().is_some() && plan.returning.is_empty() => tx.send(
+                self.sequence_insert_constant(&mut session, plan.id, selection),
                 session,
             ),
             // All non-constant values must be planned as read-then-writes.
@@ -2944,9 +2966,9 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         };
 
-        match constants {
-            MirRelationExpr::Constant { rows, typ: _ } => {
-                let rows = rows?;
+        match constants.as_const() {
+            Some((rows, ..)) => {
+                let rows = rows.clone()?;
                 for (row, _) in &rows {
                     for (i, datum) in row.iter().enumerate() {
                         desc.constraints_met(i, &datum)?;
@@ -2960,9 +2982,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 };
                 self.sequence_send_diffs(session, diffs_plan)
             }
-            o => panic!(
+            None => panic!(
                 "tried using sequence_insert_constant on non-constant MirRelationExpr {:?}",
-                o
+                constants
             ),
         }
     }

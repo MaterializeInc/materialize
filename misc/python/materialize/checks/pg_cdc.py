@@ -24,11 +24,12 @@ class PgCdc(Check):
                 > CREATE CONNECTION pg1 FOR POSTGRES
                   HOST 'postgres-source',
                   DATABASE postgres,
-                  USER postgres,
+                  USER postgres1,
                   PASSWORD SECRET pgpass1
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
-                ALTER USER postgres WITH replication;
+                CREATE USER postgres1 WITH SUPERUSER PASSWORD 'postgres';
+                ALTER USER postgres1 WITH replication;
                 DROP PUBLICATION IF EXISTS postgres_source;
 
                 DROP TABLE IF EXISTS postgres_source_table;
@@ -57,13 +58,12 @@ class PgCdc(Check):
                 INSERT INTO postgres_source_table SELECT 'B', 1, REPEAT('X', 1024) FROM generate_series(1,100);
                 UPDATE postgres_source_table SET f2 = f2 + 1;
 
-
                 > CREATE SECRET pgpass2 AS 'postgres';
 
                 > CREATE CONNECTION pg2 FOR POSTGRES
                   HOST 'postgres-source',
                   DATABASE postgres,
-                  USER postgres,
+                  USER postgres1,
                   PASSWORD SECRET pgpass1
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres-source
@@ -94,7 +94,7 @@ class PgCdc(Check):
                 > CREATE CONNECTION pg3 FOR POSTGRES
                   HOST 'postgres-source',
                   DATABASE postgres,
-                  USER postgres,
+                  USER postgres1,
                   PASSWORD SECRET pgpass3
 
                 > CREATE SOURCE postgres_source3
@@ -148,5 +148,111 @@ class PgCdc(Check):
                 G 3 102400
                 H 2 102400
            """
+            )
+        )
+
+
+class PgCdcMzNow(Check):
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > CREATE SECRET postgres_mz_now_pass AS 'postgres';
+
+                > CREATE CONNECTION postgres_mz_now_conn FOR POSTGRES
+                  HOST 'postgres-source',
+                  DATABASE postgres,
+                  USER postgres2,
+                  PASSWORD SECRET postgres_mz_now_pass
+
+                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                CREATE USER postgres2 WITH SUPERUSER PASSWORD 'postgres';
+                ALTER USER postgres2 WITH replication;
+                DROP PUBLICATION IF EXISTS postgres_mz_now_publication;
+
+                DROP TABLE IF EXISTS postgres_mz_now_table;
+
+                CREATE TABLE postgres_mz_now_table (f1 TIMESTAMP, f2 CHAR(5), PRIMARY KEY (f1, f2));
+                ALTER TABLE postgres_mz_now_table REPLICA IDENTITY FULL;
+
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'A1');
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'B1');
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'C1');
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'D1');
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'E1');
+
+                CREATE PUBLICATION postgres_mz_now_publication FOR ALL TABLES;
+
+                > CREATE SOURCE postgres_mz_now_source
+                  FROM POSTGRES CONNECTION postgres_mz_now_conn
+                  (PUBLICATION 'postgres_mz_now_publication')
+                  FOR ALL TABLES;
+
+                # Return all rows fresher than 60 seconds
+                > CREATE MATERIALIZED VIEW postgres_mz_now_view AS
+                  SELECT * FROM postgres_mz_now_table
+                  WHERE mz_now() <= ROUND(EXTRACT(epoch FROM f1 + INTERVAL '60' SECOND) * 1000)
+                """
+            )
+        )
+
+    def manipulate(self) -> List[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'A2');
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'B2');
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'C2');
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'D2');
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'E2');
+                DELETE FROM postgres_mz_now_table WHERE f2 = 'B1';
+                UPDATE postgres_mz_now_table SET f1 = NOW() WHERE f2 = 'C1';
+                """,
+                """
+                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'A3');
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'B3');
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'C3');
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'D3');
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'E3');
+                DELETE FROM postgres_mz_now_table WHERE f2 = 'B2';
+                UPDATE postgres_mz_now_table SET f1 = NOW() WHERE f2 = 'D1';
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > SELECT COUNT(*) FROM postgres_mz_now_table;
+                13
+
+                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'A4');
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'B4');
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'C4');
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'D4');
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'E4');
+                DELETE FROM postgres_mz_now_table WHERE f2 = 'B3';
+                UPDATE postgres_mz_now_table SET f1 = NOW() WHERE f2 = 'E1'
+
+                # Expect some rows newer than 60 seconds in view
+                > SELECT COUNT(*) >= 6 FROM postgres_mz_now_view
+                  WHERE f1 > NOW() - INTERVAL '60' SECOND;
+                true
+
+                # Expect no rows older than 60 seconds in view
+                > SELECT COUNT(*) FROM postgres_mz_now_view
+                  WHERE f1 < NOW() - INTERVAL '60' SECOND;
+                0
+
+                # Rollback the last INSERTs so that validate() can be called multiple times
+                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                INSERT INTO postgres_mz_now_table VALUES (NOW(), 'B3');
+                DELETE FROM postgres_mz_now_table WHERE f2 LIKE '%4%';
+                """
             )
         )

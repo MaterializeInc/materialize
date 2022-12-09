@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.66"
 async-stream = "0.3.3"
-async-trait = "0.1.58"
+async-trait = "0.1.59"
 aws-config = { version = "0.51.0", default-features = false, features = ["native-tls"] }
 aws-smithy-http = "0.51.0"
 aws-types = { version = "0.51.0", features = ["hardcoded-credentials"] }
@@ -27,7 +27,7 @@ mz-cloud-resources = { path = "../cloud-resources" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
-mz-ore = { path = "../ore", features = ["task", "tracing_"] }
+mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-orchestrator = { path = "../orchestrator" }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }

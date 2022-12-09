@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::any::Any;
 use std::future::Future;
 use std::rc::Rc;
 
@@ -16,7 +17,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OperatorInfo, OutputHandle, OutputWrapper};
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
+use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::scheduling::ActivateOnDrop;
 use timely::Data;
 
@@ -24,7 +25,7 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::Timestamp;
 use mz_timely_util::builder_async::{AsyncInputHandle, OperatorBuilder as AsyncOperatorBuilder};
 
-use crate::types::sources::{AsyncSourceToken, SourceToken};
+use crate::types::sources::SourceToken;
 
 /// Constructs a source named `name` in `scope` whose lifetime is controlled
 /// both internally and externally.
@@ -53,13 +54,19 @@ use crate::types::sources::{AsyncSourceToken, SourceToken};
 ///
 /// When the source token is dropped, the timestamping_flag is set to false
 /// to terminate any spawned threads in the source operator
-pub fn source<G, D, B, L>(scope: &G, name: String, construct: B) -> (Stream<G, D>, SourceToken)
+pub fn source<G, D, B, L>(
+    scope: &G,
+    name: String,
+    flow_control_input: &Stream<G, ()>,
+    construct: B,
+) -> (Stream<G, D>, SourceToken)
 where
     G: Scope<Timestamp = Timestamp>,
     D: Data,
     B: FnOnce(OperatorInfo) -> L,
     L: FnMut(
             &mut CapabilitySet<Timestamp>,
+            AntichainRef<G::Timestamp>,
             &mut OutputHandle<G::Timestamp, D, Tee<G::Timestamp, D>>,
         ) -> ()
         + 'static,
@@ -70,7 +77,8 @@ where
     let operator_info = builder.operator_info();
 
     let (mut data_output, data_stream) = builder.new_output();
-    builder.set_notify(false);
+
+    let _flow_control_handle = builder.new_input(flow_control_input, Pipeline);
 
     builder.build(|capabilities| {
         let cap_set = CapabilitySet::from_elem(capabilities.into_element());
@@ -90,7 +98,7 @@ where
         let tick = construct(operator_info);
         let mut cap_and_tick = Some((cap_set, tick));
 
-        move |_| {
+        move |frontiers| {
             // Drop all capabilities if `token` is dropped.
             if drop_activator_weak.upgrade().is_none() {
                 // Drop the tick closure, too, in case dropping anything it owns
@@ -104,7 +112,8 @@ where
             if let Some((cap, tick)) = &mut cap_and_tick {
                 // We still have our capability, so the source is still alive.
                 // Delegate to the inner source.
-                tick(cap, &mut data_output.activate());
+                let flow_control_frontier = frontiers[0].frontier();
+                tick(cap, flow_control_frontier, &mut data_output.activate());
                 if cap.is_empty() {
                     // The inner source is finished. Drop our capability.
                     cap_and_tick = None;
@@ -127,14 +136,13 @@ where
 /// Note that this means the input and capabilities are communicated
 /// to the future by value, not by &mut reference.
 ///
-/// Returns an `AsyncSourceToken`, which, upon drop, will cause the
-/// shutdown of the operator.
+/// Returns a token, which, upon drop, will cause the shutdown of the operator.
 pub fn async_source<G, D, B, L>(
     scope: &G,
     name: String,
     input: &Stream<G, ()>,
     construct: B,
-) -> (Stream<G, D>, AsyncSourceToken)
+) -> (Stream<G, D>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
     D: Data,
@@ -166,24 +174,11 @@ where
         vec![Antichain::new()],
     );
 
-    let (tx, mut rx) = tokio::sync::oneshot::channel();
-    let token = AsyncSourceToken {
-        _drop_closes_the_oneshot: tx,
-    };
-
-    builder.build(|capabilities| {
+    let button = builder.build(|capabilities| {
         let cap_set = CapabilitySet::from_elem(capabilities.into_element());
 
-        let tick = construct(operator_info, cap_set, remap_input, data_output);
-        async move {
-            tokio::pin!(tick);
-            tokio::select! {
-                biased;
-                _ = &mut rx => {},
-                _ = &mut tick => {},
-            }
-        }
+        construct(operator_info, cap_set, remap_input, data_output)
     });
 
-    (data_stream, token)
+    (data_stream, Rc::new(button.press_on_drop()))
 }

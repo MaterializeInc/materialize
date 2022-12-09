@@ -1774,6 +1774,27 @@ impl<T: AstInfo> AstDisplay for ShowSchemasStatement<T> {
 }
 impl_display_t!(ShowSchemasStatement);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ShowObjectType<T: AstInfo> {
+    MaterializedView {
+        in_cluster: Option<T::ClusterName>,
+    },
+    Index {
+        in_cluster: Option<T::ClusterName>,
+        on_object: Option<T::ObjectName>,
+    },
+    Table,
+    View,
+    Source,
+    Sink,
+    Type,
+    Role,
+    Cluster,
+    ClusterReplica,
+    Object,
+    Secret,
+    Connection,
+}
 /// `SHOW <object>S`
 ///
 /// ```sql
@@ -1784,9 +1805,8 @@ impl_display_t!(ShowSchemasStatement);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowObjectsStatement<T: AstInfo> {
-    pub object_type: ObjectType,
+    pub object_type: ShowObjectType<T>,
     pub from: Option<T::SchemaName>,
-    pub in_cluster: Option<T::ClusterName>,
     pub filter: Option<ShowStatementFilter<T>>,
 }
 
@@ -1795,27 +1815,43 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         f.write_str("SHOW");
         f.write_str(" ");
         f.write_str(match &self.object_type {
-            ObjectType::Table => "TABLES",
-            ObjectType::View => "VIEWS",
-            ObjectType::MaterializedView => "MATERIALIZED VIEWS",
-            ObjectType::Source => "SOURCES",
-            ObjectType::Sink => "SINKS",
-            ObjectType::Type => "TYPES",
-            ObjectType::Role => "ROLES",
-            ObjectType::Cluster => "CLUSTERS",
-            ObjectType::ClusterReplica => "CLUSTER REPLICAS",
-            ObjectType::Object => "OBJECTS",
-            ObjectType::Secret => "SECRETS",
-            ObjectType::Connection => "CONNECTIONS",
-            ObjectType::Index => unreachable!(),
+            ShowObjectType::Table => "TABLES",
+            ShowObjectType::View => "VIEWS",
+            ShowObjectType::Source => "SOURCES",
+            ShowObjectType::Sink => "SINKS",
+            ShowObjectType::Type => "TYPES",
+            ShowObjectType::Role => "ROLES",
+            ShowObjectType::Cluster => "CLUSTERS",
+            ShowObjectType::ClusterReplica => "CLUSTER REPLICAS",
+            ShowObjectType::Object => "OBJECTS",
+            ShowObjectType::Secret => "SECRETS",
+            ShowObjectType::Connection => "CONNECTIONS",
+            ShowObjectType::MaterializedView { .. } => "MATERIALIZED VIEWS",
+            ShowObjectType::Index { .. } => "INDEXES",
         });
+
+        if let ShowObjectType::Index { on_object, .. } = &self.object_type {
+            if let Some(on_object) = on_object {
+                f.write_str(" ON ");
+                f.write_node(on_object);
+            }
+        }
+
         if let Some(from) = &self.from {
             f.write_str(" FROM ");
             f.write_node(from);
         }
-        if let Some(cluster) = &self.in_cluster {
-            f.write_str(" IN CLUSTER ");
-            f.write_node(cluster);
+
+        // append IN CLUSTER clause
+        match &self.object_type {
+            ShowObjectType::MaterializedView { in_cluster }
+            | ShowObjectType::Index { in_cluster, .. } => {
+                if let Some(cluster) = in_cluster {
+                    f.write_str(" IN CLUSTER ");
+                    f.write_node(cluster);
+                }
+            }
+            _ => (),
         }
         if let Some(filter) = &self.filter {
             f.write_str(" ");
@@ -1824,39 +1860,6 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
     }
 }
 impl_display_t!(ShowObjectsStatement);
-
-/// `SHOW INDEX|INDEXES|KEYS`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ShowIndexesStatement<T: AstInfo> {
-    pub on_object: Option<T::ObjectName>,
-    pub from_schema: Option<T::SchemaName>,
-    pub in_cluster: Option<T::ClusterName>,
-    pub filter: Option<ShowStatementFilter<T>>,
-}
-
-impl<T: AstInfo> AstDisplay for ShowIndexesStatement<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SHOW ");
-        f.write_str("INDEXES");
-        if let Some(on_object) = &self.on_object {
-            f.write_str(" ON ");
-            f.write_node(on_object);
-        }
-        if let Some(from_schema) = &self.from_schema {
-            f.write_str(" FROM ");
-            f.write_node(from_schema);
-        }
-        if let Some(in_cluster) = &self.in_cluster {
-            f.write_str(" IN CLUSTER ");
-            f.write_node(in_cluster);
-        }
-        if let Some(filter) = &self.filter {
-            f.write_str(" ");
-            f.write_node(filter);
-        }
-    }
-}
-impl_display_t!(ShowIndexesStatement);
 
 /// `SHOW COLUMNS`
 ///
@@ -2733,7 +2736,6 @@ pub enum ShowStatement<T: AstInfo> {
     ShowDatabases(ShowDatabasesStatement<T>),
     ShowSchemas(ShowSchemasStatement<T>),
     ShowObjects(ShowObjectsStatement<T>),
-    ShowIndexes(ShowIndexesStatement<T>),
     ShowColumns(ShowColumnsStatement<T>),
     ShowCreateView(ShowCreateViewStatement<T>),
     ShowCreateMaterializedView(ShowCreateMaterializedViewStatement<T>),
@@ -2751,7 +2753,6 @@ impl<T: AstInfo> AstDisplay for ShowStatement<T> {
             ShowStatement::ShowDatabases(stmt) => f.write_node(stmt),
             ShowStatement::ShowSchemas(stmt) => f.write_node(stmt),
             ShowStatement::ShowObjects(stmt) => f.write_node(stmt),
-            ShowStatement::ShowIndexes(stmt) => f.write_node(stmt),
             ShowStatement::ShowColumns(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateView(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateMaterializedView(stmt) => f.write_node(stmt),

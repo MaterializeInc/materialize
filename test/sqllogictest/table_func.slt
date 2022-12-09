@@ -206,20 +206,21 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM x, generate_series(1, 10)
 Explained Query:
   CrossJoin type=differential // { arity: 3 }
     implementation
-      %1 » %0:x[×]A
+      %1[×] » %0:x[×]A
     ArrangeBy keys=[[]] // { arity: 2 }
       Get materialize.public.x // { arity: 2 }
-    Constant // { arity: 1 }
-      - (1)
-      - (2)
-      - (3)
-      - (4)
-      - (5)
-      - (6)
-      - (7)
-      - (8)
-      - (9)
-      - (10)
+    ArrangeBy keys=[[]] // { arity: 1 }
+      Constant // { arity: 1 }
+        - (1)
+        - (2)
+        - (3)
+        - (4)
+        - (5)
+        - (6)
+        - (7)
+        - (8)
+        - (9)
+        - (10)
 
 EOF
 
@@ -242,7 +243,7 @@ Explained Query:
         Project (#0..=#2) // { arity: 3 }
           Join on=(#1 = #3) type=differential // { arity: 4 }
             implementation
-              %1:l0 » %0:l0[#1]KA
+              %1:l0[#1] » %0:l0[#1]KA
             Get l0 // { arity: 2 }
             Get l0 // { arity: 2 }
   With
@@ -266,7 +267,7 @@ Explained Query:
         Project (#0..=#2) // { arity: 3 }
           Join on=(#1 = #3) type=differential // { arity: 4 }
             implementation
-              %1:l0 » %0:l0[#1]KA
+              %1:l0[#1] » %0:l0[#1]KA
             Get l0 // { arity: 2 }
             Get l0 // { arity: 2 }
   With
@@ -293,7 +294,7 @@ Explained Query:
           Project (#0..=#2) // { arity: 3 }
             Join on=(#1 = #3) type=differential // { arity: 4 }
               implementation
-                %1:l0 » %0:l0[#1]KA
+                %1:l0[#1] » %0:l0[#1]KA
               Get l0 // { arity: 2 }
               Get l0 // { arity: 2 }
   With

@@ -45,6 +45,7 @@ pub const INFORMATION_SCHEMA: &str = "information_schema";
 
 pub static BUILTIN_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
 
+#[derive(Debug)]
 pub enum Builtin<T: 'static + TypeReference> {
     Log(&'static BuiltinLog),
     Table(&'static BuiltinTable),
@@ -100,7 +101,7 @@ pub struct BuiltinLog {
     pub schema: &'static str,
 }
 
-#[derive(Hash)]
+#[derive(Hash, Debug)]
 pub struct BuiltinTable {
     pub name: &'static str,
     pub schema: &'static str,
@@ -115,13 +116,14 @@ pub struct BuiltinSource {
     pub data_source: Option<IntrospectionType>,
 }
 
-#[derive(Hash)]
+#[derive(Hash, Debug)]
 pub struct BuiltinView {
     pub name: &'static str,
     pub schema: &'static str,
     pub sql: &'static str,
 }
 
+#[derive(Debug)]
 pub struct BuiltinType<T: TypeReference> {
     pub name: &'static str,
     pub schema: &'static str,
@@ -129,12 +131,14 @@ pub struct BuiltinType<T: TypeReference> {
     pub details: CatalogTypeDetails<T>,
 }
 
+#[derive(Debug)]
 pub struct BuiltinFunc {
     pub schema: &'static str,
     pub name: &'static str,
     pub inner: &'static mz_sql::func::Func,
 }
 
+#[derive(Debug)]
 pub struct BuiltinIndex {
     pub name: &'static str,
     pub schema: &'static str,
@@ -1380,9 +1384,19 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("replica_id", ScalarType::UInt64.nullable(false))
-        .with_column("process_id", ScalarType::Int64.nullable(false))
+        .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("status", ScalarType::String.nullable(false))
-        .with_column("last_update", ScalarType::TimestampTz.nullable(false)),
+        .with_column("updated_at", ScalarType::TimestampTz.nullable(false)),
+});
+
+pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_cluster_replica_sizes",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("replica_id", ScalarType::UInt64.nullable(false))
+        .with_column("processes", ScalarType::UInt64.nullable(false))
+        .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(false))
+        .with_column("memory_bytes", ScalarType::UInt64.nullable(false)),
 });
 
 pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1530,6 +1544,14 @@ pub static MZ_EGRESS_IPS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_egress_ips",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty().with_column("egress_ip", ScalarType::String.nullable(false)),
+});
+
+pub static MZ_AWS_PRIVATELINK_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_aws_privatelink_connections",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("principal", ScalarType::String.nullable(false)),
 });
 
 pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2459,36 +2481,26 @@ FROM
 pub const MZ_SHOW_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
     name: "mz_show_cluster_replicas",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: r#"CREATE VIEW
-    mz_internal.mz_show_cluster_replicas
-    AS
-        SELECT
-            mz_catalog.mz_clusters.name AS cluster,
-            mz_catalog.mz_cluster_replicas.name AS replica,
-            mz_catalog.mz_cluster_replicas.size AS size,
-            coalesce(statuses.ready, false) AS ready
-        FROM
-            mz_catalog.mz_cluster_replicas
-                JOIN
-                    mz_catalog.mz_clusters
-                    ON mz_catalog.mz_cluster_replicas.cluster_id = mz_catalog.mz_clusters.id
-                -- TODO[btv] This has to be a left join, because `mz_cluster_replica_statuses`
-                -- is not filled in immediately on replica creation.
-                LEFT JOIN
-                    (
-                            SELECT
-                                replica_id,
-                                mz_internal.mz_all(
-                                        mz_internal.mz_cluster_replica_statuses.status
-                                        = 'ready'
-                                    )
-                                    AS ready
-                            FROM mz_internal.mz_cluster_replica_statuses
-                            GROUP BY replica_id
-                        )
-                        AS statuses
-                    ON mz_catalog.mz_cluster_replicas.id = statuses.replica_id
-        ORDER BY 1, 2"#,
+    sql: r#"CREATE VIEW mz_internal.mz_show_cluster_replicas
+AS SELECT
+    mz_catalog.mz_clusters.name AS cluster,
+    mz_catalog.mz_cluster_replicas.name AS replica,
+    mz_catalog.mz_cluster_replicas.size AS size,
+    statuses.ready AS ready
+FROM
+    mz_catalog.mz_cluster_replicas
+        JOIN mz_catalog.mz_clusters
+            ON mz_catalog.mz_cluster_replicas.cluster_id = mz_catalog.mz_clusters.id
+        JOIN
+            (
+                SELECT
+                    replica_id,
+                    mz_internal.mz_all(status = 'ready') AS ready
+                FROM mz_internal.mz_cluster_replica_statuses
+                GROUP BY replica_id
+            ) AS statuses
+            ON mz_catalog.mz_cluster_replicas.id = statuses.replica_id
+ORDER BY 1, 2"#,
 };
 
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
@@ -2779,11 +2791,13 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_METRICS),
+        Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_HEARTBEATS),
         Builtin::Table(&MZ_AUDIT_EVENTS),
         Builtin::Table(&MZ_STORAGE_USAGE_BY_SHARD),
         Builtin::Table(&MZ_EGRESS_IPS),
+        Builtin::Table(&MZ_AWS_PRIVATELINK_CONNECTIONS),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
@@ -3016,7 +3030,7 @@ mod tests {
             })
             .collect();
 
-        let catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
         let conn_catalog = catalog.for_system_session();
         let resolve_type_oid = |item: &str| {
             conn_catalog
@@ -3215,7 +3229,7 @@ mod tests {
     // Make sure pg views don't use types that only exist in Materialize.
     #[tokio::test]
     async fn test_pg_views_forbidden_types() -> Result<(), anyhow::Error> {
-        let catalog = Catalog::open_debug_sqlite(SYSTEM_TIME.clone()).await?;
+        let catalog = Catalog::open_debug_memory(SYSTEM_TIME.clone()).await?;
         let conn_catalog = catalog.for_system_session();
 
         for view in BUILTINS::views()

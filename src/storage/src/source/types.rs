@@ -35,8 +35,8 @@ use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::MzOffset;
 
-use crate::source::healthcheck::SourceStatusUpdate;
 use crate::source::metrics::SourceBaseMetrics;
+use crate::source::source_reader_pipeline::HealthStatus;
 
 /// Extension trait to the SourceConnection trait that defines how to intantiate a particular
 /// connetion into a reader and offset committer
@@ -186,7 +186,7 @@ pub enum SourceMessageType<Key, Value, Diff> {
         Diff,
     ),
     /// Information about the source status
-    SourceStatus(SourceStatusUpdate),
+    SourceStatus(HealthStatus),
     /// Signals that this [`SourceReader`] instance will never emit
     /// messages/updates for a given partition anymore. This is similar enough
     /// to a timely operator dropping a capability, hence the naming.
@@ -556,6 +556,11 @@ impl SourceReaderMetrics {
                 SourceReaderPartitionMetrics::new(&self.base_metrics, self.source_id, pid)
             })
     }
+
+    /// Get metrics struct for offset committing.
+    pub fn offset_commit_metrics(&self) -> OffsetCommitMetrics {
+        OffsetCommitMetrics::new(&self.base_metrics, self.source_id)
+    }
 }
 
 /// Partition-specific metrics, recorded to both Prometheus and a system table
@@ -576,6 +581,24 @@ impl SourceReaderPartitionMetrics {
             source_resume_upper: base
                 .source_resume_upper
                 .get_delete_on_drop_gauge(vec![source_id.to_string(), partition_id.to_string()]),
+        }
+    }
+}
+
+/// Metrics about committing offsets
+pub struct OffsetCommitMetrics {
+    /// The offset-domain resume_upper for a source.
+    pub(crate) offset_commit_failures: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+}
+
+impl OffsetCommitMetrics {
+    /// Initialises partition metrics for a given (source_id, partition_id)
+    pub fn new(base_metrics: &SourceBaseMetrics, source_id: GlobalId) -> OffsetCommitMetrics {
+        let base = &base_metrics.source_specific;
+        OffsetCommitMetrics {
+            offset_commit_failures: base
+                .offset_commit_failures
+                .get_delete_on_drop_counter(vec![source_id.to_string()]),
         }
     }
 }

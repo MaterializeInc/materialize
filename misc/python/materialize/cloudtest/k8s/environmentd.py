@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import urllib.parse
-from typing import Optional
+from typing import Dict, Optional
 
 from kubernetes.client import (
     V1Container,
@@ -60,6 +60,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         self.tag = tag
         self.release_mode = release_mode
         self.log_filter = log_filter
+        self.env: Dict[str, str] = {}
         super().__init__()
 
     def generate_stateful_set(self) -> V1StatefulSet:
@@ -76,7 +77,15 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             V1EnvVar(name="AWS_ACCESS_KEY_ID", value="minio"),
             V1EnvVar(name="AWS_SECRET_ACCESS_KEY", value="minio123"),
             V1EnvVar(name="MZ_ANNOUNCE_EGRESS_IP", value="1.2.3.4,88.77.66.55"),
+            V1EnvVar(name="MZ_AWS_ACCOUNT_ID", value="123456789000"),
+            V1EnvVar(
+                name="MZ_AWS_EXTERNAL_ID_PREFIX",
+                value="eb5cb59b-e2fe-41f3-87ca-d2176a495345",
+            ),
         ]
+
+        for (k, v) in self.env.items():
+            env.append(V1EnvVar(name=k, value=v))
 
         ports = [V1ContainerPort(container_port=5432, name="sql")]
 

@@ -16,7 +16,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
-use mz_build_info::DUMMY_BUILD_INFO;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::critical::SinceHandle;
@@ -38,6 +37,7 @@ use crate::maelstrom::api::{Body, ErrorCode, MaelstromError, NodeId, ReqTxnOp, R
 use crate::maelstrom::node::{Handle, Service};
 use crate::maelstrom::services::{CachingBlob, MaelstromBlob, MaelstromConsensus};
 use crate::maelstrom::Args;
+use crate::BUILD_INFO;
 
 pub fn run(args: Args) -> Result<(), anyhow::Error> {
     let read = std::io::stdin();
@@ -625,7 +625,7 @@ impl Service for TransactorService {
         let blob = CachingBlob::new(blob);
 
         // Construct requested Consensus.
-        let mut config = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        let mut config = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
         // to simplify some downstream logic (+ a bit more stress testing),
         // always downgrade the since of critical handles when asked
         config.critical_downgrade_interval = Duration::from_secs(0);

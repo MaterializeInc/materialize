@@ -13,7 +13,7 @@ menu:
 
 A [source](../../overview/key-concepts/#sources) describes an external system you want Materialize to read data from, and provides details about how to decode and interpret that data. To create a source, you must specify a [connector](#connectors), a [format](#formats) and an [envelope](#envelopes).
 
-[//]: # "TODO(morsapaes) Clarify what the command gets going in the background in Cloud and add short description."
+[//]: # "TODO(morsapaes) Add short description about what the command gets going in the background."
 
 ## Connectors
 
@@ -166,8 +166,6 @@ The data in CSV sources is read as [`text`](/sql/types/text). You can then handl
 Any row that doesn't match the number of columns determined by the format is ignored, and Materialize logs an error.
 
 ## Envelopes
-
-[//]: # "TODO(morsapaes) Clarify if we should plug include Materialize CDC (../materialize-cdc) here."
 
 In addition to determining how to decode incoming records, Materialize also needs to understand how to interpret them. Whether a new record inserts, updates, or deletes existing data in Materialize depends on the `ENVELOPE` specified in the `CREATE SOURCE` statement.
 

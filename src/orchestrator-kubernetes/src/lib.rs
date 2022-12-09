@@ -9,7 +9,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
-use std::net::{IpAddr, Ipv4Addr};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
@@ -39,8 +38,8 @@ use tracing::warn;
 use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_orchestrator::{
-    LabelSelectionLogic, NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments,
-    ServiceConfig, ServiceEvent, ServiceStatus,
+    LabelSelectionLogic, NamespacedOrchestrator, Orchestrator, Service, ServiceConfig,
+    ServiceEvent, ServiceStatus,
 };
 use mz_orchestrator::{LabelSelector as MzLabelSelector, ServiceProcessMetrics};
 
@@ -207,7 +206,7 @@ impl k8s_openapi::Metadata for PodMetrics {
 impl NamespacedKubernetesOrchestrator {
     /// Return a `ListParams` instance that limits results to the namespace
     /// assigned to this orchestrator.
-    fn list_params(&self) -> ListParams {
+    fn list_pod_params(&self) -> ListParams {
         let ns_selector = format!(
             "environmentd.materialize.cloud/namespace={}",
             self.namespace
@@ -398,7 +397,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }
             };
             let memory = match parse_k8s_quantity(mem_str) {
-                Ok(q) => match q.try_to_integer(3, false) {
+                Ok(q) => match q.try_to_integer(0, false) {
                     Some(i) => Some(i),
                     None => {
                         tracing::error!("Memory value {q:?} out of range");
@@ -508,29 +507,11 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             .iter()
             .map(|p| (p.name.clone(), p.port_hint))
             .collect::<HashMap<_, _>>();
-        let peers = hosts
+        let listen_addrs = ports_in
             .iter()
-            .map(|host| (host.clone(), ports.clone()))
-            .collect::<Vec<_>>();
-
-        let mut node_selector: BTreeMap<String, String> = self
-            .config
-            .service_node_selector
-            .clone()
-            .into_iter()
-            .collect();
-        if let Some(availability_zone) = availability_zone {
-            node_selector.insert(
-                "materialize.cloud/availability-zone".to_string(),
-                availability_zone,
-            );
-        }
-        let mut args = args(&ServiceAssignments {
-            listen_host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-            ports: &ports,
-            index: None,
-            peers: &peers,
-        });
+            .map(|p| (p.name.clone(), format!("0.0.0.0:{}", p.port_hint)))
+            .collect::<HashMap<_, _>>();
+        let mut args = args(&listen_addrs);
         args.push("--secrets-reader=kubernetes".into());
         args.push(format!(
             "--secrets-reader-kubernetes-context={}",
@@ -566,6 +547,19 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             // cluster-autoscaler. Notably, eviction of pods for resource overuse is still enabled.
             "cluster-autoscaler.kubernetes.io/safe-to-evict".to_owned() => "false".to_string(),
         };
+
+        let mut node_selector: BTreeMap<String, String> = self
+            .config
+            .service_node_selector
+            .clone()
+            .into_iter()
+            .collect();
+        if let Some(availability_zone) = availability_zone {
+            node_selector.insert(
+                "materialize.cloud/availability-zone".to_string(),
+                availability_zone,
+            );
+        }
 
         let container_name = image
             .splitn(2, '/')
@@ -740,6 +734,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
     /// Drops the identified service, if it exists.
     async fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
+        fail::fail_point!("kubernetes_drop_service", |_| Err(anyhow!("failpoint")));
         self.service_scales
             .lock()
             .expect("poisoned lock")
@@ -768,7 +763,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
-        let stateful_sets = self.stateful_set_api.list(&self.list_params()).await?;
+        let stateful_sets = self.stateful_set_api.list(&Default::default()).await?;
         let name_prefix = format!("{}-", self.namespace);
         Ok(stateful_sets
             .into_iter()
@@ -818,7 +813,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             })
         }
 
-        let stream = watcher(self.pod_api.clone(), self.list_params())
+        let stream = watcher(self.pod_api.clone(), self.list_pod_params())
             .touched_objects()
             .filter_map(|object| async move {
                 match object {

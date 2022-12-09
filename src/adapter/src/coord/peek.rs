@@ -184,7 +184,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
     if dataflow_plan.objects_to_build.len() >= 1 && dataflow_plan.objects_to_build[0].id == view_id
     {
         let mir = &dataflow_plan.objects_to_build[0].plan.as_inner_mut();
-        if let mz_expr::MirRelationExpr::Constant { rows, .. } = mir {
+        if let Some((rows, ..)) = mir.as_const() {
             // In the case of a constant, we can return the result now.
             return Ok(Some(FastPathPlan::Constant(
                 rows.clone().map(|rows| {
@@ -490,10 +490,14 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 inverse.entry(*compute_instance).or_default().insert(*uuid);
             }
             for (compute_instance, uuids) in inverse {
-                self.controller
+                // It's possible that this compute instance no longer exists because it was dropped
+                // while the peek was in progress. In this case we ignore the error and move on
+                // because the dataflow no longer exists.
+                // TODO(jkosh44) Dropping a cluster should actively cancel all pending queries.
+                let _ = self
+                    .controller
                     .active_compute()
-                    .cancel_peeks(compute_instance, uuids)
-                    .unwrap();
+                    .cancel_peeks(compute_instance, uuids);
             }
 
             uuids

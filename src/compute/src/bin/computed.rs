@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process;
 
@@ -20,6 +19,7 @@ use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
 use mz_pid_file::PidFile;
 use mz_service::grpc::GrpcServer;
@@ -96,7 +96,6 @@ async fn main() {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
-    mz_timely_util::panic::halt_on_timely_communication_panic();
     let (tracing_target_callbacks, _sentry_guard) = mz_ore::tracing::configure(
         "computed",
         &args.tracing,
@@ -105,58 +104,59 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     )
     .await?;
 
+    // Keep this _after_ the mz_ore::tracing::configure call so that its panic
+    // hook runs _before_ the one that sends things to sentry.
+    mz_timely_util::panic::halt_on_timely_communication_panic();
+
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {
         _pid_file = Some(PidFile::open(pid_file_location).unwrap());
     }
 
-    info!("about to bind to {:?}", args.controller_listen_addr);
-
     let metrics_registry = MetricsRegistry::new();
-    {
+
+    mz_ore::task::spawn(|| "computed_internal_http_server", {
         let metrics_registry = metrics_registry.clone();
         tracing::info!(
             "serving internal HTTP server on {}",
             args.internal_http_listen_addr
         );
-        mz_ore::task::spawn(
-            || "computed_internal_http_server",
-            axum::Server::bind(&args.internal_http_listen_addr).serve(
-                mz_prof::http::router(&BUILD_INFO)
-                    .route(
-                        "/api/livez",
-                        routing::get(mz_http_util::handle_liveness_check),
-                    )
-                    .route(
-                        "/metrics",
-                        routing::get(move || async move {
-                            mz_http_util::handle_prometheus(&metrics_registry).await
-                        }),
-                    )
-                    .route(
-                        "/api/opentelemetry/config",
-                        routing::put(move |payload| async move {
-                            mz_http_util::handle_modify_filter_target(
-                                tracing_target_callbacks.tracing,
-                                payload,
-                            )
-                            .await
-                        }),
-                    )
-                    .route(
-                        "/api/stderr/config",
-                        routing::put(move |payload| async move {
-                            mz_http_util::handle_modify_filter_target(
-                                tracing_target_callbacks.stderr,
-                                payload,
-                            )
-                            .await
-                        }),
-                    )
-                    .into_make_service(),
-            ),
-        );
-    }
+        let listener = Listener::bind(args.internal_http_listen_addr).await?;
+        axum::Server::builder(listener).serve(
+            mz_prof::http::router(&BUILD_INFO)
+                .route(
+                    "/api/livez",
+                    routing::get(mz_http_util::handle_liveness_check),
+                )
+                .route(
+                    "/metrics",
+                    routing::get(move || async move {
+                        mz_http_util::handle_prometheus(&metrics_registry).await
+                    }),
+                )
+                .route(
+                    "/api/opentelemetry/config",
+                    routing::put(move |payload| async move {
+                        mz_http_util::handle_modify_filter_target(
+                            tracing_target_callbacks.tracing,
+                            payload,
+                        )
+                        .await
+                    }),
+                )
+                .route(
+                    "/api/stderr/config",
+                    routing::put(move |payload| async move {
+                        mz_http_util::handle_modify_filter_target(
+                            tracing_target_callbacks.stderr,
+                            payload,
+                        )
+                        .await
+                    }),
+                )
+                .into_make_service(),
+        )
+    });
 
     let config = mz_compute::server::Config {
         build_info: &BUILD_INFO,
@@ -165,6 +165,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     };
 
     let (_server, client_builder) = mz_compute::server::serve(config)?;
+
+    info!(
+        "listening for controller connections on {}",
+        args.controller_listen_addr
+    );
     GrpcServer::serve(
         args.controller_listen_addr,
         BUILD_INFO.semver_version(),

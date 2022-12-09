@@ -16,7 +16,7 @@
 //! [Segment]: https://segment.com
 //! [`segment`]: https://docs.rs/segment
 
-use segment::message::{Batch, BatchMessage, Message, Track, User};
+use segment::message::{Batch, BatchMessage, Group, Message, Track, User};
 use segment::{Batcher, Client as _, HttpClient};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -33,6 +33,7 @@ const MAX_PENDING_EVENTS: usize = 32_768;
 /// will be delivered to Segment.
 ///
 /// [Segment]: https://segment.com
+#[derive(Clone)]
 pub struct Client {
     tx: Sender<BatchMessage>,
 }
@@ -71,7 +72,7 @@ impl Client {
     ) where
         S: Into<String>,
     {
-        let message = BatchMessage::Track(Track {
+        self.send(BatchMessage::Track(Track {
             user: User::UserId {
                 user_id: user_id.to_string(),
             },
@@ -79,7 +80,29 @@ impl Client {
             properties,
             context,
             ..Default::default()
-        });
+        }));
+    }
+
+    /// Sends a new [group event] to Segment.
+    ///
+    /// Delivery happens asynchronously on a background thread. It is best
+    /// effort. There is no guarantee that the event will be delivered to
+    /// Segment. Events may be dropped when the client is backlogged. Errors are
+    /// logged but not returned.
+    ///
+    /// [track event]: https://segment.com/docs/connections/spec/group/
+    pub fn group(&self, user_id: Uuid, group_id: Uuid, traits: serde_json::Value) {
+        self.send(BatchMessage::Group(Group {
+            user: User::UserId {
+                user_id: user_id.to_string(),
+            },
+            group_id: group_id.to_string(),
+            traits,
+            ..Default::default()
+        }));
+    }
+
+    fn send(&self, message: BatchMessage) {
         match self.tx.try_send(message) {
             Ok(()) => (),
             Err(TrySendError::Closed(_)) => panic!("receiver must not drop first"),

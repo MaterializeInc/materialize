@@ -11,8 +11,8 @@
 //!
 //! All structurally equivalent expressions, defined recursively as having structurally
 //! equivalent inputs, and identical parameters, will be placed behind `Let` bindings.
-//! The resulting expressions likely have an excess of `Let` expressions, and should be
-//! subjected to the `InlineLet` transformation to remove those that are not necessary.
+//! The resulting expressions likely have an excess of `Let` expressions, and therefore
+//! we automatically run the `NormalizeLets` transformation to remove those that are not necessary.
 
 use std::collections::HashMap;
 
@@ -20,11 +20,25 @@ use mz_expr::visit::VisitChildren;
 use mz_expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
+use crate::normalize_lets::NormalizeLets;
 use crate::TransformArgs;
 
 /// Identifies common relation subexpressions and places them behind `Let` bindings.
 #[derive(Debug)]
-pub struct RelationCSE;
+pub struct RelationCSE {
+    normalize_lets: NormalizeLets,
+}
+
+impl RelationCSE {
+    /// Constructs a new [`RelationCSE`] instance.
+    ///
+    /// Also communicates its argument to let normalization.
+    pub fn new(inline_mfp: bool) -> RelationCSE {
+        RelationCSE {
+            normalize_lets: NormalizeLets::new(inline_mfp),
+        }
+    }
+}
 
 impl crate::Transform for RelationCSE {
     #[tracing::instrument(
@@ -36,11 +50,12 @@ impl crate::Transform for RelationCSE {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let mut bindings = Bindings::default();
         bindings.intern_expression(relation)?;
         bindings.populate_expression(relation);
+        self.normalize_lets.transform_without_trace(relation)?;
         mz_repr::explain_new::trace_plan(&*relation);
         Ok(())
     }
@@ -113,7 +128,14 @@ impl Bindings {
                 }
                 MirRelationExpr::Get { id, .. } => {
                     if let Id::Local(id) = id {
-                        *id = this.rebindings[id];
+                        if let Some(rebound) = this.rebindings.get(id) {
+                            *id = *rebound;
+                        } else {
+                            Err(crate::TransformError::Internal(format!(
+                                "Identifier missing: {:?}",
+                                id
+                            )))?;
+                        }
                     }
                 }
 
@@ -151,7 +173,7 @@ impl Bindings {
     /// Populates `expression` with necessary `Let` bindings.
     ///
     /// This population may result in substantially more `Let` bindings that one
-    /// might expect. It is very appropriate to run the `InlineLet` transformation
+    /// might expect. It is very appropriate to run the `NormalizeLets` transformation
     /// afterwards to remove `Let` bindings that it deems unhelpful.
     fn populate_expression(self, expression: &mut MirRelationExpr) {
         // Convert the bindings in to a sequence, by the local identifier.

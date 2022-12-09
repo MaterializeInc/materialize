@@ -29,7 +29,7 @@
 //! from compacting beyond the allowed compaction of each of its outputs, ensuring that we can
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::str::FromStr;
@@ -41,16 +41,17 @@ use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
 use futures::{future, FutureExt, StreamExt};
-use mz_ore::soft_assert;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
+use tracing::warn;
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_expr::RowSetFinishing;
 use mz_orchestrator::{CpuLimit, MemoryLimit, NamespacedOrchestrator, ServiceProcessMetrics};
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::{halt, soft_assert};
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
@@ -61,7 +62,8 @@ use crate::service::{ComputeClient, ComputeGrpcClient};
 
 use self::error::{
     CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
-    InstanceExists, InstanceMissing, PeekError, ReplicaCreationError, ReplicaDropError,
+    InstanceExists, InstanceMissing, PeekError, RemoveOrphansError, ReplicaCreationError,
+    ReplicaDropError,
 };
 use self::instance::{ActiveInstance, Instance};
 use self::orchestrator::ComputeOrchestrator;
@@ -181,6 +183,13 @@ pub enum ComputeReplicaLocation {
 }
 
 impl ComputeReplicaLocation {
+    pub fn num_processes(&self) -> usize {
+        match self {
+            ComputeReplicaLocation::Remote { addrs, .. } => addrs.len(),
+            ComputeReplicaLocation::Managed { allocation, .. } => allocation.scale.get(),
+        }
+    }
+
     pub fn get_az(&self) -> Option<&str> {
         match self {
             ComputeReplicaLocation::Remote { .. } => None,
@@ -336,6 +345,39 @@ impl<T> ComputeController<T> {
             storage,
         }
     }
+
+    /// Remove orphaned compute replicas from the orchestrator. These are replicas that the
+    /// orchestrator is aware of, but not the controller.
+    pub async fn remove_orphans(
+        &self,
+        next_replica_id: ReplicaId,
+    ) -> Result<(), RemoveOrphansError> {
+        let keep: HashSet<_> = self
+            .instances
+            .iter()
+            .flat_map(|(_, inst)| inst.replica_ids())
+            .collect();
+
+        let current: HashSet<_> = self.orchestrator.list_replicas().await?.collect();
+
+        for (inst_id, replica_id) in current.into_iter() {
+            if replica_id >= next_replica_id {
+                // Found a replica in kubernetes with a higher replica id than what we are aware
+                // of. This must have been created by an environmentd with higher epoch number.
+                halt!(
+                    "Found replica id ({}) in orchestrator >= next id ({})",
+                    replica_id,
+                    next_replica_id
+                );
+            }
+
+            if !keep.contains(&replica_id) {
+                self.orchestrator.drop_replica(inst_id, replica_id).await?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl<T> ComputeController<T>
@@ -455,7 +497,7 @@ where
                 let metrics = match result {
                     Ok(metrics) => metrics,
                     Err(e) => {
-                        tracing::log::warn!("Failed to get metrics for replica {replica_id}: {e}");
+                        warn!("failed to get metrics for replica {replica_id}: {e}");
                         return;
                     }
                 };
@@ -720,7 +762,7 @@ where
             if let Ok(mut instance) = self.instance(instance_id) {
                 instance.handle_response(response, replica_id)
             } else {
-                tracing::warn!(
+                warn!(
                     ?instance_id,
                     ?response,
                     "processed response from unknown instance"

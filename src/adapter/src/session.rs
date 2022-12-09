@@ -87,7 +87,6 @@ pub struct Session<T = mz_repr::Timestamp> {
     vars: SessionVars,
     notices_tx: mpsc::UnboundedSender<AdapterNotice>,
     notices_rx: mpsc::UnboundedReceiver<AdapterNotice>,
-    prev_notice: Option<AdapterNotice>,
     next_transaction_id: TransactionId,
 }
 
@@ -123,7 +122,6 @@ impl<T: TimestampManipulation> Session<T> {
             vars,
             notices_tx,
             notices_rx,
-            prev_notice: None,
             next_transaction_id: 0,
         }
     }
@@ -137,6 +135,11 @@ impl<T: TimestampManipulation> Session<T> {
     /// current transaction.
     pub fn pcx(&self) -> &PlanContext {
         &self.transaction().inner().unwrap().pcx
+    }
+
+    /// Reports whether the session is a system session.
+    pub fn is_system(&self) -> bool {
+        crate::catalog::is_reserved_name(&self.user().name)
     }
 
     /// Starts an explicit transaction, or changes an implicit to an explicit
@@ -367,16 +370,6 @@ impl<T: TimestampManipulation> Session<T> {
             if cluster != self.vars.cluster() {
                 return None;
             }
-        }
-        match self.prev_notice.as_ref() {
-            // De-duplicate ClusterReplicaStatusChanged notices.
-            Some(prev_notice @ AdapterNotice::ClusterReplicaStatusChanged { .. }) => {
-                if prev_notice == &notice {
-                    return None;
-                }
-                self.prev_notice = Some(notice.clone());
-            }
-            _ => self.prev_notice = None,
         }
         Some(notice)
     }

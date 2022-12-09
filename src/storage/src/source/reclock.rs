@@ -25,6 +25,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use differential_dataflow::consolidation;
+use differential_dataflow::difference::Abelian;
 use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
 use timely::order::{PartialOrder, TotalOrder};
@@ -185,29 +186,64 @@ where
         // We need to compute the answer by iterating over the consolidated remap trace which will
         // present to us one diff at a time. We know that by construction at any given IntoTime
         // time the remap collection accumulates to a well formed antichain. That is, it contains
-        // exactly one copy of mutually incomparable FromTime elements. Therefore, when we see a
-        // positive diff of some element `from_t` occuring at some timestamp `into_t` we also know
-        // that the FromTime frontier at `into_t` included that element.
+        // exactly one copy of mutually incomparable FromTime elements.
         //
-        // What we do then is that for every positive diff at IntoTime `ts` we check whether the
-        // FromTime element `frontier_ts` is less than or equal to the timestamp to be reclocked
-        // `src_ts`:
-        // * If it is, then the `FromTime` frontier at `ts` *must* be less than or equal to
-        //   `src_ts` and so we know that `src_ts` should *not* be reclocked at `ts` because it is
-        //   beyond the frontier. We codify that by adding `ts` into a mutable antichain with the
-        //   minimum frequency.
-        // * If it is not, then the `FromTime` frontier at `ts` *may* be less than or equal to
-        //   `src_ts` so `src_ts` *may* be reclocked to `ts`. We codify that by adding `ts` into a
-        //   mutable antichain with a frequency of 1.
+        // We also know that `src_ts` is beyond the since frontier, therefore there exist witness
+        // timestamps `from_ts` that are less than or equal to `src_ts` and occur at IntoTime times
+        // with a positive diff. We also know that `src_ts` is not beyond the upper frontier,
+        // therefore all the positive diffs of the witness times must be retracted at subsequent
+        // IntoTime times.
         //
-        // Once we have considered all the diffs we will end up with a mutable antichain that
-        // contains timestamps with frequency 1 for all the IntoTimes times that `src_ts` might be
-        // reclocked to and timestamps with frequency Diff::MIN for all the IntoTimes that `src_ts`
-        // definitely is not reclocked to.
+        // This cycle may be repeated an arbitrary amount of times until the final retraction. The
+        // IntoTime times at which the final retraction happens are the times that `src_ts` should
+        // be reclocked to.
         //
-        // Computing the overall frontier of this mutable antichain will give us the minimum
-        // IntoTimes such that the accumulation of remap collection results in a FromTime frontier
-        // such that `src_ts` is not beyond that frontier.
+        // Therefore, if we filter the remap trace for witness timestamps and construct a
+        // MutableAntichain of the IntoTime times the witnesses occur at with a negated diff we'll
+        // end up computing a frontier of all the IntoTime times such that the remap collection
+        // accumulates to a frontier `f` such that `src_ts` is not beyond `f`, since the witness
+        // has been retracted.
+        //
+        // For our example above the remap trace would look like this:
+        //
+        // (A, t0, +1)
+        //
+        // (A, t1, -1)
+        // (B, t1, +1)
+        // (C, t1, +1)
+        //
+        // (B, t2, -1)
+        // (C, t2, -1)
+        // (F, t2, +1)
+        // (G, t2, +1)
+        //
+        // (F, t3, -1)
+        // (G, t3, -1)
+        // (H, t3, +1)
+        //
+        // (B, t4, -1)
+        // (C, t4, -1)
+        // (H, t4, +1)
+        //
+        // We are interested in reclocking the FromTime D so if we filter the trace for witnesses
+        // (i.e triplets such that `from_ts` is less than or equal to D) we are left with:
+        //
+        // (A, t0, +1)
+        // (A, t1, -1)
+        // (B, t1, +1)
+        // (B, t2, -1)
+        // (B, t4, -1)
+        //
+        // Keeping the IntoTime component and negating the diffs we have the following collection:
+        //
+        // (t0, -1)
+        // (t1, +1)
+        // (t1, -1)
+        // (t2, +1)
+        // (t4, +1)
+        //
+        // Processing this through a MutableAntichain will give as the desired frontier {t2, t4}
+        // since the diffs for t1 cancel out and t0 has a negative diff.
         //
         // While IntoTime is a partially ordered time and in the example above the answer was two
         // separate times, we force that there is actually only one such time by requiring the
@@ -216,17 +252,14 @@ where
         // implementation require a single IntoTime result. We should ideally lift that and make
         // the reclock operators fully general.
         let mut into_times = MutableAntichain::new();
-        for (frontier_ts, into_ts, diff) in inner.remap_trace.iter() {
-            if *diff > 0 {
-                if PartialOrder::less_equal(frontier_ts, src_ts) {
-                    into_times.update_dirty(into_ts.clone(), Diff::MIN);
-                } else {
-                    into_times.update_dirty(into_ts.clone(), 1);
-                }
-            }
-        }
-        // Tidy up the mutable antichain
-        into_times.update_iter([]);
+
+        into_times.update_iter(
+            inner
+                .remap_trace
+                .iter()
+                .filter(|(from_ts, _, _)| PartialOrder::less_equal(from_ts, src_ts))
+                .map(|(_, into_ts, diff)| (into_ts.clone(), diff.negate())),
+        );
         Ok(into_times.frontier().to_owned())
     }
 
@@ -993,6 +1026,37 @@ mod tests {
                 (3, 2000.into()),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn test_reclock_gh16318() {
+        const PART0: PartitionId = PartitionId::Kafka(0);
+        const PART1: PartitionId = PartitionId::Kafka(1);
+        let (mut operator, mut follower) =
+            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+
+        // First mint bindings for PART0 at timestamp 1000
+        let source_upper = partitioned_frontier([(PART0, MzOffset::from(50))]);
+        follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
+
+        // Then only for PART1 at timestamp 2000
+        let source_upper =
+            partitioned_frontier([(PART0, MzOffset::from(50)), (PART1, MzOffset::from(50))]);
+        follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
+
+        // Then again only for PART0 at timestamp 3000
+        let source_upper =
+            partitioned_frontier([(PART0, MzOffset::from(100)), (PART1, MzOffset::from(50))]);
+        follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
+
+        // Reclockng (PART0, 50) must ignore the updates on the FromTime frontier that happened at
+        // timestamp 2000 since those are completely unrelated
+        let batch = vec![(50, Partitioned::with_partition(PART0, MzOffset::from(50)))];
+        let reclocked_msgs = follower
+            .reclock(batch)
+            .map(|(m, ts)| (m, ts.unwrap()))
+            .collect_vec();
+        assert_eq!(reclocked_msgs, &[(50, 3000.into())]);
     }
 
     #[tokio::test]

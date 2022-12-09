@@ -56,6 +56,8 @@ class Materialized(Service):
         volumes_extra: Optional[List[str]] = None,
         depends_on: Optional[List[str]] = None,
         allow_host_ports: bool = False,
+        environment_id: Optional[str] = None,
+        propagate_crashes: bool = True,
     ) -> None:
         if persist_blob_url is None:
             persist_blob_url = f"file://{data_directory}/persist/blob"
@@ -66,6 +68,10 @@ class Materialized(Service):
                 "MZ_UNSAFE_MODE=1",
                 "MZ_EXPERIMENTAL=1",
                 f"MZ_PERSIST_BLOB_URL={persist_blob_url}",
+                f"MZ_ORCHESTRATOR=process",
+                f"MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY={data_directory}/secrets",
+                # TODO(benesch): remove this legacy environment variable once
+                # the upgrade tests no longer test v0.33.
                 f"MZ_ORCHESTRATOR_PROCESSDATA_DIRECTORY={data_directory}",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
@@ -86,6 +92,12 @@ class Materialized(Service):
                 "AWS_SECRET_ACCESS_KEY",
                 "AWS_SESSION_TOKEN",
             ]
+
+        if environment_id:
+            environment += [f"MZ_ENVIRONMENT_ID={environment_id}"]
+
+        if propagate_crashes:
+            environment += ["MZ_ORCHESTRATOR_PROCESS_PROPAGATE_CRASHES=1"]
 
         self.default_storage_size = default_size
         self.default_replica_size = (
@@ -307,7 +319,8 @@ class Kafka(Service):
         name: str = "kafka",
         image: str = "confluentinc/cp-kafka",
         tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
-        port: int = 9092,
+        port: Union[str, int] = 9092,
+        allow_host_ports: bool = False,
         auto_create_topics: bool = False,
         broker_id: int = 1,
         offsets_topic_replication_factor: int = 1,
@@ -335,6 +348,7 @@ class Kafka(Service):
         config: ServiceConfig = {
             "image": f"{image}:{tag}",
             "ports": [port],
+            "allow_host_ports": allow_host_ports,
             "environment": [
                 *environment,
                 f"KAFKA_AUTO_CREATE_TOPICS_ENABLE={auto_create_topics}",

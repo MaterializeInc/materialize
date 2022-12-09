@@ -11,11 +11,11 @@ name = "like_pattern"
 harness = false
 
 [dependencies]
-aho-corasick = "0.7.19"
+aho-corasick = "0.7.20"
 anyhow = "1.0.66"
 bytes = "1.2.1"
 bytesize = "1.1.0"
-chrono = { version = "0.4.23", default-features = false, features = ["clock", "std"] }
+chrono = { version = "0.4.23", default-features = false, features = ["std"] }
 csv = "1.1.6"
 dec = "0.4.8"
 derivative = "2.2.0"
@@ -28,7 +28,7 @@ itertools = "0.10.5"
 once_cell = "1.16.0"
 md-5 = "0.10.5"
 mz-lowertest = { path = "../lowertest" }
-mz-ore = { path = "../ore" }
+mz-ore = { path = "../ore", features = ["network"] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-persist-types = { path = "../persist-types" }
@@ -41,7 +41,7 @@ prost = { version = "0.11.2", features = ["no-recursion-limit"] }
 regex = "1.7.0"
 regex-syntax = "0.6.28"
 serde = { version = "1.0.147", features = ["derive"] }
-serde_json = "1.0.88"
+serde_json = "1.0.89"
 serde_regex = "1.1.0"
 sha1 = "0.10.5"
 sha2 = "0.10.6"

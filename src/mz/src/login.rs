@@ -7,20 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
+use std::io::Write;
+use std::net::SocketAddr;
+
 use anyhow::{bail, Context, Ok, Result};
 use axum::http::StatusCode;
 use axum::{extract::Query, response::IntoResponse, routing::get, Router};
-use std::net::SocketAddr;
-
-use std::{collections::HashMap, io::Write};
-use tokio::sync::broadcast::{channel, Sender};
-
-use crate::configuration::{Configuration, FronteggAPIToken, FronteggAuth};
-use crate::utils::trim_newline;
-use crate::{BrowserAPIToken, API_TOKEN_AUTH_URL, USER_AUTH_URL, WEB_LOGIN_URL};
-
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::Client;
+use tokio::sync::broadcast::{channel, Sender};
+
+use crate::configuration::{Configuration, Endpoint, FronteggAPIToken, FronteggAuth};
+use crate::utils::trim_newline;
+use crate::BrowserAPIToken;
 
 /// Request handler for the server waiting the browser API token creation
 // Axum requires the handler be async even though we don't await
@@ -45,13 +45,14 @@ async fn request(
 
 /// Log the user using the browser, generates an API token and saves the new profile data.
 pub(crate) async fn login_with_browser(
+    endpoint: Endpoint,
     profile_name: &str,
     config: &mut Configuration,
 ) -> Result<()> {
-    // Open the browser to login user
-    let path = format!("{:}?profile_name={:}", WEB_LOGIN_URL, profile_name);
-    if let Err(err) = open::that(path.clone()) {
-        bail!("An error occurred when opening '{}': {}", path, err)
+    // Open the browser to login user.
+    let url = endpoint.web_login_url(profile_name).to_string();
+    if let Err(err) = open::that(&url) {
+        bail!("An error occurred when opening '{}': {}", url, err)
     }
 
     // Start the server to handle the request response
@@ -74,7 +75,7 @@ pub(crate) async fn login_with_browser(
         .context("failed to retrive new profile")?
     {
         Some((email, api_token)) => {
-            config.create_or_update_profile(profile_name.to_string(), email, api_token);
+            config.create_or_update_profile(endpoint, profile_name.to_string(), email, api_token);
             Ok(())
         }
         None => bail!("failed to login via browser"),
@@ -83,6 +84,7 @@ pub(crate) async fn login_with_browser(
 
 /// Generates an API token using an access token
 pub(crate) async fn generate_api_token(
+    endpoint: &Endpoint,
     client: &Client,
     access_token_response: FronteggAuth,
     description: &String,
@@ -100,7 +102,7 @@ pub(crate) async fn generate_api_token(
     body.insert("description", description);
 
     client
-        .post(API_TOKEN_AUTH_URL)
+        .post(endpoint.api_token_url())
         .headers(headers)
         .json(&body)
         .send()
@@ -110,7 +112,12 @@ pub(crate) async fn generate_api_token(
 }
 
 /// Generates an access token using an API token
-async fn authenticate_user(client: &Client, email: &str, password: &str) -> Result<FronteggAuth> {
+async fn authenticate_user(
+    endpoint: &Endpoint,
+    client: &Client,
+    email: &str,
+    password: &str,
+) -> Result<FronteggAuth> {
     let mut access_token_request_body = HashMap::new();
     access_token_request_body.insert("email", email);
     access_token_request_body.insert("password", password);
@@ -120,7 +127,7 @@ async fn authenticate_user(client: &Client, email: &str, password: &str) -> Resu
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
     let response = client
-        .post(USER_AUTH_URL)
+        .post(endpoint.user_auth_url())
         .headers(headers)
         .json(&access_token_request_body)
         .send()
@@ -139,6 +146,7 @@ async fn authenticate_user(client: &Client, email: &str, password: &str) -> Resu
 
 /// Log the user using the console, generates an API token and saves the new profile data.
 pub(crate) async fn login_with_console(
+    endpoint: Endpoint,
     profile_name: &String,
     config: &mut Configuration,
 ) -> Result<()> {
@@ -158,15 +166,16 @@ pub(crate) async fn login_with_console(
 
     // Check if there is a secret somewhere.
     // If there is none save the api token someone on the root folder.
-    let auth_user = authenticate_user(&client, &email, &password).await?;
+    let auth_user = authenticate_user(&endpoint, &client, &email, &password).await?;
     let api_token = generate_api_token(
+        &endpoint,
         &client,
         auth_user,
         &String::from("App password for the CLI"),
     )
     .await?;
 
-    config.create_or_update_profile(profile_name.to_string(), email, api_token);
+    config.create_or_update_profile(endpoint, profile_name.to_string(), email, api_token);
 
     Ok(())
 }

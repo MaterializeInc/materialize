@@ -36,9 +36,10 @@ SELECT id FROM mz_sources WHERE name = 'kafka_source'
 
 > select * from mz_internal.mz_source_status_history where source_id = '${source_id}' order by occurred_at;
 "<TIMESTAMP> UTC" ${source_id} starting <null> <null>
+"<TIMESTAMP> UTC" ${source_id} running <null> <null>
 
 > select * from mz_internal.mz_source_status where id = '${source_id}';
-"${source_id}" kafka_source kafka "<TIMESTAMP> UTC" starting <null> <null>
+"${source_id}" kafka_source kafka "<TIMESTAMP> UTC" running <null> <null>
 
 $ set-from-sql var=sink_id
 SELECT id FROM mz_sinks WHERE name = 'kafka_sink'

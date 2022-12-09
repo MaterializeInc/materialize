@@ -36,26 +36,25 @@ pub mod canonicalize_mfp;
 pub mod column_knowledge;
 pub mod cse;
 pub mod demand;
+pub mod fold_constants;
 pub mod fusion;
-pub mod inline_let;
 pub mod join_implementation;
 pub mod literal_lifting;
 pub mod monotonic;
 pub mod nonnull_requirements;
 pub mod nonnullable;
+pub mod normalize_lets;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
 pub mod projection_lifting;
 pub mod projection_pushdown;
 pub mod reduce_elision;
-pub mod reduction;
 pub mod reduction_pushdown;
 pub mod redundant_join;
 pub mod semijoin_idempotence;
 pub mod threshold_elision;
 pub mod topk_elision;
 pub mod union_cancel;
-pub mod update_let;
 
 pub mod dataflow;
 pub use dataflow::optimize_dataflow;
@@ -67,8 +66,6 @@ extern crate num_derive;
 /// Arguments that get threaded through all transforms.
 #[derive(Debug)]
 pub struct TransformArgs<'a> {
-    /// A shared instance of IdGen to allow constructing new Let expressions.
-    pub id_gen: &'a mut IdGen,
     /// The indexes accessible.
     pub indexes: &'a dyn IndexOracle,
 }
@@ -182,7 +179,6 @@ impl Transform for Fixpoint {
                         transform.transform(
                             relation,
                             TransformArgs {
-                                id_gen: args.id_gen,
                                 indexes: args.indexes,
                             },
                         )?;
@@ -206,7 +202,6 @@ impl Transform for Fixpoint {
             transform.transform(
                 relation,
                 TransformArgs {
-                    id_gen: args.id_gen,
                     indexes: args.indexes,
                 },
             )?;
@@ -230,11 +225,8 @@ impl Default for FuseAndCollapse {
         Self {
             // TODO: The relative orders of the transforms have not been
             // determined except where there are comments.
-            // TODO (#6542): All the transforms here except for
-            // `ProjectionLifting`, `InlineLet`, `UpdateLet`, and
-            // `RedundantJoin` can be implemented as free functions. Note that
-            // (#716) proposes the removal of `InlineLet` and `UpdateLet` as a
-            // transforms.
+            // TODO (#6542): All the transforms here except for `ProjectionLifting`
+            //  and `RedundantJoin` can be implemented as free functions.
             transforms: vec![
                 Box::new(crate::projection_extraction::ProjectionExtraction),
                 Box::new(crate::projection_lifting::ProjectionLifting::default()),
@@ -245,7 +237,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::fusion::project::Project),
                 Box::new(crate::fusion::join::Join),
                 Box::new(crate::fusion::top_k::TopK),
-                Box::new(crate::inline_let::InlineLet::new(false)),
+                Box::new(crate::normalize_lets::NormalizeLets::new(false)),
                 Box::new(crate::fusion::reduce::Reduce),
                 Box::new(crate::fusion::union::Union),
                 // This goes after union fusion so we can cancel out
@@ -253,7 +245,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::union_cancel::UnionBranchCancellation),
                 // This should run before redundant join to ensure that key info
                 // is correct.
-                Box::new(crate::update_let::UpdateLet::default()),
+                Box::new(crate::normalize_lets::NormalizeLets::new(false)),
                 // Removes redundant inputs from joins.
                 // Note that this eliminates one redundant input per join,
                 // so it is necessary to run this section in a loop.
@@ -267,7 +259,7 @@ impl Default for FuseAndCollapse {
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
                 // clearly see this.
-                Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
+                Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
             ],
         }
     }
@@ -289,7 +281,6 @@ impl Transform for FuseAndCollapse {
             transform.transform(
                 relation,
                 TransformArgs {
-                    id_gen: args.id_gen,
                     indexes: args.indexes,
                 },
             )?;
@@ -363,10 +354,7 @@ impl Optimizer {
                     // Join fusion will clean this up to `Map{Input, Literal}`
                     Box::new(crate::literal_lifting::LiteralLifting::default()),
                     // Identifies common relation subexpressions.
-                    // Must be followed by let inlining, to keep under control.
-                    Box::new(crate::cse::relation_cse::RelationCSE),
-                    Box::new(crate::inline_let::InlineLet::new(false)),
-                    Box::new(crate::update_let::UpdateLet::default()),
+                    Box::new(crate::cse::relation_cse::RelationCSE::new(false)),
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
@@ -394,18 +382,15 @@ impl Optimizer {
                 transforms: vec![
                     Box::new(crate::join_implementation::JoinImplementation::default()),
                     Box::new(crate::column_knowledge::ColumnKnowledge::default()),
-                    Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
+                    Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
                     Box::new(crate::demand::Demand::default()),
                     Box::new(crate::literal_lifting::LiteralLifting::default()),
                 ],
             }),
             Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
             // Identifies common relation subexpressions.
-            // Must be followed by let inlining, to keep under control.
-            Box::new(crate::cse::relation_cse::RelationCSE),
-            Box::new(crate::inline_let::InlineLet::new(false)),
-            Box::new(crate::update_let::UpdateLet::default()),
-            Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
+            Box::new(crate::cse::relation_cse::RelationCSE::new(false)),
+            Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
             // Remove threshold operators which have no effect.
             // Must be done at the very end of the physical pass, because before
             // that (at least at the moment) we cannot be sure that all trees
@@ -440,9 +425,8 @@ impl Optimizer {
                     // This goes after union fusion so we can cancel out
                     // more branches at a time.
                     Box::new(crate::union_cancel::UnionBranchCancellation),
-                    Box::new(crate::cse::relation_cse::RelationCSE),
-                    Box::new(crate::inline_let::InlineLet::new(true)),
-                    Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
+                    Box::new(crate::cse::relation_cse::RelationCSE::new(true)),
+                    Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
                 ],
             }),
         ];
@@ -492,15 +476,8 @@ impl Optimizer {
         relation: &mut MirRelationExpr,
         indexes: &dyn IndexOracle,
     ) -> Result<(), TransformError> {
-        let mut id_gen = Default::default();
         for transform in self.transforms.iter() {
-            transform.transform(
-                relation,
-                TransformArgs {
-                    id_gen: &mut id_gen,
-                    indexes,
-                },
-            )?;
+            transform.transform(relation, TransformArgs { indexes })?;
         }
 
         Ok(())

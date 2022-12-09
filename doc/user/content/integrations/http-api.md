@@ -32,7 +32,7 @@ The API:
     - `CLOSE`
     - `COPY`
     - `DECLARE`
-    - `SET`
+    - `FETCH`
     - `SUBSCRIBE`
 
 ### Transactional semantics

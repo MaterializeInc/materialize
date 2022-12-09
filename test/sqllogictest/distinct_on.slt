@@ -45,10 +45,6 @@ Explained Query:
       Project (#0, #2) // { arity: 2 }
         Get materialize.public.abc // { arity: 3 }
 
-Source materialize.public.abc
-  project=(#0, #3, #2)
-  map=(dummy)
-
 EOF
 
 query T multiline

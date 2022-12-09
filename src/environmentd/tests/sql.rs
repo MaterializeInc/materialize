@@ -17,6 +17,7 @@ use std::error::Error;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use axum::response::IntoResponse;
@@ -28,6 +29,7 @@ use postgres::Row;
 use regex::Regex;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
+use tokio_postgres::error::SqlState;
 use tracing::info;
 
 use mz_adapter::catalog::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
@@ -1104,7 +1106,7 @@ source materialize.public.t1 (u1, storage):
 // of cancelled (sends a pgwire cancel request on a new connection).
 #[test]
 fn test_github_12546() {
-    let config = util::Config::default();
+    let config = util::Config::default().with_propagate_crashes(false);
     let server = util::start_server(config).unwrap();
 
     server
@@ -1783,7 +1785,7 @@ fn test_idle_in_transaction_session_timeout() {
     // session should be timed out even if transaction has failed.
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
-        .batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")
+        .batch_execute("SET idle_in_transaction_session_timeout TO '50ms'")
         .unwrap();
     client.batch_execute("BEGIN").unwrap();
     let error = client.batch_execute("SELECT 1/0").unwrap_err();
@@ -1791,7 +1793,7 @@ fn test_idle_in_transaction_session_timeout() {
         !error.is_closed(),
         "failing a transaction should not close the connection: {error:?}"
     );
-    std::thread::sleep(Duration::from_millis(5));
+    std::thread::sleep(Duration::from_millis(51));
     // Retry because sleep might be woken up early.
     Retry::default()
         .max_duration(Duration::from_secs(1))
@@ -1814,12 +1816,10 @@ fn test_idle_in_transaction_session_timeout() {
     // session should not be timed out if it's not idle.
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
-        .batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")
+        .batch_execute("SET idle_in_transaction_session_timeout TO '50ms'")
         .unwrap();
     client.batch_execute("BEGIN").unwrap();
-    client
-        .query("SELECT mz_internal.mz_sleep(0.5)", &[])
-        .unwrap();
+    client.query("SELECT mz_internal.mz_sleep(1)", &[]).unwrap();
     client.query("SELECT 1", &[]).unwrap();
     client.batch_execute("COMMIT").unwrap();
 
@@ -1892,4 +1892,49 @@ fn test_coord_startup_blocking() {
         .max_duration(Duration::from_secs(30))
         .retry(|_| rx.try_recv())
         .unwrap();
+}
+
+#[test]
+fn test_cancel_on_dropped_cluster() {
+    let config = util::Config::default().unsafe_mode();
+    let server = util::start_server(config).unwrap();
+
+    let mut read_client = server.connect(postgres::NoTls).unwrap();
+    let read_client_cancel = read_client.cancel_token();
+    read_client.batch_execute("CREATE TABLE t ()").unwrap();
+
+    let handle = thread::spawn(move || {
+        // Run query asynchronously that will hang forever.
+        let res = read_client.query_one("SELECT * FROM t AS OF 18446744073709551615", &[]);
+        assert!(res.is_err(), "cancelled query should return error");
+        let err = res.unwrap_err().unwrap_db_error();
+        assert_eq!(
+            err.code(),
+            &SqlState::QUERY_CANCELED,
+            "error code should match QUERY_CANCELED"
+        );
+    });
+
+    // Wait for asynchronous query to start.
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let count: i64 = client
+                .query_one("SELECT COUNT(*) FROM mz_internal.mz_active_peeks", &[])
+                .unwrap()
+                .get(0);
+            if count == 1 {
+                Ok(())
+            } else {
+                Err(format!("query should return 1 rows, instead saw {count}"))
+            }
+        })
+        .unwrap();
+
+    // Drop cluster that query is running on.
+    let mut drop_client = server.connect(postgres::NoTls).unwrap();
+    drop_client.batch_execute("DROP CLUSTER default").unwrap();
+    read_client_cancel.cancel_query(postgres::NoTls).unwrap();
+    handle.join().unwrap();
 }

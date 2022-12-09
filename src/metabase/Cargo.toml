@@ -7,5 +7,5 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-reqwest = "0.11.13"
+reqwest = { version = "0.11.13", features = ["json"] }
 serde = { version = "1.0.147", features = ["derive"] }

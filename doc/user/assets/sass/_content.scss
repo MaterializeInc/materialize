@@ -101,6 +101,16 @@ p+p {
     li {
         position: relative;
 
+        p:first-child {
+            margin-top: 0;
+        }
+
+        ul,
+        ol {
+            margin-top: var(--micro);
+            margin-left: var(--milli);
+        }
+
         &:not(:last-child) {
             margin-bottom: var(--pico);
         }
@@ -110,8 +120,7 @@ p+p {
         }
 
         .highlight:only-child {
-            display: inline-block;
-            margin-bottom: 1rem;
+            margin: 1rem 0;
 
             pre {
                 margin: 0;
@@ -409,6 +418,10 @@ p+p {
             &:last-child {
                 padding-bottom: 0;
             }
+
+            p {
+                display: block;
+            }
         }
     }
 
@@ -482,6 +495,7 @@ p+p {
         margin: 1.6rem 0;
         padding: 1.6rem 1.6rem 1.6rem 9.6rem;
         position: relative;
+        border-radius: 1.2rem;
 
         p:first-of-type {
             margin-top: 0;
@@ -797,6 +811,8 @@ p+p {
     display: none;
     position: absolute;
     font-size: 1.2rem;
+    font-weight: 300;
+    border: none;
     background-color: $grey-light;
     height: 26px;
     padding: 0 12px;
@@ -892,6 +908,11 @@ body.dark .content {
     .note {
         a {
             color: #4f0cff;
+        }
+
+        &::after {
+            border-color: var(--bg) var(--bg) var(--gray-mid) var(--note);
+            background: var(--note);
         }
     }
 

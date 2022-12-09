@@ -28,6 +28,24 @@ We are rolling out Early Access to the new, cloud-native version of Materialize.
 
 ## Connect
 
+1. Install the `psql` client:
+
+    For macOS:
+
+    ```shell
+    brew install libpq
+    brew link --force libpq
+    ```
+
+    For Debian-based distributions:
+
+    ```shell
+    sudo apt-get update
+    sudo apt-get install postgresql-client
+    ```
+
+    For other operating systems, see the [`psql` installation instructions](/integrations/sql-clients#installation-instructions-for-psql).
+
 1. Open a terminal window and connect to Materialize using any Materialize-compatible CLI, like `psql`. If you already have `psql` installed on your machine, use the provided connection string to connect:
 
     Example:

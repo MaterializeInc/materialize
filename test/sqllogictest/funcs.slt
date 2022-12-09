@@ -247,7 +247,7 @@ Explained Query:
     Map (date_truncts(#0, #1)) // { arity: 3 }
       CrossJoin type=differential // { arity: 2 }
         implementation
-          %1:date_trunc_timestamps » %0:date_trunc_fields[×]A
+          %1:date_trunc_timestamps[×] » %0:date_trunc_fields[×]A
         ArrangeBy keys=[[]] // { arity: 1 }
           Get materialize.public.date_trunc_fields // { arity: 1 }
         ArrangeBy keys=[[]] // { arity: 1 }
@@ -704,10 +704,6 @@ Explained Query:
     Map ((#0) IS NULL) // { arity: 3 }
       Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -718,10 +714,6 @@ Explained Query:
     Map ((#0) IS NULL) // { arity: 3 }
       Get materialize.public.t // { arity: 2 }
 
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
-
 EOF
 
 query T multiline
@@ -731,10 +723,6 @@ Explained Query:
   Project (#2) // { arity: 1 }
     Map ((#0) IS NULL) // { arity: 3 }
       Get materialize.public.t // { arity: 2 }
-
-Source materialize.public.t
-  project=(#0, #2)
-  map=(dummy)
 
 EOF
 

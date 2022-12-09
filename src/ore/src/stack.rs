@@ -217,6 +217,12 @@ pub struct RecursionGuard {
     limit: usize,
 }
 
+impl CheckedRecursion for RecursionGuard {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        self
+    }
+}
+
 impl RecursionGuard {
     /// Constructs a new recursion guard with the specified recursion
     /// limit.

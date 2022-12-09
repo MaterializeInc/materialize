@@ -93,7 +93,7 @@ use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::NowFn;
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -116,20 +116,21 @@ use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
-    self, storage, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
-    ClusterReplicaSizeMap, DataSourceDesc, StorageHostSizeMap, StorageSinkConnectionState,
+    self, storage, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog,
+    CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, StorageHostSizeMap,
+    StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::metrics::Metrics;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
 use crate::coord::timeline::{
     TimelineState, WriteTimestamp, TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
 };
 use crate::error::AdapterError;
+use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, Session};
 use crate::subscribe::PendingSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId};
@@ -144,7 +145,6 @@ mod dataflows;
 mod ddl;
 mod indexes;
 mod message_handler;
-mod metrics;
 mod read_policy;
 mod sequencer;
 mod sql;
@@ -184,8 +184,8 @@ pub enum Message<T = mz_repr::Timestamp> {
         conn_id: ConnectionId,
     },
     LinearizeReads(Vec<PendingReadTxn>),
-    StorageUsageFetch,
-    StorageUsageUpdate(HashMap<Option<ShardId>, u64>),
+    StorageUsageFetch(EpochMillis),
+    StorageUsageUpdate(HashMap<Option<ShardId>, u64>, EpochMillis),
     Consolidate(Vec<mz_stash::Id>),
 }
 
@@ -251,10 +251,11 @@ pub struct Config<S> {
     pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
-    pub segment_api_key: Option<String>,
+    pub segment_client: Option<mz_segment::Client>,
     pub egress_ips: Vec<Ipv4Addr>,
     pub consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
     pub consolidations_rx: mpsc::UnboundedReceiver<Vec<mz_stash::Id>>,
+    pub aws_account_id: Option<String>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -550,13 +551,9 @@ impl<S: Append + 'static> Coordinator<S> {
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        let source_status_collection_id = if self.catalog.config().unsafe_mode {
-            Some(self.catalog.resolve_builtin_storage_collection(
-                &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-            ))
-        } else {
-            None
-        };
+        let source_status_collection_id = Some(self.catalog.resolve_builtin_storage_collection(
+            &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+        ));
 
         info!("coordinator init: installing existing objects in catalog");
         let mut privatelink_connections = HashMap::new();
@@ -1035,10 +1032,11 @@ pub async fn serve<S: Append + 'static>(
         connection_context,
         storage_usage_client,
         storage_usage_collection_interval,
-        segment_api_key,
+        segment_client,
         egress_ips,
         consolidations_tx,
         consolidations_rx,
+        aws_account_id,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
     info!("coordinator init: beginning");
@@ -1061,6 +1059,16 @@ pub async fn serve<S: Append + 'static>(
     // Coordinator::sequence_create_compute_replica.
     availability_zones.shuffle(&mut rand::thread_rng());
 
+    let aws_principal_context =
+        if aws_account_id.is_some() && connection_context.aws_external_id_prefix.is_some() {
+            Some(AwsPrincipalContext {
+                aws_account_id: aws_account_id.unwrap(),
+                aws_external_id_prefix: connection_context.aws_external_id_prefix.clone().unwrap(),
+            })
+        } else {
+            None
+        };
+
     info!("coordinator init: opening catalog");
     let (mut catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
         Catalog::open(catalog::Config {
@@ -1079,6 +1087,7 @@ pub async fn serve<S: Append + 'static>(
             availability_zones,
             secrets_reader: secrets_controller.reader(),
             egress_ips,
+            aws_principal_context,
         })
         .await?;
     let session_id = catalog.config().session_id;
@@ -1091,7 +1100,8 @@ pub async fn serve<S: Append + 'static>(
     let handle = TokioHandle::current();
 
     let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
-    let inner_metrics_registry = metrics_registry.clone();
+    let metrics = Metrics::register_into(&metrics_registry);
+    let metrics_clone = metrics.clone();
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
         // prevent a stack overflow we allocate a stack twice as big as the default
@@ -1135,9 +1145,6 @@ pub async fn serve<S: Append + 'static>(
                 ));
             }
 
-            let segment_client =
-                handle.block_on(async { segment_api_key.map(mz_segment::Client::new) });
-
             let mut coord = Coordinator {
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
@@ -1164,10 +1171,22 @@ pub async fn serve<S: Append + 'static>(
                 storage_usage_client,
                 storage_usage_collection_interval,
                 segment_client,
-                metrics: Metrics::register_with(&inner_metrics_registry),
+                metrics,
             };
-            let bootstrap =
-                handle.block_on(coord.bootstrap(builtin_migration_metadata, builtin_table_updates));
+            let bootstrap = handle.block_on(async {
+                coord
+                    .bootstrap(builtin_migration_metadata, builtin_table_updates)
+                    .await?;
+                coord
+                    .controller
+                    .remove_orphans(
+                        coord.catalog.get_next_replica_id().await?,
+                        coord.catalog.get_next_user_global_id().await?,
+                    )
+                    .await
+                    .map_err(AdapterError::Orchestrator)?;
+                Ok(())
+            });
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
             if ok {
@@ -1188,7 +1207,7 @@ pub async fn serve<S: Append + 'static>(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(cmd_tx.clone(), &metrics_registry);
+            let client = Client::new(cmd_tx.clone(), metrics_clone);
             Ok((handle, client))
         }
         Err(e) => Err(e),

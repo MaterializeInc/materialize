@@ -113,9 +113,8 @@ steps:
 
   - id: cargo-test
     label: Cargo test
-    depends_on: build-x86_64
     timeout_in_minutes: 30
-    artifact_paths: junit_cargo-test_*.xml
+    artifact_paths: target/nextest/ci/junit_cargo-test.xml
     env:
       AWS_DEFAULT_REGION: "us-east-2"
     plugins:
@@ -123,7 +122,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cargo-test
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
 
   - id: miri-test
     label: Miri test
@@ -296,7 +295,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: upgrade
-          args: [--most-recent, "1"]
     agents:
       queue: linux-x86_64
 
@@ -561,6 +559,28 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartRedpandaDebezium]
+
+  - id: source-sink-errors
+    label: "Source/Sink Error Reporting"
+    artifact_paths: junit_mzcompose_*.xml
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: source-sink-errors
+
+  - id: storage-usage
+    label: "Storage Usage Table Test"
+    artifact_paths: junit_mzcompose_*.xml
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: storage-usage
 
   - id: lang-csharp
     label: ":csharp: tests"

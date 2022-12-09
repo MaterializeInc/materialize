@@ -15,7 +15,7 @@ Supported `transaction_mode` option values:
 
 Value | Description
 ------|----------
-`ISOLATION LEVEL SERIALIZABLE` | A no-op because transactions are always serializable. Lower isolation modes are also accepted, but treated identically to serializable.
+`ISOLATION LEVEL <level>` | Sets the transaction [isolation level](/overview/isolation-level).
 `READ ONLY` | Limits the transaction to read-only operations.
 
 ## Details

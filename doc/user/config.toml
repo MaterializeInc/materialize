@@ -41,6 +41,13 @@ parent = 'ops'
 weight= 10
 
 [[menu.main]]
+identifier = "cs_kafka"
+name = "Kafka"
+parent = "create-source"
+url = "/sql/create-source/kafka"
+weight= 5
+
+[[menu.main]]
 identifier = "cs_redpanda"
 name = "Redpanda"
 parent = "create-source"
@@ -60,16 +67,24 @@ url = "/sql/create-materialized-view/"
 weight= 35
 
 [[menu.main]]
-name = "Sinks"
-parent = "reference"
-url = "/sql/create-sink/"
-weight= 25
-
-[[menu.main]]
 name = "Clusters"
 parent = "reference"
 url = "/sql/create-cluster/"
 weight= 1
+
+[[menu.main]]
+identifier = "csink_kafka"
+name = "Kafka"
+parent = "create-sink"
+url = "/sql/create-sink/kafka"
+weight= 5
+
+[[menu.main]]
+identifier = "csink_redpanda"
+name = "Redpanda"
+parent = "create-sink"
+url = "/sql/create-sink/kafka"
+weight= 10
 
 [[menu.main]]
 name = "Queries (`SELECT`)"

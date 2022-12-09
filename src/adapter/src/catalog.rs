@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_storage_client::controller::IntrospectionType;
 use once_cell::sync::Lazy;
@@ -33,11 +34,12 @@ use mz_audit_log::{
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::{
-    ComputeInstanceEvent, ComputeInstanceId, ComputeReplicaAllocation, ComputeReplicaConfig,
-    ComputeReplicaLocation, ComputeReplicaLogging,
+    ComputeInstanceEvent, ComputeInstanceId, ComputeInstanceStatus, ComputeReplicaAllocation,
+    ComputeReplicaConfig, ComputeReplicaLocation, ComputeReplicaLogging,
 };
 use mz_compute_client::logging::{LogVariant, LogView, DEFAULT_LOG_VARIANTS, DEFAULT_LOG_VIEWS};
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
@@ -66,7 +68,7 @@ use mz_sql::plan::{
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_stash::{Append, Postgres, PostgresFactory, Sqlite};
+use mz_stash::{Append, Memory, Postgres, PostgresFactory};
 use mz_storage_client::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
@@ -79,7 +81,9 @@ use crate::catalog::builtin::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{ClusterReplicaSizeMap, Config, StorageHostSizeMap};
+pub use crate::catalog::config::{
+    AwsPrincipalContext, ClusterReplicaSizeMap, Config, StorageHostSizeMap,
+};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
@@ -187,6 +191,7 @@ pub struct CatalogState {
     availability_zones: Vec<String>,
     system_configuration: SystemVars,
     egress_ips: Vec<Ipv4Addr>,
+    aws_principal_context: Option<AwsPrincipalContext>,
 }
 
 impl CatalogState {
@@ -748,8 +753,17 @@ impl CatalogState {
     ) {
         self.insert_replica_introspection_items(&config.logging, replica_id);
         let replica = ComputeReplica {
+            name: replica_name.clone(),
+            process_status: (0..config.location.num_processes())
+                .map(|process_id| {
+                    let status = ComputeReplicaProcessStatus {
+                        status: ComputeInstanceStatus::NotReady,
+                        time: to_datetime((self.config.now)()),
+                    };
+                    (u64::cast_from(process_id), status)
+                })
+                .collect(),
             config,
-            process_status: HashMap::new(),
         };
         let compute_instance = self.compute_instances_by_id.get_mut(&on_instance).unwrap();
         assert!(compute_instance
@@ -762,44 +776,81 @@ impl CatalogState {
             .is_none());
     }
 
-    /// Try inserting/updating the status of a compute instance process as
-    /// described by the given event.
+    /// Inserts or updates the status of the specified compute replica process.
     ///
-    /// This method returns `true` if the insert was successful. It returns
-    /// `false` if the insert was unsuccessful, i.e., the given compute instance
-    /// replica is not found.
-    ///
-    /// This treatment of non-existing replicas allows us to gracefully handle
-    /// scenarios where we receive status updates for replicas that we have
-    /// already removed from the catalog.
-    fn try_insert_compute_instance_status(&mut self, event: ComputeInstanceEvent) -> bool {
-        self.compute_instances_by_id
-            .get_mut(&event.instance_id)
-            .and_then(|instance| instance.replicas_by_id.get_mut(&event.replica_id))
-            .map(|replica| replica.process_status.insert(event.process_id, event))
-            .is_some()
+    /// Panics if the compute instance or replica does not exist.
+    fn ensure_compute_replica_status(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        replica_id: ReplicaId,
+        process_id: ProcessId,
+        status: ComputeReplicaProcessStatus,
+    ) {
+        let replica = self
+            .try_get_compute_replica_mut(instance_id, replica_id)
+            .unwrap_or_else(|| {
+                panic!("unknown compute instance replica: {instance_id}.{replica_id}")
+            });
+        replica.process_status.insert(process_id, status);
     }
 
-    /// Try getting the status of the given compute instance process.
+    /// Gets a reference to the specified replica of the specified compute
+    /// instance.
     ///
-    /// This method returns `None` if no status was found for the given
-    /// compute instance process because:
-    ///   * The given compute replica is not found. This can occur
-    ///     if we already dropped the replica from the catalog, but we still
-    ///     receive status updates.
-    ///   * The given replica process is not found. This is the case when we
-    ///     receive the first status update for a new replica process.
-    fn try_get_compute_instance_status(
+    /// Returns `None` if either the compute instance or the replica does not
+    /// exist.
+    fn try_get_compute_replica(
+        &self,
+        id: ComputeInstanceId,
+        replica_id: ReplicaId,
+    ) -> Option<&ComputeReplica> {
+        self.compute_instances_by_id
+            .get(&id)
+            .and_then(|instance| instance.replicas_by_id.get(&replica_id))
+    }
+
+    /// Gets a reference to the specified replica of the specified compute
+    /// instance.
+    ///
+    /// Panics if either the compute instance or the replica does not exist.
+    fn get_compute_replica(
+        &self,
+        instance_id: ComputeInstanceId,
+        replica_id: ReplicaId,
+    ) -> &ComputeReplica {
+        self.try_get_compute_replica(instance_id, replica_id)
+            .unwrap_or_else(|| {
+                panic!("unknown compute instance replica: {instance_id}.{replica_id}")
+            })
+    }
+
+    /// Gets a mutable reference to the specified replica of the specified
+    /// compute instance.
+    ///
+    /// Returns `None` if either the compute instance or the replica does not
+    /// exist.
+    fn try_get_compute_replica_mut(
+        &mut self,
+        id: ComputeInstanceId,
+        replica_id: ReplicaId,
+    ) -> Option<&mut ComputeReplica> {
+        self.compute_instances_by_id
+            .get_mut(&id)
+            .and_then(|instance| instance.replicas_by_id.get_mut(&replica_id))
+    }
+
+    /// Gets the status of the given compute instance process.
+    ///
+    /// Panics if the compute instance or replica does not exist
+    fn get_compute_instance_status(
         &self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
         process_id: ProcessId,
-    ) -> Option<ComputeInstanceEvent> {
-        self.compute_instances_by_id
-            .get(&instance_id)
-            .and_then(|instance| instance.replicas_by_id.get(&replica_id))
-            .and_then(|replica| replica.process_status.get(&process_id))
-            .cloned()
+    ) -> &ComputeReplicaProcessStatus {
+        &self
+            .get_compute_replica(instance_id, replica_id)
+            .process_status[&process_id]
     }
 
     /// Insert system configuration `name` with `value`.
@@ -1336,8 +1387,28 @@ pub struct ComputeInstance {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct ComputeReplica {
+    pub name: String,
     pub config: ComputeReplicaConfig,
-    pub process_status: HashMap<ProcessId, ComputeInstanceEvent>,
+    pub process_status: HashMap<ProcessId, ComputeReplicaProcessStatus>,
+}
+
+impl ComputeReplica {
+    /// Computes the status of the compute replica as a whole.
+    pub fn status(&self) -> ComputeInstanceStatus {
+        use ComputeInstanceStatus::*;
+        self.process_status
+            .values()
+            .fold(Ready, |s, p| match (s, p.status) {
+                (Ready, Ready) => Ready,
+                _ => NotReady,
+            })
+    }
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ComputeReplicaProcessStatus {
+    pub status: ComputeInstanceStatus,
+    pub time: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug)]
@@ -1416,6 +1487,23 @@ impl Source {
             DataSourceDesc::Source | DataSourceDesc::Introspection(_) => false,
         }
     }
+
+    /// Type of the source.
+    pub fn source_type(&self) -> &str {
+        match &self.data_source {
+            DataSourceDesc::Ingestion(ingestion) => ingestion.desc.name(),
+            DataSourceDesc::Source => "subsource",
+            DataSourceDesc::Introspection(_) => "source",
+        }
+    }
+
+    /// Connection ID of the source, if one exists.
+    pub fn connection_id(&self) -> Option<GlobalId> {
+        match &self.data_source {
+            DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.connection_id(),
+            DataSourceDesc::Source | DataSourceDesc::Introspection(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1454,6 +1542,13 @@ pub struct Sink {
 }
 
 impl Sink {
+    pub fn sink_type(&self) -> &str {
+        match &self.connection {
+            StorageSinkConnectionState::Pending(pending) => pending.name(),
+            StorageSinkConnectionState::Ready(ready) => ready.name(),
+        }
+    }
+
     pub fn connection_id(&self) -> Option<GlobalId> {
         match &self.connection {
             StorageSinkConnectionState::Pending(pending) => pending.connection_id(),
@@ -1875,7 +1970,7 @@ impl CatalogEntry {
 struct AllocatedBuiltinSystemIds<T> {
     all_builtins: Vec<(T, GlobalId)>,
     new_builtins: Vec<(T, GlobalId)>,
-    migrated_builtins: Vec<(GlobalId, String)>,
+    migrated_builtins: Vec<GlobalId>,
 }
 
 /// Functions can share the same name as any other catalog item type
@@ -1934,7 +2029,7 @@ pub struct BuiltinMigrationMetadata {
     pub introspection_source_index_updates:
         HashMap<ComputeInstanceId, Vec<(LogVariant, String, GlobalId)>>,
     // Used to update persisted on disk catalog state
-    pub migrated_system_table_mappings: HashMap<GlobalId, SystemObjectMapping>,
+    pub migrated_system_object_mappings: HashMap<GlobalId, SystemObjectMapping>,
     pub user_drop_ops: Vec<GlobalId>,
     pub user_create_ops: Vec<(GlobalId, SchemaId, String)>,
 }
@@ -1948,19 +2043,19 @@ impl BuiltinMigrationMetadata {
             all_drop_ops: Vec::new(),
             all_create_ops: Vec::new(),
             introspection_source_index_updates: HashMap::new(),
-            migrated_system_table_mappings: HashMap::new(),
+            migrated_system_object_mappings: HashMap::new(),
             user_drop_ops: Vec::new(),
             user_create_ops: Vec::new(),
         }
     }
 }
 
-impl Catalog<Sqlite> {
-    /// Opens a debug in-memory sqlite catalog.
+impl Catalog<Memory> {
+    /// Opens a debug in-memory catalog.
     ///
     /// See [`Catalog::open_debug`].
-    pub async fn open_debug_sqlite(now: NowFn) -> Result<Catalog<Sqlite>, anyhow::Error> {
-        let stash = mz_stash::Sqlite::open(None)?;
+    pub async fn open_debug_memory(now: NowFn) -> Result<Catalog<Memory>, anyhow::Error> {
+        let stash = mz_stash::Memory::new();
         Catalog::open_debug(stash, now).await
     }
 }
@@ -2033,6 +2128,7 @@ impl<S: Append> Catalog<S> {
                 availability_zones: config.availability_zones,
                 system_configuration: SystemVars::default(),
                 egress_ips: config.egress_ips,
+                aws_principal_context: config.aws_principal_context,
             },
             transient_revision: 0,
             storage: Arc::new(Mutex::new(config.storage)),
@@ -2134,6 +2230,10 @@ impl<S: Append> Catalog<S> {
             )
             .await?;
 
+        let id_fingerprint_map: HashMap<GlobalId, String> = all_builtins
+            .iter()
+            .map(|(builtin, id)| (*id, builtin.fingerprint()))
+            .collect();
         let (builtin_indexes, builtin_non_indexes): (Vec<_>, Vec<_>) = all_builtins
             .into_iter()
             .partition(|(builtin, _)| matches!(builtin, Builtin::Index(_)));
@@ -2402,7 +2502,7 @@ impl<S: Append> Catalog<S> {
         };
 
         let mut builtin_migration_metadata = catalog
-            .generate_builtin_migration_metadata(migrated_builtins)
+            .generate_builtin_migration_metadata(migrated_builtins, id_fingerprint_map)
             .await?;
         catalog.apply_in_memory_builtin_migration(&mut builtin_migration_metadata)?;
         catalog
@@ -2454,12 +2554,23 @@ impl<S: Append> Catalog<S> {
         for (name, id) in &catalog.state.compute_instances_by_name {
             builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
             let instance = &catalog.state.compute_instances_by_id[id];
-            for (replica_name, _replica_id) in &instance.replica_id_by_name {
-                builtin_table_updates.push(catalog.state.pack_compute_replica_update(
-                    *id,
-                    replica_name,
-                    1,
-                ));
+            for (replica_name, replica_id) in &instance.replica_id_by_name {
+                builtin_table_updates.extend(
+                    catalog
+                        .state
+                        .pack_compute_replica_updates(*id, replica_name, 1)
+                        .into_iter(),
+                );
+                let replica = catalog.state.get_compute_replica(*id, *replica_id);
+                for process_id in 0..replica.config.location.num_processes() {
+                    let update = catalog.state.pack_compute_replica_status_update(
+                        *id,
+                        *replica_id,
+                        u64::cast_from(process_id),
+                        1,
+                    );
+                    builtin_table_updates.push(update);
+                }
             }
         }
         let audit_logs = catalog.storage().await.load_audit_log().await?;
@@ -2660,23 +2771,23 @@ impl<S: Append> Catalog<S> {
     /// and they need to be recreated starting at the root of the DAG and going towards the leafs.
     pub async fn generate_builtin_migration_metadata(
         &mut self,
-        migrated_ids: Vec<(GlobalId, String)>,
+        migrated_ids: Vec<GlobalId>,
+        id_fingerprint_map: HashMap<GlobalId, String>,
     ) -> Result<BuiltinMigrationMetadata, Error> {
         let mut migration_metadata = BuiltinMigrationMetadata::new();
 
-        let mut object_queue: VecDeque<_> = migrated_ids.iter().map(|(id, _)| (*id)).collect();
-        let mut visited_set: HashSet<_> = migrated_ids.iter().map(|(id, _)| (*id)).collect();
+        let mut object_queue: VecDeque<_> = migrated_ids.iter().collect();
+        let mut visited_set: HashSet<_> = migrated_ids.iter().collect();
         let mut topological_sort = Vec::new();
         let mut ancestor_ids = HashMap::new();
         let mut migrated_log_ids = HashMap::new();
 
-        let id_fingerprint_map: HashMap<GlobalId, String> = migrated_ids.into_iter().collect();
         let log_name_map: HashMap<_, _> = BUILTINS::logs()
             .map(|log| (log.variant.clone(), log.name))
             .collect();
 
         while let Some(id) = object_queue.pop_front() {
-            let entry = self.get_entry(&id);
+            let entry = self.get_entry(id);
 
             let new_id = match id {
                 GlobalId::System(_) => self
@@ -2689,8 +2800,16 @@ impl<S: Append> Catalog<S> {
                 _ => unreachable!("can't migrate id: {id}"),
             };
 
-            // Generate value to update fingerprint and global ID persisted mapping.
-            if let Some(fingerprint) = id_fingerprint_map.get(&id) {
+            let name = self.resolve_full_name(entry.name(), None);
+            info!("migrating {name} from {id} to {new_id}");
+
+            // Generate value to update fingerprint and global ID persisted mapping for system objects.
+            // Not every system object has a fingerprint, like introspection source indexes.
+            if let Some(fingerprint) = id_fingerprint_map.get(id) {
+                assert!(
+                    id.is_system(),
+                    "id_fingerprint_map should only contain builtin objects"
+                );
                 let schema_name = self
                     .get_schema(
                         &entry.name.qualifiers.database_spec,
@@ -2700,8 +2819,8 @@ impl<S: Append> Catalog<S> {
                     .name
                     .schema
                     .as_str();
-                migration_metadata.migrated_system_table_mappings.insert(
-                    id,
+                migration_metadata.migrated_system_object_mappings.insert(
+                    *id,
                     SystemObjectMapping {
                         schema_name: schema_name.to_string(),
                         object_type: entry.item_type(),
@@ -2715,13 +2834,13 @@ impl<S: Append> Catalog<S> {
             // Defer adding the create/drop ops until we know more about the dependency graph.
             topological_sort.push((entry, new_id));
 
-            ancestor_ids.insert(id, new_id);
+            ancestor_ids.insert(*id, new_id);
 
             // Add children to queue.
             for dependant in &entry.used_by {
                 if !visited_set.contains(dependant) {
-                    object_queue.push_back(*dependant);
-                    visited_set.insert(*dependant);
+                    object_queue.push_back(dependant);
+                    visited_set.insert(dependant);
                 } else {
                     // If dependant is a child of the current node, then we need to make sure that
                     // it appears later in the topologically sorted list.
@@ -2850,7 +2969,7 @@ impl<S: Append> Catalog<S> {
         }
         tx.update_system_object_mappings(
             migration_metadata
-                .migrated_system_table_mappings
+                .migrated_system_object_mappings
                 .drain()
                 .collect(),
         )?;
@@ -2965,6 +3084,7 @@ impl<S: Append> Catalog<S> {
             availability_zones: vec![],
             secrets_reader,
             egress_ips: vec![],
+            aws_principal_context: None,
         })
         .await?;
         Ok(catalog)
@@ -3052,10 +3172,11 @@ impl<S: Append> Catalog<S> {
         let mut migrated_builtins = Vec::new();
         for builtin in &builtins {
             match builtin_lookup(builtin) {
-                Some((id, fingerprint)) => {
+                Some((id, old_fingerprint)) => {
                     all_builtins.push((*builtin, id));
-                    if fingerprint != builtin.fingerprint() {
-                        migrated_builtins.push((id, builtin.fingerprint()));
+                    let new_fingerprint = builtin.fingerprint();
+                    if old_fingerprint != new_fingerprint {
+                        migrated_builtins.push(id);
                     }
                 }
                 None => {
@@ -3103,6 +3224,16 @@ impl<S: Append> Catalog<S> {
         timeline: &Timeline,
     ) -> Result<mz_repr::Timestamp, Error> {
         self.storage().await.get_persisted_timestamp(timeline).await
+    }
+
+    /// Get the next user id without allocating it.
+    pub async fn get_next_user_global_id(&mut self) -> Result<GlobalId, Error> {
+        self.storage().await.get_next_user_global_id().await
+    }
+
+    /// Get the next replica id without allocating it.
+    pub async fn get_next_replica_id(&mut self) -> Result<ReplicaId, Error> {
+        self.storage().await.get_next_replica_id().await
     }
 
     /// Persist new global timestamp for a timeline to disk.
@@ -3607,7 +3738,6 @@ impl<S: Append> Catalog<S> {
                 name: QualifiedObjectName,
                 item: CatalogItem,
             },
-
             DropDatabase {
                 id: DatabaseId,
             },
@@ -3632,7 +3762,7 @@ impl<S: Append> Catalog<S> {
                 to_name: QualifiedObjectName,
                 to_item: CatalogItem,
             },
-            UpdateComputeInstanceStatus {
+            UpdateComputeReplicaStatus {
                 event: ComputeInstanceEvent,
             },
             UpdateSystemConfiguration {
@@ -4177,17 +4307,19 @@ impl<S: Append> Catalog<S> {
                         );
                         let details = match &item {
                             CatalogItem::Source(s) => {
-                                EventDetails::CreateSourceSinkV1(mz_audit_log::CreateSourceSinkV1 {
+                                EventDetails::CreateSourceSinkV2(mz_audit_log::CreateSourceSinkV2 {
                                     id,
                                     name,
                                     size: s.size().map(|s| s.to_string()),
+                                    external_type: s.source_type().to_string(),
                                 })
                             }
                             CatalogItem::Sink(s) => {
-                                EventDetails::CreateSourceSinkV1(mz_audit_log::CreateSourceSinkV1 {
+                                EventDetails::CreateSourceSinkV2(mz_audit_log::CreateSourceSinkV2 {
                                     id: id.to_string(),
                                     name,
                                     size: s.host_config.size().map(|x| x.to_string()),
+                                    external_type: s.sink_type().to_string(),
                                 })
                             }
                             _ => EventDetails::IdFullNameV1(IdFullNameV1 { id, name }),
@@ -4342,7 +4474,7 @@ impl<S: Append> Catalog<S> {
                     let replica_id = instance.replica_id_by_name[&name];
                     let replica = &instance.replicas_by_id[&replica_id];
                     for process_id in replica.process_status.keys() {
-                        let update = state.pack_compute_instance_status_update(
+                        let update = state.pack_compute_replica_status_update(
                             instance.id,
                             replica_id,
                             *process_id,
@@ -4351,11 +4483,11 @@ impl<S: Append> Catalog<S> {
                         builtin_table_updates.push(update);
                     }
 
-                    builtin_table_updates.push(state.pack_compute_replica_update(
-                        instance.id,
-                        &name,
-                        -1,
-                    ));
+                    builtin_table_updates.extend(
+                        state
+                            .pack_compute_replica_updates(instance.id, &name, -1)
+                            .into_iter(),
+                    );
 
                     let details =
                         EventDetails::DropComputeReplicaV1(mz_audit_log::DropComputeReplicaV1 {
@@ -4528,31 +4660,11 @@ impl<S: Append> Catalog<S> {
                         catalog_action(state, builtin_table_updates, action)?;
                     }
                 }
-                Op::UpdateComputeInstanceStatus { event } => {
-                    // When we receive the first status update for a given
-                    // replica process, there is no entry in the builtin table
-                    // yet, so we must make sure to not try to delete one.
-                    let status_known = state
-                        .try_get_compute_instance_status(
-                            event.instance_id,
-                            event.replica_id,
-                            event.process_id,
-                        )
-                        .is_some();
-                    if status_known {
-                        let update = state.pack_compute_instance_status_update(
-                            event.instance_id,
-                            event.replica_id,
-                            event.process_id,
-                            -1,
-                        );
-                        builtin_table_updates.push(update);
-                    }
-
+                Op::UpdateComputeReplicaStatus { event } => {
                     catalog_action(
                         state,
                         builtin_table_updates,
-                        Action::UpdateComputeInstanceStatus { event },
+                        Action::UpdateComputeReplicaStatus { event },
                     )?;
                 }
                 Op::UpdateItem { id, name, to_item } => {
@@ -4736,16 +4848,26 @@ impl<S: Append> Catalog<S> {
                     on_cluster_id,
                     config,
                 } => {
+                    let num_processes = config.location.num_processes();
                     let introspection_ids: Vec<_> = config.logging.source_and_view_ids().collect();
                     state.insert_compute_replica(on_cluster_id, name.clone(), id, config);
                     for id in introspection_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
-                    builtin_table_updates.push(state.pack_compute_replica_update(
-                        on_cluster_id,
-                        &name,
-                        1,
-                    ));
+                    builtin_table_updates.extend(
+                        state
+                            .pack_compute_replica_updates(on_cluster_id, &name, 1)
+                            .into_iter(),
+                    );
+                    for process_id in 0..num_processes {
+                        let update = state.pack_compute_replica_status_update(
+                            on_cluster_id,
+                            id,
+                            u64::cast_from(process_id),
+                            1,
+                        );
+                        builtin_table_updates.push(update);
+                    }
                 }
 
                 Action::CreateItem {
@@ -4852,19 +4974,28 @@ impl<S: Append> Catalog<S> {
                     builtin_table_updates.extend(state.pack_item_update(id, 1));
                 }
 
-                Action::UpdateComputeInstanceStatus { event } => {
-                    // It is possible that we receive a status update for a
-                    // replica that has already been dropped from the catalog.
-                    // In this case, `try_insert_compute_instance_status`
-                    // returns `false` and we ignore the event.
-                    if state.try_insert_compute_instance_status(event.clone()) {
-                        builtin_table_updates.push(state.pack_compute_instance_status_update(
-                            event.instance_id,
-                            event.replica_id,
-                            event.process_id,
-                            1,
-                        ));
-                    }
+                Action::UpdateComputeReplicaStatus { event } => {
+                    builtin_table_updates.push(state.pack_compute_replica_status_update(
+                        event.instance_id,
+                        event.replica_id,
+                        event.process_id,
+                        -1,
+                    ));
+                    state.ensure_compute_replica_status(
+                        event.instance_id,
+                        event.replica_id,
+                        event.process_id,
+                        ComputeReplicaProcessStatus {
+                            status: event.status,
+                            time: event.time,
+                        },
+                    );
+                    builtin_table_updates.push(state.pack_compute_replica_status_update(
+                        event.instance_id,
+                        event.replica_id,
+                        event.process_id,
+                        1,
+                    ));
                 }
                 Action::UpdateSystemConfiguration { name, value } => {
                     state.insert_system_configuration(&name, &value)?;
@@ -5129,6 +5260,13 @@ impl<S: Append> Catalog<S> {
         self.state.compute_instances_by_id.values()
     }
 
+    pub fn try_get_compute_instance(
+        &self,
+        instance_id: ComputeInstanceId,
+    ) -> Option<&ComputeInstance> {
+        self.state.compute_instances_by_id.get(&instance_id)
+    }
+
     pub fn user_compute_instances(&self) -> impl Iterator<Item = &ComputeInstance> {
         self.compute_instances()
             .filter(|compute_instance| compute_instance.id.is_user())
@@ -5327,7 +5465,7 @@ pub enum Op {
         current_full_name: FullObjectName,
         to_name: String,
     },
-    UpdateComputeInstanceStatus {
+    UpdateComputeReplicaStatus {
         event: ComputeInstanceEvent,
     },
     UpdateItem {
@@ -5921,7 +6059,8 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 mod tests {
     use itertools::Itertools;
     use mz_compute_client::controller::ComputeInstanceId;
-    use std::collections::HashMap;
+    use mz_stash::Memory;
+    use std::collections::{HashMap, HashSet};
     use std::error::Error;
 
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
@@ -5934,9 +6073,10 @@ mod tests {
     };
     use mz_sql::DEFAULT_SCHEMA;
     use mz_sql_parser::ast::Expr;
-    use mz_stash::Sqlite;
 
-    use crate::catalog::{Catalog, CatalogItem, MaterializedView, Op, Table, SYSTEM_CONN_ID};
+    use crate::catalog::{
+        Catalog, CatalogItem, Index, MaterializedView, Op, Table, SYSTEM_CONN_ID,
+    };
     use crate::session::{Session, DEFAULT_DATABASE_NAME};
 
     /// System sessions have an empty `search_path` so it's necessary to
@@ -5953,7 +6093,7 @@ mod tests {
             normal_output: PartialObjectName,
         }
 
-        let catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
 
         let test_cases = vec![
             TestCase {
@@ -6019,7 +6159,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_catalog_revision() -> Result<(), anyhow::Error> {
-        let mut catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
+        let mut catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
         assert_eq!(catalog.transient_revision(), 1);
         catalog
             .transact(
@@ -6036,7 +6176,7 @@ mod tests {
         assert_eq!(catalog.transient_revision(), 2);
         drop(catalog);
 
-        let catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
         assert_eq!(catalog.transient_revision(), 1);
 
         Ok(())
@@ -6044,7 +6184,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_effective_search_path() -> Result<(), anyhow::Error> {
-        let catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
         let mz_catalog_schema = (
             ResolvedDatabaseSpecifier::Ambient,
             SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id().clone()),
@@ -6173,6 +6313,7 @@ mod tests {
         enum SimplifiedItem {
             Table,
             MaterializedView { depends_on: Vec<String> },
+            Index { on: String },
         }
 
         struct SimplifiedCatalogEntry {
@@ -6219,6 +6360,17 @@ mod tests {
                             compute_instance: ComputeInstanceId::User(1),
                         })
                     }
+                    SimplifiedItem::Index { on } => {
+                        let on_id = id_mapping[&on];
+                        CatalogItem::Index(Index {
+                            create_sql: format!("CREATE INDEX idx ON {on} (a)"),
+                            on: on_id,
+                            keys: Vec::new(),
+                            conn_id: None,
+                            depends_on: vec![on_id],
+                            compute_instance: ComputeInstanceId::User(1),
+                        })
+                    }
                 };
                 (self.name, self.namespace, item)
             }
@@ -6235,10 +6387,11 @@ mod tests {
             expected_user_drop_ops: Vec<String>,
             expected_all_create_ops: Vec<String>,
             expected_user_create_ops: Vec<String>,
+            expected_migrated_system_object_mappings: Vec<String>,
         }
 
         async fn add_item(
-            catalog: &mut Catalog<Sqlite>,
+            catalog: &mut Catalog<Memory>,
             name: String,
             item: CatalogItem,
             item_namespace: ItemNamespace,
@@ -6303,6 +6456,7 @@ mod tests {
                 expected_user_drop_ops: vec![],
                 expected_all_create_ops: vec![],
                 expected_user_create_ops: vec![],
+                expected_migrated_system_object_mappings: vec![],
             },
             BuiltinMigrationTestCase {
                 test_name: "single_migrations",
@@ -6319,6 +6473,7 @@ mod tests {
                 expected_user_drop_ops: vec![],
                 expected_all_create_ops: vec!["s1".to_string()],
                 expected_user_create_ops: vec![],
+                expected_migrated_system_object_mappings: vec!["s1".to_string()],
             },
             BuiltinMigrationTestCase {
                 test_name: "child_migrations",
@@ -6344,6 +6499,7 @@ mod tests {
                 expected_user_drop_ops: vec!["u1".to_string()],
                 expected_all_create_ops: vec!["s1".to_string(), "u1".to_string()],
                 expected_user_create_ops: vec!["u1".to_string()],
+                expected_migrated_system_object_mappings: vec!["s1".to_string()],
             },
             BuiltinMigrationTestCase {
                 test_name: "multi_child_migrations",
@@ -6376,6 +6532,7 @@ mod tests {
                 expected_user_drop_ops: vec!["u2".to_string(), "u1".to_string()],
                 expected_all_create_ops: vec!["s1".to_string(), "u1".to_string(), "u2".to_string()],
                 expected_user_create_ops: vec!["u1".to_string(), "u2".to_string()],
+                expected_migrated_system_object_mappings: vec!["s1".to_string()],
             },
             BuiltinMigrationTestCase {
                 test_name: "topological_sort",
@@ -6423,11 +6580,38 @@ mod tests {
                     "u1".to_string(),
                 ],
                 expected_user_create_ops: vec!["u2".to_string(), "u1".to_string()],
+                expected_migrated_system_object_mappings: vec!["s1".to_string(), "s2".to_string()],
+            },
+            BuiltinMigrationTestCase {
+                test_name: "system_child_migrations",
+                initial_state: vec![
+                    SimplifiedCatalogEntry {
+                        name: "s1".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::Table,
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s2".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::Index {
+                            on: "s1".to_string(),
+                        },
+                    },
+                ],
+                migrated_names: vec!["s1".to_string()],
+                expected_previous_sink_names: vec![],
+                expected_previous_materialized_view_names: vec![],
+                expected_previous_source_names: vec!["s1".to_string()],
+                expected_all_drop_ops: vec!["s2".to_string(), "s1".to_string()],
+                expected_user_drop_ops: vec![],
+                expected_all_create_ops: vec!["s1".to_string(), "s2".to_string()],
+                expected_user_create_ops: vec![],
+                expected_migrated_system_object_mappings: vec!["s1".to_string(), "s2".to_string()],
             },
         ];
 
         for test_case in test_cases {
-            let mut catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
+            let mut catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
 
             let mut id_mapping = HashMap::new();
             for entry in test_case.initial_state {
@@ -6439,11 +6623,16 @@ mod tests {
             let migrated_ids = test_case
                 .migrated_names
                 .into_iter()
+                .map(|name| id_mapping[&name])
+                .collect();
+            let id_fingerprint_map: HashMap<GlobalId, String> = id_mapping
+                .iter()
+                .filter(|(_name, id)| id.is_system())
                 // We don't use the new fingerprint in this test, so we can just hard code it
-                .map(|name| (id_mapping[&name], "".to_string()))
+                .map(|(_name, id)| (*id, "".to_string()))
                 .collect();
             let migration_metadata = catalog
-                .generate_builtin_migration_metadata(migrated_ids)
+                .generate_builtin_migration_metadata(migrated_ids, id_fingerprint_map)
                 .await?;
 
             assert_eq!(
@@ -6497,6 +6686,21 @@ mod tests {
                     .collect::<Vec<_>>(),
                 test_case.expected_user_create_ops,
                 "{} test failed with wrong user create ops",
+                test_case.test_name
+            );
+            assert_eq!(
+                migration_metadata
+                    .migrated_system_object_mappings
+                    .keys()
+                    .cloned()
+                    .collect::<HashSet<_>>(),
+                convert_name_vec_to_id_vec(
+                    test_case.expected_migrated_system_object_mappings,
+                    &id_mapping
+                )
+                .into_iter()
+                .collect::<HashSet<_>>(),
+                "{} test failed with wrong migrated system object mappings",
                 test_case.test_name
             );
         }

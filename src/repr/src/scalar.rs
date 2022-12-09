@@ -11,7 +11,7 @@
 // https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
 #![allow(clippy::extra_unused_lifetimes)]
 
-use std::fmt::{self, Write};
+use std::fmt::{self, Debug, Write};
 use std::hash::Hash;
 use std::iter;
 use std::ops::Add;
@@ -35,6 +35,7 @@ use crate::adt::date::Date;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
+use crate::adt::range::Range;
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::timestamp::{CheckedTimestamp, TimestampError};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
@@ -47,9 +48,25 @@ pub use crate::relation_and_scalar::ProtoScalarType;
 
 /// A single value.
 ///
-/// Note that `Datum` must always derive [`Eq`] to enforce equality with
-/// `repr::Row`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+/// # Notes
+///
+/// ## Equality
+/// `Datum` must always derive [`Eq`] to enforce equality with `repr::Row`.
+///
+/// ## `Datum`-containing types
+/// Because Rust disallows recursive enums, complex types which need to contain
+/// other `Datum`s instead store bytes representing that data in other structs,
+/// usually prefixed with `Datum` (e.g. `DatumList`). These types perform a form
+/// of ad-hoc deserialization of their inner bytes to `Datum`s via
+/// `crate::row::read_datum`.
+///
+/// To create a new instance of a `Datum`-referencing `Datum`, you need to store
+/// the inner `Datum`'s bytes in a row (so you can in turn borrow those bytes in
+/// the outer `Datum`). The idiom we've devised for this is a series of
+/// functions on `repr::row::RowPacker` prefixed with `push_`.
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, EnumKind)]
+#[enum_kind(DatumKind)]
 pub enum Datum<'a> {
     /// The `false` boolean value.
     False,
@@ -132,6 +149,8 @@ pub enum Datum<'a> {
     // calling `<` on Datums (see `fn lt` in scalar/func.rs).
     /// An unknown value.
     Null,
+    // A range of values, e.g. [-1, 1).
+    Range(Range<'a>),
 }
 
 /// This implementation of serialize is designed to be able to print out Datums
@@ -171,6 +190,7 @@ impl<'a> Serialize for Datum<'a> {
             Dummy => serializer.serialize_str("Dummy"),
             JsonNull => serializer.serialize_str("JsonNull"),
             Null => serializer.serialize_none(),
+            r @ Range { .. } => serializer.serialize_str(&r.to_string()),
         }
     }
 }
@@ -809,6 +829,9 @@ impl<'a> Datum<'a> {
                     (Datum::Numeric(_), _) => false,
                     (Datum::MzTimestamp(_), ScalarType::MzTimestamp) => true,
                     (Datum::MzTimestamp(_), _) => false,
+                    (Datum::Range(_), _) => {
+                        unreachable!("ranges not available in dataflows or types")
+                    }
                 }
             }
         }
@@ -1078,6 +1101,7 @@ impl fmt::Display for Datum<'_> {
             Datum::MzTimestamp(t) => write!(f, "{}", t),
             Datum::JsonNull => f.write_str("json_null"),
             Datum::Dummy => f.write_str("dummy"),
+            Datum::Range(i) => write!(f, "{}", i),
         }
     }
 }
@@ -1139,7 +1163,8 @@ impl From<&Datum<'_>> for serde_json::Value {
             | Datum::Timestamp(_)
             | Datum::TimestampTz(_)
             | Datum::MzTimestamp(_)
-            | Datum::Uuid(_) => serde_json::Value::String(datum.to_string()),
+            | Datum::Uuid(_)
+            | Datum::Range { .. } => serde_json::Value::String(datum.to_string()),
         }
     }
 }
@@ -1585,6 +1610,23 @@ impl<'a, E> DatumType<'a, E> for DatumMap<'a> {
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::Map(self))
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for Range<'a> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::Range(range)) => Ok(range),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::Range(self))
     }
 }
 

@@ -16,8 +16,9 @@ use std::time::Duration;
 use chrono::DurationRound;
 use tracing::{event, warn, Level};
 
-use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceStatus};
+use mz_compute_client::controller::ComputeInstanceEvent;
 use mz_controller::ControllerResponse;
+use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_persist_client::ShardId;
 use mz_sql::ast::Statement;
@@ -73,11 +74,11 @@ impl<S: Append + 'static> Coordinator<S> {
             Message::LinearizeReads(pending_read_txns) => {
                 self.message_linearize_reads(pending_read_txns).await;
             }
-            Message::StorageUsageFetch => {
-                self.storage_usage_fetch().await;
+            Message::StorageUsageFetch(collection_timestamp) => {
+                self.storage_usage_fetch(collection_timestamp).await;
             }
-            Message::StorageUsageUpdate(sizes) => {
-                self.storage_usage_update(sizes).await;
+            Message::StorageUsageUpdate(sizes, collection_timestamp) => {
+                self.storage_usage_update(sizes, collection_timestamp).await;
             }
             Message::Consolidate(collections) => {
                 self.consolidate(&collections).await;
@@ -93,14 +94,17 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_fetch(&self) {
+    async fn storage_usage_fetch(&self, collection_timestamp: EpochMillis) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
         task::spawn(|| "storage_usage_fetch", async move {
             let shard_sizes = client.shard_sizes().await;
             // It is not an error for shard sizes to become ready after `internal_cmd_rx`
             // is dropped.
-            let result = internal_cmd_tx.send(Message::StorageUsageUpdate(shard_sizes));
+            let result = internal_cmd_tx.send(Message::StorageUsageUpdate(
+                shard_sizes,
+                collection_timestamp,
+            ));
             if let Err(e) = result {
                 warn!("internal_cmd_rx dropped before we could send: {:?}", e);
             }
@@ -108,8 +112,11 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_update(&mut self, shard_sizes: HashMap<Option<ShardId>, u64>) {
-        let collection_timestamp = (self.catalog.config().now)();
+    async fn storage_usage_update(
+        &mut self,
+        shard_sizes: HashMap<Option<ShardId>, u64>,
+        collection_timestamp: EpochMillis,
+    ) {
         let mut ops = vec![];
         for (shard_id, size_bytes) in shard_sizes {
             ops.push(catalog::Op::UpdateStorageUsage {
@@ -128,6 +135,9 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     pub fn schedule_storage_usage_collection(&self) {
+        // Instead of using an `tokio::timer::Interval`, we calculate the time since the last
+        // collection and wait for however much time is left. This is so we can keep the intervals
+        // consistent even across restarts.
         let time_since_previous_collection = self
             .now()
             .saturating_sub(self.catalog.most_recent_storage_usage_collection());
@@ -135,9 +145,13 @@ impl<S: Append + 'static> Coordinator<S> {
             .storage_usage_collection_interval
             .saturating_sub(Duration::from_millis(time_since_previous_collection));
         let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let now_fn = self.now_fn();
         task::spawn(|| "storage_usage_collection", async move {
             tokio::time::sleep(next_collection_interval).await;
-            if internal_cmd_tx.send(Message::StorageUsageFetch).is_err() {
+            if internal_cmd_tx
+                .send(Message::StorageUsageFetch(now_fn()))
+                .is_err()
+            {
                 // If sending fails, the main thread has shutdown.
             }
         });
@@ -160,11 +174,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 // We use an `if let` here because the peek could have been canceled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
-                if let Some(pending_subscribes) = self.pending_subscribes.get_mut(&sink_id) {
-                    let remove = pending_subscribes.process_response(response);
+                if let Some(pending_subscribe) = self.pending_subscribes.get_mut(&sink_id) {
+                    let remove = pending_subscribe.process_response(response);
                     if remove {
+                        self.metrics
+                            .active_subscribes
+                            .with_label_values(&[pending_subscribe.session_type])
+                            .dec();
                         self.pending_subscribes.remove(&sink_id);
-                        self.metrics.active_subscribes.dec();
                     }
                 }
             }
@@ -458,36 +475,43 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn message_compute_instance_status(&mut self, event: ComputeInstanceEvent) {
         event!(Level::TRACE, event = format!("{:?}", event));
 
-        let (instance_name, replica_name) = self
-            .catalog
-            .compute_instances()
-            .find(|i| i.id == event.instance_id)
-            .map(|i| {
-                let mut replica = event.replica_id.to_string();
-                for (name, id) in &i.replica_id_by_name {
-                    if *id == event.replica_id {
-                        replica = name.clone();
-                        break;
-                    }
-                }
-                (i.name.clone(), replica)
-            })
-            .unwrap_or_else(|| (event.instance_id.to_string(), event.replica_id.to_string()));
+        // It is possible that we receive a status update for a replica that has
+        // already been dropped from the catalog. Just ignore these events.
+        let Some(instance) = self.catalog.try_get_compute_instance(event.instance_id) else {
+            return;
+        };
+        let Some(replica) = instance.replicas_by_id.get(&event.replica_id) else {
+            return;
+        };
 
-        if matches!(event.status, ComputeInstanceStatus::NotReady) {
-            self.broadcast_notice(AdapterNotice::ClusterReplicaStatusChanged {
-                cluster: instance_name,
-                replica: replica_name,
-                status: event.status,
-            });
+        if event.status != replica.process_status[&event.process_id].status {
+            let old_status = replica.status();
+
+            self.catalog_transact(
+                None,
+                vec![catalog::Op::UpdateComputeReplicaStatus {
+                    event: event.clone(),
+                }],
+            )
+            .await
+            .unwrap_or_terminate("updating compute instance status cannot fail");
+
+            let instance = self
+                .catalog
+                .try_get_compute_instance(event.instance_id)
+                .expect("instance known to exist");
+            let replica = &instance.replicas_by_id[&event.replica_id];
+            let new_status = replica.status();
+
+            if old_status != new_status {
+                self.broadcast_notice(AdapterNotice::ClusterReplicaStatusChanged {
+                    cluster: instance.name.clone(),
+                    replica: replica.name.clone(),
+                    status: new_status,
+                    time: event.time,
+                });
+            }
         }
-
-        self.catalog_transact(
-            None,
-            vec![catalog::Op::UpdateComputeInstanceStatus { event }],
-        )
-        .await
-        .unwrap_or_terminate("updating compute instance status cannot fail");
     }
 
     #[tracing::instrument(level = "debug", skip_all)]

@@ -7,14 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Persist command-line utilities
+//! Commands for read-only inspection of persist state
 
 use mz_persist_client::ShardId;
 
 use serde_json::json;
 use std::str::FromStr;
 
-/// Commands for inspecting current persist state
+/// Commands for read-only inspection of persist state
 #[derive(Debug, clap::Args)]
 pub struct InspectArgs {
     #[clap(subcommand)]
@@ -67,7 +67,7 @@ pub(crate) enum Command {
 pub struct StateArgs {
     /// Shard to view
     #[clap(long)]
-    shard_id: String,
+    pub(crate) shard_id: String,
 
     /// Consensus to use.
     ///
@@ -81,16 +81,16 @@ pub struct StateArgs {
     ///     &sslrootcert=/path/to/cockroach-cloud/certs/cluster-ca.crt
     ///     &options=--search_path=consensus
     ///
-    #[clap(long, verbatim_doc_comment)]
-    consensus_uri: String,
+    #[clap(long, verbatim_doc_comment, env = "CONSENSUS_URI")]
+    pub(crate) consensus_uri: String,
 
     /// Blob to use
     ///
     /// When connecting to a deployed environment's blob, the necessary connection glue must be in
     /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
     /// URI scoped to the environment's bucket prefix.
-    #[clap(long)]
-    blob_uri: String,
+    #[clap(long, env = "BLOB_URI")]
+    pub(crate) blob_uri: String,
 }
 
 /// Arguments for viewing the blobs of a given shard

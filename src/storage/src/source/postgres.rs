@@ -39,6 +39,8 @@ use mz_storage_client::types::sources::{
 use self::metrics::PgSourceMetrics;
 use super::metrics::SourceBaseMetrics;
 use crate::source::commit::LogCommitter;
+
+use crate::source::source_reader_pipeline::HealthStatus;
 use crate::source::types::{OffsetCommitter, SourceConnectionBuilder};
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
@@ -140,6 +142,7 @@ macro_rules! try_indefinite {
 // Message used to communicate between `get_next_message` and the tokio task
 enum InternalMessage {
     Err(SourceReaderError),
+    Status(HealthStatus),
     Value {
         output: usize,
         value: Row,
@@ -361,6 +364,9 @@ impl SourceReader for PostgresSourceReader {
                     NextMessage::Ready(SourceMessageType::InProgress(Ok(msg), ts, diff))
                 }
             }
+            Some(Some(InternalMessage::Status(update))) => {
+                NextMessage::Ready(SourceMessageType::SourceStatus(update))
+            }
             Some(Some(InternalMessage::Err(err))) => {
                 // XXX(petrosagg): we are fabricating a timestamp here!!
                 let non_definite_ts = (PartitionId::None, MzOffset::from(self.last_lsn) + 1);
@@ -446,10 +452,17 @@ async fn postgres_replication_loop_inner(
     loop {
         match task_info.produce_replication().await {
             Err(ReplicationError::Indefinite(e)) => {
+                // If the channel is shutting down, so is the source.
+                let _ = task_info
+                    .sender
+                    .send(InternalMessage::Status(HealthStatus::StalledWithError(
+                        e.to_string(),
+                    )))
+                    .await;
                 warn!(
                     "replication for source {} interrupted, retrying: {}",
                     task_info.source_id, e
-                )
+                );
             }
             Err(ReplicationError::Definite(e)) => {
                 return Err(SourceReaderError {
@@ -815,6 +828,8 @@ impl PostgresTaskInfo {
                 lsn = cur_lsn,
                 publication = self.publication
             );
+
+            let peek_binary_start_time = Instant::now();
             let rows = try_indefinite!(client.simple_query(&query).await);
 
             match rows.first().expect("query returns exactly one row") {
@@ -824,12 +839,24 @@ impl PostgresTaskInfo {
                         .expect("query returns one column")
                         .parse()
                         .expect("count returned invalid number");
-                    if changes == 0 {
+                    let chosen_lsn = if changes == 0 {
                         // If there are no changes until the end of the WAL it's safe to fast forward
                         cur_lsn
                     } else {
                         self.lsn
-                    }
+                    };
+
+                    tracing::info!(
+                        slot = ?self.slot,
+                        query_time = ?peek_binary_start_time.elapsed(),
+                        ?chosen_lsn,
+                        current_lsn = ?cur_lsn,
+                        resumption_lsn = ?self.lsn,
+                        "Found {} changes in the wal.",
+                        changes
+                    );
+
+                    chosen_lsn
                 }
                 _ => panic!(),
             }
@@ -1088,9 +1115,18 @@ impl PostgresTaskInfo {
                 },
                 PrimaryKeepAlive(keepalive) => {
                     needs_status_update = needs_status_update || keepalive.reply() == 1;
+
+                    // Additional logging for incident 25
                     if last_data_message.elapsed() > WAL_LAG_GRACE_PERIOD
                         && keepalive.wal_end().saturating_sub(self.lsn.into()) > MAX_WAL_LAG
                     {
+                        tracing::info!(
+                            wal_lag_grace_period = ?WAL_LAG_GRACE_PERIOD,
+                            max_wal_lag = %bytesize::to_string(MAX_WAL_LAG, false),
+                            last_elapsed = ?last_data_message.elapsed(),
+                            lsn_diff = ?keepalive.wal_end().saturating_sub(self.lsn.into()),
+                            resumption_lsn = ?self.lsn,
+                            "Got PrimaryKeepAlive");
                         return Err(Indefinite(anyhow!("reached maximum WAL lag")));
                     }
                 }

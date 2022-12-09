@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.66"
 bytes = "1.2.1"
-chrono = { version = "0.4.23", default-features = false, features = ["clock", "std"] }
+chrono = { version = "0.4.23", default-features = false, features = ["std"] }
 clap = { version = "3.2.20", features = ["derive"] }
 fallible-iterator = "0.2.0"
 futures = "0.3.25"
@@ -20,7 +20,7 @@ md-5 = "0.10.5"
 mz-build-info = { path = "../build-info" }
 mz-controller = { path = "../controller" }
 mz-environmentd = { path = "../environmentd", default-features = false }
-mz-ore = { path = "../ore", features = ["task", "tracing_"] }
+mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
 mz-persist-client = { path = "../persist-client" }
@@ -34,7 +34,7 @@ mz-storage-client = { path = "../storage-client" }
 mz-cloud-resources = { path = "../cloud-resources" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 regex = "1.7.0"
-serde_json = "1.0.88"
+serde_json = "1.0.89"
 tempfile = "3.2.0"
 time = "0.3.17"
 tokio = "1.22.0"

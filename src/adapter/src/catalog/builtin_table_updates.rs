@@ -9,15 +9,16 @@
 
 use std::net::Ipv4Addr;
 
+use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::{
-    ComputeInstanceId, ComputeInstanceStatus, ComputeReplicaLocation,
+    ComputeInstanceId, ComputeInstanceStatus, ComputeReplicaAllocation, ComputeReplicaLocation,
 };
 use mz_expr::MirScalarExpr;
-use mz_orchestrator::ServiceProcessMetrics;
+use mz_orchestrator::{MemoryLimit, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -44,7 +45,8 @@ use crate::catalog::{
     MaterializedView, Role, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
 
-use super::{DataSourceDesc, Ingestion};
+use super::builtin::{MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_CLUSTER_REPLICA_SIZES};
+use super::{AwsPrincipalContext, DataSourceDesc, Ingestion};
 
 /// An update to a built-in table.
 #[derive(Debug)]
@@ -124,27 +126,41 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_compute_replica_update(
+    pub(super) fn pack_compute_replica_updates(
         &self,
         compute_instance_id: ComputeInstanceId,
         name: &str,
         diff: Diff,
-    ) -> BuiltinTableUpdate {
+    ) -> Vec<BuiltinTableUpdate> {
         let instance = &self.compute_instances_by_id[&compute_instance_id];
         let id = instance.replica_id_by_name[name];
         let replica = &instance.replicas_by_id[&id];
 
-        let (size, az) = match &replica.config.location {
+        let (size, az, allocation) = match &replica.config.location {
             ComputeReplicaLocation::Managed {
                 size,
                 availability_zone,
                 az_user_specified: _,
-                allocation: _,
-            } => (Some(&**size), Some(availability_zone.as_str())),
-            ComputeReplicaLocation::Remote { .. } => (None, None),
+                allocation,
+            } => (
+                Some(&**size),
+                Some(availability_zone.as_str()),
+                Some(*allocation),
+            ),
+            ComputeReplicaLocation::Remote { .. } => (None, None, None),
         };
 
-        BuiltinTableUpdate {
+        let (processes, cpu, memory) = match allocation {
+            Some(ComputeReplicaAllocation {
+                memory_limit,
+                cpu_limit,
+                scale,
+                ..
+            }) => (Some(scale), cpu_limit, memory_limit),
+            None => (None, None, None),
+        };
+
+        let mut updates = vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
             row: Row::pack_slice(&[
                 Datum::UInt64(id),
@@ -154,30 +170,43 @@ impl CatalogState {
                 Datum::from(az),
             ]),
             diff,
+        }];
+
+        if let (Some(processes), Some(cpu), Some(MemoryLimit(ByteSize(memory)))) =
+            (processes, cpu, memory)
+        {
+            updates.push(BuiltinTableUpdate {
+                id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_SIZES),
+                row: Row::pack_slice(&[
+                    Datum::UInt64(id),
+                    Datum::UInt64(u64::cast_from(processes.get())),
+                    Datum::UInt64(u64::cast_from(cpu.as_millicpus()) * 1_000_000),
+                    Datum::UInt64(memory),
+                ]),
+                diff,
+            })
         }
+        updates
     }
 
-    pub(super) fn pack_compute_instance_status_update(
+    pub(super) fn pack_compute_replica_status_update(
         &self,
         compute_instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
         process_id: ProcessId,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let event = self
-            .try_get_compute_instance_status(compute_instance_id, replica_id, process_id)
-            .expect("status not known");
+        let event = self.get_compute_instance_status(compute_instance_id, replica_id, process_id);
         let status = match event.status {
             ComputeInstanceStatus::Ready => "ready",
-            ComputeInstanceStatus::NotReady => "not_ready",
-            ComputeInstanceStatus::Unknown => "unknown",
+            ComputeInstanceStatus::NotReady => "not-ready",
         };
 
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_STATUSES),
             row: Row::pack_slice(&[
                 Datum::UInt64(replica_id),
-                Datum::Int64(process_id),
+                Datum::UInt64(process_id),
                 Datum::String(status),
                 Datum::TimestampTz(event.time.try_into().expect("must fit")),
             ]),
@@ -205,14 +234,7 @@ impl CatalogState {
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
             CatalogItem::Source(source) => {
-                let (source_type, connection_id) = match &source.data_source {
-                    DataSourceDesc::Ingestion(ingestion) => (
-                        ingestion.desc.name(),
-                        ingestion.desc.connection.connection_id(),
-                    ),
-                    DataSourceDesc::Source => ("subsource", None),
-                    DataSourceDesc::Introspection(_) => ("source", None),
-                };
+                let (source_type, connection_id) = (source.source_type(), source.connection_id());
 
                 self.pack_source_update(
                     id,
@@ -372,7 +394,17 @@ impl CatalogState {
             mz_storage_client::types::connections::Connection::Csr(_)
             | mz_storage_client::types::connections::Connection::Postgres(_)
             | mz_storage_client::types::connections::Connection::Aws(_)
-            | mz_storage_client::types::connections::Connection::AwsPrivatelink(_) => {}
+            | mz_storage_client::types::connections::Connection::AwsPrivatelink(_) => {
+                if let Some(aws_principal_context) = self.aws_principal_context.as_ref() {
+                    updates.extend(self.pack_aws_privatelink_connection_update(
+                        id,
+                        aws_principal_context,
+                        diff,
+                    ));
+                } else {
+                    tracing::error!("Missing AWS principal context, cannot write to mz_aws_privatelink_connections table");
+                }
+            }
         };
         updates
     }
@@ -427,6 +459,20 @@ impl CatalogState {
             row: Row::pack_slice(&[Datum::String(&id.to_string()), brokers, progress_topic]),
             diff,
         }]
+    }
+
+    pub fn pack_aws_privatelink_connection_update(
+        &self,
+        connection_id: GlobalId,
+        aws_principal_context: &AwsPrincipalContext,
+        diff: Diff,
+    ) -> Result<BuiltinTableUpdate, Error> {
+        let id = self.resolve_builtin_table(&MZ_AWS_PRIVATELINK_CONNECTIONS);
+        let row = Row::pack_slice(&[
+            Datum::String(&connection_id.to_string()),
+            Datum::String(&aws_principal_context.to_principal_string(connection_id)),
+        ]);
+        Ok(BuiltinTableUpdate { id, row, diff })
     }
 
     fn pack_view_update(

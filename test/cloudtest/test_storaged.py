@@ -9,6 +9,9 @@
 
 from textwrap import dedent
 
+import pytest
+from pg8000.exceptions import InterfaceError
+
 from materialize.cloudtest.application import MaterializeApplication
 from materialize.cloudtest.exists import exists, not_exists
 from materialize.cloudtest.wait import wait
@@ -102,7 +105,12 @@ def test_storaged_resizing(mz: MaterializeApplication) -> None:
     wait(condition="delete", resource=storaged)
 
 
-def test_storaged_shutdown(mz: MaterializeApplication) -> None:
+@pytest.mark.parametrize("failpoint", [False, True])
+def test_storaged_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
+    print("Starting test_storaged_shutdown")
+    if failpoint:
+        mz.set_environmentd_failpoints("kubernetes_drop_service=return(error)")
+
     """Test that dropping a source causes its respective storaged to shut down."""
     mz.testdrive.run(
         input=dedent(
@@ -143,7 +151,16 @@ def test_storaged_shutdown(mz: MaterializeApplication) -> None:
     wait(condition="condition=Ready", resource=storaged_pod)
     exists(storaged_svc)
 
-    mz.environmentd.sql("DROP SOURCE source1")
+    mz.wait_for_sql()
+
+    try:
+        mz.environmentd.sql("DROP SOURCE source1")
+    except InterfaceError as e:
+        print(f"Expected SQL error: {e}")
+
+    if failpoint:
+        # Disable failpoint here, this should end the crash loop of environmentd
+        mz.set_environmentd_failpoints("")
 
     wait(condition="delete", resource=storaged_pod)
     not_exists(storaged_svc)

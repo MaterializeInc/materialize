@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.66"
-async-trait = "0.1.58"
+async-trait = "0.1.59"
 byteorder = "1.4.3"
 bytes = "1.2.1"
 futures = "0.3.25"
@@ -21,7 +21,7 @@ mz-pgcopy = { path = "../pgcopy" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
-openssl = { version = "0.10.42", features = ["vendored"] }
+openssl = { version = "0.10.43", features = ["vendored"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio = "1.22.0"
 tokio-openssl = "0.6.3"

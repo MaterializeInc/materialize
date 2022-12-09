@@ -81,7 +81,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                             )
                         })?;
                     } else {
-                        write!(f, "{}Constant <empty>", ctx.indent)?;
+                        writeln!(f, "{}Constant <empty>", ctx.indent)?;
                     }
                 }
                 Err(err) => {
@@ -254,7 +254,15 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                             None => format!("%{}", pos),
                         }
                     };
-                    let join_order = |head_idx: usize,
+                    let join_key_to_string = |key: &Vec<MirScalarExpr>| -> String {
+                        if key.is_empty() {
+                            "×".to_owned()
+                        } else {
+                            separated_text(", ", key.iter().map(Displayable::from)).to_string()
+                        }
+                    };
+                    let join_order = |start_idx: usize,
+                                      start_key: &Option<Vec<MirScalarExpr>>,
                                       tail: &Vec<(
                         usize,
                         Vec<MirScalarExpr>,
@@ -262,20 +270,19 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                     )>|
                      -> String {
                         format!(
-                            "{} » {}",
-                            input_name(head_idx),
+                            "{}{} » {}",
+                            input_name(start_idx),
+                            match start_key {
+                                None => "".to_owned(),
+                                Some(key) => format!("[{}]", join_key_to_string(key)),
+                            },
                             separated(
                                 " » ",
                                 tail.iter().map(|(pos, key, characteristics)| {
                                     format!(
                                         "{}[{}]{}",
                                         input_name(*pos),
-                                        if key.is_empty() {
-                                            "×".to_owned()
-                                        } else {
-                                            separated_text(", ", key.iter().map(Displayable::from))
-                                                .to_string()
-                                        },
+                                        join_key_to_string(key),
                                         characteristics
                                             .as_ref()
                                             .map(|c| c.explain())
@@ -287,12 +294,17 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                     };
                     ctx.indented(|ctx| {
                         match implementation {
-                            JoinImplementation::Differential((head_idx, _head_key), tail) => {
+                            JoinImplementation::Differential((start_idx, start_key), tail) => {
                                 soft_assert!(inputs.len() == tail.len() + 1);
 
                                 writeln!(f, "{}implementation", ctx.indent)?;
                                 ctx.indented(|ctx| {
-                                    writeln!(f, "{}{}", ctx.indent, join_order(*head_idx, tail))
+                                    writeln!(
+                                        f,
+                                        "{}{}",
+                                        ctx.indent,
+                                        join_order(*start_idx, start_key, tail)
+                                    )
                                 })?;
                             }
                             JoinImplementation::DeltaQuery(half_join_chains) => {
@@ -301,7 +313,12 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                                 writeln!(f, "{}implementation", ctx.indent)?;
                                 ctx.indented(|ctx| {
                                     for (pos, chain) in half_join_chains.iter().enumerate() {
-                                        writeln!(f, "{}{}", ctx.indent, join_order(pos, chain))?;
+                                        writeln!(
+                                            f,
+                                            "{}{}",
+                                            ctx.indent,
+                                            join_order(pos, &None, chain)
+                                        )?;
                                     }
                                     Ok(())
                                 })?;
@@ -653,14 +670,18 @@ impl<'a> DisplayText for Displayable<'a, MirScalarExpr> {
 
 impl<'a> DisplayText for Displayable<'a, AggregateExpr> {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut ()) -> fmt::Result {
-        let func = self.0.func.clone();
-        if self.0.distinct {
-            write!(f, "{}(distinct ", func)?;
-            Displayable::from(&self.0.expr).fmt_text(f, ctx)?;
-        } else {
-            write!(f, "{}(", func)?;
-            Displayable::from(&self.0.expr).fmt_text(f, ctx)?;
+        if self.0.is_count_asterisk() {
+            return write!(f, "count(*)");
         }
+
+        write!(
+            f,
+            "{}({}",
+            self.0.func.clone(),
+            if self.0.distinct { "distinct " } else { "" }
+        )?;
+
+        Displayable::from(&self.0.expr).fmt_text(f, ctx)?;
         write!(f, ")")
     }
 }

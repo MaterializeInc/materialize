@@ -54,7 +54,6 @@ use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
-use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
@@ -255,7 +254,7 @@ pub struct Args {
 
     // === Orchestrator options. ===
     /// The service orchestrator implementation to use.
-    #[structopt(long, default_value = "process", arg_enum)]
+    #[structopt(long, arg_enum, env = "ORCHESTRATOR")]
     orchestrator: OrchestratorKind,
     /// Labels to apply to all services created by the Kubernetes orchestrator
     /// in the form `KEY=VALUE`.
@@ -292,21 +291,18 @@ pub struct Args {
     /// value.
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
-    /// Base port for services spawned by the process orchestrator.
-    #[structopt(
-        long,
-        env = "ORCHESTRATOR_PROCESS_BASE_SERVICE_PORT",
-        default_value = "2100"
-    )]
-    orchestrator_process_base_service_port: u16,
-    /// Where the process orchestrator should store its metadata.
+    /// Where the process orchestrator should store secrets.
     #[clap(
         long,
-        env = "ORCHESTRATOR_PROCESSDATA_DIRECTORY",
+        env = "ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY",
         value_name = "PATH",
-        default_value = "mzdata"
+        required_if_eq("orchestrator", "process")
     )]
-    orchestrator_process_data_directory: PathBuf,
+    orchestrator_process_secrets_directory: Option<PathBuf>,
+    /// Whether the process orchestrator should handle crashes in child
+    /// processes by crashing the parent process.
+    #[clap(long, env = "ORCHESTRATOR_PROCESS_PROPAGATE_CRASHES")]
+    orchestrator_process_propagate_crashes: bool,
 
     /// The init container to use for computed and storaged when using the
     /// kubernetes orchestrator.
@@ -418,6 +414,10 @@ pub struct Args {
         use_delimiter = true
     )]
     announce_egress_ip: Vec<Ipv4Addr>,
+
+    /// The 12-digit AWS account id, which is used to generate an AWS Principal.
+    #[clap(long, env = "AWS_ACCOUNT_ID")]
+    aws_account_id: Option<String>,
 
     // === Tracing options. ===
     #[clap(flatten)]
@@ -600,17 +600,15 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                         // binaries and release binaries look for other release
                         // binaries.
                         image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
-                        port_allocator: Arc::new(PortAllocator::new(
-                            args.orchestrator_process_base_service_port,
-                            args.orchestrator_process_base_service_port
-                                .checked_add(1000)
-                                .expect("Port number overflow, base-service-port too large."),
-                        )),
                         suppress_output: false,
-                        data_dir: args.orchestrator_process_data_directory.clone(),
+                        environment_id: args.environment_id.clone(),
+                        secrets_dir: args
+                            .orchestrator_process_secrets_directory
+                            .expect("clap enforced"),
                         command_wrapper: args
                             .orchestrator_process_wrapper
                             .map_or(Ok(vec![]), |s| shell_words::split(&s))?,
+                        propagate_crashes: args.orchestrator_process_propagate_crashes,
                     }))
                     .context("creating process orchestrator")?,
             );
@@ -688,7 +686,7 @@ max log level: {max_log_level}",
                         value.to_string_lossy().into_owned(),
                     )
                 })
-                .filter(|(name, _value)| name.starts_with("MZ_"))
+                .filter(|(name, _value)| name.starts_with("MZ_") || name == "FAILPOINTS")
                 .map(|(name, value)| format!("{}={}", escape(&name), escape(&value)))
                 .chain(env::args().into_iter().map(|arg| escape(&arg).into_owned()))
                 .join(" ")
@@ -768,6 +766,7 @@ max log level: {max_log_level}",
         storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
         segment_api_key: args.segment_api_key,
         egress_ips: args.announce_egress_ip,
+        aws_account_id: args.aws_account_id,
     }))?;
 
     metrics.start_time_environmentd.set(

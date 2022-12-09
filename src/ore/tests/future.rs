@@ -13,26 +13,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::error::Error;
+use std::panic;
 
-use mz_orchestrator_process::port_metadata_file::PortMetadataFile;
+use scopeguard::defer;
 
-#[test]
-fn test_port_metadata_file_basic() -> Result<(), Box<dyn Error>> {
-    let dir = tempfile::tempdir()?;
-    let path = dir.path().join("portfile");
+use mz_ore::future::OreFutureExt;
+use mz_ore::panic::set_abort_on_panic;
 
-    let port_metadata: HashMap<String, u16> =
-        vec![("joe".to_string(), 42), ("shmoe".to_string(), 666)]
-            .into_iter()
-            .collect();
-    let _port_metadata_file = PortMetadataFile::open(&path, &port_metadata)?;
-    assert!(path.exists());
+// IMPORTANT!!! Do not add any additional tests to this file. This test sets and
+// removes panic hooks and can interfere with any concurrently running test.
+// Therefore, it needs to be run in isolation.
 
-    let port_metadata_file_contents = PortMetadataFile::read(&path)?;
+#[tokio::test]
+async fn catch_panic_async() {
+    let old_hook = panic::take_hook();
+    defer! {
+        panic::set_hook(old_hook);
+    }
 
-    assert_eq!(port_metadata, port_metadata_file_contents);
+    set_abort_on_panic();
 
-    Ok(())
+    let result = async {
+        panic!("panicked");
+    }
+    .ore_catch_unwind()
+    .await
+    .unwrap_err()
+    .downcast::<&str>()
+    .unwrap();
+
+    assert_eq!(*result, "panicked");
 }

@@ -32,6 +32,7 @@ where
     /// Export the sink described by `sink` from the rendering context.
     pub(crate) fn export_sink(
         &mut self,
+        scope: &G,
         compute_state: &mut crate::compute_state::ComputeState,
         tokens: &mut std::collections::BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         import_ids: BTreeSet<GlobalId>,
@@ -71,6 +72,7 @@ where
         };
 
         let sink_token = sink_render.render_continuous_sink(
+            scope,
             compute_state,
             sink,
             sink_id,
@@ -99,6 +101,7 @@ where
 {
     fn render_continuous_sink(
         &self,
+        scope: &G,
         compute_state: &mut crate::compute_state::ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,

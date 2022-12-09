@@ -46,6 +46,7 @@ use crate::server::ListenerHandle;
 
 mod http;
 mod server;
+mod telemetry;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 
@@ -119,6 +120,8 @@ pub struct Config {
     pub segment_api_key: Option<String>,
     /// IP Addresses which will be used for egress.
     pub egress_ips: Vec<Ipv4Addr>,
+    /// 12-digit AWS account id, which will be used to generate an AWS Principal.
+    pub aws_account_id: Option<String>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -173,7 +176,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         .postgres_factory
         .open(config.adapter_stash_url.clone(), None, tls)
         .await?;
-    let stash = mz_stash::Memory::new(stash);
+    let stash = mz_stash::Cache::new(stash);
 
     // Validate TLS configuration, if present.
     let (pgwire_tls, http_tls) = match &config.tls {
@@ -284,6 +287,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let controller = mz_controller::Controller::new(config.controller, envd_epoch).await;
 
     // Initialize adapter.
+    let segment_client = config.segment_api_key.map(mz_segment::Client::new);
     let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
         dataflow_client: controller,
         storage: adapter_storage,
@@ -303,10 +307,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         connection_context: config.connection_context,
         storage_usage_client,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
-        segment_api_key: config.segment_api_key,
+        segment_client: segment_client.clone(),
         egress_ips: config.egress_ips,
         consolidations_tx,
         consolidations_rx,
+        aws_account_id: config.aws_account_id,
     })
     .await?;
 
@@ -344,12 +349,21 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     task::spawn(|| "http_server", {
         let http_server = HttpServer::new(HttpConfig {
             tls: http_tls,
-            frontegg: config.frontegg,
-            adapter_client,
+            frontegg: config.frontegg.clone(),
+            adapter_client: adapter_client.clone(),
             allowed_origin: config.cors_allowed_origin,
         });
         server::serve(http_conns, http_server)
     });
+
+    // Start telemetry reporting loop.
+    if let (Some(segment_client), Some(frontegg)) = (segment_client, config.frontegg) {
+        telemetry::start_reporting(telemetry::Config {
+            segment_client,
+            adapter_client,
+            organization_id: frontegg.tenant_id(),
+        });
+    }
 
     Ok(Server {
         sql_listener,

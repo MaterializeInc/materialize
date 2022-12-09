@@ -332,6 +332,9 @@ pub trait StorageController: Debug + Send {
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
     async fn process(&mut self) -> Result<(), anyhow::Error>;
+
+    /// Considers all nodes not currently used as orphans and removes those from the orchestrator.
+    async fn remove_orphans(&mut self, next_id: GlobalId) -> Result<(), anyhow::Error>;
 }
 
 /// Compaction policies for collections maintained by `Controller`.
@@ -597,7 +600,7 @@ impl Arbitrary for DurableExportMetadata<mz_repr::Timestamp> {
 #[derive(Debug)]
 pub struct StorageControllerState<
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
-    S = mz_stash::Memory<mz_stash::Postgres>,
+    S = mz_stash::Cache<mz_stash::Postgres>,
 > {
     /// Collections maintained by the storage controller.
     ///
@@ -746,7 +749,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             .open(postgres_url, None, tls)
             .await
             .expect("could not connect to postgres storage stash");
-        let stash = mz_stash::Memory::new(stash);
+        let stash = mz_stash::Cache::new(stash);
 
         let persist_write_handles = persist_write_handles::PersistWorker::new(tx);
         let collection_manager_write_handle = persist_write_handles.clone();
@@ -1421,6 +1424,10 @@ where
 
         Ok(())
     }
+
+    async fn remove_orphans(&mut self, next_id: GlobalId) -> Result<(), anyhow::Error> {
+        self.hosts.remove_orphans(next_id).await
+    }
 }
 
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
@@ -1652,32 +1659,7 @@ impl<T: Timestamp> ExportState<T> {
     }
 }
 
-#[async_trait(?Send)]
-pub trait CollectionManagement: Debug + Send + StorageController {
-    /// Appends `updates` to the collection correlated with `global_id` at a
-    /// timestamp decided on by the implementor.
-    async fn append_to_managed_collection(
-        &mut self,
-        global_id: GlobalId,
-        updates: Vec<(Row, Diff)>,
-    );
-
-    /// Truncates the collection associated with `global_id`.
-    async fn truncate_managed_collection(&mut self, global_id: GlobalId);
-
-    // ShardMapping functions
-
-    /// Initializes the data expressing which global IDs correlate to which
-    /// shards. Necessary because we cannot write any of these mappings that we
-    /// discover before the shard mapping collection exists.
-    async fn initialize_shard_mapping(&mut self);
-
-    /// Writes a new global ID, shard ID pair to the appropriate collection.
-    async fn register_shard_mapping(&mut self, global_id: GlobalId);
-}
-
-#[async_trait(?Send)]
-impl<T> CollectionManagement for Controller<T>
+impl<T> Controller<T>
 where
     T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
 
@@ -1685,8 +1667,7 @@ where
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
 
-    MetadataExportFetcher: MetadataExport<T>,
-    DurableExportMetadata<T>: mz_stash::Data,
+    Self: StorageController<Timestamp = T>,
 {
     /// Effectively truncates the `data_shard` associated with `global_id`
     /// effective as of the system time.
@@ -1728,12 +1709,13 @@ where
             .await;
     }
 
-    /// Append `updates` to the `data_shard` correlated with `global_id`
-    /// effective as of the system time.
+    /// Initializes the data expressing which global IDs correspond to which
+    /// shards. Necessary because we cannot write any of these mappings that we
+    /// discover before the shard mapping collection exists.
     ///
     /// # Panics
-    /// - If `IntrospectionType::ShardMapping` is not correlated with a
-    ///   `GlobalId`.
+    /// - If `IntrospectionType::ShardMapping` is not associated with a
+    /// `GlobalId` in `self.state.introspection_ids`.
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     async fn initialize_shard_mapping(&mut self) {
@@ -1758,8 +1740,7 @@ where
         self.append_to_managed_collection(id, updates).await;
     }
 
-    /// Tracks the mapping of `GlobalId` to data shards in the collection at
-    /// `self.state.shard_collection_global_id`.
+    /// Writes a new global ID, shard ID pair to the appropriate collection.
     ///
     /// However, data is written iff we know of the `GlobalId` of the
     /// `IntrospectionType::ShardMapping` collection; in other cases, data is

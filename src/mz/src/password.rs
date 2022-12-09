@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use crate::configuration::ValidProfile;
-use crate::{FronteggAppPassword, API_FRONTEGG_TOKEN_AUTH_URL};
+use crate::FronteggAppPassword;
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::Client;
@@ -33,7 +33,7 @@ pub(crate) async fn list_passwords(
     body.insert("description", &"App password for the CLI");
 
     client
-        .get(API_FRONTEGG_TOKEN_AUTH_URL)
+        .get(valid_profile.profile.endpoint().api_token_auth_url())
         .headers(headers)
         .json(&body)
         .send()

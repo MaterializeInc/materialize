@@ -49,7 +49,7 @@ mod tests {
                         as Box<dyn Transform>,
                 ))
                 .chain(std::iter::once(
-                    Box::new(mz_transform::update_let::UpdateLet::default()) as Box<dyn Transform>
+                    Box::new(mz_transform::normalize_lets::NormalizeLets::new(false)) as Box<dyn Transform>
                 ))
                 .chain(Optimizer::logical_cleanup_pass().transforms.into_iter())
                 .chain(Optimizer::physical_optimizer().transforms.into_iter())
@@ -123,12 +123,10 @@ mod tests {
         test_type: TestType,
     ) -> Result<String, Error> {
         let mut rel = parse_relation(s, cat, args)?;
-        let mut id_gen = Default::default();
         for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
             get_transform(t)?.transform(
                 &mut rel,
                 TransformArgs {
-                    id_gen: &mut id_gen,
                     indexes: &EmptyIndexOracle,
                 },
             )?;
@@ -142,7 +140,6 @@ mod tests {
                     transform.transform(
                         &mut rel,
                         TransformArgs {
-                            id_gen: &mut id_gen,
                             indexes: &EmptyIndexOracle,
                         },
                     )?;
@@ -166,7 +163,6 @@ mod tests {
                         transform.transform(
                             &mut rel,
                             TransformArgs {
-                                id_gen: &mut id_gen,
                                 indexes: &EmptyIndexOracle,
                             },
                         )?;
@@ -233,7 +229,7 @@ mod tests {
             )),
             "Demand" => Ok(Box::new(mz_transform::demand::Demand::default())),
             "FilterFusion" => Ok(Box::new(mz_transform::fusion::filter::Filter)),
-            "FoldConstants" => Ok(Box::new(mz_transform::reduction::FoldConstants {
+            "FoldConstants" => Ok(Box::new(mz_transform::fold_constants::FoldConstants {
                 limit: None,
             })),
             "FlatMapToMap" => Ok(Box::new(mz_transform::fusion::flatmap_to_map::FlatMapToMap)),
@@ -263,7 +259,9 @@ mod tests {
             "RedundantJoin" => Ok(Box::new(
                 mz_transform::redundant_join::RedundantJoin::default(),
             )),
-            "RelationCSE" => Ok(Box::new(mz_transform::cse::relation_cse::RelationCSE)),
+            "RelationCSE" => Ok(Box::new(mz_transform::cse::relation_cse::RelationCSE::new(
+                false,
+            ))),
             "TopKFusion" => Ok(Box::new(mz_transform::fusion::top_k::TopK)),
             "ThresholdElision" => Ok(Box::new(mz_transform::threshold_elision::ThresholdElision)),
             "UnionBranchCancellation" => Ok(Box::new(

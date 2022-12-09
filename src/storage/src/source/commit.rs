@@ -18,7 +18,7 @@ use mz_ore::task;
 use mz_repr::GlobalId;
 use mz_storage_client::types::sources::MzOffset;
 
-use crate::source::types::OffsetCommitter;
+use crate::source::types::{OffsetCommitMetrics, OffsetCommitter};
 
 /// An OffsetCommitter that simply logs its callbacks.
 pub struct LogCommitter {
@@ -62,6 +62,7 @@ pub(crate) fn drive_offset_committer<S: OffsetCommitter + Send + Sync + 'static>
     source_id: GlobalId,
     worker_id: usize,
     worker_count: usize,
+    metrics: OffsetCommitMetrics,
 ) -> OffsetCommitHandle {
     let (tx, mut rx): (_, watch::Receiver<HashMap<PartitionId, MzOffset>>) =
         watch::channel(Default::default());
@@ -90,8 +91,8 @@ pub(crate) fn drive_offset_committer<S: OffsetCommitter + Send + Sync + 'static>
                 {
                     last_offsets = new_offsets.clone();
                     if let Err(e) = sc.commit_offsets(new_offsets).await {
-                        // TODO(guswynn): stats for this error
-                        tracing::error!(
+                        metrics.offset_commit_failures.inc();
+                        tracing::warn!(
                             %e,
                             "Failed to commit offsets for {source_id} ({worker_id}/{worker_count}"
                         );
