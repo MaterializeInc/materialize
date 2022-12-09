@@ -25,6 +25,7 @@ use std::time::Duration;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
+use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig, ConsensusKnobs};
 use mz_persist::location::{Blob, Consensus, ExternalError};
@@ -251,6 +252,16 @@ pub struct PersistConfig {
     /// is likely a good place to start so that all connections are rotated when the
     /// pool is fully used.
     pub consensus_connection_pool_ttl_stagger: Duration,
+    /// The # of diffs to initially scan when fetching the latest consensus state, to
+    /// determine which requests go down the fast vs slow path. Should be large enough
+    /// to fetch all live diffs in the steady-state, and small enough to query Consensus
+    /// at high volume. Steady-state usage should accommodate readers that require
+    /// seqno-holds for reasonable amounts of time, which to start we say is 10s of minutes.
+    ///
+    /// This value ought to be defined in terms of `NEED_ROLLUP_THRESHOLD` to approximate
+    /// when we expect rollups to be written and therefore when old states will be truncated
+    /// by GC.
+    pub state_versions_recent_live_diffs_limit: usize,
     /// Length of time after a writer's last operation after which the writer
     /// may be expired.
     pub writer_lease_duration: Duration,
@@ -326,6 +337,9 @@ impl PersistConfig {
             consensus_connection_pool_max_size: 50,
             consensus_connection_pool_ttl: Duration::from_secs(300),
             consensus_connection_pool_ttl_stagger: Duration::from_secs(6),
+            state_versions_recent_live_diffs_limit: usize::cast_from(
+                30 * Self::NEED_ROLLUP_THRESHOLD,
+            ),
             writer_lease_duration: 60 * Duration::from_secs(60),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
             critical_downgrade_interval: Duration::from_secs(30),

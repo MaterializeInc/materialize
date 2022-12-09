@@ -121,13 +121,17 @@ def main() -> int:
         if args.program == "environmentd":
             _handle_lingering_services(kill=args.reset)
             mzdata = ROOT / "mzdata"
-            if args.reset:
-                print("Removing mzdata directory...")
-                shutil.rmtree(mzdata, ignore_errors=True)
             for schema in ["consensus", "adapter", "storage"]:
                 if args.reset:
                     _run_sql(args.postgres, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
                 _run_sql(args.postgres, f"CREATE SCHEMA IF NOT EXISTS {schema}")
+            # Keep this after clearing out Postgres. Otherwise there is a race
+            # where a ctrl-c could leave persist with references in Postgres to
+            # files that have been deleted. There's no race if we reset in the
+            # opposite order.
+            if args.reset:
+                print("Removing mzdata directory...")
+                shutil.rmtree(mzdata, ignore_errors=True)
 
             mzdata.mkdir(exist_ok=True)
             environment_file = mzdata / "environment-id"

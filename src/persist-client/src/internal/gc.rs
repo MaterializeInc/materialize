@@ -196,7 +196,7 @@ where
 
         let mut states = machine
             .state_versions
-            .fetch_live_states::<K, V, T, D>(&req.shard_id)
+            .fetch_all_live_states::<K, V, T, D>(&req.shard_id)
             .await
             .expect("shard codecs should not change");
 
