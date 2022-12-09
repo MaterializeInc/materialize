@@ -61,7 +61,10 @@ impl<T: TimestampManipulation> TimestampContext<T> {
                     ts,
                 )
             }
-            TimelineContext::TimestampIndependent => Self::NoTimestamp,
+            TimelineContext::TimestampIndependent => {
+                assert_eq!(T::maximum(), ts, "timestamp selection should have selected `T::maximum()` for timestamp independent queries");
+                Self::NoTimestamp
+            }
         }
     }
 
@@ -73,8 +76,16 @@ impl<T: TimestampManipulation> TimestampContext<T> {
         }
     }
 
-    /// The timestamp belonging to this context.
-    pub fn timestamp(&self) -> T {
+    /// The timestamp belonging to this context, if one exists.
+    pub fn timestamp(&self) -> Option<&T> {
+        match self {
+            Self::TimelineTimestamp(_, ts) => Some(ts),
+            Self::NoTimestamp => None,
+        }
+    }
+
+    /// The timestamp belonging to this context, or a sensible default if one does not exists.
+    pub fn timestamp_or_default(&self) -> T {
         match self {
             Self::TimelineTimestamp(_, ts) => ts.clone(),
             // Anything without a timestamp is given the maximum possible timestamp to indicate
@@ -86,15 +97,12 @@ impl<T: TimestampManipulation> TimestampContext<T> {
 
     /// Whether or not the context contains a timestamp.
     pub fn contains_timestamp(&self) -> bool {
-        match self {
-            Self::TimelineTimestamp(_, _) => true,
-            Self::NoTimestamp => false,
-        }
+        self.timestamp().is_some()
     }
 
     /// Converts this `TimestampContext` to an `Antichain`.
     pub fn antichain(&self) -> Antichain<T> {
-        Antichain::from_elem(self.timestamp())
+        Antichain::from_elem(self.timestamp_or_default())
     }
 }
 
@@ -136,16 +144,7 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.join_assign(&ts);
         }
 
-        let upper = self.least_valid_write(id_bundle);
-        let largest_not_in_advance_of_upper = self.largest_not_in_advance_of_upper(&upper);
-        let mut oracle_read_ts = None;
-
-        if when.advance_to_since() {
-            candidate.advance_by(since.borrow());
-        }
-
         let isolation_level = session.vars().transaction_isolation();
-        // We only care about timelines for Strict Serializable and non AS OF queries.
         let timeline = match &timeline_context {
             TimelineContext::TimelineDependent(timeline) => Some(timeline.clone()),
             // // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
@@ -153,8 +152,16 @@ impl<S: Append + 'static> Coordinator<S> {
             TimelineContext::TimestampIndependent => None,
         };
         let use_timestamp_oracle = isolation_level == &vars::IsolationLevel::StrictSerializable
-            && when.advance_to_global_ts()
-            && timeline.is_some();
+            && timeline.is_some()
+            && when.advance_to_global_ts();
+
+        let upper = self.least_valid_write(id_bundle);
+        let largest_not_in_advance_of_upper = self.largest_not_in_advance_of_upper(&upper);
+        let mut oracle_read_ts = None;
+
+        if when.advance_to_since() {
+            candidate.advance_by(since.borrow());
+        }
 
         if use_timestamp_oracle {
             let timeline = timeline
@@ -377,7 +384,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
 /// Information used when determining the timestamp for a query.
 pub struct TimestampDetermination<T> {
-    /// The chosen timestamp and timeline context from `determine_timestamp`.
+    /// The chosen timestamp context from `determine_timestamp`.
     pub timestamp_context: TimestampContext<T>,
     /// The read frontier of all involved sources.
     pub since: Antichain<T>,
@@ -466,7 +473,7 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
             "                query timestamp: {}",
             self.determination
                 .timestamp_context
-                .timestamp()
+                .timestamp_or_default()
                 .display(timeline)
         )?;
         if let Some(oracle_read_ts) = &self.determination.oracle_read_ts {

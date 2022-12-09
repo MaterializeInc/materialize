@@ -681,7 +681,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect()
     }
 
-    /// Returns an iterator that partitions an id bundle by the timeline that each id belongs to.
+    /// Returns an iterator that partitions an id bundle by the timeline context that each id belongs to.
     pub fn partition_ids_by_timeline_context(
         &self,
         id_bundle: &CollectionIdBundle,

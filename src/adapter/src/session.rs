@@ -863,9 +863,9 @@ pub enum TransactionOps<T> {
     /// in it.
     None,
     /// This transaction has had a peek (`SELECT`, `SUBSCRIBE`). If the inner value
-    /// is Some, it must only do other peeks. However, if the value is None
-    /// (i.e. the values are constants), the transaction can still perform
-    /// writes.
+    /// is has a timestamp, it must only do other peeks. However, if it doesn't
+    /// have a timestamp (i.e. the values are constants), the transaction can still
+    /// perform writes.
     Peeks(TimestampContext<T>),
     /// This transaction has done a `SUBSCRIBE` and must do nothing else.
     Subscribe,

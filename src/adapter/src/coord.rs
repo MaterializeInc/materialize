@@ -310,7 +310,7 @@ pub enum PendingReadTxn {
     Read {
         /// The inner transaction.
         txn: PendingTxn,
-        /// The timestamp of the transaction, if one exists.
+        /// The timestamp context of the transaction.
         timestamp_context: TimestampContext<mz_repr::Timestamp>,
     },
     ReadThenWrite {
@@ -322,7 +322,7 @@ pub enum PendingReadTxn {
 }
 
 impl PendingReadTxn {
-    /// Return the timestamp and timeline context of the pending read transaction.
+    /// Return the timestamp context of the pending read transaction.
     pub fn timestamp_context(&self) -> TimestampContext<mz_repr::Timestamp> {
         match &self {
             PendingReadTxn::Read {

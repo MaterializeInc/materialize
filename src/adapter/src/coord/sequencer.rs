@@ -2139,8 +2139,9 @@ impl<S: Append + 'static> Coordinator<S> {
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
             && source.contains_temporal()
         {
-            // If the source IDs are timeline independent but the query contains temporal functions,
-            // then the timeline context needs to be upgraded to timeline dependent.
+            // If the source IDs are timestamp independent but the query contains temporal functions,
+            // then the timeline context needs to be upgraded to timestamp dependent. This is
+            // required because `source_ids` doesn't contain functions.
             timeline_context = TimelineContext::TimestampDependent;
         }
         let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
@@ -2220,12 +2221,12 @@ impl<S: Append + 'static> Coordinator<S> {
             .sufficient_collections(source_ids);
 
         let conn_id = session.conn_id();
-        // For transactions that do not use AS OF, get the timestamp of the
+        // For transactions that do not use AS OF, get the timestamp context of the
         // in-progress transaction or create one. If this is an AS OF query, we
-        // don't care about any possible transaction timestamp. If this is a
+        // don't care about any possible transaction timestamp context. If this is a
         // single-statement transaction (TransactionStatus::Started), we don't
         // need to worry about preventing compaction or choosing a valid
-        // timestamp for future queries.
+        // timestamp context for future queries.
         let timestamp_context = if in_immediate_multi_stmt_txn {
             match session.get_transaction_timestamp_context() {
                 Some(ts_context) => ts_context,
@@ -2248,7 +2249,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         compute_instance,
                         timeline_context,
                     )?;
-                    // We only need read holds if the depends on a timestamp.
+                    // We only need read holds if the read depends on a timestamp.
                     if timestamp.timestamp_context.contains_timestamp() {
                         read_holds = Some(id_bundle);
                     }
@@ -2270,7 +2271,7 @@ impl<S: Append + 'static> Coordinator<S> {
             // If there are no `txn_reads`, then this must be the first query in the transaction
             // and we can skip timedomain validations.
             if let Some(txn_reads) = self.txn_reads.get(&session.conn_id()) {
-                // queries without a timestamp and timeline can belong to any existing timedomain.
+                // Queries without a timestamp and timeline can belong to any existing timedomain.
                 if let TimestampContext::TimelineTimestamp(_, _) = &timestamp_context {
                     // Verify that the references and indexes for this query are in the
                     // current read transaction.
@@ -2342,7 +2343,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.catalog.state(),
                 plan,
                 ExprPrepStyle::OneShot {
-                    logical_time: Some(timestamp_context.timestamp()),
+                    logical_time: Some(timestamp_context.timestamp_or_default()),
                     session,
                 },
             )?;
@@ -3231,7 +3232,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 diffs
             };
 
-            // We need to clear out the read ops so the write doesn't fail due to a
+            // We need to clear out the timestamp context so the write doesn't fail due to a
             // read only transaction.
             let timestamp_context = session.take_transaction_timestamp_context();
             // No matter what isolation level the client is using, we must linearize this
