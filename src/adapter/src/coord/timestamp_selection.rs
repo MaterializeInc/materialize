@@ -61,10 +61,7 @@ impl<T: TimestampManipulation> TimestampContext<T> {
                     ts,
                 )
             }
-            TimelineContext::TimestampIndependent => {
-                assert_eq!(T::maximum(), ts, "timestamp selection should have selected `T::maximum()` for timestamp independent queries");
-                Self::NoTimestamp
-            }
+            TimelineContext::TimestampIndependent => Self::NoTimestamp,
         }
     }
 

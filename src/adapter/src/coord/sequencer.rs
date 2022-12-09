@@ -2229,8 +2229,8 @@ impl<S: Append + 'static> Coordinator<S> {
         // timestamp context for future queries.
         let timestamp_context = if in_immediate_multi_stmt_txn {
             match session.get_transaction_timestamp_context() {
-                Some(ts_context) => ts_context,
-                None => {
+                Some(ts_context @ TimestampContext::TimelineTimestamp(_, _)) => ts_context,
+                _ => {
                     // Determine a timestamp that will be valid for anything in any schema
                     // referenced by the first query.
                     let id_bundle = self.timedomain_for(
