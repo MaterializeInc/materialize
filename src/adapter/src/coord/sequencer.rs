@@ -2248,7 +2248,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         compute_instance,
                         timeline_context,
                     )?;
-                    // We only need read holds if the depends on a timeline.
+                    // We only need read holds if the depends on a timestamp.
                     if timestamp.timestamp_context.contains_timestamp() {
                         read_holds = Some(id_bundle);
                     }
@@ -2342,7 +2342,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.catalog.state(),
                 plan,
                 ExprPrepStyle::OneShot {
-                    logical_time: timestamp_context.timestamp().cloned(),
+                    logical_time: Some(timestamp_context.timestamp()),
                     session,
                 },
             )?;

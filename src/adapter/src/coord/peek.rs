@@ -335,10 +335,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
             };
         }
 
-        let timestamp = timestamp_context
-            .timestamp()
-            .expect("non-constant peeks must have a timestamp")
-            .clone();
+        let timestamp = timestamp_context.timestamp();
 
         // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
         // In both cases we will want to peek, and the main difference is that we might want to
