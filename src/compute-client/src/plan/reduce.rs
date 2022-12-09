@@ -60,9 +60,6 @@
 //! type, we can specialize and render the dataflow to compute those aggregations in the correct order, and
 //! return the output arrangement directly and avoid the extra collation arrangement.
 
-// https://github.com/tokio-rs/prost/issues/237
-#![allow(missing_docs)]
-
 use mz_expr::permutation_for_arrangement;
 use mz_expr::AggregateExpr;
 use mz_expr::AggregateFunc;
@@ -144,7 +141,6 @@ pub enum ReducePlan {
     Distinct,
     /// Plan for not computing any aggregations, just determining the set of distinct keys. A
     /// specialization of [ReducePlan::Distinct] maintaining rows not in the output.
-    #[allow(dead_code)]
     DistinctNegated,
     /// Plan for computing only accumulable aggregations.
     Accumulable(AccumulablePlan),

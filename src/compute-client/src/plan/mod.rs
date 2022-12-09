@@ -9,8 +9,6 @@
 
 //! An explicit representation of a rendering plan for provided dataflows.
 
-// https://github.com/tokio-rs/prost/issues/237
-#![allow(missing_docs)]
 #![warn(missing_debug_implementations)]
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
