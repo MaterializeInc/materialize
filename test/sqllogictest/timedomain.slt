@@ -13,8 +13,10 @@ mode cockroach
 # first use. If the first use happens to be in a transaction, then we can get unexpected time
 # domain errors. This is an annoying hack to load the information in the postgres client before
 # we start any transactions.
-query error Temporal functions can only be called in the context of an existing timeline
+query T rowsort
 SELECT mz_now()
+----
+18446744073709551615
 
 statement ok
 CREATE TABLE t (i INT);
@@ -39,8 +41,18 @@ query error Transactions can only reference objects in the same timedomain.
 SELECT * FROM t
 
 # Referring to the timestamp prevents including sources later.
-query error Temporal functions can only be called in the context of an existing timeline
+simple
+ROLLBACK;
+BEGIN;
 SELECT mz_now();
+----
+COMPLETE 0
+COMPLETE 0
+18446744073709551615
+COMPLETE 1
+
+query error Transactions can only reference objects in the same timedomain.
+SELECT 1 FROM mz_types LIMIT 1
 
 simple
 ROLLBACK;

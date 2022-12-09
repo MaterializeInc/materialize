@@ -2173,11 +2173,8 @@ impl<S: Append + 'static> Coordinator<S> {
             || when == QueryWhen::Immediately
         {
             let timeline = session.get_transaction_timeline();
-            let read_context = ReadContext::from_timeline_context(
-                peek_plan.timestamp,
-                timeline,
-                timeline_context,
-            )?;
+            let read_context =
+                ReadContext::from_timeline_context(peek_plan.timestamp, timeline, timeline_context);
             session.add_transaction_ops(TransactionOps::Peeks(read_context))?;
         }
 
