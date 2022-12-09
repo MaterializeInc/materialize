@@ -70,6 +70,7 @@ use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::timeline::TimelineContext;
+use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
     peek, Coordinator, Message, PendingReadTxn, PendingTxn, SendDiffs, SinkConnectionReady,
     DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
@@ -80,8 +81,8 @@ use crate::metrics;
 use crate::notice::AdapterNotice;
 use crate::session::vars::{IsolationLevel, CLUSTER_VAR_NAME, DATABASE_VAR_NAME};
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, TimestampContext, TransactionOps,
-    TransactionStatus, Var, WriteOp,
+    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
+    WriteOp,
 };
 use crate::subscribe::PendingSubscribe;
 use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId};

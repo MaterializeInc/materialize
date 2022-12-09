@@ -17,7 +17,6 @@ use std::mem;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use timely::progress::Antichain;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::OwnedMutexGuard;
 use uuid::Uuid;
@@ -32,7 +31,7 @@ use mz_storage_client::types::sources::Timeline;
 use crate::catalog::{INTERNAL_USER_NAMES, SYSTEM_USER};
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
-use crate::coord::timeline::TimelineContext;
+use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::session::vars::IsolationLevel;
 use crate::AdapterNotice;
@@ -887,62 +886,6 @@ impl<T> TransactionOps<T> {
 impl<T> Default for TransactionOps<T> {
     fn default() -> Self {
         Self::None
-    }
-}
-
-/// The timeline and timestamp context of a read.
-#[derive(Debug, Clone, PartialEq)]
-pub enum TimestampContext<T> {
-    /// Read is executed in a specific timeline with a specific timestamp.
-    TimelineTimestamp(Timeline, T),
-    /// Read is execute without a timeline or timestamp.
-    NoTimestamp,
-}
-
-impl<T: TimestampManipulation> TimestampContext<T> {
-    /// Creates a `TimestampContext` from a timestamp and `TimelineContext`.
-    pub fn from_timeline_context(
-        ts: T,
-        timeline: Option<Timeline>,
-        timeline_context: TimelineContext,
-    ) -> TimestampContext<T> {
-        match timeline_context {
-            TimelineContext::TimelineDependent(timeline) => Self::TimelineTimestamp(timeline, ts),
-            TimelineContext::TimestampDependent => {
-                // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
-                Self::TimelineTimestamp(timeline.unwrap_or(Timeline::EpochMilliseconds), ts)
-            }
-            TimelineContext::TimestampIndependent => Self::NoTimestamp,
-        }
-    }
-
-    /// The timeline belonging to this context, if one exists.
-    pub fn timeline(&self) -> Option<&Timeline> {
-        match self {
-            Self::TimelineTimestamp(timeline, _) => Some(timeline),
-            Self::NoTimestamp => None,
-        }
-    }
-
-    /// The timestamp belonging to this context, if one exists.
-    pub fn timestamp(&self) -> Option<&T> {
-        match self {
-            Self::TimelineTimestamp(_, ts) => Some(ts),
-            Self::NoTimestamp => None,
-        }
-    }
-
-    /// Whether or not the context contains a timestamp.
-    pub fn contains_timestamp(&self) -> bool {
-        self.timestamp().is_some()
-    }
-
-    /// Converts this `TimestampContext` to an `Antichain`.
-    pub fn antichain(&self) -> Antichain<T> {
-        self.timestamp()
-            .cloned()
-            .map(|timestamp| Antichain::from_elem(timestamp))
-            .unwrap_or_else(|| Antichain::new())
     }
 }
 

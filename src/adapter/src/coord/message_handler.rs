@@ -30,11 +30,11 @@ use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
 use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice};
 
+use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
     Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, SendDiffs,
     SinkConnectionReady,
 };
-use crate::session::TimestampContext;
 
 impl<S: Append + 'static> Coordinator<S> {
     pub(crate) async fn handle_message(&mut self, msg: Message) {

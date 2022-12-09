@@ -34,8 +34,8 @@ use mz_repr::{Diff, GlobalId, RelationType, Row};
 use mz_stash::Append;
 
 use crate::client::ConnectionId;
+use crate::coord::timestamp_selection::TimestampContext;
 use crate::explain_new::Displayable;
-use crate::session::TimestampContext;
 use crate::util::send_immediate_rows;
 use crate::{AdapterError, AdapterNotice};
 

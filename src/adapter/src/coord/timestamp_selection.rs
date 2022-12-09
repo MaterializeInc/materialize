@@ -28,8 +28,72 @@ use crate::coord::dataflows::{prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::Coordinator;
-use crate::session::{vars, Session, TimestampContext};
+use crate::session::{vars, Session};
 use crate::AdapterError;
+
+/// The timeline and timestamp context of a read.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TimestampContext<T> {
+    /// Read is executed in a specific timeline with a specific timestamp.
+    TimelineTimestamp(Timeline, T),
+    /// Read is execute without a timeline or timestamp.
+    NoTimestamp,
+}
+
+impl<T: TimestampManipulation> TimestampContext<T> {
+    /// Creates a `TimestampContext` from a timestamp and `TimelineContext`.
+    pub fn from_timeline_context(
+        ts: T,
+        transaction_timeline: Option<Timeline>,
+        timeline_context: TimelineContext,
+    ) -> TimestampContext<T> {
+        match timeline_context {
+            TimelineContext::TimelineDependent(timeline) => {
+                if let Some(transaction_timeline) = transaction_timeline {
+                    assert_eq!(timeline, transaction_timeline);
+                }
+                Self::TimelineTimestamp(timeline, ts)
+            }
+            TimelineContext::TimestampDependent => {
+                // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
+                Self::TimelineTimestamp(
+                    transaction_timeline.unwrap_or(Timeline::EpochMilliseconds),
+                    ts,
+                )
+            }
+            TimelineContext::TimestampIndependent => Self::NoTimestamp,
+        }
+    }
+
+    /// The timeline belonging to this context, if one exists.
+    pub fn timeline(&self) -> Option<&Timeline> {
+        match self {
+            Self::TimelineTimestamp(timeline, _) => Some(timeline),
+            Self::NoTimestamp => None,
+        }
+    }
+
+    /// The timestamp belonging to this context, if one exists.
+    pub fn timestamp(&self) -> Option<&T> {
+        match self {
+            Self::TimelineTimestamp(_, ts) => Some(ts),
+            Self::NoTimestamp => None,
+        }
+    }
+
+    /// Whether or not the context contains a timestamp.
+    pub fn contains_timestamp(&self) -> bool {
+        self.timestamp().is_some()
+    }
+
+    /// Converts this `TimestampContext` to an `Antichain`.
+    pub fn antichain(&self) -> Antichain<T> {
+        self.timestamp()
+            .cloned()
+            .map(|timestamp| Antichain::from_elem(timestamp))
+            .unwrap_or_else(|| Antichain::new())
+    }
+}
 
 impl<S: Append + 'static> Coordinator<S> {
     /// Determines the timestamp for a query.
@@ -81,6 +145,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // We only care about timelines for Strict Serializable and non AS OF queries.
         let timeline = match &timeline_context {
             TimelineContext::TimelineDependent(timeline) => Some(timeline.clone()),
+            // // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
             TimelineContext::TimestampDependent => Some(Timeline::EpochMilliseconds),
             TimelineContext::TimestampIndependent => None,
         };

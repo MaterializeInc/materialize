@@ -129,9 +129,10 @@ use crate::coord::read_policy::ReadCapability;
 use crate::coord::timeline::{
     TimelineState, WriteTimestamp, TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
 };
+use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
-use crate::session::{EndTransactionAction, Session, TimestampContext};
+use crate::session::{EndTransactionAction, Session};
 use crate::subscribe::PendingSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId};
 use crate::AdapterNotice;
@@ -139,6 +140,7 @@ use crate::AdapterNotice;
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
 pub(crate) mod timeline;
+pub(crate) mod timestamp_selection;
 
 mod appends;
 mod command_handler;
@@ -149,7 +151,6 @@ mod message_handler;
 mod read_policy;
 mod sequencer;
 mod sql;
-mod timestamp_selection;
 
 /// The default is set to a second to track the default timestamp frequency for sources.
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<mz_repr::Timestamp> =
