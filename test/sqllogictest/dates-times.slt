@@ -761,17 +761,15 @@ SELECT current_timestamp > TIMESTAMP '2016-06-13 00:00:00'
 true
 
 statement ok
-CREATE VIEW logical_timestamp_view AS SELECT mz_now()
+CREATE VIEW logical_timestamp_view(ts) AS SELECT mz_now()
 
-# Equivalent to running `SELECT mz_now()` directly IF AND ONLY IF
-# there are no other objects in the same time domain, and has the same somewhat
-# confusing output when there are no dependencies on any views. If there are
+# Equivalent to running `SELECT mz_now()` directly. If there are
 # other objects in the same time domain as the view, they will dictate what is
-# returned.
+# returned. Otherwise it defaults to the epoch millisecond timeline.
 query T
-SELECT * FROM logical_timestamp_view
+SELECT ts < 18446744073709551615 FROM logical_timestamp_view
 ----
-18446744073709551615
+true
 
 statement ok
 CREATE VIEW now_view AS SELECT now() AS ts
