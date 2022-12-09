@@ -176,6 +176,7 @@ where
             let input = collection.map(move |((key, hash), row)| ((key, hash % modulus), row));
             // We only want to arrange parts of the input that are not part of the actual output
             // such that `input.concat(&negated_output.negate())` yields the correct TopK
+            // TODO(#16549): Use explicit arrangement
             let negated_output = input.reduce_named("TopK", {
                 move |_key, source, target: &mut Vec<(Row, Diff)>| {
                     // Determine if we must actually shrink the result set.
@@ -241,7 +242,11 @@ where
                 }
             });
 
-            negated_output.negate().concat(&input).consolidate()
+            negated_output
+                .negate()
+                .concat(&input)
+                // TODO(#16549): Use explicit arrangement
+                .consolidate()
         }
 
         fn render_top1_monotonic<G>(
@@ -279,6 +284,7 @@ where
             // TODO: Could we use explode here? We'd lose the diff>0 assert and we'd have to impl Mul
             // for the monoid, unclear if it's worth it.
             let partial: Collection<G, Row, monoids::Top1Monoid> = collection
+                // TODO(#16549): Use explicit arrangement
                 .consolidate()
                 .inner
                 .map(move |((group_key, row), time, diff)| {
@@ -296,6 +302,7 @@ where
                 })
                 .as_collection();
             let result = partial
+                // TODO(#16549): Use explicit arrangement
                 .arrange_by_self()
                 .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("Top1Monotonic", {
                     move |_key, input, output| {

@@ -110,6 +110,7 @@ where
         .as_collection(|k, _| k.clone())
         .negate()
         .concat(&oks)
+        // TODO(#16549): Use explicit arrangement
         .consolidate();
     CollectionBundle::from_collections(oks, errs)
 }
