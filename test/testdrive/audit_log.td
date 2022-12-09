@@ -22,7 +22,7 @@ $ kafka-create-topic topic=test
   FORMAT CSV WITH 2 COLUMNS
 
 > SELECT event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
-create  source  "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src\",\"schema\":\"public\",\"size\":\"4\",\"type\":\"kafka\"}"  materialize
+create  source  "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src\",\"schema\":\"public\",\"size\":\"${arg.default-storage-size}\",\"type\":\"kafka\"}"  materialize
 
 $ s3-create-bucket bucket=test
 
@@ -42,4 +42,4 @@ $ s3-create-bucket bucket=test
   FORMAT BYTES;
 
 > SELECT event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
-create  source  "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"s3_src\",\"schema\":\"public\",\"size\":\"4\",\"type\":\"s3\"}"  materialize
+create  source  "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"s3_src\",\"schema\":\"public\",\"size\":\"${arg.default-storage-size}\",\"type\":\"s3\"}"  materialize
