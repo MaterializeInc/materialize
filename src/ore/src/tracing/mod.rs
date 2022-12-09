@@ -22,8 +22,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io;
-#[cfg(feature = "tokio-console")]
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -49,6 +47,9 @@ use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{reload, Registry};
+
+#[cfg(feature = "tokio-console")]
+use crate::netio::SocketAddr;
 
 /// Application tracing configuration.
 ///
@@ -330,12 +331,17 @@ where
 
     #[cfg(feature = "tokio-console")]
     let tokio_console_layer = if let Some(console_config) = config.tokio_console.clone() {
-        let layer = ConsoleLayer::builder()
-            .server_addr(console_config.listen_addr)
+        let builder = ConsoleLayer::builder()
             .publish_interval(console_config.publish_interval)
-            .retention(console_config.retention)
-            .spawn();
-        Some(layer)
+            .retention(console_config.retention);
+        let builder = match console_config.listen_addr {
+            SocketAddr::Inet(addr) => builder.server_addr(addr),
+            SocketAddr::Unix(addr) => {
+                let path = addr.as_pathname().unwrap().as_ref();
+                builder.server_addr(path)
+            }
+        };
+        Some(builder.spawn())
     } else {
         None
     };
@@ -373,10 +379,11 @@ where
 
     #[cfg(feature = "tokio-console")]
     if let Some(console_config) = config.tokio_console {
-        tracing::info!(
-            "starting tokio console on http://{}",
-            console_config.listen_addr
-        );
+        let endpoint = match console_config.listen_addr {
+            SocketAddr::Inet(addr) => format!("http://{addr}"),
+            SocketAddr::Unix(addr) => addr.to_string(),
+        };
+        tracing::info!("starting tokio console on {endpoint}");
     }
 
     Ok((

@@ -1175,8 +1175,7 @@ dependencies = [
 [[package]]
 name = "console-api"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e57ff02e8ad8e06ab9731d5dc72dc23bef9200778eae1a89d555d8c42e5d4a86"
+source = "git+https://github.com/benesch/tokio-console.git?branch=uds#b409aa1a262f9196630c21406c8d11e61277cdcd"
 dependencies = [
  "prost",
  "prost-types",
@@ -1187,8 +1186,7 @@ dependencies = [
 [[package]]
 name = "console-subscriber"
 version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22a3a81dfaf6b66bce5d159eddae701e3a002f194d378cbf7be5f053c281d9be"
+source = "git+https://github.com/benesch/tokio-console.git?branch=uds#b409aa1a262f9196630c21406c8d11e61277cdcd"
 dependencies = [
  "console-api",
  "crossbeam-channel",
