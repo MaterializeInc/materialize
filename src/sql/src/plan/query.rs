@@ -1179,7 +1179,7 @@ pub fn plan_ctes(
             }
 
             Err(PlanError::Unstructured(
-                "recursive query planned, but not yet convertable to HIR".to_string(),
+                "recursive query planned, but not supported in HIR".to_string(),
             ))?;
         }
     }

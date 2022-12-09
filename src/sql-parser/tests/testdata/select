@@ -1292,3 +1292,24 @@ SELECT NULLIF(x, '')
 SELECT NULLIF(x, '')
 =>
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: NullIf { l_expr: Identifier([Ident("x")]), r_expr: Value(String("")) }, alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+# parse a plausibly correct WITH MUTUALLY RECURSIVE query.
+parse-statement roundtrip
+WITH MUTUALLY RECURSIVE foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar), bar (a int) as (SELECT a FROM foo) SELECT * FROM bar
+----
+WITH MUTUALLY RECURSIVE foo (a int4, b int4) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar), bar (a int4) AS (SELECT a FROM foo) SELECT * FROM bar
+
+
+# parse a semantically unacceptable but parseable WITH MUTUALLY RECURSIVE.
+parse-statement roundtrip
+WITH MUTUALLY RECURSIVE foo (a int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar), bar (a int) as (SELECT a FROM foo) SELECT * FROM bar
+----
+WITH MUTUALLY RECURSIVE foo (a int4) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar), bar (a int4) AS (SELECT a FROM foo) SELECT * FROM bar
+
+# fail to parse bindings that do not specify types
+parse-statement roundtrip
+WITH MUTUALLY RECURSIVE foo (a, b) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar), bar (a int) as (SELECT a FROM foo) SELECT * FROM bar
+----
+error: Expected a data type name, found comma
+WITH MUTUALLY RECURSIVE foo (a, b) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar), bar (a int) as (SELECT a FROM foo) SELECT * FROM bar
+                              ^
