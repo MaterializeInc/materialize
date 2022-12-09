@@ -203,6 +203,7 @@ impl InternalHttpServer {
                     .await
                 }),
             )
+            .route("/api/tracing", routing::get(mz_http_util::handle_tracing))
             .route(
                 "/api/catalog",
                 routing::get(catalog::handle_internal_catalog),
