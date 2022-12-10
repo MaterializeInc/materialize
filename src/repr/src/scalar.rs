@@ -1127,6 +1127,8 @@ impl From<&Datum<'_>> for serde_json::Value {
             Datum::UInt16(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
             Datum::UInt32(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
             Datum::UInt64(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+            // No other known way to take an f64 to an f32.
+            #[allow(clippy::as_conversions)]
             Datum::Float32(n) => float_to_json(n.into_inner() as f64),
             Datum::Float64(n) => float_to_json(n.into_inner()),
             Datum::Numeric(d) => {
@@ -2828,7 +2830,7 @@ pub struct PropArray(Row, Vec<PropDatum>);
 fn arb_array(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropArray> {
     prop::collection::vec(
         arb_array_dimension(),
-        1..(crate::adt::array::MAX_ARRAY_DIMENSIONS as usize),
+        1..usize::from(crate::adt::array::MAX_ARRAY_DIMENSIONS),
     )
     .prop_flat_map(move |dimensions| {
         let n_elts: usize = dimensions.iter().map(|d| d.length).product();

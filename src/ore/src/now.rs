@@ -24,6 +24,8 @@ pub type EpochMillis = u64;
 
 /// Converts epoch milliseconds to a DateTime.
 #[cfg(feature = "chrono")]
+// TODO(benesch): rewrite to avoid dangerous use of `as`.
+#[allow(clippy::as_conversions)]
 pub fn to_datetime(millis: EpochMillis) -> DateTime<Utc> {
     let dur = std::time::Duration::from_millis(millis);
     Utc.timestamp_opt(dur.as_secs() as i64, dur.subsec_nanos())
@@ -40,6 +42,8 @@ pub struct NowFn(Arc<dyn Fn() -> EpochMillis + Send + Sync>);
 
 impl NowFn {
     /// Returns now in seconds.
+    // TODO(benesch): rewrite to avoid dangerous use of `as`.
+    #[allow(clippy::as_conversions)]
     pub fn as_secs(&self) -> i64 {
         ((self)() / 1_000) as i64
     }
@@ -124,7 +128,10 @@ mod tests {
         for (millis, datetime) in test_cases.into_iter() {
             let converted_datetime = to_datetime(millis).naive_utc();
             assert_eq!(datetime, converted_datetime);
-            assert_eq!(millis, converted_datetime.timestamp_millis() as u64)
+            assert_eq!(
+                millis,
+                u64::try_from(converted_datetime.timestamp_millis()).unwrap()
+            )
         }
     }
 }

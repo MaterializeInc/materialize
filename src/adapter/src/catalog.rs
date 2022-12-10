@@ -5853,13 +5853,9 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         compute_instance_name: Option<&str>,
     ) -> Result<&dyn mz_sql::catalog::CatalogComputeInstance, SqlCatalogError> {
-        self.state
-            .resolve_compute_instance(
-                compute_instance_name.unwrap_or_else(|| self.active_compute_instance()),
-            )
-            .map(|compute_instance| {
-                compute_instance as &dyn mz_sql::catalog::CatalogComputeInstance
-            })
+        Ok(self.state.resolve_compute_instance(
+            compute_instance_name.unwrap_or_else(|| self.active_compute_instance()),
+        )?)
     }
 
     fn resolve_item(
@@ -5887,9 +5883,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn try_get_item(&self, id: &GlobalId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
-        self.state
-            .try_get_entry(id)
-            .map(|item| item as &dyn mz_sql::catalog::CatalogItem)
+        Some(self.state.try_get_entry(id)?)
     }
 
     fn get_item(&self, id: &GlobalId) -> &dyn mz_sql::catalog::CatalogItem {

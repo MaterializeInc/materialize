@@ -26,6 +26,7 @@ use std::fmt;
 use itertools::Itertools;
 use tracing::warn;
 
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
@@ -1697,7 +1698,7 @@ impl<'a> Parser<'a> {
                     names: self.parse_parenthesized_column_list(Mandatory)?,
                 }
             } else {
-                let n_cols = self.parse_literal_uint()? as usize;
+                let n_cols = usize::cast_from(self.parse_literal_uint()?);
                 self.expect_keyword(COLUMNS)?;
                 CsvColumns::Count(n_cols)
             };

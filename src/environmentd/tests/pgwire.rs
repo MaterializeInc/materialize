@@ -121,7 +121,7 @@ fn test_partial_read() {
         let rows = trans.query_portal(&portal, max_rows).unwrap();
         assert_eq!(
             rows.len(),
-            max_rows as usize,
+            usize::try_from(max_rows).unwrap(),
             "should get max rows each time"
         );
         let eagerly = simpler_iter.next().unwrap().get::<_, String>(0);

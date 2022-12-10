@@ -427,8 +427,8 @@ impl SessionVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values for this session.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        vec![
-            &self.application_name as &dyn Var,
+        let vars: [&dyn Var; 21] = [
+            &self.application_name,
             &self.client_encoding,
             &self.client_min_messages,
             &self.cluster,
@@ -449,16 +449,16 @@ impl SessionVars {
             &self.idle_in_transaction_session_timeout,
             &self.timezone,
             &self.transaction_isolation,
-        ]
-        .into_iter()
+        ];
+        vars.into_iter()
     }
 
     /// Returns an iterator over configuration parameters (and their current
     /// values for this session) that are expected to be sent to the client when
     /// a new connection is established or when their value changes.
     pub fn notify_set(&self) -> impl Iterator<Item = &dyn Var> {
-        vec![
-            &self.application_name as &dyn Var,
+        let vars: [&dyn Var; 8] = [
+            &self.application_name,
             &self.client_encoding,
             &self.date_style,
             &self.integer_datetimes,
@@ -466,8 +466,8 @@ impl SessionVars {
             &self.standard_conforming_strings,
             &self.timezone,
             &self.interval_style,
-        ]
-        .into_iter()
+        ];
+        vars.into_iter()
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the
@@ -917,8 +917,8 @@ impl SystemVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        vec![
-            &self.max_aws_privatelink_connections as &dyn Var,
+        let vars: [&dyn Var; 16] = [
+            &self.max_aws_privatelink_connections,
             &self.max_tables,
             &self.max_sources,
             &self.max_sinks,
@@ -934,8 +934,8 @@ impl SystemVars {
             &self.allowed_cluster_replica_sizes,
             &self.window_functions,
             &self.config_has_synced_once,
-        ]
-        .into_iter()
+        ];
+        vars.into_iter()
     }
 
     /// Returns an iterator over the configuration parameters and their current

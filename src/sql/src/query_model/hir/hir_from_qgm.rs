@@ -61,9 +61,9 @@ impl FromModel {
     fn generate(mut self, mut model: Model) -> Result<HirRelationExpr, QGMError> {
         // Derive the RelationType of each box.
         use crate::query_model::attribute::core::{Attribute, RequiredAttributes};
-        let attributes = HashSet::from_iter(std::iter::once(
-            Box::new(BoxRelationType) as Box<dyn Attribute>
-        ));
+        let attributes = HashSet::from_iter(std::iter::once::<Box<dyn Attribute>>(Box::new(
+            BoxRelationType,
+        )));
         let root = model.top_box;
         RequiredAttributes::from(attributes).derive(&mut model, root);
 
@@ -194,11 +194,11 @@ impl FromModel {
                 let mut quantifier_iter = r#box.input_quantifiers();
                 let left_preserved = matches!(
                     quantifier_iter.next().unwrap().quantifier_type,
-                    QuantifierType::PreservedForeach
+                    QuantifierType::PRESERVED_FOREACH
                 );
                 let right_preserved = matches!(
                     quantifier_iter.next().unwrap().quantifier_type,
-                    QuantifierType::PreservedForeach
+                    QuantifierType::PRESERVED_FOREACH
                 );
                 let kind = if left_preserved {
                     if right_preserved {
@@ -273,18 +273,18 @@ impl FromModel {
             };
 
             match q.quantifier_type {
-                QuantifierType::Foreach | QuantifierType::PreservedForeach => {
+                QuantifierType::FOREACH | QuantifierType::PRESERVED_FOREACH => {
                     rels.push((q.id, inner_relation))
                 }
-                QuantifierType::Existential => {
+                QuantifierType::EXISTENTIAL => {
                     scalars.push((q.id, HirScalarExpr::Exists(Box::new(inner_relation))))
                 }
-                QuantifierType::Scalar => {
+                QuantifierType::SCALAR => {
                     scalars.push((q.id, HirScalarExpr::Select(Box::new(inner_relation))))
                 }
-                q @ QuantifierType::All => {
+                _ => {
                     return Err(QGMError::from(UnsupportedQuantifierType {
-                        quantifier_type: q.clone(),
+                        quantifier_type: q.quantifier_type,
                         context: "HIR conversion".to_string(),
                     }));
                 }

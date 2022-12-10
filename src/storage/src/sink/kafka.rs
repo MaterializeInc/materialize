@@ -1042,7 +1042,7 @@ where
 
     // We want exactly one worker to send all the data to the sink topic.
     let hashed_id = id.hashed();
-    let is_active_worker = (hashed_id as usize) % scope.peers() == scope.index();
+    let is_active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
 
     let mut input = builder.new_input(&stream, Exchange::new(move |_| hashed_id));
 
@@ -1122,6 +1122,8 @@ where
                             // Explicitly refuse to send no-op records
                             continue;
                         };
+                        // TODO(benesch): rewrite to avoid `as`.
+                        #[allow(clippy::as_conversions)]
                         let diff = diff as usize;
 
                         let rows = s.pending_rows.entry(time).or_default();

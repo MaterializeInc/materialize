@@ -2674,6 +2674,9 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             // For the `Trace` stage, return the entire trace as (time, path, plan) triples.
             Trace => {
+                // TODO(benesch): remove this once this module no longer makes
+                // use of potentially dangerous `as` conversions.
+                #[allow(clippy::as_conversions)]
                 let rows = trace
                     .into_iter()
                     .map(|entry| {

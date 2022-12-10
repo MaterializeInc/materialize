@@ -519,7 +519,7 @@ fn test_auth_expiry() {
         tenant_id,
         users,
         SYSTEM_TIME.clone(),
-        EXPIRES_IN_SECS as i64,
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
     )
     .unwrap();
     let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
@@ -527,7 +527,7 @@ fn test_auth_expiry() {
         decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
         tenant_id,
         now: SYSTEM_TIME.clone(),
-        refresh_before_secs: REFRESH_BEFORE_SECS as i64,
+        refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
         password_prefix: "mzauth_".to_string(),
     });
     let frontegg_user = "user@_.com";

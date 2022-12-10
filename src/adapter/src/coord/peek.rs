@@ -325,6 +325,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     )))?
                 };
                 if count > 0 {
+                    // TODO(benesch): rewrite to avoid `as`.
+                    #[allow(clippy::as_conversions)]
                     results.push((row, NonZeroUsize::new(count as usize).unwrap()));
                 }
             }

@@ -553,7 +553,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::Dummy => Datum::Dummy,
         Tag::Numeric => {
             let digits = read_byte(data, offset).into();
-            let exponent = read_byte(data, offset) as i8;
+            let exponent = i8::from_ne_bytes(read_byte(data, offset).to_ne_bytes());
             let bits = read_byte(data, offset);
 
             let lsu_u16_len = Numeric::digits_to_lsu_elements_len(digits);
@@ -638,20 +638,20 @@ where
 {
     match tag {
         Tag::BytesTiny | Tag::StringTiny => {
-            let len = bytes.len() as u8;
-            data.push(len);
+            let len = bytes.len().to_le_bytes();
+            data.push(len[0]);
         }
         Tag::BytesShort | Tag::StringShort => {
-            let len = bytes.len() as u16;
-            data.extend_from_slice(&len.to_le_bytes());
+            let len = bytes.len().to_le_bytes();
+            data.extend_from_slice(&len[0..2]);
         }
         Tag::BytesLong | Tag::StringLong => {
-            let len = bytes.len() as u32;
-            data.extend_from_slice(&len.to_le_bytes());
+            let len = bytes.len().to_le_bytes();
+            data.extend_from_slice(&len[0..4]);
         }
         Tag::BytesHuge | Tag::StringHuge => {
-            let len = u64::cast_from(bytes.len());
-            data.extend_from_slice(&len.to_le_bytes());
+            let len = bytes.len().to_le_bytes();
+            data.extend_from_slice(&len);
         }
         _ => unreachable!(),
     }
@@ -807,8 +807,9 @@ where
             data.push(Tag::Numeric.into());
             data.push(u8::try_from(digits).expect("digits to fit within u8; should not exceed 39"));
             data.push(
-                i8::try_from(exponent).expect("exponent to fit within i8; should not exceed +/- 39")
-                    as u8,
+                i8::try_from(exponent)
+                    .expect("exponent to fit within i8; should not exceed +/- 39")
+                    .to_le_bytes()[0],
             );
             data.push(bits);
 
@@ -1157,7 +1158,7 @@ impl RowPacker<'_> {
     where
         F: FnOnce(&mut RowPacker) -> R,
     {
-        self.row.data.push(Tag::List as u8);
+        self.row.data.push(Tag::List.into());
         let start = self.row.data.len();
         // write a dummy len, will fix it up later
         self.row.data.extend_from_slice(&[0; size_of::<u64>()]);
@@ -1212,7 +1213,7 @@ impl RowPacker<'_> {
     where
         F: FnOnce(&mut RowPacker) -> R,
     {
-        self.row.data.push(Tag::Dict as u8);
+        self.row.data.push(Tag::Dict.into());
         let start = self.row.data.len();
         // write a dummy len, will fix it up later
         self.row.data.extend_from_slice(&[0; size_of::<u64>()]);
@@ -1257,7 +1258,7 @@ impl RowPacker<'_> {
         }
 
         let start = self.row.data.len();
-        self.row.data.push(Tag::Array as u8);
+        self.row.data.push(Tag::Array.into());
 
         // Write dimension information.
         self.row

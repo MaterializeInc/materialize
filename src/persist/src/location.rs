@@ -329,6 +329,8 @@ impl<T: Codec> TryFrom<&VersionedData> for (SeqNo, T) {
 
 /// Helper constant to scan all states in [Consensus::scan].
 /// The maximum possible SeqNo is i64::MAX.
+// TODO(benesch): find a way to express this without `as`.
+#[allow(clippy::as_conversions)]
 pub const SCAN_ALL: usize = u64_to_usize(i64::MAX as u64);
 
 /// An abstraction for [VersionedData] held in a location in persistent storage
@@ -861,7 +863,7 @@ pub mod tests {
         // Writing a large (~10 KiB) amount of data works fine.
         let large_state = VersionedData {
             seqno: SeqNo(11),
-            data: std::iter::repeat('a' as u8).take(10240).collect(),
+            data: std::iter::repeat(b'a').take(10240).collect(),
         };
         assert_eq!(
             consensus

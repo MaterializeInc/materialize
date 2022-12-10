@@ -20,8 +20,8 @@ pub struct QuantifierConstraint {
     min: Bound<usize>,
     /// Upper bound for the number of allowed quantifiers that match the `allowed_types` bitmask.
     max: Bound<usize>,
-    /// A bitmask of allowed [`QuantifierType`] variant discriminants.
-    allowed_types: usize,
+    /// The allowed [`QuantifierType`] variant discriminants.
+    allowed_types: QuantifierType,
     /// Indicates whether the input of a quantifier with an `allowed_type` must be a select box.
     select_input: bool,
     /// Indicates whether the parent of a quantifier with an `allowed_type` must be a select box.
@@ -31,7 +31,7 @@ pub struct QuantifierConstraint {
 impl QuantifierConstraint {
     /// Check if the given [`Quantifier`] satisfy the `allowed_types` of the this constraint.
     fn satisfies_q_type<'a>(&self, quantifier: &'a Quantifier) -> bool {
-        (quantifier.quantifier_type as usize) & self.allowed_types != 0
+        self.allowed_types.intersects(quantifier.quantifier_type)
     }
     /// Check if the boxes referenced by the given [`Quantifier`] satisfy the `input_is_select`
     /// and `parent_is_select` of the this constraint.
@@ -81,7 +81,7 @@ fn check_constraints<'a, const N: usize>(
         for i in 0..N {
             if constraints[i].satisfies_q_type(&q) {
                 q_type_counts[i] += 1;
-                b_type_counts[i] += constraints[i].satisfies_b_type(&q, model) as usize;
+                b_type_counts[i] += usize::from(constraints[i].satisfies_b_type(&q, model));
             }
         }
     }
@@ -102,7 +102,7 @@ mod constants {
     pub(crate) const ZERO_ARBITRARY: QuantifierConstraint = QuantifierConstraint {
         min: Bound::Included(0),
         max: Bound::Included(0),
-        allowed_types: ARBITRARY_QUANTIFIER,
+        allowed_types: QuantifierType::all(),
         select_input: false,
         select_parent: false,
     };
@@ -110,7 +110,7 @@ mod constants {
     pub(crate) const ZERO_NOT_SUBQUERY: QuantifierConstraint = QuantifierConstraint {
         min: Bound::Included(0),
         max: Bound::Included(0),
-        allowed_types: ARBITRARY_QUANTIFIER & !(SUBQUERY_QUANTIFIER as usize),
+        allowed_types: QuantifierType::all().difference(QuantifierType::SUBQUERY),
         select_input: false,
         select_parent: false,
     };
@@ -118,7 +118,7 @@ mod constants {
     pub(crate) const ZERO_NOT_FOREACH: QuantifierConstraint = QuantifierConstraint {
         min: Bound::Included(0),
         max: Bound::Included(0),
-        allowed_types: ARBITRARY_QUANTIFIER & !(QuantifierType::Foreach as usize),
+        allowed_types: QuantifierType::all().difference(QuantifierType::FOREACH),
         select_input: false,
         select_parent: false,
     };
@@ -126,7 +126,7 @@ mod constants {
     pub(crate) const ZERO_PRESERVED_FOREACH: QuantifierConstraint = QuantifierConstraint {
         min: Bound::Included(0),
         max: Bound::Included(0),
-        allowed_types: QuantifierType::PreservedForeach as usize,
+        allowed_types: QuantifierType::PRESERVED_FOREACH,
         select_input: false,
         select_parent: false,
     };
@@ -134,7 +134,7 @@ mod constants {
     pub(crate) const ONE_OR_MORE_NOT_PRES_FOREACH: QuantifierConstraint = QuantifierConstraint {
         min: Bound::Included(1),
         max: Bound::Unbounded,
-        allowed_types: ARBITRARY_QUANTIFIER & !(QuantifierType::PreservedForeach as usize),
+        allowed_types: QuantifierType::all().difference(QuantifierType::PRESERVED_FOREACH),
         select_input: false,
         select_parent: false,
     };
@@ -142,7 +142,7 @@ mod constants {
     pub(crate) const ONE_OR_MORE_FOREACH: QuantifierConstraint = QuantifierConstraint {
         min: Bound::Included(1),
         max: Bound::Unbounded,
-        allowed_types: QuantifierType::Foreach as usize,
+        allowed_types: QuantifierType::FOREACH,
         select_input: false,
         select_parent: false,
     };
@@ -150,7 +150,7 @@ mod constants {
     pub(crate) const ONE_FOREACH_INPUT_SELECT: QuantifierConstraint = QuantifierConstraint {
         min: Bound::Included(1),
         max: Bound::Included(1),
-        allowed_types: QuantifierType::Foreach as usize,
+        allowed_types: QuantifierType::FOREACH,
         select_input: true,
         select_parent: false,
     };
@@ -158,7 +158,7 @@ mod constants {
     pub(crate) const ONE_FOREACH_PARENT_SELECT: QuantifierConstraint = QuantifierConstraint {
         min: Bound::Included(1),
         max: Bound::Included(1),
-        allowed_types: QuantifierType::Foreach as usize,
+        allowed_types: QuantifierType::FOREACH,
         select_input: false,
         select_parent: true,
     };
@@ -166,7 +166,7 @@ mod constants {
     pub(crate) const ONE_OR_TWO_PRES_FOREACH: QuantifierConstraint = QuantifierConstraint {
         min: Bound::Included(1),
         max: Bound::Included(2),
-        allowed_types: QuantifierType::PreservedForeach as usize,
+        allowed_types: QuantifierType::PRESERVED_FOREACH,
         select_input: false,
         select_parent: false,
     };
@@ -174,7 +174,7 @@ mod constants {
     pub(crate) const ZERO_OR_ONE_FOREACH: QuantifierConstraint = QuantifierConstraint {
         min: Bound::Included(0),
         max: Bound::Included(1),
-        allowed_types: QuantifierType::Foreach as usize,
+        allowed_types: QuantifierType::FOREACH,
         select_input: false,
         select_parent: false,
     };
@@ -182,7 +182,7 @@ mod constants {
     pub(crate) const TWO_OUTER_JOIN_INPUTS: QuantifierConstraint = QuantifierConstraint {
         min: Bound::Included(2),
         max: Bound::Included(2),
-        allowed_types: QuantifierType::PreservedForeach as usize | QuantifierType::Foreach as usize,
+        allowed_types: QuantifierType::PRESERVED_FOREACH.union(QuantifierType::FOREACH),
         select_input: false,
         select_parent: false,
     };
@@ -190,7 +190,7 @@ mod constants {
     pub(crate) const ZERO_NOT_OUTER_JOIN_INPUTS: QuantifierConstraint = QuantifierConstraint {
         min: Bound::Included(0),
         max: Bound::Included(0),
-        allowed_types: !TWO_OUTER_JOIN_INPUTS.allowed_types,
+        allowed_types: TWO_OUTER_JOIN_INPUTS.allowed_types.complement(),
         select_input: false,
         select_parent: false,
     };
@@ -300,8 +300,8 @@ mod tests {
         let box_values = model.make_box(Values::default().into());
         let box_tgt = model.make_box(Select::default().into());
 
-        model.make_quantifier(QuantifierType::Foreach, box_get, box_tgt);
-        model.make_quantifier(QuantifierType::Foreach, box_values, box_tgt);
+        model.make_quantifier(QuantifierType::FOREACH, box_get, box_tgt);
+        model.make_quantifier(QuantifierType::FOREACH, box_values, box_tgt);
 
         let result = QuantifierConstraintValidator::default().validate(&model);
         assert!(result.is_ok());
@@ -317,8 +317,8 @@ mod tests {
         let box_get = model.make_box(qgm::get(1).into());
         let box_values = model.make_box(Values::default().into());
 
-        model.make_quantifier(QuantifierType::Foreach, box_src, box_get);
-        model.make_quantifier(QuantifierType::Foreach, box_src, box_values);
+        model.make_quantifier(QuantifierType::FOREACH, box_src, box_get);
+        model.make_quantifier(QuantifierType::FOREACH, box_src, box_values);
 
         let result = QuantifierConstraintValidator::default().validate(&model);
         assert!(result.is_err());
@@ -344,8 +344,8 @@ mod tests {
         let box_table_fn = model.make_box(call_table.into());
         let box_tgt = model.make_box(Select::default().into());
 
-        model.make_quantifier(QuantifierType::Scalar, box_src, box_table_fn);
-        model.make_quantifier(QuantifierType::Foreach, box_table_fn, box_tgt);
+        model.make_quantifier(QuantifierType::SCALAR, box_src, box_table_fn);
+        model.make_quantifier(QuantifierType::FOREACH, box_table_fn, box_tgt);
 
         let result = QuantifierConstraintValidator::default().validate(&model);
         assert!(result.is_ok());
@@ -363,8 +363,8 @@ mod tests {
         let call_table = CallTable::new(GenerateSeriesInt32, vec![]);
         let box_table_fn = model.make_box(call_table.into());
 
-        model.make_quantifier(QuantifierType::Scalar, box_src, box_table_fn);
-        model.make_quantifier(QuantifierType::Foreach, box_src, box_table_fn);
+        model.make_quantifier(QuantifierType::SCALAR, box_src, box_table_fn);
+        model.make_quantifier(QuantifierType::FOREACH, box_src, box_table_fn);
 
         let result = QuantifierConstraintValidator::default().validate(&model);
         assert!(result.is_err());
@@ -388,12 +388,12 @@ mod tests {
         let box_except = model.make_box(BoxType::Except);
         let box_intersect = model.make_box(BoxType::Intersect);
 
-        model.make_quantifier(QuantifierType::Foreach, box_src, box_union);
-        model.make_quantifier(QuantifierType::Foreach, box_src, box_union);
-        model.make_quantifier(QuantifierType::Foreach, box_src, box_except);
-        model.make_quantifier(QuantifierType::Foreach, box_src, box_except);
-        model.make_quantifier(QuantifierType::Foreach, box_src, box_intersect);
-        model.make_quantifier(QuantifierType::Foreach, box_src, box_intersect);
+        model.make_quantifier(QuantifierType::FOREACH, box_src, box_union);
+        model.make_quantifier(QuantifierType::FOREACH, box_src, box_union);
+        model.make_quantifier(QuantifierType::FOREACH, box_src, box_except);
+        model.make_quantifier(QuantifierType::FOREACH, box_src, box_except);
+        model.make_quantifier(QuantifierType::FOREACH, box_src, box_intersect);
+        model.make_quantifier(QuantifierType::FOREACH, box_src, box_intersect);
 
         let result = QuantifierConstraintValidator::default().validate(&model);
         assert!(result.is_ok());
@@ -410,9 +410,9 @@ mod tests {
         let box_except = model.make_box(BoxType::Except);
         let box_intersect = model.make_box(BoxType::Intersect);
 
-        model.make_quantifier(QuantifierType::PreservedForeach, box_src, box_union);
-        model.make_quantifier(QuantifierType::PreservedForeach, box_src, box_except);
-        model.make_quantifier(QuantifierType::PreservedForeach, box_src, box_intersect);
+        model.make_quantifier(QuantifierType::PRESERVED_FOREACH, box_src, box_union);
+        model.make_quantifier(QuantifierType::PRESERVED_FOREACH, box_src, box_except);
+        model.make_quantifier(QuantifierType::PRESERVED_FOREACH, box_src, box_intersect);
 
         let result = QuantifierConstraintValidator::default().validate(&model);
         assert!(result.is_err());
@@ -439,9 +439,9 @@ mod tests {
         let box_grouping = model.make_box(Grouping::default().into());
         let box_dst = model.make_box(Select::default().into());
 
-        model.make_quantifier(QuantifierType::Foreach, box_src, box_select);
-        model.make_quantifier(QuantifierType::Foreach, box_select, box_grouping);
-        model.make_quantifier(QuantifierType::Foreach, box_grouping, box_dst);
+        model.make_quantifier(QuantifierType::FOREACH, box_src, box_select);
+        model.make_quantifier(QuantifierType::FOREACH, box_select, box_grouping);
+        model.make_quantifier(QuantifierType::FOREACH, box_grouping, box_dst);
 
         let result = QuantifierConstraintValidator::default().validate(&model);
         assert!(result.is_ok());
@@ -456,10 +456,10 @@ mod tests {
         let box_grouping = model.make_box(Grouping::default().into());
         let box_dst = model.make_box(BoxType::Union);
 
-        model.make_quantifier(QuantifierType::Existential, box_src, box_grouping);
-        model.make_quantifier(QuantifierType::Foreach, box_src, box_grouping);
-        model.make_quantifier(QuantifierType::Foreach, box_grouping, box_dst);
-        model.make_quantifier(QuantifierType::Foreach, box_grouping, box_dst);
+        model.make_quantifier(QuantifierType::EXISTENTIAL, box_src, box_grouping);
+        model.make_quantifier(QuantifierType::FOREACH, box_src, box_grouping);
+        model.make_quantifier(QuantifierType::FOREACH, box_grouping, box_dst);
+        model.make_quantifier(QuantifierType::FOREACH, box_grouping, box_dst);
 
         let result = QuantifierConstraintValidator::default().validate(&model);
         assert!(result.is_err());
@@ -481,9 +481,9 @@ mod tests {
         let box_src = model.make_box(qgm::get(0).into());
         let box_select = model.make_box(Select::default().into());
 
-        model.make_quantifier(QuantifierType::Foreach, box_src, box_select);
-        model.make_quantifier(QuantifierType::Existential, box_src, box_select);
-        model.make_quantifier(QuantifierType::Scalar, box_src, box_select);
+        model.make_quantifier(QuantifierType::FOREACH, box_src, box_select);
+        model.make_quantifier(QuantifierType::EXISTENTIAL, box_src, box_select);
+        model.make_quantifier(QuantifierType::SCALAR, box_src, box_select);
 
         let result = QuantifierConstraintValidator::default().validate(&model);
         assert!(result.is_ok());
@@ -497,7 +497,7 @@ mod tests {
         let box_src = model.make_box(qgm::get(0).into());
         let box_select = model.make_box(Select::default().into());
 
-        model.make_quantifier(QuantifierType::PreservedForeach, box_src, box_select);
+        model.make_quantifier(QuantifierType::PRESERVED_FOREACH, box_src, box_select);
 
         let result = QuantifierConstraintValidator::default().validate(&model);
         assert!(result.is_err());
@@ -520,10 +520,10 @@ mod tests {
         let box_outer_join_1 = model.make_box(OuterJoin::default().into());
         let box_outer_join_2 = model.make_box(OuterJoin::default().into());
 
-        model.make_quantifier(QuantifierType::Foreach, box_lhs, box_outer_join_1);
-        model.make_quantifier(QuantifierType::PreservedForeach, box_rhs, box_outer_join_1);
-        model.make_quantifier(QuantifierType::PreservedForeach, box_lhs, box_outer_join_2);
-        model.make_quantifier(QuantifierType::PreservedForeach, box_rhs, box_outer_join_2);
+        model.make_quantifier(QuantifierType::FOREACH, box_lhs, box_outer_join_1);
+        model.make_quantifier(QuantifierType::PRESERVED_FOREACH, box_rhs, box_outer_join_1);
+        model.make_quantifier(QuantifierType::PRESERVED_FOREACH, box_lhs, box_outer_join_2);
+        model.make_quantifier(QuantifierType::PRESERVED_FOREACH, box_rhs, box_outer_join_2);
 
         let result = QuantifierConstraintValidator::default().validate(&model);
         assert!(result.is_ok());
@@ -539,10 +539,10 @@ mod tests {
         let box_outer_join_1 = model.make_box(OuterJoin::default().into());
         let box_outer_join_2 = model.make_box(OuterJoin::default().into());
 
-        model.make_quantifier(QuantifierType::Existential, box_lhs, box_outer_join_1);
-        model.make_quantifier(QuantifierType::Scalar, box_rhs, box_outer_join_1);
-        model.make_quantifier(QuantifierType::Foreach, box_lhs, box_outer_join_2);
-        model.make_quantifier(QuantifierType::Foreach, box_rhs, box_outer_join_2);
+        model.make_quantifier(QuantifierType::EXISTENTIAL, box_lhs, box_outer_join_1);
+        model.make_quantifier(QuantifierType::SCALAR, box_rhs, box_outer_join_1);
+        model.make_quantifier(QuantifierType::FOREACH, box_lhs, box_outer_join_2);
+        model.make_quantifier(QuantifierType::FOREACH, box_rhs, box_outer_join_2);
 
         let result = QuantifierConstraintValidator::default().validate(&model);
         assert!(result.is_err());

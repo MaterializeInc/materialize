@@ -20,6 +20,7 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_lowertest::*;
+use mz_ore::cast::CastFrom;
 use mz_ore::now::{EpochMillis, NOW_ZERO};
 use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
@@ -352,7 +353,7 @@ impl TestCatalog {
                         "Ensure that there are the right number of column names for source {}",
                         source_name
                     );
-                    let id = GlobalId::User(self.tables.len() as u64);
+                    let id = GlobalId::User(u64::cast_from(self.tables.len()));
                     self.id_to_name.insert(id, source_name.clone());
                     self.tables.insert(
                         source_name.clone(),

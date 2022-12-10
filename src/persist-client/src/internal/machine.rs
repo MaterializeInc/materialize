@@ -1761,7 +1761,7 @@ pub mod tests {
     use mz_ore::cast::CastFrom;
     use mz_ore::task::spawn;
     use mz_persist::intercept::{InterceptBlob, InterceptHandle};
-    use mz_persist::location::{Blob, SeqNo};
+    use mz_persist::location::SeqNo;
     use timely::progress::Antichain;
 
     use crate::internal::gc::{GarbageCollector, GcReq};
@@ -1827,7 +1827,7 @@ pub mod tests {
         client.blob = Arc::new(InterceptBlob::new(
             Arc::clone(&client.blob),
             intercept.clone(),
-        )) as Arc<dyn Blob + Send + Sync>;
+        ));
         let (_, mut read) = client
             .expect_open::<String, String, u64, i64>(ShardId::new())
             .await;

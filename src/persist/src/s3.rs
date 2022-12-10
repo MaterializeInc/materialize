@@ -557,6 +557,9 @@ impl S3Blob {
         Ok(())
     }
 
+    // TODO(benesch): remove this once this function no longer makes use of
+    // potentially dangerous `as` conversions.
+    #[allow(clippy::as_conversions)]
     async fn set_multi_part(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let start_overall = Instant::now();
         let path = self.get_path(key);

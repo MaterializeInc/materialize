@@ -9,14 +9,15 @@
 
 #[cfg(test)]
 mod tests {
-    use mz_lowertest::*;
-
     use std::collections::HashMap;
 
-    use mz_ore::result::ResultExt;
     use proc_macro2::TokenTree;
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
+
+    use mz_lowertest::*;
+    use mz_ore::cast::CastFrom;
+    use mz_ore::result::ResultExt;
 
     #[derive(Debug, Deserialize, PartialEq, Serialize, MzReflect)]
     struct ZeroArg;
@@ -154,7 +155,7 @@ mod tests {
         /// This decrements all numbers of type "usize" by one.
         fn reverse_syntax_override(&mut self, json: &Value, type_name: &str) -> Option<String> {
             if type_name == "usize" {
-                let result: usize = json.as_u64().unwrap() as usize;
+                let result = usize::cast_from(json.as_u64().unwrap());
                 if result == 0 {
                     return Some(0.to_string());
                 } else {

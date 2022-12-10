@@ -674,6 +674,8 @@ impl ReducePlan {
                     // the preceding layer, while also limiting the number of
                     // layers.
                     while current < limit {
+                        // TODO(benesch): fix this dangerous use of `as`.
+                        #[allow(clippy::as_conversions)]
                         buckets.push(current as u64);
                         current = current.saturating_mul(16);
                     }

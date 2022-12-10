@@ -62,7 +62,7 @@ impl Attribute for RejectedNulls {
                 // reject nulls and need to be removed from the result value.
                 for q in r#box
                     .input_quantifiers()
-                    .filter(|q| q.quantifier_type == QuantifierType::PreservedForeach)
+                    .filter(|q| q.quantifier_type == QuantifierType::PRESERVED_FOREACH)
                 {
                     value.retain(|c| c.quantifier_id != q.id);
                 }
@@ -481,7 +481,7 @@ mod tests {
         F: FnOnce(QuantifierId) -> Vec<BoxScalarExpr>,
     {
         let tgt_id = model.make_box(Select::default().into());
-        let inp_id = model.make_quantifier(QuantifierType::Foreach, src_id, tgt_id);
+        let inp_id = model.make_quantifier(QuantifierType::FOREACH, src_id, tgt_id);
 
         if let BoxType::Select(ref mut b) = model.get_mut_box(tgt_id).box_type {
             b.predicates.extend_from_slice(&predicates(inp_id));
@@ -502,8 +502,8 @@ mod tests {
         F: FnOnce(QuantifierId, QuantifierId) -> Vec<BoxScalarExpr>,
     {
         let tgt_id = model.make_box(OuterJoin::default().into());
-        let lhs_id = model.make_quantifier(QuantifierType::PreservedForeach, lhs_id, tgt_id);
-        let rhs_id = model.make_quantifier(QuantifierType::PreservedForeach, rhs_id, tgt_id);
+        let lhs_id = model.make_quantifier(QuantifierType::PRESERVED_FOREACH, lhs_id, tgt_id);
+        let rhs_id = model.make_quantifier(QuantifierType::PRESERVED_FOREACH, rhs_id, tgt_id);
 
         if let BoxType::OuterJoin(ref mut b) = model.get_mut_box(tgt_id).box_type {
             b.predicates.extend_from_slice(&predicates(lhs_id, rhs_id));
@@ -524,8 +524,8 @@ mod tests {
         F: FnOnce(QuantifierId, QuantifierId) -> Vec<BoxScalarExpr>,
     {
         let tgt_id = model.make_box(OuterJoin::default().into());
-        let lhs_id = model.make_quantifier(QuantifierType::PreservedForeach, lhs_id, tgt_id);
-        let rhs_id = model.make_quantifier(QuantifierType::Foreach, rhs_id, tgt_id);
+        let lhs_id = model.make_quantifier(QuantifierType::PRESERVED_FOREACH, lhs_id, tgt_id);
+        let rhs_id = model.make_quantifier(QuantifierType::FOREACH, rhs_id, tgt_id);
 
         if let BoxType::OuterJoin(ref mut b) = model.get_mut_box(tgt_id).box_type {
             b.predicates.extend_from_slice(&predicates(lhs_id, rhs_id));

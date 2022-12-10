@@ -103,10 +103,12 @@ where
                 .iter()
                 .find(|t| t.name() == new_topic.name)
                 .ok_or(CreateTopicError::MissingMetadata)?;
-            if topic.partitions().len() as i32 != new_topic.num_partitions {
+            let num_partitions = i32::try_from(topic.partitions().len())
+                .map_err(|_| CreateTopicError::TooManyPartitions)?;
+            if num_partitions != new_topic.num_partitions {
                 return Err(CreateTopicError::PartitionCountMismatch {
                     expected: new_topic.num_partitions,
-                    actual: topic.partitions().len() as i32,
+                    actual: num_partitions,
                 });
             }
             Ok(())
@@ -126,6 +128,9 @@ pub enum CreateTopicError {
     /// The topic metadata could not be fetched after the topic was created.
     #[error("unable to fetch topic metadata after creation")]
     MissingMetadata,
+    /// The topic reported more than the maximum allowable number of partitions.
+    #[error("the topic reported more than {} partitions", i32::MAX)]
+    TooManyPartitions,
     /// The topic metadata reported a number of partitions that did not match
     /// the number of partitions in the topic creation request.
     #[error("topic reports {actual} partitions, but expected {expected} partitions")]

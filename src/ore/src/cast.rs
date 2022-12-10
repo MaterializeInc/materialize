@@ -40,6 +40,7 @@ macro_rules! cast_from {
     ($from:ty, $to:ty) => {
         paste! {
             impl CastFrom<$from> for $to {
+                #[allow(clippy::as_conversions)]
                 fn cast_from(from: $from) -> $to {
                     from as $to
                 }
@@ -49,6 +50,7 @@ macro_rules! cast_from {
             ///
             /// This is equivalent to the [`CastFrom`] implementation but is
             /// available as a `const fn`.
+            #[allow(clippy::as_conversions)]
             pub const fn [< $from _to_ $to >](from: $from) -> $to {
                 from as $to
             }
@@ -81,6 +83,7 @@ cast_from!(isize, i64);
 cast_from!(isize, i128);
 
 /// Returns `Some` if `f` can losslessly be converted to an i64.
+#[allow(clippy::as_conversions)]
 pub fn f64_to_i64(f: f64) -> Option<i64> {
     let i = f as i64;
     let i_as_f = i as f64;

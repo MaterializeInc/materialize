@@ -294,6 +294,9 @@ impl CpuLimit {
 }
 
 impl<'de> Deserialize<'de> for CpuLimit {
+    // TODO(benesch): remove this once this function no longer makes use of
+    // potentially dangerous `as` conversions.
+    #[allow(clippy::as_conversions)]
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -316,6 +319,9 @@ impl<'de> Deserialize<'de> for CpuLimit {
 }
 
 impl Serialize for CpuLimit {
+    // TODO(benesch): remove this once this function no longer makes use of
+    // potentially dangerous `as` conversions.
+    #[allow(clippy::as_conversions)]
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,

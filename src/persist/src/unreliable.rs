@@ -227,7 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn unreliable_blob() {
-        let blob = Arc::new(MemBlob::open(MemBlobConfig::default())) as Arc<dyn Blob + Send + Sync>;
+        let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
         let handle = UnreliableHandle::default();
         let blob = UnreliableBlob::new(blob, handle.clone());
 
@@ -258,7 +258,7 @@ mod tests {
 
     #[tokio::test]
     async fn unreliable_consensus() {
-        let consensus = Arc::new(MemConsensus::default()) as Arc<dyn Consensus + Send + Sync>;
+        let consensus = Arc::new(MemConsensus::default());
         let handle = UnreliableHandle::default();
         let consensus = UnreliableConsensus::new(consensus, handle.clone());
 

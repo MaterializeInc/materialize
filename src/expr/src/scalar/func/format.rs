@@ -616,6 +616,8 @@ const MONTHS_ROMAN_CAPS: [&str; 12] = [
 ];
 
 impl DateTimeFormatNode {
+    // TODO(benesch): remove potentially dangerous usage of `as`.
+    #[allow(clippy::as_conversions)]
     fn render(&self, buf: &mut impl fmt::Write, ts: &impl TimestampLike) -> Result<(), fmt::Error> {
         use WordCaps::*;
         match self {
@@ -819,7 +821,10 @@ impl DateTimeFormat {
             .map(|m| Match {
                 start: m.start(),
                 end: m.end(),
-                token: DateTimeToken::try_from(m.pattern() as u8).expect("match pattern missing"),
+                token: DateTimeToken::try_from(
+                    u8::try_from(m.pattern()).expect("match index fits in a u8"),
+                )
+                .expect("match pattern missing"),
             })
             .collect();
 

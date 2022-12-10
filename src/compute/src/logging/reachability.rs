@@ -68,6 +68,8 @@ pub fn construct<A: Allocate>(
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
+        // TODO(benesch): avoid dangerous `as` conversion.
+        #[allow(clippy::as_conversions)]
         let (mut logs, token) = Some(linked).mz_replay(
             scope,
             "reachability logs",
@@ -142,7 +144,7 @@ pub fn construct<A: Allocate>(
             let common = updates
                 .as_collection()
                 .arrange_core::<_, RowSpine<_, _, _, _>>(
-                    Exchange::new(|(((_, _, _, _, w, _), ()), _, _)| *w as u64),
+                    Exchange::new(|(((_, _, _, _, w, _), ()), _, _)| u64::cast_from(*w)),
                     "PreArrange Timely reachability",
                 );
 

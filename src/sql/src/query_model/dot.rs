@@ -72,9 +72,9 @@ impl<'a> DotGenerator<'a> {
     /// Derive attributes required for rendering the given [`Model`].
     fn derive_required_attributes(&self, model: &mut Model, start_box: BoxId) {
         // collect a set of required attributes for rendering
-        let mut attributes = HashSet::new();
+        let mut attributes = HashSet::<Box<dyn Attribute>>::new();
         if self.with_types {
-            attributes.insert(Box::new(RelationType) as Box<dyn Attribute>);
+            attributes.insert(Box::new(RelationType));
         }
         // derive the required derived attributes
         RequiredAttributes::from(attributes).derive(model, start_box);

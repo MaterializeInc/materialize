@@ -58,7 +58,11 @@ sqlfunc!(
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat32ToInt32)]
     fn cast_int32_to_float32(a: i32) -> f32 {
-        a as f32
+        // TODO(benesch): remove potentially dangerous usage of `as`.
+        #[allow(clippy::as_conversions)]
+        {
+            a as f32
+        }
     }
 );
 

@@ -2898,7 +2898,11 @@ pub static MZ_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             vec![ListAny] => Operation::unary(|ecx, e| {
                 ecx.require_unsafe_mode("list_n_layers")?;
                 let d = ecx.scalar_type(&e).unwrap_list_n_layers();
-                Ok(HirScalarExpr::literal(Datum::Int32(d as i32), ScalarType::Int32))
+                match i32::try_from(d) {
+                    Ok(d) => Ok(HirScalarExpr::literal(Datum::Int32(d), ScalarType::Int32)),
+                    Err(_) => sql_bail!("list has more than {} layers", i32::MAX),
+                }
+
             }) => Int32, oid::FUNC_LIST_N_LAYERS_OID;
         },
         "list_length" => Scalar {

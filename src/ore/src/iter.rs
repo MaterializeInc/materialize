@@ -51,7 +51,8 @@ mod tests {
 
     #[test]
     fn test_all_equal() {
-        assert!(([] as [i64; 0]).iter().all_equal());
+        let empty: [i64; 0] = [];
+        assert!(empty.iter().all_equal());
         assert!([1].iter().all_equal());
         assert!([1, 1].iter().all_equal());
         assert!(![1, 2].iter().all_equal());

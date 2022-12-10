@@ -353,6 +353,8 @@ fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::Time(t)
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn round_numeric_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mut a = a.unwrap_numeric().0;
     let mut b = b.unwrap_int32();
@@ -472,6 +474,8 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
     }
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 pub fn add_timestamp_months<T: TimestampLike>(
     dt: &T,
     mut months: i32,
@@ -611,6 +615,8 @@ fn bit_xor_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_uint64() ^ b.unwrap_uint64())
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn bit_shift_left_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     // widen to i32 and then cast back to i16 in order emulate the C promotion rules used in by Postgres
     // when the rhs in the 16-31 range, e.g. (1 << 17 should evaluate to 0)
@@ -620,18 +626,24 @@ fn bit_shift_left_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(lhs.wrapping_shl(rhs) as i16)
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn bit_shift_left_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let lhs = a.unwrap_int32();
     let rhs = b.unwrap_int32() as u32;
     Datum::from(lhs.wrapping_shl(rhs))
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn bit_shift_left_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let lhs = a.unwrap_int64();
     let rhs = b.unwrap_int32() as u32;
     Datum::from(lhs.wrapping_shl(rhs))
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn bit_shift_left_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     // widen to u32 and then cast back to u16 in order emulate the C promotion rules used in by Postgres
     // when the rhs in the 16-31 range, e.g. (1 << 17 should evaluate to 0)
@@ -653,6 +665,8 @@ fn bit_shift_left_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(lhs.wrapping_shl(rhs))
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn bit_shift_right_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     // widen to i32 and then cast back to i16 in order emulate the C promotion rules used in by Postgres
     // when the rhs in the 16-31 range, e.g. (-32767 >> 17 should evaluate to -1)
@@ -662,18 +676,24 @@ fn bit_shift_right_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(lhs.wrapping_shr(rhs) as i16)
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn bit_shift_right_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let lhs = a.unwrap_int32();
     let rhs = b.unwrap_int32() as u32;
     Datum::from(lhs.wrapping_shr(rhs))
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn bit_shift_right_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let lhs = a.unwrap_int64();
     let rhs = b.unwrap_int32() as u32;
     Datum::from(lhs.wrapping_shr(rhs))
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn bit_shift_right_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     // widen to u32 and then cast back to u16 in order emulate the C promotion rules used in by Postgres
     // when the rhs in the 16-31 range, e.g. (-32767 >> 17 should evaluate to -1)
@@ -1264,6 +1284,8 @@ where
     Datum::String(temp_storage.push_string(fmt.render(ts)))
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn jsonb_get_int64<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
@@ -1318,6 +1340,8 @@ fn jsonb_get_string<'a>(
     }
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn jsonb_get_path<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
@@ -1500,6 +1524,8 @@ fn jsonb_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> D
     }
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn jsonb_delete_int64<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     let i = b.unwrap_int64();
     match a {
@@ -4979,15 +5005,13 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
                 raw_start_idx
             )))
         }
-    } as usize;
+    };
 
     let mut char_indices = s.char_indices();
     let get_str_index = |(index, _char)| index;
 
     let str_len = s.len();
-    let start_char_idx = char_indices
-        .nth(start_idx as usize)
-        .map_or(str_len, get_str_index);
+    let start_char_idx = char_indices.nth(start_idx).map_or(str_len, get_str_index);
 
     if datums.len() == 3 {
         let end_idx = match datums[2].unwrap_int64() {
@@ -5449,6 +5473,8 @@ where
     }
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn array_index<'a>(datums: &[Datum<'a>], offset: usize) -> Datum<'a> {
     let array = datums[0].unwrap_array();
     let dims = array.dims();
@@ -5484,6 +5510,8 @@ fn array_index<'a>(datums: &[Datum<'a>], offset: usize) -> Datum<'a> {
         .unwrap_or(Datum::Null)
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn list_index<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     let mut buf = datums[0];
 
@@ -5506,6 +5534,8 @@ fn list_index<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     buf
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn list_slice_linear<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     assert_eq!(
         datums.len() % 2,
@@ -5558,6 +5588,8 @@ fn list_slice_linear<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Da
     })
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let year: i32 = match datums[0].unwrap_int64().try_into() {
         Ok(year) => year,
@@ -5702,6 +5734,8 @@ fn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     })
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn array_lower<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let i = b.unwrap_int64();
     if i < 1 {
@@ -5745,6 +5779,8 @@ fn array_remove<'a>(
     Ok(temp_storage.try_make_datum(|packer| packer.push_array(&dims, elems))?)
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let i = b.unwrap_int64();
     if i < 1 {
@@ -5762,6 +5798,8 @@ fn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     )
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn list_length_max<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
@@ -5844,6 +5882,8 @@ fn array_array_concat<'a>(
     // than one.
     // This cast is safe since MAX_ARRAY_DIMENSIONS is 6
     // Can be replaced by .abs_diff once it is stabilized
+    // TODO(benesch): remove potentially dangerous usage of `as`.
+    #[allow(clippy::as_conversions)]
     if (a_ndims as isize - b_ndims as isize).abs() > 1 {
         return Err(EvalError::IncompatibleArrayDimensions {
             dims: Some((a_ndims, b_ndims)),

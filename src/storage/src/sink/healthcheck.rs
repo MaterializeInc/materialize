@@ -429,7 +429,7 @@ mod tests {
         persist_clients: &Arc<Mutex<PersistClientCache>>,
     ) -> Healthchecker {
         let start = tokio::time::Instant::now();
-        let now_fn = NowFn::from(move || start.elapsed().as_millis() as u64);
+        let now_fn = NowFn::from(move || u64::try_from(start.elapsed().as_millis()).unwrap());
 
         Healthchecker::new(
             source_id,

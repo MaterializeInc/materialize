@@ -55,6 +55,8 @@ pub fn construct<A: Allocate>(
     let interval_ms = std::cmp::max(1, config.interval_ns / 1_000_000);
 
     let traces = worker.dataflow_named("Dataflow: differential logging", move |scope| {
+        // TODO(benesch): avoid dangerous `as` conversion.
+        #[allow(clippy::as_conversions)]
         let (mut logs, token) = Some(linked).mz_replay(
             scope,
             "differential logs",

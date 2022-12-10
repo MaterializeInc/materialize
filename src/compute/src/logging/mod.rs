@@ -81,6 +81,8 @@ where
 
     /// Publishes a batch of logged events and advances the capability.
     pub fn publish_batch(&mut self, time: &Duration, data: &mut Vec<(Duration, E, T)>) {
+        // TODO(benesch): avoid dangerous `as` conversion.
+        #[allow(clippy::as_conversions)]
         let new_time_ms = Timestamp::try_from(
             (((time.as_millis() as u64) / self.interval_ms) + 1) * self.interval_ms,
         )
@@ -89,7 +91,7 @@ where
             // If we don't need to grow our buffer, move
             if data.len() > self.buffer.capacity() - self.buffer.len() {
                 self.event_pusher.push(Event::Messages(
-                    self.time_ms as Timestamp,
+                    self.time_ms,
                     self.buffer.drain(..).collect(),
                 ));
             }
@@ -99,7 +101,7 @@ where
         if self.time_ms < new_time_ms {
             // Flush buffered events that may need to advance.
             self.event_pusher.push(Event::Messages(
-                self.time_ms as Timestamp,
+                self.time_ms,
                 self.buffer.drain(..).collect(),
             ));
             if self.buffer.capacity() > Self::buffer_capacity() {
@@ -121,7 +123,7 @@ where
 {
     fn drop(&mut self) {
         self.event_pusher
-            .push(Event::Progress(vec![(self.time_ms as Timestamp, -1)]));
+            .push(Event::Progress(vec![(self.time_ms, -1)]));
     }
 }
 

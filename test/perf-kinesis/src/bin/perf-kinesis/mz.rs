@@ -98,7 +98,7 @@ pub async fn query_materialized_view_until(
 
     let row = mz_client::try_query_one(client, &*query, Duration::from_secs(1)).await?;
     let count: i64 = row.get("count");
-    if count as u64 == expected_total_records {
+    if u64::try_from(count)? == expected_total_records {
         info!(
             "Found all {} records, done querying.",
             expected_total_records
