@@ -32,7 +32,7 @@ use mz_persist_client::async_runtime::CpuHeavyRuntime;
 use tracing::error;
 
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist::location::{Blob, Consensus, ExternalError};
+use mz_persist::location::ExternalError;
 use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
 use mz_persist_client::{Metrics, PersistClient, PersistConfig, PersistLocation};
 
@@ -176,10 +176,8 @@ async fn persist_client(args: Args) -> Result<PersistClient, ExternalError> {
     let should_happen = 1.0 - args.unreliability;
     let should_timeout = args.unreliability;
     unreliable.partially_available(should_happen, should_timeout);
-    let blob =
-        Arc::new(UnreliableBlob::new(blob, unreliable.clone())) as Arc<dyn Blob + Send + Sync>;
-    let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable))
-        as Arc<dyn Consensus + Send + Sync>;
+    let blob = Arc::new(UnreliableBlob::new(blob, unreliable.clone()));
+    let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
     PersistClient::new(config, blob, consensus, metrics, cpu_heavy_runtime)
 }

@@ -139,7 +139,8 @@ pub fn serve(
         }
         let client =
             LocalClient::new_partitioned(response_rxs, command_txs, worker_threads.clone());
-        Box::new(client) as Box<dyn StorageClient>
+        let client: Box<dyn StorageClient> = Box::new(client);
+        client
     };
     let server = Server {
         _worker_guards: worker_guards,

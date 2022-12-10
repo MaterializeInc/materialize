@@ -164,6 +164,9 @@ impl Interval {
         self.checked_op(other, |f1, f2| f1 / f2)
     }
 
+    // TODO(benesch): the use of `as` in this function looks very sketchy.
+    // Rewrite.
+    #[allow(clippy::as_conversions)]
     fn checked_op<F1>(&self, other: f64, op: F1) -> Option<Self>
     where
         F1: Fn(f64, f64) -> f64,

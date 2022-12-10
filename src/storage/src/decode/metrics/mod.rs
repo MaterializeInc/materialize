@@ -9,6 +9,7 @@
 
 //! Utilities for tracking metrics related to decoding.
 
+use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::raw::IntCounterVec;
 use mz_ore::metrics::MetricsRegistry;
@@ -48,7 +49,7 @@ impl DecodeMetrics {
         let success_label = if success { "success" } else { "error" };
         self.events_read
             .with_label_values(&[format_label, success_label])
-            .inc_by(n as u64);
+            .inc_by(u64::cast_from(n));
     }
 
     pub(crate) fn count_successes(&self, decoder: &DataDecoderInner, n: usize) {

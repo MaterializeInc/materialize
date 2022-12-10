@@ -209,10 +209,9 @@ impl<'a> Explanation<'a> {
                             id_gen,
                             explanation.local_id_chains.clone(),
                         );
-                        explanation.expr_chains.insert(
-                            &**expr as *const HirRelationExpr,
-                            subquery.nodes.last().unwrap().chain,
-                        );
+                        explanation
+                            .expr_chains
+                            .insert(&**expr, subquery.nodes.last().unwrap().chain);
                         subqueries.push(subquery);
                     }
                     _ => (),
@@ -226,9 +225,7 @@ impl<'a> Explanation<'a> {
                 chain: explanation.chain,
                 subqueries,
             });
-            explanation
-                .expr_chains
-                .insert(expr as *const HirRelationExpr, explanation.chain);
+            explanation.expr_chains.insert(expr, explanation.chain);
         }
 
         fn walk_many<'a, E>(exprs: E, explanation: &mut Explanation<'a>, id_gen: &mut IdGen)
@@ -241,10 +238,9 @@ impl<'a> Explanation<'a> {
                     id: Id::Local(id), ..
                 } = expr
                 {
-                    explanation.expr_chains.insert(
-                        expr as *const HirRelationExpr,
-                        explanation.local_id_chains[id].1,
-                    );
+                    explanation
+                        .expr_chains
+                        .insert(expr, explanation.local_id_chains[id].1);
                 } else {
                     walk(expr, explanation, id_gen);
                     explanation.chain = id_gen.allocate_id();
@@ -584,6 +580,7 @@ impl<'a> Explanation<'a> {
     /// The `ExplanationNode` for `expr` must have already been inserted into
     /// the explanation.
     fn expr_chain(&self, expr: &HirRelationExpr) -> u64 {
-        self.expr_chains[&(expr as *const HirRelationExpr)]
+        let expr: *const HirRelationExpr = expr;
+        self.expr_chains[&expr]
     }
 }

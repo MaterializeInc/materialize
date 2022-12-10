@@ -593,7 +593,11 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
 
     // Configure controller.
-    let (orchestrator, secrets_controller, cloud_resource_controller) = match args.orchestrator {
+    let (orchestrator, secrets_controller, cloud_resource_controller): (
+        Arc<dyn Orchestrator>,
+        Arc<dyn SecretsController>,
+        Option<Arc<dyn CloudResourceController>>,
+    ) = match args.orchestrator {
         OrchestratorKind::Kubernetes => {
             let orchestrator = Arc::new(
                 runtime
@@ -615,10 +619,12 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     }))
                     .context("creating kubernetes orchestrator")?,
             );
+            let secrets_controller = Arc::clone(&orchestrator);
+            let cloud_resource_controller = Arc::clone(&orchestrator);
             (
-                Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
-                Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
-                Some(orchestrator as Arc<dyn CloudResourceController>),
+                orchestrator,
+                secrets_controller,
+                Some(cloud_resource_controller),
             )
         }
         OrchestratorKind::Process => {
@@ -643,11 +649,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     }))
                     .context("creating process orchestrator")?,
             );
-            (
-                Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
-                orchestrator as Arc<dyn SecretsController>,
-                None,
-            )
+            let secrets_controller = Arc::clone(&orchestrator);
+            (orchestrator, secrets_controller, None)
         }
     };
     let secrets_reader = secrets_controller.reader();

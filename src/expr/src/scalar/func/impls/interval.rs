@@ -37,6 +37,8 @@ sqlfunc!(
                 .unwrap();
         }
 
+        // TODO(benesch): remove potentially dangerous usage of `as`.
+        #[allow(clippy::as_conversions)]
         NaiveTime::from_hms_nano_opt(
             i.hours() as u32,
             i.minutes() as u32,

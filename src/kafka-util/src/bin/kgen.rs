@@ -79,6 +79,8 @@ struct RandomAvroGenerator<'a> {
 
 impl<'a> RandomAvroGenerator<'a> {
     fn gen_inner(&mut self, node: SchemaNode, rng: &mut ThreadRng) -> Value {
+        // TODO(benesch): rewrite to avoid `as`.
+        #[allow(clippy::as_conversions)]
         let p = &*node.inner as *const _ as usize;
         match node.inner {
             SchemaPiece::Null => Value::Null,
@@ -110,6 +112,8 @@ impl<'a> RandomAvroGenerator<'a> {
                 let millis = self.longs.get_mut(&p).unwrap()(rng);
 
                 let seconds = millis / 1000;
+                // TODO(benesch): rewrite to avoid `as`.
+                #[allow(clippy::as_conversions)]
                 let fraction = (millis % 1000) as u32;
                 let val = NaiveDateTime::from_timestamp_opt(seconds, fraction * 1_000_000).unwrap();
                 Value::Timestamp(val)
@@ -118,6 +122,8 @@ impl<'a> RandomAvroGenerator<'a> {
                 let micros = self.longs.get_mut(&p).unwrap()(rng);
 
                 let seconds = micros / 1_000_000;
+                // TODO(benesch): rewrite to avoid `as`.
+                #[allow(clippy::as_conversions)]
                 let fraction = (micros % 1_000_000) as u32;
                 let val = NaiveDateTime::from_timestamp_opt(seconds, fraction * 1_000).unwrap();
                 Value::Timestamp(val)
@@ -247,6 +253,8 @@ impl<'a> RandomAvroGenerator<'a> {
         }
         fn float_dist(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> f32 + Clone {
             let x = json.as_array().unwrap();
+            // TODO(benesch): rewrite to avoid `as`.
+            #[allow(clippy::as_conversions)]
             let (min, max) = (x[0].as_f64().unwrap() as f32, x[1].as_f64().unwrap() as f32);
             let dist = Uniform::new_inclusive(min, max);
             move |rng| dist.sample(rng)
@@ -262,9 +270,7 @@ impl<'a> RandomAvroGenerator<'a> {
             move |rng| {
                 let len = len(rng);
                 let cd = Alphanumeric;
-                iter::repeat_with(|| cd.sample(rng) as u8)
-                    .take(len)
-                    .collect()
+                iter::repeat_with(|| cd.sample(rng)).take(len).collect()
             }
         }
         fn bytes_dist(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> Vec<u8> + Clone {
@@ -300,6 +306,8 @@ impl<'a> RandomAvroGenerator<'a> {
             let dist = Uniform::<i64>::new_inclusive(min, max);
             move |rng| dist.sample(rng).to_be_bytes().to_vec()
         }
+        // TODO(benesch): rewrite to avoid `as`.
+        #[allow(clippy::as_conversions)]
         let p = &*node.inner as *const _ as usize;
 
         let dist_json = field_name.and_then(|fn_| annotations.get(fn_));
@@ -722,6 +730,8 @@ async fn main() -> anyhow::Result<()> {
                     };
 
                     let mut rec = BaseRecord::to(topic).key(&key_buf).payload(&value_buf);
+                    // TODO(benesch): rewrite to avoid `as`.
+                    #[allow(clippy::as_conversions)]
                     if args.partitions_round_robin != 0 {
                         rec = rec.partition((i % args.partitions_round_robin) as i32);
                     }

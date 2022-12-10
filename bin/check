@@ -129,9 +129,16 @@ extra_lints=(
 
     # Confusing and likely buggy
     clippy::excessive_precision
-    clippy::fn_to_numeric_cast
-    clippy::fn_to_numeric_cast_with_truncation
     clippy::overflow_check_conditional
+
+    # The `as` operator silently truncates data in many situations. It is very
+    # difficult to assess whether a given usage of `as` is dangerous or not. So
+    # ban it outright, to force usage of safer patterns, like `From` and
+    # `TryFrom`.
+    #
+    # When absolutely essential (e.g., casting from a float to an integer), you
+    # can attach `#[allow(clippy::as_conversion)]` to a single statement.
+    clippy::as_conversions
 
     # Confusing
     clippy::match_overlapping_arm

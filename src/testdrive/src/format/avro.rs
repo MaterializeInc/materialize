@@ -46,6 +46,8 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
         }
         (JsonValue::Number(ref n), SchemaPiece::Long) => Ok(Value::Long(n.as_i64().unwrap())),
         (JsonValue::Number(ref n), SchemaPiece::Float) => {
+            // No other known way to cast an `f64` to an `f32`.
+            #[allow(clippy::as_conversions)]
             Ok(Value::Float(n.as_f64().unwrap() as f32))
         }
         (JsonValue::Number(ref n), SchemaPiece::Double) => Ok(Value::Double(n.as_f64().unwrap())),
@@ -54,6 +56,8 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
         }
         (JsonValue::Number(ref n), SchemaPiece::TimestampMilli) => {
             let ts = n.as_i64().unwrap();
+            // TODO(benesch): rewrite to avoid `as`.
+            #[allow(clippy::as_conversions)]
             Ok(Value::Timestamp(
                 chrono::NaiveDateTime::from_timestamp_opt(
                     ts / 1_000,
@@ -64,6 +68,8 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
         }
         (JsonValue::Number(ref n), SchemaPiece::TimestampMicro) => {
             let ts = n.as_i64().unwrap();
+            // TODO(benesch): rewrite to avoid `as`.
+            #[allow(clippy::as_conversions)]
             Ok(Value::Timestamp(
                 chrono::NaiveDateTime::from_timestamp_opt(
                     ts / 1_000_000,

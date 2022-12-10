@@ -123,7 +123,7 @@ mod tests {
         }
 
         let s_id = model.make_box(Select::default().into());
-        let q_id = model.make_quantifier(QuantifierType::Foreach, g_id, s_id);
+        let q_id = model.make_quantifier(QuantifierType::FOREACH, g_id, s_id);
         {
             let mut b = model.get_mut_box(s_id);
             // C0: (#0 - #1) + (#2 - #3)

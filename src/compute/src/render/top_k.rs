@@ -180,6 +180,8 @@ where
             let negated_output = input.reduce_named("TopK", {
                 move |_key, source, target: &mut Vec<(Row, Diff)>| {
                     // Determine if we must actually shrink the result set.
+                    // TODO(benesch): avoid dangerous `as` conversion.
+                    #[allow(clippy::as_conversions)]
                     let must_shrink = offset > 0
                         || limit
                             .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() as usize > l)
@@ -226,6 +228,8 @@ where
                                     diff -= Diff::try_from(to_skip).unwrap();
                                 }
                                 // We should produce at most `limit` records.
+                                // TODO(benesch): avoid dangerous `as` conversion.
+                                #[allow(clippy::as_conversions)]
                                 if let Some(limit) = &mut limit {
                                     diff = std::cmp::min(diff, Diff::try_from(*limit).unwrap());
                                     *limit -= diff as usize;

@@ -59,7 +59,6 @@ use tower_http::cors::AllowOrigin;
 use uuid::Uuid;
 
 use mz_controller::ControllerConfig;
-use mz_orchestrator::Orchestrator;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -369,7 +368,7 @@ impl<'a> FromSql<'a> for Slt {
                 let num_fields = read_be_i32(&mut raw)?;
                 let mut tuple = vec![];
                 for _ in 0..num_fields {
-                    let oid = read_be_i32(&mut raw)? as u32;
+                    let oid = u32::from_ne_bytes(read_be_i32(&mut raw)?.to_ne_bytes());
                     let typ = match PgType::from_oid(oid) {
                         Some(typ) => typ,
                         None => return Err("unknown oid".into()),
@@ -394,6 +393,8 @@ impl<'a> FromSql<'a> for Slt {
                         // Map a Vec<Option<Slt>> to Vec<Option<Value>>.
                         .map(|v| v.map(|v| v.0))
                         .collect();
+                    // TODO(benesch): rewrite to avoid `as`.
+                    #[allow(clippy::as_conversions)]
                     Self(Value::Array {
                         dims: arr
                             .dimensions()
@@ -498,6 +499,8 @@ where
     T: FromSql<'a>,
 {
     let len = read_be_i32(buf)?;
+    // TODO(benesch): rewrite to avoid `as`.
+    #[allow(clippy::as_conversions)]
     let value = if len < 0 {
         None
     } else {
@@ -522,7 +525,11 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         (Type::Integer, Value::UInt4(u)) => u.to_string(),
         (Type::Integer, Value::UInt8(u)) => u.to_string(),
         (Type::Integer, Value::Oid(i)) => i.to_string(),
+        // TODO(benesch): rewrite to avoid `as`.
+        #[allow(clippy::as_conversions)]
         (Type::Integer, Value::Float4(f)) => format!("{}", f as i64),
+        // TODO(benesch): rewrite to avoid `as`.
+        #[allow(clippy::as_conversions)]
         (Type::Integer, Value::Float8(f)) => format!("{}", f as i64),
         // This is so wrong, but sqlite needs it.
         (Type::Integer, Value::Text(_)) => "0".to_string(),
@@ -791,11 +798,13 @@ impl RunnerInner {
         );
         let persist_clients = Arc::new(Mutex::new(persist_clients));
         let postgres_factory = PostgresFactory::new(&metrics_registry);
+        let secrets_controller = Arc::clone(&orchestrator);
+        let connection_context = ConnectionContext::for_tests(orchestrator.reader());
         let server_config = mz_environmentd::Config {
             adapter_stash_url,
             controller: ControllerConfig {
                 build_info: &mz_environmentd::BUILD_INFO,
-                orchestrator: Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
+                orchestrator,
                 storaged_image: "storaged".into(),
                 computed_image: "computed".into(),
                 init_container_image: None,
@@ -808,7 +817,7 @@ impl RunnerInner {
                 now: SYSTEM_TIME.clone(),
                 postgres_factory: postgres_factory.clone(),
             },
-            secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
+            secrets_controller,
             cloud_resource_controller: None,
             // Setting the port to 0 means that the OS will automatically
             // allocate an available port.
@@ -831,9 +840,7 @@ impl RunnerInner {
             storage_host_sizes: Default::default(),
             default_storage_host_size: None,
             availability_zones: Default::default(),
-            connection_context: ConnectionContext::for_tests(
-                (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
-            ),
+            connection_context,
             tracing_target_callbacks: mz_ore::tracing::TracingTargetCallbacks::default(),
             storage_usage_collection_interval: Duration::from_secs(3600),
             segment_api_key: None,
@@ -1522,6 +1529,8 @@ impl<'a> RewriteBuffer<'a> {
 
     fn append_header(&mut self, input: &String, expected_output: &str) {
         // Output everything before this record.
+        // TODO(benesch): is it possible to rewrite this to avoid `as`?
+        #[allow(clippy::as_conversions)]
         let offset = expected_output.as_ptr() as usize - input.as_ptr() as usize;
         self.flush_to(offset);
         self.skip_to(offset + expected_output.len());

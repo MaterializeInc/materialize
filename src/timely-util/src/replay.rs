@@ -101,6 +101,9 @@ where
                 }
             }
 
+            // TODO(benesch): remove this once this block no longer makes use of
+            // potentially dangerous `as` conversions.
+            #[allow(clippy::as_conversions)]
             if !started {
                 // The first thing we do is modify our capabilities to match the number of streams we manage.
                 // This should be a simple change of `self.event_streams.len() - 1`. We only do this once, as

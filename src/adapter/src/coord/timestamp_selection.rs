@@ -424,6 +424,9 @@ pub trait DisplayableInTimeline {
 }
 
 impl DisplayableInTimeline for mz_repr::Timestamp {
+    // TODO(benesch): remove this once this function no longer makes use of
+    // potentially dangerous `as` conversions.
+    #[allow(clippy::as_conversions)]
     fn fmt(&self, timeline: Option<&Timeline>, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(Timeline::EpochMilliseconds) = timeline {
             let ts_ms: u64 = self.into();

@@ -157,7 +157,10 @@ pub fn symbolicate(profile: &StackProfile) -> BTreeMap<usize, Vec<String>> {
         .into_iter()
         .map(|addr| {
             let mut syms = vec![];
-            backtrace::resolve(addr as *mut c_void, |sym| {
+            // No other known way to convert usize to pointer.
+            #[allow(clippy::as_conversions)]
+            let addr_ptr = addr as *mut c_void;
+            backtrace::resolve(addr_ptr, |sym| {
                 let name = sym
                     .name()
                     .map(|sn| sn.to_string())

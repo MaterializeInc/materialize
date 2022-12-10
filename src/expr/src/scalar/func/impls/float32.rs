@@ -74,6 +74,8 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastInt16ToFloat32)]
     fn cast_float32_to_int16(a: f32) -> Result<i16, EvalError> {
         let f = round_float32(a);
+        // TODO(benesch): remove potentially dangerous usage of `as`.
+        #[allow(clippy::as_conversions)]
         if (f >= (i16::MIN as f32)) && (f < -(i16::MIN as f32)) {
             Ok(f as i16)
         } else {
@@ -92,6 +94,8 @@ sqlfunc!(
         // an f32 but not i32::MAX. We follow PostgreSQL's approach here.
         //
         // See: https://github.com/postgres/postgres/blob/ca3b37487/src/include/c.h#L1074-L1096
+        // TODO(benesch): remove potentially dangerous usage of `as`.
+        #[allow(clippy::as_conversions)]
         if (f >= (i32::MIN as f32)) && (f < -(i32::MIN as f32)) {
             Ok(f as i32)
         } else {
@@ -110,6 +114,8 @@ sqlfunc!(
         // an f32 but not i64::MAX. We follow PostgreSQL's approach here.
         //
         // See: https://github.com/postgres/postgres/blob/ca3b37487/src/include/c.h#L1074-L1096
+        // TODO(benesch): remove potentially dangerous usage of `as`.
+        #[allow(clippy::as_conversions)]
         if (f >= (i64::MIN as f32)) && (f < -(i64::MIN as f32)) {
             Ok(f as i64)
         } else {
@@ -144,6 +150,8 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastUint16ToFloat32)]
     fn cast_float32_to_uint16(a: f32) -> Result<u16, EvalError> {
         let f = round_float32(a);
+        // TODO(benesch): remove potentially dangerous usage of `as`.
+        #[allow(clippy::as_conversions)]
         if (f >= 0.0) && (f <= (u16::MAX as f32)) {
             Ok(f as u16)
         } else {
@@ -158,6 +166,8 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastUint32ToFloat32)]
     fn cast_float32_to_uint32(a: f32) -> Result<u32, EvalError> {
         let f = round_float32(a);
+        // TODO(benesch): remove potentially dangerous usage of `as`.
+        #[allow(clippy::as_conversions)]
         if (f >= 0.0) && (f <= (u32::MAX as f32)) {
             Ok(f as u32)
         } else {
@@ -172,6 +182,8 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastUint64ToFloat32)]
     fn cast_float32_to_uint64(a: f32) -> Result<u64, EvalError> {
         let f = round_float32(a);
+        // TODO(benesch): remove potentially dangerous usage of `as`.
+        #[allow(clippy::as_conversions)]
         if (f >= 0.0) && (f <= (u64::MAX as f32)) {
             Ok(f as u64)
         } else {

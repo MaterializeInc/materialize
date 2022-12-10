@@ -11,11 +11,6 @@
 
 #![doc = include_str!("../README.md")]
 #![warn(missing_docs, missing_debug_implementations)]
-#![warn(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss
-)]
 
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -748,7 +743,6 @@ mod tests {
 
     use differential_dataflow::consolidation::consolidate_updates;
     use futures_task::noop_waker;
-    use mz_ore::cast::CastFrom;
     use mz_ore::future::OreFutureExt;
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist::workload::DataGenerator;
@@ -1573,8 +1567,7 @@ mod tests {
             .expect_open::<String, String, u64, i64>(shard_id)
             .await;
 
-        let lease_duration_ms =
-            u64::cast_from(write.cfg.writer_lease_duration.as_millis() as usize);
+        let lease_duration_ms = u64::try_from(write.cfg.writer_lease_duration.as_millis()).unwrap();
 
         // we won't heartbeat if enough time hasn't passed
         let heartbeat = write.last_heartbeat;

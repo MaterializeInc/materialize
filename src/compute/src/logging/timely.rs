@@ -55,6 +55,8 @@ pub fn construct<A: Allocate>(
     let peers = worker.peers();
 
     // A dataflow for multiple log-derived arrangements.
+    // TODO(benesch): avoid dangerous `as` conversion.
+    #[allow(clippy::as_conversions)]
     let traces = worker.dataflow_named("Dataflow: timely logging", move |scope| {
         let (mut logs, token) = Some(linked).mz_replay(
             scope,
@@ -334,7 +336,7 @@ pub fn construct<A: Allocate>(
         let elapsed = schedules_duration
             .as_collection()
             .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|(((_, w), ()), _, _)| *w as u64),
+                Exchange::new(|(((_, w), ()), _, _)| u64::cast_from(*w)),
                 "PreArrange Timely duration",
             )
             .as_collection(|(op, worker), _| {
@@ -348,7 +350,7 @@ pub fn construct<A: Allocate>(
         let histogram = schedules_histogram
             .as_collection()
             .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|(((_, w, _), ()), _, _)| *w as u64),
+                Exchange::new(|(((_, w, _), ()), _, _)| u64::cast_from(*w)),
                 "PreArrange Timely histogram",
             )
             .as_collection(|(op, worker, pow), _| {
@@ -363,7 +365,7 @@ pub fn construct<A: Allocate>(
         let operates = operates
             .as_collection()
             .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|((((_, w), _), ()), _, _)| *w as u64),
+                Exchange::new(|((((_, w), _), ()), _, _)| u64::cast_from(*w)),
                 "PreArrange Timely operates",
             )
             .as_collection(move |((id, worker), name), _| {
@@ -377,7 +379,7 @@ pub fn construct<A: Allocate>(
         let addresses = addresses
             .as_collection()
             .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|(((_, w, _), ()), _, _)| *w as u64),
+                Exchange::new(|(((_, w, _), ()), _, _)| u64::cast_from(*w)),
                 "PreArrange Timely addresses",
             )
             .as_collection(|(event_id, worker, addr), _| {
@@ -387,7 +389,7 @@ pub fn construct<A: Allocate>(
         let parks = parks
             .as_collection()
             .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|(((w, _, _), ()), _, _)| *w as u64),
+                Exchange::new(|(((w, _, _), ()), _, _)| u64::cast_from(*w)),
                 "PreArrange Timely parks",
             )
             .as_collection(|(worker, duration_ns, requested), ()| {
@@ -405,7 +407,7 @@ pub fn construct<A: Allocate>(
         let messages_received = messages_received
             .as_collection()
             .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|((((_, w), _), ()), _, _)| *w as u64),
+                Exchange::new(|((((_, w), _), ()), _, _)| u64::cast_from(*w)),
                 "PreArrange Timely messages received",
             )
             .as_collection(move |((channel, source), target), ()| {
@@ -419,7 +421,7 @@ pub fn construct<A: Allocate>(
         let messages_sent = messages_sent
             .as_collection()
             .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|((((_, w), _), ()), _, _)| *w as u64),
+                Exchange::new(|((((_, w), _), ()), _, _)| u64::cast_from(*w)),
                 "PreArrange Timely messages sent",
             )
             .as_collection(move |((channel, source), target), ()| {
@@ -433,7 +435,7 @@ pub fn construct<A: Allocate>(
         let channels = channels
             .as_collection()
             .arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|((((_, w), _, _, _, _), ()), _, _)| *w as u64),
+                Exchange::new(|((((_, w), _, _, _, _), ()), _, _)| u64::cast_from(*w)),
                 "PreArrange Timely operates",
             )
             .as_collection(

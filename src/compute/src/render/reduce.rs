@@ -499,6 +499,8 @@ where
                 // We respect the multiplicity here (unlike in hierarchical aggregation)
                 // because we don't know that the aggregation method is not sensitive
                 // to the number of records.
+                // TODO(benesch): remove potentially dangerous usage of `as`.
+                #[allow(clippy::as_conversions)]
                 let iter = source.iter().flat_map(|(v, w)| {
                     std::iter::repeat(v.iter().next().unwrap()).take(*w as usize)
                 });
@@ -1105,10 +1107,10 @@ where
                     x => panic!("Invalid argument to AggregateFunc::{:?}: {:?}", aggr, x),
                 };
 
-                let nans = n.is_nan() as Diff;
-                let pos_infs = (n == f64::INFINITY) as Diff;
-                let neg_infs = (n == f64::NEG_INFINITY) as Diff;
-                let non_nulls = (datum != Datum::Null) as Diff;
+                let nans = Diff::from(n.is_nan());
+                let pos_infs = Diff::from(n == f64::INFINITY);
+                let neg_infs = Diff::from(n == f64::NEG_INFINITY);
+                let non_nulls = Diff::from(datum != Datum::Null);
 
                 // Map the floating point value onto a fixed precision domain
                 // All special values should map to zero, since they are tracked separately
@@ -1116,7 +1118,11 @@ where
                     0
                 } else {
                     // This operation will truncate to i128::MAX if out of range.
-                    (n * float_scale) as i128
+                    // TODO(benesch): rewrite to avoid `as`.
+                    #[allow(clippy::as_conversions)]
+                    {
+                        (n * float_scale) as i128
+                    }
                 };
 
                 AccumInner::Float {
@@ -1322,6 +1328,9 @@ where
                             | (AggregateFunc::SumInt32, AccumInner::SimpleNumber { accum, .. }) => {
                                 // This conversion is safe, as long as we have less than 2^32
                                 // summands.
+                                // TODO(benesch): are we guaranteed to have less than 2^32 summands?
+                                // If so, rewrite to avoid `as`.
+                                #[allow(clippy::as_conversions)]
                                 Datum::Int64(*accum as i64)
                             }
                             (AggregateFunc::SumInt64, AccumInner::SimpleNumber { accum, .. }) => {
@@ -1358,7 +1367,11 @@ where
                                 } else if *neg_infs > 0 {
                                     Datum::from(f32::NEG_INFINITY)
                                 } else {
-                                    Datum::from(((*accum as f64) / float_scale) as f32)
+                                    // TODO(benesch): remove potentially dangerous usage of `as`.
+                                    #[allow(clippy::as_conversions)]
+                                    {
+                                        Datum::from(((*accum as f64) / float_scale) as f32)
+                                    }
                                 }
                             }
                             (
@@ -1380,7 +1393,11 @@ where
                                 } else if *neg_infs > 0 {
                                     Datum::from(f64::NEG_INFINITY)
                                 } else {
-                                    Datum::from((*accum as f64) / float_scale)
+                                    // TODO(benesch): remove potentially dangerous usage of `as`.
+                                    #[allow(clippy::as_conversions)]
+                                    {
+                                        Datum::from((*accum as f64) / float_scale)
+                                    }
                                 }
                             }
                             (

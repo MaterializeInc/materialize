@@ -88,8 +88,8 @@ impl PersistClientCache {
                 Arc::clone(x.insert(consensus))
             }
         };
-        let consensus = Arc::new(MetricsConsensus::new(consensus, Arc::clone(&self.metrics)))
-            as Arc<dyn Consensus + Send + Sync>;
+        let consensus: Arc<dyn Consensus + Send + Sync> =
+            Arc::new(MetricsConsensus::new(consensus, Arc::clone(&self.metrics)));
         PersistClient::new(
             self.cfg.clone(),
             blob,
@@ -116,8 +116,7 @@ impl PersistClientCache {
                 Arc::clone(x.insert(blob))
             }
         };
-        Ok(Arc::new(MetricsBlob::new(blob, Arc::clone(&self.metrics)))
-            as Arc<dyn Blob + Send + Sync>)
+        Ok(Arc::new(MetricsBlob::new(blob, Arc::clone(&self.metrics))))
     }
 }
 

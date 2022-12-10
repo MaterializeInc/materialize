@@ -147,7 +147,11 @@ sqlfunc!(
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat32ToInt64)]
     fn cast_int64_to_float32(a: i64) -> f32 {
-        a as f32
+        // TODO(benesch): remove potentially dangerous usage of `as`.
+        #[allow(clippy::as_conversions)]
+        {
+            a as f32
+        }
     }
 );
 
@@ -156,7 +160,11 @@ sqlfunc!(
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat64ToInt64)]
     fn cast_int64_to_float64(a: i64) -> f64 {
-        a as f64
+        // TODO(benesch): remove potentially dangerous usage of `as`.
+        #[allow(clippy::as_conversions)]
+        {
+            a as f64
+        }
     }
 );
 

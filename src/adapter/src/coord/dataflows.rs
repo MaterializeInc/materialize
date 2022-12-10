@@ -677,6 +677,9 @@ fn eval_unmaterializable_func(
         UnmaterializableFunc::MzVersionNum => {
             pack(Datum::Int32(state.config().build_info.version_num()))
         }
+        // TODO(benesch): rewrite this to make clear that presenting a large
+        // unsigned integer as a signed integer is fine.
+        #[allow(clippy::as_conversions)]
         UnmaterializableFunc::PgBackendPid => pack(Datum::Int32(session.conn_id() as i32)),
         UnmaterializableFunc::PgPostmasterStartTime => {
             let t: Datum = state.config().start_time.try_into()?;

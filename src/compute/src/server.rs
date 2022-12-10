@@ -39,6 +39,7 @@ use mz_compute_client::metrics::ComputeMetrics;
 use mz_compute_client::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription};
+use mz_ore::cast::CastFrom;
 use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -125,7 +126,8 @@ pub fn serve(
                 Arc::clone(&persist_clients),
                 tokio_executor.clone(),
             );
-            Box::new(client) as Box<dyn ComputeClient>
+            let client: Box<dyn ComputeClient> = Box::new(client);
+            client
         }
     };
 
@@ -506,7 +508,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                 })
                 .unary_frontier::<Vec<()>, _, _, _>(
-                    Exchange::new(|(idx, _)| *idx as u64),
+                    Exchange::new(|(idx, _)| u64::cast_from(*idx)),
                     "CmdReceiver",
                     |_, _| {
                         let mut container = Default::default();

@@ -36,6 +36,8 @@ pub mod parquet;
 /// There's no reason it needs to map an Array 1:1 to a page (it could instead
 /// be 1:1 with a "column chunk", which contains 1 or more pages). For now, we
 /// work around it.
+// TODO(benesch): find a way to express this without `as`.
+#[allow(clippy::as_conversions)]
 pub const KEY_VAL_DATA_MAX_LEN: usize = i32::MAX as usize;
 
 const BYTES_PER_KEY_VAL_OFFSET: usize = 4;

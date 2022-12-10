@@ -299,8 +299,11 @@ where
             .map_err(|e| sql_err!("{}", e))?
             .len();
 
+            let num_partitions_i32 = i32::try_from(num_partitions)
+                .map_err(|_| sql_err!("kafka topic had more than {} partitions", i32::MAX))?;
+
             let mut tpl = TopicPartitionList::with_capacity(1);
-            tpl.add_partition_range(&topic, 0, num_partitions as i32 - 1);
+            tpl.add_partition_range(&topic, 0, num_partitions_i32 - 1);
             tpl.set_all_offsets(Offset::Offset(time_offset))
                 .map_err(|e| sql_err!("{}", e))?;
 

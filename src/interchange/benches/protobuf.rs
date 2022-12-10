@@ -11,6 +11,7 @@ use criterion::{black_box, Criterion, Throughput};
 use prost::Message;
 
 use mz_interchange::protobuf::{DecodedDescriptors, Decoder};
+use mz_ore::cast::CastFrom;
 
 use self::gen::benchmark::{Connector, Record, Value};
 
@@ -63,7 +64,7 @@ pub fn bench_protobuf(c: &mut Criterion) {
     };
 
     let buf = record.encode_to_vec();
-    let len = buf.len() as u64;
+    let len = u64::cast_from(buf.len());
     let mut decoder = Decoder::new(
         DecodedDescriptors::from_bytes(
             &include_bytes!(concat!(env!("OUT_DIR"), "/file_descriptor_set.pb"))[..],

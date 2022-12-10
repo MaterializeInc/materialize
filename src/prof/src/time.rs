@@ -24,18 +24,23 @@ pub async unsafe fn prof_time(
     sample_freq: u32,
     merge_threads: bool,
 ) -> anyhow::Result<StackProfile> {
-    if sample_freq > (1e6 as u32) {
+    if sample_freq > 1_000_000 {
         bail!("Sub-microsecond intervals are not supported.");
     }
-    let pg = ProfilerGuard::new(sample_freq as c_int)?;
+    let sample_freq = c_int::try_from(sample_freq)?;
+    let pg = ProfilerGuard::new(sample_freq)?;
     time::sleep(total_time).await;
     let builder = pg.report();
     let report = builder.build_unresolved()?;
     let mut profile = <StackProfile as Default>::default();
     for (f, weight) in report.data {
         let thread_name;
+        // No other known way to convert `*mut c_void` to `usize`.
+        #[allow(clippy::as_conversions)]
         let mut addrs: Vec<_> = f.frames.iter().map(|f| f.ip() as usize).collect();
         addrs.reverse();
+        // No other known way to convert `isize` to `f64`.
+        #[allow(clippy::as_conversions)]
         let weight = weight as f64;
         let anno = if merge_threads {
             None

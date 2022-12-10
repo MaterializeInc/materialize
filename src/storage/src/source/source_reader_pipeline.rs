@@ -861,7 +861,7 @@ where
 
     // We'll route all the work to a single arbitrary worker;
     // there's not much to do, and we need a global view.
-    let chosen_worker_id = source_id.hashed() as usize % worker_count;
+    let chosen_worker_id = usize::cast_from(source_id.hashed()) % worker_count;
     let is_active_worker = chosen_worker_id == healthcheck_worker_id;
 
     let mut healths = vec![HealthStatus::Starting; worker_count];
@@ -871,7 +871,7 @@ where
 
     let mut input = health_op.new_input(
         &health_stream,
-        Exchange::new(move |_| chosen_worker_id as u64),
+        Exchange::new(move |_| u64::cast_from(chosen_worker_id)),
     );
 
     fn overall_status(healths: &[HealthStatus]) -> &HealthStatus {
@@ -1009,7 +1009,7 @@ where
         persist_clients,
     } = config;
 
-    let chosen_worker = (id.hashed() % worker_count as u64) as usize;
+    let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
     let active_worker = chosen_worker == worker_id;
 
     let operator_name = format!("remap({})", id);
@@ -1018,7 +1018,7 @@ where
 
     let mut input = remap_op.new_input_connection(
         &batch_upper_summaries,
-        Exchange::new(move |_x| chosen_worker as u64),
+        Exchange::new(move |_x| u64::cast_from(chosen_worker)),
         // We don't want frontier information to flow from the input to the
         // output. This operator is it's own "root source" of capabilities for
         // current reclocked, wall-clock time.
@@ -1423,7 +1423,7 @@ where
                 untimestamped_batches.pop_front();
             }
 
-            bytes_read_counter.inc_by(bytes_read as u64);
+            bytes_read_counter.inc_by(u64::cast_from(bytes_read));
             source_metrics.record_partition_offsets(metric_updates);
 
             // This is correct for totally ordered times because there can be at

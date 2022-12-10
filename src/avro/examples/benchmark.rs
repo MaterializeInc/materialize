@@ -21,6 +21,10 @@
 // The original source code is subject to the terms of the MIT license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
+// TODO(benesch): remove this once this module no longer makes use of
+// potentially dangerous `as` conversions.
+#![allow(clippy::as_conversions)]
+
 use std::time::{Duration, Instant};
 
 use mz_avro::{

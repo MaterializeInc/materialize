@@ -99,6 +99,8 @@ pub fn construct<A: Allocate>(
     let interval_ms = std::cmp::max(1, config.interval_ns / 1_000_000);
 
     let traces = worker.dataflow_named("Dataflow: compute logging", move |scope| {
+        // TODO(benesch): avoid dangerous `as` conversion.
+        #[allow(clippy::as_conversions)]
         let (mut compute_logs, token) = Some(compute).mz_replay(
             scope,
             "compute logs",

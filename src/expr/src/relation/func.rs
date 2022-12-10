@@ -536,6 +536,8 @@ where
     }
 }
 
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn count<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -837,6 +839,8 @@ where
         };
         let vec_offset = idx - offset;
 
+        // TODO(benesch): remove potentially dangerous usage of `as`.
+        #[allow(clippy::as_conversions)]
         let lagged_value = if vec_offset >= 0 {
             datums
                 .get(vec_offset as usize)
@@ -2108,6 +2112,8 @@ impl RustType<ProtoAnalyzedRegex> for AnalyzedRegex {
 impl AnalyzedRegex {
     pub fn new(s: &str) -> Result<Self, regex::Error> {
         let r = regex::Regex::new(s)?;
+        // TODO(benesch): remove potentially dangerous usage of `as`.
+        #[allow(clippy::as_conversions)]
         let descs: Vec<_> = r
             .capture_names()
             .enumerate()

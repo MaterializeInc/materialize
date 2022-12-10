@@ -1834,11 +1834,11 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>, S
             if *is_frac {
                 // Fractions only support 9 places of precision.
                 n.truncate(9);
+                let len = u32::try_from(n.len()).expect("length known to fit in a u32");
                 let raw: i64 = n
                     .parse()
                     .map_err(|e| format!("couldn't parse fraction {}: {}", n, e))?;
-                // this is guaranteed to be ascii, so len is fine
-                let multiplicand = 1_000_000_000 / 10_i64.pow(n.len() as u32);
+                let multiplicand = 1_000_000_000 / 10_i64.pow(len);
                 t.push_back(TimeStrToken::Nanos(raw * multiplicand));
                 n.clear();
             } else {
@@ -2038,9 +2038,9 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
     ];
 
     let mut is_positive = true;
-    let mut hour_offset: Option<i64> = None;
-    let mut minute_offset: Option<i64> = None;
-    let mut second_offset: Option<i64> = None;
+    let mut hour_offset: Option<i32> = None;
+    let mut minute_offset: Option<i32> = None;
+    let mut second_offset: Option<i32> = None;
 
     for format in all_formats.iter() {
         let actual = tokens.iter();
@@ -2061,8 +2061,8 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                         (None, None, None) => {
                             // Postgres allows timezones in the range -15:59:59..15:59:59
                             if val <= 15 {
-                                hour_offset = Some(i64::try_from(val).expect(
-                                    "number between 0 and 15 should fit in signed 64-bit integer",
+                                hour_offset = Some(i32::try_from(val).expect(
+                                    "number between 0 and 15 should fit in signed 32-bit integer",
                                 ));
                             } else {
                                 return Err(format!(
@@ -2073,8 +2073,8 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                         }
                         (Some(_), None, None) => {
                             if val < 60 {
-                                minute_offset = Some(i64::try_from(val).expect(
-                                    "number between 0 and 59 should fit in signed 64-bit integer",
+                                minute_offset = Some(i32::try_from(val).expect(
+                                    "number between 0 and 59 should fit in signed 32-bit integer",
                                 ));
                             } else {
                                 return Err(format!(
@@ -2085,8 +2085,8 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                         }
                         (Some(_), Some(_), None) => {
                             if val < 60 {
-                                second_offset = Some(i64::try_from(val).expect(
-                                    "number between 0 and 59 should fit in signed 64-bit integer",
+                                second_offset = Some(i32::try_from(val).expect(
+                                    "number between 0 and 59 should fit in signed 32-bit integer",
                                 ));
                             } else {
                                 return Err(format!(
@@ -2132,7 +2132,7 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
 
         // Return the first valid parsed result
         if let Some(hour_offset) = hour_offset {
-            let mut tz_offset_second: i64 = hour_offset * 60 * 60;
+            let mut tz_offset_second = hour_offset * 60 * 60;
 
             if let Some(minute_offset) = minute_offset {
                 tz_offset_second += minute_offset * 60;
@@ -2143,9 +2143,9 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
             }
 
             let offset = if is_positive {
-                FixedOffset::east_opt(tz_offset_second as i32).unwrap()
+                FixedOffset::east_opt(tz_offset_second).unwrap()
             } else {
-                FixedOffset::west_opt(tz_offset_second as i32).unwrap()
+                FixedOffset::west_opt(tz_offset_second).unwrap()
             };
 
             return Ok(Timezone::FixedOffset(offset));

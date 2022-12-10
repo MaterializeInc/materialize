@@ -58,6 +58,8 @@ pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<StackProfile> {
     }?;
     // The first line of the file should be e.g. "heap_v2/524288", where the trailing
     // number is the inverse probability of a byte being sampled.
+    // TODO(benesch): rewrite to avoid `as`.
+    #[allow(clippy::as_conversions)]
     let sampling_rate = str::parse::<usize>(first_line.trim_start_matches("heap_v2/"))? as f64;
     for line in lines {
         let line = line?;
@@ -103,7 +105,11 @@ pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<StackProfile> {
                 // For more details, see this doc: https://github.com/jemalloc/jemalloc/pull/1902
                 //
                 // And this gitter conversation between me (Brennan Vincent) and David Goldblatt: https://gitter.im/jemalloc/jemalloc?at=5f31b673811d3571b3bb9b6b
+                // TODO(benesch): rewrite to avoid `as`.
+                #[allow(clippy::as_conversions)]
                 let n_objs = str::parse::<usize>(words[1].trim_end_matches(':'))? as f64;
+                // TODO(benesch): rewrite to avoid `as`.
+                #[allow(clippy::as_conversions)]
                 let bytes_in_sampled_objs = str::parse::<usize>(words[2])? as f64;
                 let ratio = (bytes_in_sampled_objs / n_objs) / sampling_rate;
                 let scale_factor = 1.0 / (1.0 - (-ratio).exp());
