@@ -4535,13 +4535,9 @@ impl<'a> Parser<'a> {
         let name = self.parse_identifier()?;
         self.expect_token(&Token::LParen)?;
         let columns = self.parse_comma_separated(|parser| {
-            let name = parser.parse_identifier()?;
-            let data_type = parser.parse_data_type()?;
-            Ok(ColumnDef {
-                name,
-                data_type,
-                collation: None,
-                options: Vec::new(),
+            Ok(CteMutRecColumnDef {
+                name: parser.parse_identifier()?,
+                data_type: parser.parse_data_type()?,
             })
         })?;
         self.expect_token(&Token::RParen)?;

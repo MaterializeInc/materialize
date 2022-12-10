@@ -858,7 +858,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     let columns = cte
                         .columns
                         .into_iter()
-                        .map(|column| self.fold_column_def(column))
+                        .map(|column| self.fold_cte_mut_rec_column_def(column))
                         .collect();
                     let query = self.fold_query(cte.query);
                     result_ctes.push(CteMutRec {

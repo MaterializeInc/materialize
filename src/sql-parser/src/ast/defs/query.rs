@@ -387,12 +387,10 @@ impl<T: AstInfo> AstDisplay for Cte<T> {
 }
 impl_display_t!(Cte);
 
-use crate::ast::ColumnDef;
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CteMutRec<T: AstInfo> {
     pub name: Ident,
-    pub columns: Vec<ColumnDef<T>>,
+    pub columns: Vec<CteMutRecColumnDef<T>>,
     pub id: T::CteId,
     pub query: Query<T>,
 }
@@ -411,6 +409,22 @@ impl<T: AstInfo> AstDisplay for CteMutRec<T> {
     }
 }
 impl_display_t!(CteMutRec);
+
+/// A column definition in a [`CteMutRec`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CteMutRecColumnDef<T: AstInfo> {
+    pub name: Ident,
+    pub data_type: T::DataType,
+}
+
+impl<T: AstInfo> AstDisplay for CteMutRecColumnDef<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        f.write_str(" ");
+        f.write_node(&self.data_type);
+    }
+}
+impl_display_t!(CteMutRecColumnDef);
 
 /// One item of the comma-separated list following `SELECT`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
