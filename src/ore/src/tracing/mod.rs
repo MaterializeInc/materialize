@@ -252,11 +252,11 @@ where
         }
         StderrLogFormat::Json => Box::new(fmt::layer().with_writer(io::stderr).json()),
     };
-    let (stderr_log_layer, stderr_reloader) =
-        reload::Layer::new(stderr_log_layer.with_filter(config.stderr_log.filter));
+    let (stderr_filter, stderr_filter_reloader) = reload::Layer::new(config.stderr_log.filter);
+    let stderr_log_layer = stderr_log_layer.with_filter(stderr_filter);
     let stderr_callback = DynamicTargetsCallback {
         callback: Arc::new(move |targets| {
-            stderr_reloader.modify(|layer| *layer.filter_mut() = targets)?;
+            stderr_filter_reloader.reload(targets)?;
             Ok(())
         }),
     };
@@ -316,7 +316,7 @@ where
             .with_filter(filter);
         let reloader = DynamicTargetsCallback {
             callback: Arc::new(move |targets| {
-                filter_handle.modify(|filter| *filter = targets)?;
+                filter_handle.reload(targets)?;
                 Ok(())
             }),
         };
