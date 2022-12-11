@@ -13,7 +13,7 @@ globset = "0.4.9"
 http = "0.2.8"
 mz-ore = { path = "../ore", default-features = false }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
-prost = { version = "0.11.2", features = ["no-recursion-limit"] }
+prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 regex = "1.7.0"
 serde_json = { version = "1.0.89", features = ["arbitrary_precision"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", optional = true }
