@@ -22,5 +22,5 @@ mz-stash = { path = "../stash" }
 mz-storage-client = { path = "../storage-client" }
 serde = { version = "1.0.147", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = "1.22.0"
+tokio = "1.23.0"
 uuid = { version = "1.2.2" }

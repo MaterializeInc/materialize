@@ -34,7 +34,7 @@ uuid = { version = "1.2.2", features = ["serde"] }
 
 [dev-dependencies]
 criterion = { version = "0.4.0", features = ["async_tokio"] }
-tokio = { version = "1.22.0", features = ["macros"] }
+tokio = { version = "1.23.0", features = ["macros"] }
 
 [build-dependencies]
 prost-build = "0.11.2"

@@ -23,7 +23,7 @@ mz-ore = { path = "../ore" }
 once_cell = "1.16.0"
 semver = "1.0.14"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = "1.22.0"
+tokio = "1.23.0"
 tokio-stream = "0.1.11"
 tonic = "0.8.2"
 tower = "0.4.13"
