@@ -129,7 +129,7 @@ pub struct Config {
     /// with LaunchDarkly.
     pub launchdarkly_sdk_key: Option<String>,
     /// The interval in seconds at which to synchronize system parameter values.
-    pub config_sync_loop_interval: Duration,
+    pub config_sync_loop_interval: Option<Duration>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -395,7 +395,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         });
     }
 
-    // If system_parameter_frontend is present, start the system_parameter_sync loop.
+    // If system_parameter_frontend and config_sync_loop_interval are present,
+    // start the system_parameter_sync loop.
     if let Some(system_parameter_frontend) = system_parameter_frontend {
         let system_parameter_backend = SystemParameterBackend::new(adapter_client).await?;
         task::spawn(

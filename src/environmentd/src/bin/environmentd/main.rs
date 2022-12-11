@@ -416,18 +416,22 @@ pub struct Args {
     announce_egress_ip: Vec<Ipv4Addr>,
     /// An SDK key for LaunchDarkly.
     ///
-    /// Setting this will enable synchronization of LaunchDarkly features with
-    /// system configuration parameters.
+    /// Setting this in combination with [`Self::config_sync_loop_interval`]
+    /// will enable synchronization of LaunchDarkly features with system
+    /// configuration parameters.
     #[clap(long, env = "LAUNCHDARKLY_SDK_KEY")]
     launchdarkly_sdk_key: Option<String>,
     /// The interval in seconds at which to synchronize system parameter values.
+    ///
+    /// If this is not explicitly set, the loop that synchronizes LaunchDarkly
+    /// features with system configuration parameters will not run _even if
+    /// [`Self::launchdarkly_sdk_key`] is present_.
     #[clap(
         long,
         env = "CONFIG_SYNC_LOOP_INTERVAL",
         parse(try_from_str = humantime::parse_duration),
-        default_value = "15s"
     )]
-    config_sync_loop_interval: Duration,
+    config_sync_loop_interval: Option<Duration>,
 
     /// The 12-digit AWS account id, which is used to generate an AWS Principal.
     #[clap(long, env = "AWS_ACCOUNT_ID")]
