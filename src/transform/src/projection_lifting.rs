@@ -91,6 +91,7 @@ impl ProjectionLifting {
                     gets.remove(&id);
                     Ok(())
                 }
+                MirRelationExpr::LetRec { .. } => Err(crate::TransformError::LetRecUnsupported)?,
                 MirRelationExpr::Project { input, outputs } => {
                     self.action(input, gets)?;
                     if let MirRelationExpr::Project {

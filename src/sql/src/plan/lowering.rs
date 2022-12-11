@@ -337,8 +337,11 @@ impl HirRelationExpr {
                         }
                     }
 
-                    // TODO: Create a `MirRelationExpr::LetRec` from `mir_ids`, `mir_values`, and `mir_body`.
-                    unimplemented!()
+                    mz_expr::MirRelationExpr::LetRec {
+                        ids: mir_ids,
+                        values: mir_values,
+                        body: Box::new(mir_body),
+                    }
                 }
                 Project { input, outputs } => {
                     // Projections should be applied to the decorrelated `inner`, and to its columns,

@@ -81,6 +81,9 @@ impl FoldConstants {
             MirRelationExpr::Constant { .. } => { /* handled after match */ }
             MirRelationExpr::Get { .. } => {}
             MirRelationExpr::Let { .. } => { /* constant prop done in NormalizeLets */ }
+            MirRelationExpr::LetRec { .. } => {
+                Err(crate::TransformError::LetRecUnsupported)?;
+            }
             MirRelationExpr::Reduce {
                 input,
                 group_key,
