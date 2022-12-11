@@ -56,7 +56,7 @@ mz-storage-client = { path = "../storage-client" }
 nix = "0.26.1"
 num_cpus = "1.14.0"
 openssl = { version = "0.10.43", features = ["vendored"] }
-openssl-sys = { version = "0.9.78", features = ["vendored"] }
+openssl-sys = { version = "0.9.79", features = ["vendored"] }
 os_info = "3.5.1"
 prometheus = { version = "0.13.3", default-features = false }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
