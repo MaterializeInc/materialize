@@ -130,6 +130,9 @@ pub struct Config {
     pub launchdarkly_sdk_key: Option<String>,
     /// The interval in seconds at which to synchronize system parameter values.
     pub config_sync_loop_interval: Option<Duration>,
+    /// An invertible map from system parameter names to LaunchDarkly feature
+    /// keys to use when propagating values from the latter to the former.
+    pub launchdarkly_key_map: BTreeMap<String, String>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -301,13 +304,16 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             .as_ref()
             .map(|frontegg| frontegg.tenant_id().to_string())
             .unwrap_or_else(|| "anonymous-dev@materialize.com".to_string());
+        let ld_key_map = config.launchdarkly_key_map;
         // The `SystemParameterFrontend::new` call needs to be wrapped in a
         // spawn_blocking call because the LaunchDarkly SDK initialization uses
         // `reqwest::blocking::client`. This should be revisited after the SDK
         // is updated to 1.0.0.
         let system_parameter_frontend = task::spawn_blocking(
             || "SystemParameterFrontend::new",
-            move || SystemParameterFrontend::new(ld_sdk_key.as_str(), ld_user_key.as_str()),
+            move || {
+                SystemParameterFrontend::new(ld_sdk_key.as_str(), ld_user_key.as_str(), ld_key_map)
+            },
         )
         .await??;
         Some(Arc::new(system_parameter_frontend))

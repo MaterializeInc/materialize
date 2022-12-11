@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use derivative::Derivative;
 use launchdarkly_server_sdk as ld;
@@ -15,23 +15,37 @@ use tokio::time;
 
 use super::SynchronizedParameters;
 
-/// A frontend client for pulling [SynchronizedParameters].
+/// A frontend client for pulling [SynchronizedParameters] from LaunchDarkly.
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct SystemParameterFrontend {
+    /// An SDK client to mediate interactions with the LaunchDarkly client.
     #[derivative(Debug = "ignore")]
     ld_client: ld::Client,
+    /// The user to use when quering LaunchDarkly using the SDK.
     ld_user: ld::User,
+    /// A map from parameter names to LaunchDarkly feature keys
+    /// to use when populating the the [SynchronizedParameters]
+    /// instance in [SystemParameterFrontend::pull].
+    ld_key_map: BTreeMap<String, String>,
 }
 
 impl SystemParameterFrontend {
     /// Construct a new [SystemParameterFrontend] instance.
-    pub fn new(ld_sdk_key: &str, ld_user_key: &str) -> Result<Self, anyhow::Error> {
+    pub fn new(
+        ld_sdk_key: &str,
+        ld_user_key: &str,
+        ld_key_map: BTreeMap<String, String>,
+    ) -> Result<Self, anyhow::Error> {
         let ld_config = ld::ConfigBuilder::new(ld_sdk_key).build();
         let ld_client = ld::Client::build(ld_config)?;
         let ld_user = ld::User::with_key(ld_user_key).build();
 
-        Ok(Self { ld_client, ld_user })
+        Ok(Self {
+            ld_client,
+            ld_user,
+            ld_key_map,
+        })
     }
 
     /// Ensure the backing [ld::Client] is initialized.
@@ -62,9 +76,15 @@ impl SystemParameterFrontend {
         let mut changed = false;
 
         for param_name in params.synchronized().into_iter() {
+            let flag_name = self
+                .ld_key_map
+                .get(param_name)
+                .map(|flag_name| flag_name.as_str())
+                .unwrap_or(param_name);
+
             let flag_var =
                 self.ld_client
-                    .variation(&self.ld_user, param_name, params.get(param_name));
+                    .variation(&self.ld_user, flag_name, params.get(param_name));
 
             let flag_str = match flag_var {
                 ld::FlagValue::Bool(v) => v.to_string(),

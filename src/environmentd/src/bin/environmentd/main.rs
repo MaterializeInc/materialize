@@ -421,6 +421,19 @@ pub struct Args {
     /// configuration parameters.
     #[clap(long, env = "LAUNCHDARKLY_SDK_KEY")]
     launchdarkly_sdk_key: Option<String>,
+    /// A list of PARAM_NAME=KEY_NAME pairs from system parameter names to
+    /// LaunchDarkly feature keys.
+    ///
+    /// This is used (so far only for testing purposes) when propagating values
+    /// from the latter to the former. The identity map is assumed for absent
+    /// parameter names.
+    #[clap(
+        long,
+        env = "LAUNCHDARKLY_KEY_MAP",
+        multiple = true,
+        value_delimiter = ';'
+    )]
+    launchdarkly_key_map: Vec<KeyValueArg<String, String>>,
     /// The interval in seconds at which to synchronize system parameter values.
     ///
     /// If this is not explicitly set, the loop that synchronizes LaunchDarkly
@@ -779,6 +792,11 @@ max log level: {max_log_level}",
         egress_ips: args.announce_egress_ip,
         aws_account_id: args.aws_account_id,
         launchdarkly_sdk_key: args.launchdarkly_sdk_key,
+        launchdarkly_key_map: args
+            .launchdarkly_key_map
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .collect(),
         config_sync_loop_interval: args.config_sync_loop_interval,
     }))?;
 
