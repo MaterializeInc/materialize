@@ -130,6 +130,7 @@ allow = [
     "ICU",
     "ISC",
     "MIT",
+    "MPL-2.0",
     "Zlib",
 ]
 copyleft = "deny"
