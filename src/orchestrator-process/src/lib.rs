@@ -403,7 +403,7 @@ async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_fil
         return;
     };
 
-    let pid = Pid::from(pid);
+    let pid = Pid::from_u32(u32::from_ne_bytes(pid.to_ne_bytes()));
     let mut system = System::new();
     system.refresh_process_specifics(pid, ProcessRefreshKind::new());
     let Some(process) = system.process(pid) else {
