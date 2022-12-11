@@ -42,7 +42,7 @@ mz-stash = { path = "../stash" }
 mz-timely-util = { path = "../timely-util" }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git"}
-prost = { version = "0.11.2", features = ["no-recursion-limit"] }
+prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.7.0" }
 serde = { version = "1.0.147", features = ["derive"] }

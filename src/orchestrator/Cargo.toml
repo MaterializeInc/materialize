@@ -15,7 +15,7 @@ derivative = "2.2.0"
 futures-core = "0.3.21"
 mz-ore = { path = "../ore"}
 mz-proto = { path = "../proto" }
-prost = { version = "0.11.2", features = ["no-recursion-limit"] }
+prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 serde = "1.0"
 
 [build-dependencies]
