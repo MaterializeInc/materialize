@@ -693,16 +693,9 @@ max log level: {max_log_level}",
         dep_versions = build_info().join("\n"),
         invocation = {
             use shell_words::quote as escape;
-            env::vars_os()
-                .map(|(name, value)| {
-                    (
-                        name.to_string_lossy().into_owned(),
-                        value.to_string_lossy().into_owned(),
-                    )
-                })
-                .filter(|(name, _value)| name.starts_with("MZ_") || name == "FAILPOINTS")
-                .map(|(name, value)| format!("{}={}", escape(&name), escape(&value)))
-                .chain(env::args().into_iter().map(|arg| escape(&arg).into_owned()))
+            env::args()
+                .into_iter()
+                .map(|arg| escape(&arg).into_owned())
                 .join(" ")
         },
         os = os_info::get(),
