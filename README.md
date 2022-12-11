@@ -108,6 +108,10 @@ Materialize is source-available and [licensed](LICENSE) under the BSL 1.1, conve
 
 Materialize is also available as [a paid cloud service](https://materialize.com/pricing/) with additional features such as high availability via multi-active replication.
 
+Materialize depends upon many open source Rust crates. We maintain a [list of
+these crates and their licenses](https://dev.materialize.com/licenses.html),
+including links to their source repositories.
+
 ## For developers
 
 Materialize is primarily written in Rust.
