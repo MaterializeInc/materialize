@@ -416,18 +416,35 @@ pub struct Args {
     announce_egress_ip: Vec<Ipv4Addr>,
     /// An SDK key for LaunchDarkly.
     ///
-    /// Setting this will enable synchronization of LaunchDarkly features with
-    /// system configuration parameters.
+    /// Setting this in combination with [`Self::config_sync_loop_interval`]
+    /// will enable synchronization of LaunchDarkly features with system
+    /// configuration parameters.
     #[clap(long, env = "LAUNCHDARKLY_SDK_KEY")]
     launchdarkly_sdk_key: Option<String>,
+    /// A list of PARAM_NAME=KEY_NAME pairs from system parameter names to
+    /// LaunchDarkly feature keys.
+    ///
+    /// This is used (so far only for testing purposes) when propagating values
+    /// from the latter to the former. The identity map is assumed for absent
+    /// parameter names.
+    #[clap(
+        long,
+        env = "LAUNCHDARKLY_KEY_MAP",
+        multiple = true,
+        value_delimiter = ';'
+    )]
+    launchdarkly_key_map: Vec<KeyValueArg<String, String>>,
     /// The interval in seconds at which to synchronize system parameter values.
+    ///
+    /// If this is not explicitly set, the loop that synchronizes LaunchDarkly
+    /// features with system configuration parameters will not run _even if
+    /// [`Self::launchdarkly_sdk_key`] is present_.
     #[clap(
         long,
         env = "CONFIG_SYNC_LOOP_INTERVAL",
         parse(try_from_str = humantime::parse_duration),
-        default_value = "15s"
     )]
-    config_sync_loop_interval: Duration,
+    config_sync_loop_interval: Option<Duration>,
 
     /// The 12-digit AWS account id, which is used to generate an AWS Principal.
     #[clap(long, env = "AWS_ACCOUNT_ID")]
@@ -693,16 +710,9 @@ max log level: {max_log_level}",
         dep_versions = build_info().join("\n"),
         invocation = {
             use shell_words::quote as escape;
-            env::vars_os()
-                .map(|(name, value)| {
-                    (
-                        name.to_string_lossy().into_owned(),
-                        value.to_string_lossy().into_owned(),
-                    )
-                })
-                .filter(|(name, _value)| name.starts_with("MZ_") || name == "FAILPOINTS")
-                .map(|(name, value)| format!("{}={}", escape(&name), escape(&value)))
-                .chain(env::args().into_iter().map(|arg| escape(&arg).into_owned()))
+            env::args()
+                .into_iter()
+                .map(|arg| escape(&arg).into_owned())
                 .join(" ")
         },
         os = os_info::get(),
@@ -782,6 +792,11 @@ max log level: {max_log_level}",
         egress_ips: args.announce_egress_ip,
         aws_account_id: args.aws_account_id,
         launchdarkly_sdk_key: args.launchdarkly_sdk_key,
+        launchdarkly_key_map: args
+            .launchdarkly_key_map
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .collect(),
         config_sync_loop_interval: args.config_sync_loop_interval,
     }))?;
 

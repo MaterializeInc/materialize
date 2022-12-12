@@ -26,8 +26,16 @@ pub use params::{ModifiedParameter, SynchronizedParameters};
 pub async fn system_parameter_sync(
     frontend: Arc<SystemParameterFrontend>,
     mut backend: SystemParameterBackend,
-    tick_interval: Duration,
+    tick_interval: Option<Duration>,
 ) -> Result<(), anyhow::Error> {
+    let tick_interval = match tick_interval {
+        Some(tick_interval) => tick_interval,
+        None => {
+            tracing::info!("skipping system parameter sync as tick_interval = None");
+            return Ok(());
+        }
+    };
+
     // Ensure the frontend client is initialized.
     frontend.ensure_initialized().await;
 

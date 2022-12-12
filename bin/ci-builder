@@ -149,6 +149,8 @@ case "$cmd" in
             --env CI
             --env GITHUB_TOKEN
             --env GPG_KEY
+            --env LAUNCHDARKLY_API_TOKEN
+            --env LAUNCHDARKLY_SDK_KEY
             --env PYPI_TOKEN
         )
         for env in $(printenv | grep '^BUILDKITE' | sed 's/=.*//'); do

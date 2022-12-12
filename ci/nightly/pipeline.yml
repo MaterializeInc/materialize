@@ -60,6 +60,7 @@ steps:
           - { value: persist-maelstrom-single-node }
           - { value: persist-maelstrom-multi-node }
           - { value: unused-deps }
+          - { value: launchdarkly }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -542,3 +543,13 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
+
+  - id: launchdarkly
+    label: "LaunchDarkly"
+    artifact_paths: junit_mzcompose_*.xml
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: launchdarkly

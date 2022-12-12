@@ -15,7 +15,7 @@ use std::time::SystemTime;
 
 use anyhow::{bail, Context};
 use md5::{Digest, Md5};
-use mz_sql::ast::ExplainStage;
+use mz_sql::ast::{ExplainStage, ShowStatement};
 use postgres_array::Array;
 use regex::Regex;
 use tokio_postgres::error::DbError;
@@ -32,6 +32,7 @@ use crate::action::{ControlFlow, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedError, SqlOutput};
 
 pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+    use ShowStatement::*;
     use Statement::*;
 
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
@@ -72,8 +73,10 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | Discard(_)
         | DropDatabase(_)
         | DropObjects(_)
-        | SetVariable(_)
-        | Show(_) => false,
+        | SetVariable(_) => false,
+        // Show variable statements might have to be retried to account for
+        // asynchronous propagation of updates from the LaunchDarkly frontend.
+        Show(stmt) => matches!(stmt, ShowVariable(_)),
         _ => true,
     };
 
