@@ -2222,7 +2222,7 @@ SELECT
 FROM
     mz_cluster_replicas AS r
         JOIN mz_internal.mz_cluster_replica_sizes AS s ON r.size = s.size
-        JOIN mz_internal.mz_cluster_replica_metrics AS m ON m.replica_id = r.id;"
+        JOIN mz_internal.mz_cluster_replica_metrics AS m ON m.replica_id = r.id;",
 };
 
 // NOTE: If you add real data to this implementation, then please update
