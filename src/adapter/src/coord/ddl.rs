@@ -456,7 +456,9 @@ impl<S: Append + 'static> Coordinator<S> {
         // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean
         // that only things going forward are exported.
         let timeline = self
-            .get_timeline(sink.from)
+            .get_timeline_context(sink.from)
+            .timeline()
+            .cloned()
             .unwrap_or(Timeline::EpochMilliseconds);
         let now = self.ensure_timeline_state(&timeline).await.oracle.read_ts();
         let frontier = Antichain::from_elem(now);

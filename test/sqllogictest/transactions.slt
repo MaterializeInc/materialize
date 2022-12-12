@@ -588,18 +588,3 @@ SELECT INTERVAL '1 day'
 
 statement ok
 COMMIT
-
-# Time-domain error
-
-statement ok
-DELETE FROM t
-
-statement ok
-BEGIN;
-
-query I rowsort
-SELECT * FROM t
-----
-
-query error Transactions can only reference objects in the same timedomain.
-SELECT * FROM mz_views

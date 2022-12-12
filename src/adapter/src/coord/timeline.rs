@@ -14,13 +14,16 @@ use std::future::Future;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use itertools::Itertools;
 use once_cell::sync::Lazy;
 use timely::progress::Timestamp as TimelyTimestamp;
 use tracing::error;
 
 use mz_compute_client::controller::ComputeInstanceId;
-use mz_expr::CollectionPlan;
+use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
+use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
+use mz_ore::vec::VecExt;
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_stash::Append;
@@ -33,6 +36,34 @@ use crate::coord::read_policy::ReadHolds;
 use crate::coord::{timeline, Coordinator};
 use crate::util::ResultExt;
 use crate::AdapterError;
+
+/// An enum describing the timeline context of a query.
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
+pub enum TimelineContext {
+    /// Can only ever belong to a single specific timeline. The answer will depend on a timestamp
+    /// chosen from that specific timeline.
+    TimelineDependent(Timeline),
+    /// Can belong to any timeline. The answer will depend on a timestamp chosen from some
+    /// timeline.
+    TimestampDependent,
+    /// The answer does not depend on a chosen timestamp.
+    TimestampIndependent,
+}
+
+impl TimelineContext {
+    /// Whether or not the context contains a timeline.
+    pub fn contains_timeline(&self) -> bool {
+        self.timeline().is_some()
+    }
+
+    /// The timeline belonging to this context, if one exists.
+    pub fn timeline(&self) -> Option<&Timeline> {
+        match self {
+            Self::TimelineDependent(timeline) => Some(timeline),
+            Self::TimestampIndependent | Self::TimestampDependent => None,
+        }
+    }
+}
 
 /// Timestamps used by writes in an Append command.
 #[derive(Debug)]
@@ -429,7 +460,7 @@ impl<S: Append + 'static> Coordinator<S> {
     {
         let mut empty_timelines = Vec::new();
         for id in ids {
-            if let Some(timeline) = self.get_timeline(id) {
+            if let TimelineContext::TimelineDependent(timeline) = self.get_timeline_context(id) {
                 let TimelineState { read_holds, .. } = self
                     .global_timelines
                     .get_mut(&timeline)
@@ -450,7 +481,7 @@ impl<S: Append + 'static> Coordinator<S> {
     {
         let mut empty_timelines = Vec::new();
         for (compute_instance, id) in ids {
-            if let Some(timeline) = self.get_timeline(id) {
+            if let TimelineContext::TimelineDependent(timeline) = self.get_timeline_context(id) {
                 let TimelineState { read_holds, .. } = self
                     .global_timelines
                     .get_mut(&timeline)
@@ -487,7 +518,9 @@ impl<S: Append + 'static> Coordinator<S> {
     pub(crate) fn ids_in_timeline(&self, timeline: &Timeline) -> CollectionIdBundle {
         let mut id_bundle = CollectionIdBundle::default();
         for entry in self.catalog.entries() {
-            if let Some(entry_timeline) = self.get_timeline(entry.id()) {
+            if let TimelineContext::TimelineDependent(entry_timeline) =
+                self.get_timeline_context(entry.id())
+            {
                 if timeline == &entry_timeline {
                     match entry.item() {
                         CatalogItem::Table(_)
@@ -516,16 +549,19 @@ impl<S: Append + 'static> Coordinator<S> {
         id_bundle
     }
 
-    /// Return an error if the ids are from incompatible timelines. This should
+    /// Return an error if the ids are from incompatible timeline contexts. This should
     /// be used to prevent users from doing things that are either meaningless
     /// (joining data from timelines that have similar numbers with different
     /// meanings like two separate debezium topics) or will never complete (joining
     /// cdcv2 and realtime data).
-    pub(crate) fn validate_timeline<I>(&self, ids: I) -> Result<Option<Timeline>, AdapterError>
+    pub(crate) fn validate_timeline_context<I>(
+        &self,
+        ids: I,
+    ) -> Result<TimelineContext, AdapterError>
     where
         I: IntoIterator<Item = GlobalId>,
     {
-        let timelines = self.get_timelines(ids);
+        let mut timeline_contexts: Vec<_> = self.get_timeline_contexts(ids).into_iter().collect();
         // If there's more than one timeline, we will not produce meaningful
         // data to a user. Take, for example, some realtime source and a debezium
         // consistency topic source. The realtime source uses something close to now
@@ -541,35 +577,68 @@ impl<S: Append + 'static> Coordinator<S> {
         // a lot. However it's still not meaningful to join those two at a specific
         // transaction counter number because those counters are unrelated to the
         // other.
+        let timelines: Vec<_> = timeline_contexts
+            .drain_filter_swapping(|timeline_context| timeline_context.contains_timeline())
+            .collect();
+
+        // A single or group of objects may contain multiple compatible timeline
+        // contexts. For example `SELECT *, 1, mz_now() FROM t` will contain all
+        // types of contexts. We choose the strongest context level to return back.
         if timelines.len() > 1 {
-            return Err(AdapterError::Unsupported(
+            Err(AdapterError::Unsupported(
                 "multiple timelines within one dataflow",
-            ));
+            ))
+        } else if timelines.len() == 1 {
+            Ok(timelines.into_element())
+        } else if timeline_contexts
+            .iter()
+            .contains(&TimelineContext::TimestampDependent)
+        {
+            Ok(TimelineContext::TimestampDependent)
+        } else {
+            Ok(TimelineContext::TimestampIndependent)
         }
-        Ok(timelines.into_iter().next())
     }
 
-    /// Return the timeline belonging to a GlobalId, if one exists.
-    pub(crate) fn get_timeline(&self, id: GlobalId) -> Option<Timeline> {
-        let timelines = self.get_timelines(vec![id]);
-        assert!(
-            timelines.len() <= 1,
-            "impossible for a single object to belong to two timelines"
-        );
-        timelines.into_iter().next()
+    /// Return the timeline context belonging to a GlobalId, if one exists.
+    pub(crate) fn get_timeline_context(&self, id: GlobalId) -> TimelineContext {
+        self.validate_timeline_context(vec![id])
+            .expect("impossible for a single object to belong to incompatible timeline contexts")
     }
 
-    /// Return the timelines belonging to a list of GlobalIds, if any exist.
-    fn get_timelines<I>(&self, ids: I) -> HashSet<Timeline>
+    /// Return the timeline contexts belonging to a list of GlobalIds, if any exist.
+    fn get_timeline_contexts<I>(&self, ids: I) -> HashSet<TimelineContext>
     where
         I: IntoIterator<Item = GlobalId>,
     {
-        let mut timelines: HashMap<GlobalId, Timeline> = HashMap::new();
+        let mut timelines: HashMap<GlobalId, TimelineContext> = HashMap::new();
+        let mut contains_temporal = false;
 
         // Recurse through IDs to find all sources and tables, adding new ones to
-        // the set until we reach the bottom. Static views will end up with an empty
-        // timelines.
+        // the set until we reach the bottom.
         let mut ids: Vec<_> = ids.into_iter().collect();
+        // Helper function for both materialized views and views.
+        fn visit_view_expr(
+            id: GlobalId,
+            optimized_expr: &OptimizedMirRelationExpr,
+            ids: &mut Vec<GlobalId>,
+            timelines: &mut HashMap<GlobalId, TimelineContext>,
+            contains_temporal: &mut bool,
+        ) {
+            if !*contains_temporal && optimized_expr.contains_temporal() {
+                *contains_temporal = true;
+            }
+            let depends_on = optimized_expr.depends_on();
+            if depends_on.is_empty() {
+                if *contains_temporal {
+                    timelines.insert(id, TimelineContext::TimestampDependent);
+                } else {
+                    timelines.insert(id, TimelineContext::TimestampIndependent);
+                }
+            } else {
+                ids.extend(depends_on);
+            }
+        }
         while let Some(id) = ids.pop() {
             // Protect against possible infinite recursion. Not sure if it's possible, but
             // a cheap prevention for the future.
@@ -579,22 +648,40 @@ impl<S: Append + 'static> Coordinator<S> {
             if let Some(entry) = self.catalog.try_get_entry(&id) {
                 match entry.item() {
                     CatalogItem::Source(source) => {
-                        timelines.insert(id, source.timeline.clone());
+                        timelines.insert(
+                            id,
+                            TimelineContext::TimelineDependent(source.timeline.clone()),
+                        );
                     }
                     CatalogItem::Index(index) => {
                         ids.push(index.on);
                     }
                     CatalogItem::View(view) => {
-                        ids.extend(view.optimized_expr.depends_on());
+                        visit_view_expr(
+                            id,
+                            &view.optimized_expr,
+                            &mut ids,
+                            &mut timelines,
+                            &mut contains_temporal,
+                        );
                     }
                     CatalogItem::MaterializedView(mview) => {
-                        ids.extend(mview.optimized_expr.depends_on());
+                        visit_view_expr(
+                            id,
+                            &mview.optimized_expr,
+                            &mut ids,
+                            &mut timelines,
+                            &mut contains_temporal,
+                        );
                     }
                     CatalogItem::Table(table) => {
-                        timelines.insert(id, table.timeline());
+                        timelines.insert(id, TimelineContext::TimelineDependent(table.timeline()));
                     }
                     CatalogItem::Log(_) => {
-                        timelines.insert(id, Timeline::EpochMilliseconds);
+                        timelines.insert(
+                            id,
+                            TimelineContext::TimelineDependent(Timeline::EpochMilliseconds),
+                        );
                     }
                     CatalogItem::Sink(_)
                     | CatalogItem::Type(_)
@@ -611,22 +698,25 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect()
     }
 
-    /// Returns an iterator that partitions an id bundle by the timeline that each id belongs to.
-    pub fn partition_ids_by_timeline(
+    /// Returns an iterator that partitions an id bundle by the timeline context that each id belongs to.
+    pub fn partition_ids_by_timeline_context(
         &self,
         id_bundle: &CollectionIdBundle,
-    ) -> impl Iterator<Item = (Option<Timeline>, CollectionIdBundle)> {
-        let mut res: HashMap<Option<Timeline>, CollectionIdBundle> = HashMap::new();
+    ) -> impl Iterator<Item = (TimelineContext, CollectionIdBundle)> {
+        let mut res: HashMap<TimelineContext, CollectionIdBundle> = HashMap::new();
 
         for id in &id_bundle.storage_ids {
-            let timeline = self.get_timeline(*id);
-            res.entry(timeline).or_default().storage_ids.insert(*id);
+            let timeline_context = self.get_timeline_context(*id);
+            res.entry(timeline_context)
+                .or_default()
+                .storage_ids
+                .insert(*id);
         }
 
         for (compute_instance, ids) in &id_bundle.compute_ids {
             for id in ids {
-                let timeline = self.get_timeline(*id);
-                res.entry(timeline)
+                let timeline_context = self.get_timeline_context(*id);
+                res.entry(timeline_context)
                     .or_default()
                     .compute_ids
                     .entry(*compute_instance)
@@ -646,7 +736,7 @@ impl<S: Append + 'static> Coordinator<S> {
     pub(crate) fn timedomain_for<'a, I>(
         &self,
         uses_ids: I,
-        timeline: &Option<Timeline>,
+        timeline_context: &TimelineContext,
         conn_id: ConnectionId,
         compute_instance: ComputeInstanceId,
     ) -> Result<CollectionIdBundle, AdapterError>
@@ -703,18 +793,27 @@ impl<S: Append + 'static> Coordinator<S> {
             &mut id_bundle.compute_ids.entry(compute_instance).or_default(),
         ] {
             ids.retain(|&id| {
-                let id_timeline = self
-                    .validate_timeline(vec![id])
+                let id_timeline_context = self
+                    .validate_timeline_context(vec![id])
                     .expect("single id should never fail");
-                match (&id_timeline, &timeline) {
+                match (&id_timeline_context, &timeline_context) {
                     // If this id doesn't have a timeline, we can keep it.
-                    (None, _) => true,
+                    (
+                        TimelineContext::TimestampIndependent | TimelineContext::TimestampDependent,
+                        _,
+                    ) => true,
                     // If there's no source timeline, we have the option to opt into a timeline,
                     // so optimistically choose epoch ms. This is useful when the first query in a
                     // transaction is on a static view.
-                    (Some(id_timeline), None) => id_timeline == &Timeline::EpochMilliseconds,
+                    (
+                        TimelineContext::TimelineDependent(id_timeline),
+                        TimelineContext::TimestampIndependent | TimelineContext::TimestampDependent,
+                    ) => id_timeline == &Timeline::EpochMilliseconds,
                     // Otherwise check if timelines are the same.
-                    (Some(id_timeline), Some(source_timeline)) => id_timeline == source_timeline,
+                    (
+                        TimelineContext::TimelineDependent(id_timeline),
+                        TimelineContext::TimelineDependent(source_timeline),
+                    ) => id_timeline == source_timeline,
                 }
             });
         }

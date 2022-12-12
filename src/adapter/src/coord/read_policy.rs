@@ -28,7 +28,7 @@ use mz_stash::Append;
 use mz_storage_client::controller::ReadPolicy;
 
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::timeline::TimelineState;
+use crate::coord::timeline::{TimelineContext, TimelineState};
 
 /// Information about the read capability requirements of a collection.
 ///
@@ -236,9 +236,9 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         let mut id_bundles = HashMap::new();
 
         // Update the Coordinator's timeline read hold state and organize all id bundles by time.
-        for (timeline, id_bundle) in self.partition_ids_by_timeline(id_bundle) {
-            match timeline {
-                Some(timeline) => {
+        for (timeline_context, id_bundle) in self.partition_ids_by_timeline_context(id_bundle) {
+            match timeline_context {
+                TimelineContext::TimelineDependent(timeline) => {
                     let TimelineState { oracle, .. } = self.ensure_timeline_state(&timeline).await;
                     let read_ts = oracle.read_ts();
                     let new_read_holds = self.initialize_read_holds(read_ts, &id_bundle);
@@ -249,7 +249,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     }
                     read_holds.extend(new_read_holds);
                 }
-                None => {
+                TimelineContext::TimestampIndependent | TimelineContext::TimestampDependent => {
                     id_bundles.insert(None, id_bundle);
                 }
             }

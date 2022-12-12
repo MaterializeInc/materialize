@@ -31,6 +31,7 @@ use mz_storage_client::types::sources::Timeline;
 use crate::catalog::{INTERNAL_USER_NAMES, SYSTEM_USER};
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
+use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::session::vars::IsolationLevel;
 use crate::AdapterNotice;
@@ -273,18 +274,28 @@ impl<T: TimestampManipulation> Session<T> {
                         }
                         *ops = add_ops;
                     }
-                    TransactionOps::Peeks(txn_ts) => match add_ops {
-                        TransactionOps::Peeks(add_ts) => {
-                            match (&txn_ts, add_ts) {
-                                (Some(txn_ts), Some(add_ts)) => assert_eq!(*txn_ts, add_ts),
-                                (None, Some(add_ts)) => *txn_ts = Some(add_ts),
-                                _ => {}
+                    TransactionOps::Peeks(txn_timestamp_context) => match add_ops {
+                        TransactionOps::Peeks(add_timestamp_context) => {
+                            match (&txn_timestamp_context, add_timestamp_context) {
+                                (
+                                    TimestampContext::TimelineTimestamp(txn_timeline, txn_ts),
+                                    TimestampContext::TimelineTimestamp(add_timeline, add_ts),
+                                ) => {
+                                    assert_eq!(*txn_timeline, add_timeline);
+                                    assert_eq!(*txn_ts, add_ts);
+                                }
+                                (TimestampContext::NoTimestamp, add_timestamp_context) => {
+                                    *txn_timestamp_context = add_timestamp_context
+                                }
+                                (_, TimestampContext::NoTimestamp) => {}
                             };
                         }
                         // Iff peeks thus far do not have a timestamp (i.e.
                         // they are constant), we can switch to a write
                         // transaction.
-                        writes @ TransactionOps::Writes(..) if txn_ts.is_none() => {
+                        writes @ TransactionOps::Writes(..)
+                            if !txn_timestamp_context.contains_timestamp() =>
+                        {
                             *ops = writes;
                         }
                         _ => return Err(AdapterError::ReadOnlyTransaction),
@@ -311,7 +322,8 @@ impl<T: TimestampManipulation> Session<T> {
                         }
                         // Iff peeks do not have a timestamp (i.e. they are
                         // constant), we can permit them.
-                        TransactionOps::Peeks(None) => {}
+                        TransactionOps::Peeks(timestamp_context)
+                            if !timestamp_context.contains_timestamp() => {}
                         _ => {
                             return Err(AdapterError::WriteOnlyTransaction);
                         }
@@ -383,34 +395,35 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// If the current transaction ops belong to a read, then sets the
-    /// transaction timestamp to `None`, returning the old timestamp if
+    /// ops to `None`, returning the old read timestamp context if
     /// any existed. Must only be used after verifying that no transaction
     /// anomalies will occur if cleared.
-    pub fn take_transaction_read_ops(&mut self) -> Option<(T, Option<Timeline>)> {
-        if let Some(Transaction {
-            ops: TransactionOps::Peeks(ts),
-            ..
-        }) = self.transaction.inner_mut()
-        {
-            std::mem::take(ts)
+    pub fn take_transaction_timestamp_context(&mut self) -> Option<TimestampContext<T>> {
+        if let Some(Transaction { ops, .. }) = self.transaction.inner_mut() {
+            if let TransactionOps::Peeks(_) = ops {
+                let ops = std::mem::take(ops);
+                Some(ops.timestamp_context().expect("checked above"))
+            } else {
+                None
+            }
         } else {
             None
         }
     }
 
-    /// Returns the transaction's read timestamp, if set.
+    /// Returns the transaction's read timestamp context, if set.
     ///
     /// Returns `None` if there is no active transaction, or if the active
     /// transaction is not a read transaction.
-    pub fn get_transaction_timestamp(&self) -> Option<T> {
+    pub fn get_transaction_timestamp_context(&self) -> Option<TimestampContext<T>> {
         match self.transaction.inner() {
             Some(Transaction {
                 pcx: _,
-                ops: TransactionOps::Peeks(ts),
+                ops: TransactionOps::Peeks(timestamp_context),
                 write_lock_guard: _,
                 access: _,
                 id: _,
-            }) => ts.clone().map(|(ts, _)| ts),
+            }) => Some(timestamp_context.clone()),
             _ => None,
         }
     }
@@ -779,6 +792,17 @@ impl<T> TransactionStatus<T> {
             | TransactionStatus::Failed(txn) => txn.grant_write_lock(guard),
         }
     }
+
+    /// The timeline of the transaction, if one exists.
+    pub fn timeline(&self) -> Option<Timeline> {
+        match self {
+            TransactionStatus::Default => None,
+            TransactionStatus::Started(txn)
+            | TransactionStatus::InTransaction(txn)
+            | TransactionStatus::InTransactionImplicit(txn)
+            | TransactionStatus::Failed(txn) => txn.timeline(),
+        }
+    }
 }
 
 /// An abstraction allowing us to identify different transactions.
@@ -813,6 +837,19 @@ impl<T> Transaction<T> {
     fn grant_write_lock(&mut self, guard: OwnedMutexGuard<()>) {
         self.write_lock_guard = Some(guard);
     }
+
+    /// The timeline of the transaction, if one exists.
+    fn timeline(&self) -> Option<Timeline> {
+        match &self.ops {
+            TransactionOps::Peeks(TimestampContext::TimelineTimestamp(timeline, _)) => {
+                Some(timeline.clone())
+            }
+            TransactionOps::Peeks(_)
+            | TransactionOps::None
+            | TransactionOps::Subscribe
+            | TransactionOps::Writes(_) => None,
+        }
+    }
 }
 
 /// The type of operation being performed by the transaction.
@@ -826,15 +863,30 @@ pub enum TransactionOps<T> {
     /// in it.
     None,
     /// This transaction has had a peek (`SELECT`, `SUBSCRIBE`). If the inner value
-    /// is Some, it must only do other peeks. However, if the value is None
-    /// (i.e. the values are constants), the transaction can still perform
-    /// writes.
-    Peeks(Option<(T, Option<Timeline>)>),
+    /// is has a timestamp, it must only do other peeks. However, if it doesn't
+    /// have a timestamp (i.e. the values are constants), the transaction can still
+    /// perform writes.
+    Peeks(TimestampContext<T>),
     /// This transaction has done a `SUBSCRIBE` and must do nothing else.
     Subscribe,
     /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must
     /// only do other writes, or reads whose timestamp is None (i.e. constants).
     Writes(Vec<WriteOp>),
+}
+
+impl<T> TransactionOps<T> {
+    fn timestamp_context(self) -> Option<TimestampContext<T>> {
+        match self {
+            TransactionOps::Peeks(timestamp_context) => Some(timestamp_context),
+            TransactionOps::None | TransactionOps::Subscribe | TransactionOps::Writes(_) => None,
+        }
+    }
+}
+
+impl<T> Default for TransactionOps<T> {
+    fn default() -> Self {
+        Self::None
+    }
 }
 
 /// An `INSERT` waiting to be committed.

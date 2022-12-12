@@ -9,6 +9,14 @@
 
 mode cockroach
 
+# Since mz_now() is a custom function, the postgres client will look it up in the catalog on
+# first use. If the first use happens to be in a transaction, then we can get unexpected time
+# domain errors. This is an annoying hack to load the information in the postgres client before
+# we start any transactions.
+query T rowsort
+SELECT mz_now() LIMIT 0
+----
+
 statement ok
 CREATE TABLE t (i INT);
 
@@ -35,12 +43,11 @@ SELECT * FROM t
 simple
 ROLLBACK;
 BEGIN;
-SELECT mz_now();
+SELECT mz_now() LIMIT 0;
 ----
 COMPLETE 0
 COMPLETE 0
-18446744073709551615
-COMPLETE 1
+COMPLETE 0
 
 query error Transactions can only reference objects in the same timedomain.
 SELECT 1 FROM mz_types LIMIT 1
@@ -66,3 +73,103 @@ SELECT * FROM t;
 
 statement ok
 ROLLBACK
+
+# Test that user table and system tables cannot be mixed in a transaction because they
+# belong to different timedomains.
+
+statement ok
+BEGIN;
+
+query I rowsort
+SELECT * FROM t
+----
+
+query error Transactions can only reference objects in the same timedomain.
+SELECT * FROM mz_views
+
+statement ok
+ROLLBACK
+
+# Test that timeline dependent queries can be included in transaction.
+
+statement ok
+BEGIN
+
+query I rowsort
+SELECT * FROM t
+----
+
+query I rowsort
+SELECT mz_now() LIMIT 0
+----
+
+statement ok
+COMMIT
+
+# Test that timeline independent queries can be included at the end transaction.
+
+statement ok
+BEGIN
+
+query I rowsort
+SELECT 1 FROM pg_attribute LIMIT 1
+----
+1
+
+query I rowsort
+SELECT 1 FROM pg_catalog.pg_am LIMIT 1
+----
+
+statement ok
+COMMIT
+
+# Test that timeline independent queries can be included at the start transaction.
+
+statement ok
+BEGIN
+
+query I rowsort
+SELECT 1 FROM pg_catalog.pg_am LIMIT 1
+----
+
+query I rowsort
+SELECT 1 FROM pg_attribute LIMIT 1
+----
+1
+
+statement ok
+COMMIT
+
+statement ok
+CREATE VIEW v AS SELECT 1
+
+statement ok
+BEGIN
+
+query I rowsort
+SELECT 1 FROM v LIMIT 1
+----
+1
+
+query I rowsort
+SELECT 1 FROM t LIMIT 1
+----
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+query I rowsort
+SELECT 1
+----
+1
+
+query I rowsort
+SELECT 1 FROM pg_attribute LIMIT 1
+----
+1
+
+statement ok
+COMMIT

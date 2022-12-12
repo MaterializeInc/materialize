@@ -26,9 +26,82 @@ use mz_storage_client::types::sources::Timeline;
 
 use crate::coord::dataflows::{prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::timeline::TimelineContext;
 use crate::coord::Coordinator;
 use crate::session::{vars, Session};
 use crate::AdapterError;
+
+/// The timeline and timestamp context of a read.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TimestampContext<T> {
+    /// Read is executed in a specific timeline with a specific timestamp.
+    TimelineTimestamp(Timeline, T),
+    /// Read is execute without a timeline or timestamp.
+    NoTimestamp,
+}
+
+impl<T: TimestampManipulation> TimestampContext<T> {
+    /// Creates a `TimestampContext` from a timestamp and `TimelineContext`.
+    pub fn from_timeline_context(
+        ts: T,
+        transaction_timeline: Option<Timeline>,
+        timeline_context: TimelineContext,
+    ) -> TimestampContext<T> {
+        match timeline_context {
+            TimelineContext::TimelineDependent(timeline) => {
+                if let Some(transaction_timeline) = transaction_timeline {
+                    assert_eq!(timeline, transaction_timeline);
+                }
+                Self::TimelineTimestamp(timeline, ts)
+            }
+            TimelineContext::TimestampDependent => {
+                // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
+                Self::TimelineTimestamp(
+                    transaction_timeline.unwrap_or(Timeline::EpochMilliseconds),
+                    ts,
+                )
+            }
+            TimelineContext::TimestampIndependent => Self::NoTimestamp,
+        }
+    }
+
+    /// The timeline belonging to this context, if one exists.
+    pub fn timeline(&self) -> Option<&Timeline> {
+        match self {
+            Self::TimelineTimestamp(timeline, _) => Some(timeline),
+            Self::NoTimestamp => None,
+        }
+    }
+
+    /// The timestamp belonging to this context, if one exists.
+    pub fn timestamp(&self) -> Option<&T> {
+        match self {
+            Self::TimelineTimestamp(_, ts) => Some(ts),
+            Self::NoTimestamp => None,
+        }
+    }
+
+    /// The timestamp belonging to this context, or a sensible default if one does not exists.
+    pub fn timestamp_or_default(&self) -> T {
+        match self {
+            Self::TimelineTimestamp(_, ts) => ts.clone(),
+            // Anything without a timestamp is given the maximum possible timestamp to indicate
+            // that they have been closed up until the end of time. This allows us to SUBSCRIBE to
+            // static views.
+            Self::NoTimestamp => T::maximum(),
+        }
+    }
+
+    /// Whether or not the context contains a timestamp.
+    pub fn contains_timestamp(&self) -> bool {
+        self.timestamp().is_some()
+    }
+
+    /// Converts this `TimestampContext` to an `Antichain`.
+    pub fn antichain(&self) -> Antichain<T> {
+        Antichain::from_elem(self.timestamp_or_default())
+    }
+}
 
 impl<S: Append + 'static> Coordinator<S> {
     /// Determines the timestamp for a query.
@@ -44,7 +117,7 @@ impl<S: Append + 'static> Coordinator<S> {
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
-        timeline: &Option<Timeline>,
+        timeline_context: TimelineContext,
     ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
@@ -69,6 +142,12 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         let isolation_level = session.vars().transaction_isolation();
+        let timeline = match &timeline_context {
+            TimelineContext::TimelineDependent(timeline) => Some(timeline.clone()),
+            // // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
+            TimelineContext::TimestampDependent => Some(Timeline::EpochMilliseconds),
+            TimelineContext::TimestampIndependent => None,
+        };
         let use_timestamp_oracle = isolation_level == &vars::IsolationLevel::StrictSerializable
             && timeline.is_some()
             && when.advance_to_global_ts();
@@ -83,9 +162,9 @@ impl<S: Append + 'static> Coordinator<S> {
 
         if use_timestamp_oracle {
             let timeline = timeline
-                .clone()
-                .expect("checked that timeline exists above");
-            let timestamp_oracle = self.get_timestamp_oracle(&timeline);
+                .as_ref()
+                .expect("timeline is always present when using the timestamp oracle");
+            let timestamp_oracle = self.get_timestamp_oracle(timeline);
             oracle_read_ts = Some(timestamp_oracle.read_ts());
             candidate.join_assign(&oracle_read_ts.unwrap());
         } else if when.advance_to_upper() {
@@ -111,8 +190,10 @@ impl<S: Append + 'static> Coordinator<S> {
             ));
         };
 
+        let timestamp_context =
+            TimestampContext::from_timeline_context(timestamp, timeline, timeline_context);
         let det = TimestampDetermination {
-            timestamp,
+            timestamp_context,
             since,
             upper,
             largest_not_in_advance_of_upper,
@@ -300,8 +381,8 @@ impl<S: Append + 'static> Coordinator<S> {
 
 /// Information used when determining the timestamp for a query.
 pub struct TimestampDetermination<T> {
-    /// The chosen timestamp from `determine_timestamp`.
-    pub timestamp: T,
+    /// The chosen timestamp context from `determine_timestamp`.
+    pub timestamp_context: TimestampContext<T>,
     /// The read frontier of all involved sources.
     pub since: Antichain<T>,
     /// The write frontier of all involved sources.
@@ -314,7 +395,10 @@ pub struct TimestampDetermination<T> {
 
 impl<T: TimestampManipulation> TimestampDetermination<T> {
     pub fn respond_immediately(&self) -> bool {
-        !self.upper.less_equal(&self.timestamp)
+        match &self.timestamp_context {
+            TimestampContext::TimelineTimestamp(_, timestamp) => !self.upper.less_equal(timestamp),
+            TimestampContext::NoTimestamp => true,
+        }
     }
 }
 
@@ -322,8 +406,6 @@ impl<T: TimestampManipulation> TimestampDetermination<T> {
 pub struct TimestampExplanation<T> {
     /// The chosen timestamp from `determine_timestamp`.
     pub determination: TimestampDetermination<T>,
-    /// The timeline that the timestamp corresponds to.
-    pub timeline: Option<Timeline>,
     /// Details about each source.
     pub sources: Vec<TimestampSource<T>>,
 }
@@ -382,11 +464,14 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
     for TimestampExplanation<T>
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let timeline = self.timeline.as_ref();
+        let timeline = self.determination.timestamp_context.timeline();
         writeln!(
             f,
             "                query timestamp: {}",
-            self.determination.timestamp.display(timeline)
+            self.determination
+                .timestamp_context
+                .timestamp_or_default()
+                .display(timeline)
         )?;
         if let Some(oracle_read_ts) = &self.determination.oracle_read_ts {
             writeln!(
@@ -425,7 +510,8 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
             "        can respond immediately: {}",
             self.determination.respond_immediately()
         )?;
-        writeln!(f, "                       timeline: {:?}", &self.timeline)?;
+        writeln!(f, "                       timeline: {:?}", &timeline)?;
+
         for source in &self.sources {
             writeln!(f, "")?;
             writeln!(f, "source {}:", source.name)?;

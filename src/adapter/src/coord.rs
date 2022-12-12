@@ -130,6 +130,7 @@ use crate::coord::read_policy::ReadCapability;
 use crate::coord::timeline::{
     TimelineState, WriteTimestamp, TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
 };
+use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, Session};
@@ -139,6 +140,8 @@ use crate::AdapterNotice;
 
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
+pub(crate) mod timeline;
+pub(crate) mod timestamp_selection;
 
 mod appends;
 mod command_handler;
@@ -149,8 +152,6 @@ mod message_handler;
 mod read_policy;
 mod sequencer;
 mod sql;
-mod timeline;
-mod timestamp_selection;
 
 /// The default is set to a second to track the default timestamp frequency for sources.
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<mz_repr::Timestamp> =
@@ -292,15 +293,6 @@ struct ConnMeta {
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,
 }
 
-struct TxnReads {
-    // True iff all statements run so far in the transaction are independent
-    // of the chosen logical timestamp (not the PlanContext walltime). This
-    // happens if both 1) there are no referenced sources or indexes and 2)
-    // `mz_now()` is not present.
-    timestamp_independent: bool,
-    read_holds: crate::coord::read_policy::ReadHolds<mz_repr::Timestamp>,
-}
-
 #[derive(Debug)]
 /// A pending transaction waiting to be committed.
 pub struct PendingTxn {
@@ -320,8 +312,8 @@ pub enum PendingReadTxn {
     Read {
         /// The inner transaction.
         txn: PendingTxn,
-        /// The timestamp of the transaction, if one exists.
-        timestamp: Option<(mz_repr::Timestamp, Option<Timeline>)>,
+        /// The timestamp context of the transaction.
+        timestamp_context: TimestampContext<mz_repr::Timestamp>,
     },
     ReadThenWrite {
         /// Channel used to alert the transaction that the read has been linearized.
@@ -332,14 +324,16 @@ pub enum PendingReadTxn {
 }
 
 impl PendingReadTxn {
-    /// Return the timestamp and timeline of the pending transaction, if one exists.
-    pub fn timestamp(&self) -> Option<(mz_repr::Timestamp, Option<Timeline>)> {
+    /// Return the timestamp context of the pending read transaction.
+    pub fn timestamp_context(&self) -> TimestampContext<mz_repr::Timestamp> {
         match &self {
-            PendingReadTxn::Read { timestamp, .. } => timestamp.clone(),
+            PendingReadTxn::Read {
+                timestamp_context, ..
+            } => timestamp_context.clone(),
             PendingReadTxn::ReadThenWrite {
                 timestamp: (timestamp, timeline),
                 ..
-            } => Some((*timestamp, Some(timeline.clone()))),
+            } => TimestampContext::TimelineTimestamp(timeline.clone(), timestamp.clone()),
         }
     }
 
@@ -417,7 +411,7 @@ pub struct Coordinator<S> {
     ///
     /// Upon completing a transaction, this timestamp should be removed from the holds
     /// in `self.read_capability[id]`, using the `release_read_holds` method.
-    txn_reads: HashMap<ConnectionId, TxnReads>,
+    txn_reads: HashMap<ConnectionId, crate::coord::read_policy::ReadHolds<mz_repr::Timestamp>>,
 
     /// Access to the peek fields should be restricted to methods in the [`peek`] API.
     /// A map from pending peek ids to the queue into which responses are sent, and
