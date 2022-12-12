@@ -45,6 +45,7 @@ copyright_files=$(grep -vE \
     -e '(^|/)(Cargo|askama)\.toml$' \
     -e '^\.cargo/config$' \
     -e '^Cargo\.lock$' \
+    -e '^about\.toml$' \
     -e '^deny\.toml$' \
     -e '^netlify\.toml$' \
     -e '^rustfmt\.toml$' \

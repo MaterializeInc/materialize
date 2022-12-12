@@ -1,5 +1,5 @@
 <!--
-Copyright Materialize, Inc. All rights reserved.
+Copyright Materialize, Inc. and contributors. All rights reserved.
 
 Use of this software is governed by the Business Source License
 included in the LICENSE file at the root of this repository.
@@ -25,34 +25,18 @@ by the Apache License, Version 2.0.
 <body>
     <h1>Materialize developer hub</h1>
 
-    <p>Download latest materialized(1) binaries:</p>
-    <ul>
-      <li>
-        <a href="https://binaries.materialize.com/materialized-latest-x86_64-unknown-linux-gnu.tar.gz"><code>x86_64-unknown-linux-gnu</code></a>
-      </li>
-      <li>
-        <a href="https://binaries.materialize.com/materialized-latest-aarch64-unknown-linux-gnu.tar.gz"><code>aarch64-unknown-linux-gnu</code></a>
-      </li>
-      <li>
-        <a href="https://binaries.materialize.com/materialized-latest-x86_64-apple-darwin.tar.gz"><code>x86_64-apple-darwin</code></a>
-      </li>
-      <li>
-        <a href="https://binaries.materialize.com/materialized-latest-aarch64-apple-darwin.tar.gz"><code>aarch64-apple-darwin</code></a>
-      </li>
-    </ul>
-
-    <p>Linux one-liner:</p>
-    <div class="code">
-      $ curl -L https://binaries.materialize.com/materialized-latest-$(uname -m)-unknown-linux-gnu.tar.gz | sudo tar -xzC /usr/local --strip-components=1
-    </div>
-
-    <p>macOS one-liner:</p>
-    <div class="code">
-      $ curl -L https://binaries.materialize.com/materialized-latest-$(uname -m)-apple-darwin.tar.gz | sudo tar -xzC /usr/local --strip-components=1
-    </div>
+    <p>
+        Materialize is a streaming database powered by
+        <a href="https://github.com/TimelyDataflow/timely-dataflow#timely-dataflow">timely dataflow</a>
+        and
+        <a href="https://github.com/timelydataflow/differential-dataflow#differential-dataflow">differential dataflow</a>.
+    </p>
 
     <p>Resources:</p>
     <ul>
+        <li><a href="https://github.com/MaterializeInc/materialize">Git repository</a></li>
+        <li><a href="https://hub.docker.com/r/materialize/materialized">Docker image</a></li>
+        <li><a href="licenses.html">Third-party licenses</a></li>
         <li>
           Internal API documentation
           <ul>
@@ -63,8 +47,5 @@ by the Apache License, Version 2.0.
         </li>
         <li><a href="https://buildkite.com/materialize">Buildkite (CI)</a></li>
     </ul>
-
-    <p>DEB822 source (apt 2.3.10+)</p>
-    <a href="apt/materialize.sources">https://dev.materialize.com/apt/materialize.sources</a>
 </body>
 </html>
