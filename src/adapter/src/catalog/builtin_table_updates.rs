@@ -126,41 +126,27 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_compute_replica_updates(
+    pub(super) fn pack_compute_replica_update(
         &self,
         compute_instance_id: ComputeInstanceId,
         name: &str,
         diff: Diff,
-    ) -> Vec<BuiltinTableUpdate> {
+    ) -> BuiltinTableUpdate {
         let instance = &self.compute_instances_by_id[&compute_instance_id];
         let id = instance.replica_id_by_name[name];
         let replica = &instance.replicas_by_id[&id];
 
-        let (size, az, allocation) = match &replica.config.location {
+        let (size, az) = match &replica.config.location {
             ComputeReplicaLocation::Managed {
                 size,
                 availability_zone,
                 az_user_specified: _,
-                allocation,
-            } => (
-                Some(&**size),
-                Some(availability_zone.as_str()),
-                Some(*allocation),
-            ),
-            ComputeReplicaLocation::Remote { .. } => (None, None, None),
+                allocation: _,
+            } => (Some(&**size), Some(availability_zone.as_str())),
+            ComputeReplicaLocation::Remote { .. } => (None, None),
         };
 
-        let (processes, cpu, memory) = match allocation {
-            Some(ComputeReplicaAllocation {
-                memory_limit,
-                cpu_limit,
-                scale,
-                ..
-            }) => (Some(scale), cpu_limit, memory_limit),
-            None => (None, None, None),
-        };
-
-        let mut updates = vec![BuiltinTableUpdate {
+        BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
             row: Row::pack_slice(&[
                 Datum::UInt64(id),
@@ -170,23 +156,7 @@ impl CatalogState {
                 Datum::from(az),
             ]),
             diff,
-        }];
-
-        if let (Some(processes), Some(cpu), Some(MemoryLimit(ByteSize(memory)))) =
-            (processes, cpu, memory)
-        {
-            updates.push(BuiltinTableUpdate {
-                id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_SIZES),
-                row: Row::pack_slice(&[
-                    Datum::UInt64(id),
-                    Datum::UInt64(u64::cast_from(processes.get())),
-                    Datum::UInt64(u64::cast_from(cpu.as_millicpus()) * 1_000_000),
-                    Datum::UInt64(memory),
-                ]),
-                diff,
-            })
         }
-        updates
     }
 
     pub(super) fn pack_compute_replica_status_update(
@@ -905,6 +875,54 @@ impl CatalogState {
         );
         let updates = rows
             .map(|row| BuiltinTableUpdate { id, row, diff })
+            .collect();
+        updates
+    }
+
+    pub fn pack_all_replica_size_updates(&self) -> Vec<BuiltinTableUpdate> {
+        let id = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_SIZES);
+        let updates = self
+            .cluster_replica_sizes
+            .0
+            .iter()
+            .filter_map(
+                |(
+                    size,
+                    ComputeReplicaAllocation {
+                        memory_limit,
+                        cpu_limit,
+                        scale,
+                        workers,
+                    },
+                )| {
+                    cpu_limit
+                        .and_then(|cpu_limit| {
+                            memory_limit.map(|memory_limit| (cpu_limit, memory_limit))
+                        })
+                        .map(|(cpu_limit, MemoryLimit(ByteSize(memory_bytes)))| {
+                            let row = Row::pack_slice(&[
+                                size.as_str().into(),
+                                u64::cast_from(scale.get()).into(),
+                                u64::cast_from(workers.get()).into(),
+                                // The largest possible value of a u64 is
+                                // 18_446_744_073_709_551_615,
+                                // so we won't overflow this
+                                // unless we have an instance with
+                                // ~18.45 billion cores.
+                                //
+                                // Such an instance seems unrealistic,
+                                // at least until we raise another few rounds
+                                // of funding ...
+                                (u64::cast_from(cpu_limit.as_millicpus())
+                                    .checked_mul(1_000_000)
+                                    .expect("Realistic number of cores"))
+                                .into(),
+                                memory_bytes.into(),
+                            ]);
+                            BuiltinTableUpdate { id, row, diff: 1 }
+                        })
+                },
+            )
             .collect();
         updates
     }

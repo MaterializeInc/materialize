@@ -2595,12 +2595,11 @@ impl<S: Append> Catalog<S> {
             builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
             let instance = &catalog.state.compute_instances_by_id[id];
             for (replica_name, replica_id) in &instance.replica_id_by_name {
-                builtin_table_updates.extend(
-                    catalog
-                        .state
-                        .pack_compute_replica_updates(*id, replica_name, 1)
-                        .into_iter(),
-                );
+                builtin_table_updates.push(catalog.state.pack_compute_replica_update(
+                    *id,
+                    replica_name,
+                    1,
+                ));
                 let replica = catalog.state.get_compute_replica(*id, *replica_id);
                 for process_id in 0..replica.config.location.num_processes() {
                     let update = catalog.state.pack_compute_replica_status_update(
@@ -4524,11 +4523,11 @@ impl<S: Append> Catalog<S> {
                         builtin_table_updates.push(update);
                     }
 
-                    builtin_table_updates.extend(
-                        state
-                            .pack_compute_replica_updates(instance.id, &name, -1)
-                            .into_iter(),
-                    );
+                    builtin_table_updates.push(state.pack_compute_replica_update(
+                        instance.id,
+                        &name,
+                        -1,
+                    ));
 
                     let details =
                         EventDetails::DropComputeReplicaV1(mz_audit_log::DropComputeReplicaV1 {
@@ -4895,11 +4894,11 @@ impl<S: Append> Catalog<S> {
                     for id in introspection_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
-                    builtin_table_updates.extend(
-                        state
-                            .pack_compute_replica_updates(on_cluster_id, &name, 1)
-                            .into_iter(),
-                    );
+                    builtin_table_updates.push(state.pack_compute_replica_update(
+                        on_cluster_id,
+                        &name,
+                        1,
+                    ));
                     for process_id in 0..num_processes {
                         let update = state.pack_compute_replica_status_update(
                             on_cluster_id,

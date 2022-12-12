@@ -841,6 +841,9 @@ impl<S: Append + 'static> Coordinator<S> {
             )
         }
 
+        // Expose mapping from T-shirt sizes to actual sizes
+        builtin_table_updates.extend(self.catalog.state().pack_all_replica_size_updates());
+
         // Advance all tables to the current timestamp
         info!("coordinator init: advancing all tables to current timestamp");
         let WriteTimestamp {
