@@ -214,6 +214,10 @@ pub struct ServicePort {
 #[derive(Copy, Clone, Debug, PartialOrd, Eq, Ord, PartialEq)]
 pub struct MemoryLimit(pub ByteSize);
 
+impl MemoryLimit {
+    pub const MAX: Self = Self(ByteSize(u64::MAX));
+}
+
 impl<'de> Deserialize<'de> for MemoryLimit {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -258,8 +262,13 @@ pub struct CpuLimit {
 }
 
 impl CpuLimit {
+    pub const MAX: Self = Self::from_millicpus(usize::MAX / 1_000_000);
     /// Constructs a new CPU limit from a number of millicpus.
-    pub fn from_millicpus(millicpus: usize) -> CpuLimit {
+    pub const fn from_millicpus(millicpus: usize) -> CpuLimit {
+        assert!(
+            millicpus.checked_mul(1_000_000).is_some(),
+            "Nano-CPUs must be representable"
+        );
         CpuLimit { millicpus }
     }
 

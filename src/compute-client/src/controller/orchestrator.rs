@@ -127,8 +127,8 @@ impl ComputeOrchestrator {
                             port_hint: 6878,
                         },
                     ],
-                    cpu_limit: allocation.cpu_limit,
-                    memory_limit: allocation.memory_limit,
+                    cpu_limit: Some(allocation.cpu_limit),
+                    memory_limit: Some(allocation.memory_limit),
                     scale: allocation.scale,
                     labels: HashMap::from([
                         ("replica-id".into(), replica_id.to_string()),
