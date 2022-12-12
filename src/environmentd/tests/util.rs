@@ -27,7 +27,6 @@ use tokio::sync::Mutex;
 use tokio_postgres::config::Host;
 use tokio_postgres::Client;
 use tower_http::cors::AllowOrigin;
-use uuid::Uuid;
 
 use mz_controller::ControllerConfig;
 use mz_environmentd::TlsMode;
@@ -41,6 +40,7 @@ use mz_ore::task;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
+use mz_sql::catalog::EnvironmentId;
 use mz_stash::PostgresFactory;
 use mz_storage_client::types::connections::ConnectionContext;
 
@@ -152,7 +152,7 @@ impl Config {
 
 pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     let runtime = Arc::new(Runtime::new()?);
-    let environment_id = format!("environment-{}-0", Uuid::new_v4());
+    let environment_id = EnvironmentId::for_tests();
     let (data_directory, temp_dir) = match config.data_directory {
         None => {
             // If no data directory is provided, we create a temporary
@@ -190,7 +190,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
                 .unwrap()
                 .to_path_buf(),
             suppress_output: false,
-            environment_id: environment_id.clone(),
+            environment_id: environment_id.to_string(),
             secrets_dir: data_directory.join("secrets"),
             command_wrapper: vec![],
             propagate_crashes: config.propagate_crashes,

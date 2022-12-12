@@ -4537,6 +4537,7 @@ dependencies = [
  "mz-ore",
  "mz-postgres-util",
  "mz-secrets",
+ "mz-sql",
  "mz-stash",
  "mz-storage-client",
  "once_cell",

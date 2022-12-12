@@ -20,6 +20,7 @@ use mz_compute_client::controller::ComputeReplicaAllocation;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
+use mz_sql::catalog::EnvironmentId;
 use mz_storage_client::types::hosts::StorageHostResourceAllocation;
 
 use crate::catalog::storage;
@@ -37,7 +38,7 @@ pub struct Config<'a, S> {
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// A persistent ID associated with the environment.
-    pub environment_id: String,
+    pub environment_id: EnvironmentId,
     /// Function to generate wall clock now; can be mocked.
     pub now: mz_ore::now::NowFn,
     /// Whether or not to skip catalog migrations.

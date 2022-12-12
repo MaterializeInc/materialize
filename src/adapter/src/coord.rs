@@ -78,8 +78,6 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
-use mz_orchestrator::ServiceProcessMetrics;
-use mz_ore::task::spawn;
 use rand::seq::SliceRandom;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
@@ -90,10 +88,12 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId, ReplicaId};
+use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
+use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{stack, task};
@@ -102,6 +102,7 @@ use mz_persist_client::ShardId;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
+use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::Aug;
 use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
@@ -238,7 +239,7 @@ pub struct Config<S> {
     pub unsafe_mode: bool,
     pub persisted_introspection: bool,
     pub build_info: &'static BuildInfo,
-    pub environment_id: String,
+    pub environment_id: EnvironmentId,
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
     pub secrets_controller: Arc<dyn SecretsController>,

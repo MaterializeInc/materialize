@@ -67,6 +67,7 @@ class Materialized(Service):
                 "MZ_SOFT_ASSERTIONS=1",
                 "MZ_UNSAFE_MODE=1",
                 "MZ_EXPERIMENTAL=1",
+                f"MZ_ENVIRONMENT_ID=mzcompose-test-00000000-0000-0000-0000-000000000000-0",
                 f"MZ_PERSIST_BLOB_URL={persist_blob_url}",
                 f"MZ_ORCHESTRATOR=process",
                 f"MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY={data_directory}/secrets",
