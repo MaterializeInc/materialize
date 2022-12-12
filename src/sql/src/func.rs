@@ -2497,9 +2497,6 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(TimestampTz) => AggregateFunc::MinTimestampTz, 2143;
             params!(Numeric) => AggregateFunc::MinNumeric, oid::FUNC_MIN_NUMERIC_OID;
         },
-        "json_agg" => Aggregate {
-            params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("json_agg")) => Jsonb, 3175;
-        },
         "jsonb_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
                 // TODO(#7572): remove this
