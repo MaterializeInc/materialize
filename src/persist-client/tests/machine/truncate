@@ -8,18 +8,18 @@
 # by the Apache License, Version 2.0.
 
 write-batch output=b0 lower=0 upper=3
-zero 0 1
-one 1 1
-two 2 1
+a 0 1
+b 1 1
+c 2 1
 ----
 parts=1 len=3
 
 fetch-batch input=b0
 ----
 <part 0>
-zero 0 1
-one 1 1
-two 2 1
+a 0 1
+b 1 1
+c 2 1
 <run 0>
 part 0
 
@@ -30,7 +30,7 @@ parts=1 len=3
 fetch-batch input=b1
 ----
 <part 0>
-one 1 1
+b 1 1
 <run 0>
 part 0
 

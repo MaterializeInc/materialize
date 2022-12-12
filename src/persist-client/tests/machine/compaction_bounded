@@ -42,7 +42,7 @@ part 0
 # most importantly, we expect there to be a single run, as each input has a single run of ordered parts
 compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=50 memory_bound=10000
 ----
-parts=3 len=4
+parts=6 len=6
 
 fetch-batch input=b0_1
 ----

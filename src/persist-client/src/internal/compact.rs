@@ -87,7 +87,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send,
+    D: Semigroup + Codec64 + Send + Sync,
 {
     pub fn new(
         cfg: PersistConfig,
@@ -410,7 +410,12 @@ where
             )
             .await?;
             let (parts, runs, updates) = (batch.parts, batch.runs, batch.len);
-            assert!((updates == 0 && parts.len() == 0) || (updates > 0 && parts.len() > 0));
+            assert!(
+                (updates == 0 && parts.len() == 0) || (updates > 0 && parts.len() > 0),
+                "updates={}, parts={}",
+                updates,
+                parts.len(),
+            );
 
             if updates == 0 {
                 continue;
@@ -675,8 +680,7 @@ where
                 }
             }
 
-            // WIP: handle result here
-            let _ = batch.add(&k, &v, &t, &d);
+            batch.add(&k, &v, &t, &d).await?;
         }
 
         let start = Instant::now();

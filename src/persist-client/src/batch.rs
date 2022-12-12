@@ -28,7 +28,7 @@ use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
-use tracing::{debug_span, instrument, trace_span, warn, Instrument};
+use tracing::{debug_span, info, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
@@ -193,7 +193,7 @@ where
     blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
 
-    current_part: Vec<((Vec<u8>, Vec<u8>), [u8; 8], [u8; 8])>,
+    current_part: Vec<((Vec<u8>, Vec<u8>), T, D)>,
     current_part_bytes: usize,
     greatest_kv_seen: Option<(Vec<u8>, Vec<u8>)>,
     runs: Vec<usize>,
@@ -277,18 +277,26 @@ where
                 upper,
             });
         }
-        if upper.less_equal(&self.max_ts) {
-            return Err(InvalidUsage::UpdateBeyondUpper {
-                max_ts: self.max_ts,
-                expected_upper: upper.clone(),
-            });
-        }
+        // if upper.less_equal(&self.max_ts) {
+        //     return Err(InvalidUsage::UpdateBeyondUpper {
+        //         max_ts: self.max_ts,
+        //         expected_upper: upper.clone(),
+        //     });
+        // }
+
+        info!(
+            "{}: finishing batch. {} updates in current part, {} updates total",
+            self.shard_id,
+            self.current_part.len(),
+            self.num_updates
+        );
 
         Self::consolidate_run(
             &mut self.current_part,
             &mut self.runs,
             self.parts_written,
             &mut self.greatest_kv_seen,
+            &mut self.num_updates,
         );
         Self::write_run(
             &mut self.parts,
@@ -311,21 +319,13 @@ where
                 runs: self.runs,
             },
         );
+        info!("{}: Created batch {:?}", self.shard_id, batch.batch);
 
         Ok(batch)
     }
 
-    /// Adds the given update to the batch.
-    ///
-    /// The update timestamp must be greater or equal to `lower` that was given
-    /// when creating this [BatchBuilder].
-    pub async fn add(
-        &mut self,
-        key: &K,
-        val: &V,
-        ts: &T,
-        diff: &D,
-    ) -> Result<Added, InvalidUsage<T>> {
+    /// TODO
+    pub async fn add_encoded(&mut self, ts: &T, diff: &D) -> Result<Added, InvalidUsage<T>> {
         if !self.lower.less_equal(ts) {
             return Err(InvalidUsage::UpdateNotBeyondLower {
                 ts: ts.clone(),
@@ -335,27 +335,19 @@ where
 
         self.max_ts.join_assign(ts);
 
-        self.key_buf.clear();
-        self.val_buf.clear();
-        self.metrics
-            .codecs
-            .key
-            .encode(|| K::encode(key, &mut self.key_buf));
-        self.metrics
-            .codecs
-            .val
-            .encode(|| V::encode(val, &mut self.val_buf));
-
         let size = ColumnarRecordsBuilder::columnar_record_size(&self.key_buf, &self.val_buf);
+        let (ts, diff) = (ts.clone(), diff.clone());
 
         // WIP: If we've filled up a chunk of ColumnarRecords, flush it out now to blob storage to keep our memory usage capped.
         let mut part_written = false;
         if size + self.current_part_bytes >= self.blob_target_size {
+            info!("flushing part");
             Self::consolidate_run(
                 &mut self.current_part,
                 &mut self.runs,
                 self.parts_written,
                 &mut self.greatest_kv_seen,
+                &mut self.num_updates,
             );
             // TODO: This upper would ideally be `[self.max_ts+1]` but
             // there's nothing that lets us increment a timestamp. An empty
@@ -377,19 +369,39 @@ where
         }
 
         // WIP remove the clone here if possible
-        let t = Codec64::encode(ts);
-        let d = Codec64::encode(diff);
-
         self.current_part
-            .push(((self.key_buf.clone(), self.val_buf.clone()), t, d));
+            .push(((self.key_buf.clone(), self.val_buf.clone()), ts, diff));
         self.current_part_bytes += size;
-        self.num_updates += 1;
 
         if part_written {
             Ok(Added::RecordAndParts)
         } else {
             Ok(Added::Record)
         }
+    }
+
+    /// Adds the given update to the batch.
+    ///
+    /// The update timestamp must be greater or equal to `lower` that was given
+    /// when creating this [BatchBuilder].
+    pub async fn add(
+        &mut self,
+        key: &K,
+        val: &V,
+        ts: &T,
+        diff: &D,
+    ) -> Result<Added, InvalidUsage<T>> {
+        self.key_buf.clear();
+        self.val_buf.clear();
+        self.metrics
+            .codecs
+            .key
+            .encode(|| K::encode(key, &mut self.key_buf));
+        self.metrics
+            .codecs
+            .val
+            .encode(|| V::encode(val, &mut self.val_buf));
+        self.add_encoded(ts, diff).await
     }
 
     /// Consolidates `updates`, and determines whether the updates should extend the
@@ -400,10 +412,13 @@ where
         runs: &mut Vec<usize>,
         number_of_compacted_runs: usize,
         greatest_kv: &mut Option<(Vec<u8>, Vec<u8>)>,
+        num_updates: &mut usize,
         // timings: &mut Timings,
     ) -> usize {
         // let start = Instant::now();
         consolidate_updates(updates);
+
+        *num_updates += updates.len();
 
         match (&greatest_kv, updates.last()) {
             // our updates contain a key that exists within the range of a run we've
@@ -433,6 +448,7 @@ where
         // timings: &mut Timings,
     ) {
         if updates.is_empty() {
+            info!("skipping update, is empty");
             return;
         }
         *compaction_parts_count += 1;
