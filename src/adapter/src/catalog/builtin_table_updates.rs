@@ -199,12 +199,14 @@ impl CatalogState {
         let name = &entry.name().item;
         let mut updates = match entry.item() {
             CatalogItem::Log(_) => {
-                self.pack_source_update(id, oid, schema_id, name, "log", None, None, diff)
+                self.pack_source_update(id, oid, schema_id, name, "log", None, None, None, diff)
             }
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
             CatalogItem::Source(source) => {
-                let (source_type, connection_id) = (source.source_type(), source.connection_id());
+                let source_type = source.source_type();
+                let connection_id = source.connection_id();
+                let envelope = source.envelope();
 
                 self.pack_source_update(
                     id,
@@ -220,6 +222,7 @@ impl CatalogState {
                         }) => Some(size.as_str()),
                         _ => None,
                     },
+                    envelope,
                     diff,
                 )
             }
@@ -296,6 +299,7 @@ impl CatalogState {
         source_desc_name: &str,
         connection_id: Option<GlobalId>,
         size: Option<&str>,
+        envelope: Option<&str>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -308,6 +312,7 @@ impl CatalogState {
                 Datum::String(source_desc_name),
                 Datum::from(connection_id.map(|id| id.to_string()).as_deref()),
                 Datum::from(size),
+                Datum::from(envelope),
             ]),
             diff,
         }]

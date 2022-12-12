@@ -1450,6 +1450,10 @@ impl SourceDesc {
     pub fn name(&self) -> &'static str {
         self.connection.name()
     }
+
+    pub fn envelope(&self) -> &SourceEnvelope {
+        &self.envelope
+    }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
