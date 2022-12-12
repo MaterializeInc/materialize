@@ -899,19 +899,7 @@ impl CatalogState {
                         size.as_str().into(),
                         u64::cast_from(scale.get()).into(),
                         u64::cast_from(workers.get()).into(),
-                        // The largest possible value of a u64 is
-                        // 18_446_744_073_709_551_615,
-                        // so we won't overflow this
-                        // unless we have an instance with
-                        // ~18.45 billion cores.
-                        //
-                        // Such an instance seems unrealistic,
-                        // at least until we raise another few rounds
-                        // of funding ...
-                        (u64::cast_from(cpu_limit.as_millicpus())
-                            .checked_mul(1_000_000)
-                            .expect("Realistic number of cores"))
-                        .into(),
+                        cpu_limit.as_nanocpus().into(),
                         (*memory_bytes).into(),
                     ]);
                     BuiltinTableUpdate { id, row, diff: 1 }
