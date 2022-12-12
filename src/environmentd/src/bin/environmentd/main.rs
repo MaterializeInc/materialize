@@ -31,7 +31,6 @@ use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
-use mz_ore::metric;
 use once_cell::sync::Lazy;
 use prometheus::IntGauge;
 use sysinfo::{CpuExt, SystemExt};
@@ -54,11 +53,13 @@ use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
+use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
+use mz_sql::catalog::EnvironmentId;
 use mz_stash::PostgresFactory;
 use mz_storage_client::types::connections::ConnectionContext;
 
@@ -345,10 +346,9 @@ pub struct Args {
     #[clap(
         long,
         env = "ENVIRONMENT_ID",
-        value_name = "ID",
-        default_value = "environment-00000000-0000-0000-0000-000000000000-0"
+        value_name = "<CLOUD>-<REGION>-<ORG-ID>-<ORDINAL>"
     )]
-    environment_id: String,
+    environment_id: EnvironmentId,
     /// Prefix for an external ID to be supplied to all AWS AssumeRole operations.
     ///
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
@@ -632,7 +632,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                         // binaries.
                         image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
                         suppress_output: false,
-                        environment_id: args.environment_id.clone(),
+                        environment_id: args.environment_id.to_string(),
                         secrets_dir: args
                             .orchestrator_process_secrets_directory
                             .expect("clap enforced"),

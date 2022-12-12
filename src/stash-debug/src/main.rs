@@ -37,6 +37,7 @@ use mz_ore::{
     now::SYSTEM_TIME,
 };
 use mz_secrets::InMemorySecretsController;
+use mz_sql::catalog::EnvironmentId;
 use mz_stash::{Append, PostgresFactory, Stash};
 use mz_storage_client::controller as storage;
 
@@ -328,7 +329,7 @@ impl Usage {
             unsafe_mode: true,
             persisted_introspection: true,
             build_info: &BUILD_INFO,
-            environment_id: "environment-stash-debug".to_string(),
+            environment_id: EnvironmentId::for_tests(),
             now,
             skip_migrations: false,
             metrics_registry,

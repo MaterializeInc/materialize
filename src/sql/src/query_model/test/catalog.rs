@@ -29,7 +29,8 @@ use mz_storage_client::types::sources::SourceDesc;
 use crate::ast::Expr;
 use crate::catalog::{
     CatalogComputeInstance, CatalogConfig, CatalogDatabase, CatalogError, CatalogItem,
-    CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails, IdReference, SessionCatalog,
+    CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails, EnvironmentId, IdReference,
+    SessionCatalog,
 };
 use crate::func::{Func, MZ_CATALOG_BUILTINS, MZ_INTERNAL_BUILTINS, PG_CATALOG_BUILTINS};
 use crate::names::{
@@ -43,7 +44,7 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     start_time: DateTime::<Utc>::MIN_UTC,
     start_instant: Instant::now(),
     nonce: 0,
-    environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
+    environment_id: EnvironmentId::for_tests(),
     session_id: Uuid::from_u128(0),
     unsafe_mode: false,
     persisted_introspection: false,

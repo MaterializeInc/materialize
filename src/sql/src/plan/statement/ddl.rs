@@ -448,7 +448,7 @@ pub fn plan_create_source(
                 topic,
                 start_offsets,
                 group_id_prefix,
-                environment_id: scx.catalog.config().environment_id.clone(),
+                environment_id: scx.catalog.config().environment_id.to_string(),
                 include_timestamp: None,
                 include_partition: None,
                 include_topic: None,

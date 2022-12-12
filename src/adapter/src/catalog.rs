@@ -50,8 +50,8 @@ use mz_sql::ast::Expr;
 use mz_sql::catalog::{
     CatalogComputeInstance, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
-    CatalogSchema, CatalogType, CatalogTypeDetails, IdReference, NameReference, SessionCatalog,
-    TypeReference,
+    CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference, NameReference,
+    SessionCatalog, TypeReference,
 };
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
@@ -3112,7 +3112,7 @@ impl<S: Append> Catalog<S> {
             unsafe_mode: true,
             persisted_introspection: true,
             build_info: &DUMMY_BUILD_INFO,
-            environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
+            environment_id: EnvironmentId::for_tests(),
             now,
             skip_migrations: true,
             metrics_registry,

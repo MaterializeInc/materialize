@@ -45,6 +45,7 @@ pub mod client;
 pub mod config;
 pub mod metrics;
 pub mod session;
+pub mod telemetry;
 
 pub use crate::client::{Client, ConnClient, Handle, SessionClient};
 pub use crate::command::{

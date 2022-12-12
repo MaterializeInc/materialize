@@ -41,6 +41,7 @@ use mz_ore::task;
 use mz_ore::tracing::TracingTargetCallbacks;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
+use mz_sql::catalog::EnvironmentId;
 use mz_stash::Stash;
 use mz_storage_client::types::connections::ConnectionContext;
 
@@ -100,7 +101,7 @@ pub struct Config {
 
     // === Cloud options. ===
     /// The cloud ID of this environment.
-    pub environment_id: String,
+    pub environment_id: EnvironmentId,
     /// Availability zones in which storage and compute resources may be
     /// deployed.
     pub availability_zones: Vec<String>,
@@ -329,7 +330,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         unsafe_mode: config.unsafe_mode,
         persisted_introspection: config.persisted_introspection,
         build_info: &BUILD_INFO,
-        environment_id: config.environment_id,
+        environment_id: config.environment_id.clone(),
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,
         secrets_controller: config.secrets_controller,
@@ -393,11 +394,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     });
 
     // Start telemetry reporting loop.
-    if let (Some(segment_client), Some(frontegg)) = (segment_client, config.frontegg) {
+    if let Some(segment_client) = segment_client {
         telemetry::start_reporting(telemetry::Config {
             segment_client,
             adapter_client: adapter_client.clone(),
-            organization_id: frontegg.tenant_id(),
+            environment_id: config.environment_id,
         });
     }
 

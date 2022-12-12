@@ -45,8 +45,6 @@ use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use md5::{Digest, Md5};
-use mz_persist_client::cache::PersistClientCache;
-use mz_repr::adt::date::Date;
 use once_cell::sync::Lazy;
 use postgres_protocol::types;
 use regex::Regex;
@@ -67,12 +65,15 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_pgrepr::{oid, Interval, Jsonb, Numeric, Value};
+use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
 use mz_sql::ast::{Expr, Raw, ShowStatement, Statement};
+use mz_sql::catalog::EnvironmentId;
 use mz_sql_parser::{
     ast::{display::AstDisplay, CreateIndexStatement, RawObjectName, Statement as AstStatement},
     parser,
@@ -745,7 +746,7 @@ impl<'a> Runner<'a> {
 impl RunnerInner {
     pub async fn start(config: &RunConfig<'_>) -> Result<RunnerInner, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
-        let environment_id = format!("environment-{}-0", Uuid::new_v4());
+        let environment_id = EnvironmentId::for_tests();
         let (consensus_uri, adapter_stash_url, storage_stash_url) = {
             let postgres_url = &config.postgres_url;
             let (client, conn) = tokio_postgres::connect(postgres_url, NoTls).await?;
@@ -775,7 +776,7 @@ impl RunnerInner {
             ProcessOrchestrator::new(ProcessOrchestratorConfig {
                 image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
                 suppress_output: false,
-                environment_id: environment_id.clone(),
+                environment_id: environment_id.to_string(),
                 secrets_dir: temp_dir.path().join("secrets"),
                 command_wrapper: vec![],
                 propagate_crashes: true,

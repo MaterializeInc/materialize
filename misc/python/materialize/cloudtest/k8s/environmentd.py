@@ -108,6 +108,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 "--availability-zone=kind-worker",
                 "--availability-zone=kind-worker2",
                 "--availability-zone=kind-worker3",
+                "--environment-id=cloudtest-test-00000000-0000-0000-0000-000000000000-0",
                 f"--persist-blob-url=s3://minio:minio123@persist/persist?endpoint={s3_endpoint}&region=minio",
                 "--orchestrator=kubernetes",
                 "--orchestrator-kubernetes-image-pull-policy=if-not-present",

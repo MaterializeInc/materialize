@@ -14,6 +14,7 @@ mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-secrets = { path = "../secrets" }
+mz-sql = { path = "../sql" }
 mz-stash = { path = "../stash" }
 mz-storage-client = { path = "../storage-client" }
 once_cell = "1.16.0"

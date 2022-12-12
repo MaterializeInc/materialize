@@ -9,18 +9,9 @@
 
 //! Telemetry collection.
 
-// To test this module, you'll need to run environmentd with the following
-// flags.
-//
-//   --tls-mode=disable
-//   --segment-api-key=<REDACTED>
-//   --frontegg-tenant=<REDACTED>
-//   --frontegg-jwk=<REDACTED>
-//   --frontegg-api-token-url=<REDACTED>
-//   --frontegg-password-prefix=mzp_
-//
-// Use values from a personal Materialize Cloud stack for the values that
-// are listed as <REDACTED>.
+// To test this module, you'll need to run environmentd with
+// the --segment-api-key=<REDACTED> flag. Use the API key from your personal
+// Materialize Cloud stack.
 //
 // You can then use the Segment debugger to watch the events emitted by your
 // environment in real time:
@@ -30,11 +21,12 @@ use serde::Serialize;
 use serde_json::json;
 use tokio::time::{self, Duration};
 use tracing::warn;
-use uuid::Uuid;
 
+use mz_adapter::telemetry::EnvironmentIdExt;
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::task;
+use mz_sql::catalog::EnvironmentId;
 
 /// How frequently to send a summary to Segment.
 const REPORT_INTERVAL: Duration = Duration::from_secs(3600);
@@ -46,8 +38,8 @@ pub struct Config {
     pub segment_client: mz_segment::Client,
     /// A client to the adapter to introspect.
     pub adapter_client: mz_adapter::Client,
-    /// The ID of the organization for which to report data.
-    pub organization_id: Uuid,
+    /// The ID of the environment for which to report data.
+    pub environment_id: EnvironmentId,
 }
 
 /// Starts reporting telemetry events to Segment.
@@ -60,7 +52,7 @@ async fn report_rollup_loop(
     Config {
         segment_client,
         adapter_client,
-        organization_id,
+        environment_id,
     }: Config,
 ) {
     #[derive(Default)]
@@ -93,7 +85,7 @@ async fn report_rollup_loop(
         segment_client.track(
             // We use the organization ID as the user ID for events
             // that are not associated with a particular user.
-            organization_id,
+            environment_id.organization_id(),
             "Environment Rolled Up",
             json!({
                 "event_source": "environmentd",
@@ -103,9 +95,7 @@ async fn report_rollup_loop(
                 "selects": current_rollup.selects - last_rollup.selects,
                 "subscribes": current_rollup.subscribes - last_rollup.subscribes,
             }),
-            Some(json!({
-                "groupId": organization_id,
-            })),
+            Some(environment_id.as_segment_context()),
         );
 
         last_rollup = current_rollup;
@@ -116,13 +106,14 @@ async fn report_traits_loop(
     Config {
         segment_client,
         adapter_client,
-        organization_id,
+        environment_id,
     }: Config,
 ) {
     const QUERY: &str = "SELECT
     (SELECT count(*) FROM mz_materialized_views WHERE id LIKE 'u%') AS active_materialized_views,
     (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%') AS active_sources,
     (SELECT count(*) FROM mz_sinks WHERE id LIKE 'u%') AS active_sinks,
+    (SELECT count(*) FROM mz_tables WHERE id LIKE 'u%') AS active_tables,
     (SELECT count(*) FROM mz_views WHERE id LIKE 'u%') AS active_views";
 
     #[derive(Debug, Serialize)]
@@ -131,6 +122,7 @@ async fn report_traits_loop(
         active_materialized_views: i64,
         active_sources: i64,
         active_sinks: i64,
+        active_tables: i64,
         active_views: i64,
         // Gathered from metrics
         active_subscribes: i64,
@@ -151,6 +143,7 @@ async fn report_traits_loop(
                     active_materialized_views: row.next().unwrap().unwrap_int64(),
                     active_sources: row.next().unwrap().unwrap_int64(),
                     active_sinks: row.next().unwrap().unwrap_int64(),
+                    active_tables: row.next().unwrap().unwrap_int64(),
                     active_views: row.next().unwrap().unwrap_int64(),
                     active_subscribes: adapter_client
                         .metrics()
@@ -166,9 +159,13 @@ async fn report_traits_loop(
                 segment_client.group(
                     // We use the organization ID as the user ID for events
                     // that are not associated with a particular user.
-                    organization_id,
-                    organization_id,
-                    traits,
+                    environment_id.organization_id(),
+                    environment_id.organization_id(),
+                    json!({
+                        environment_id.cloud_provider(): {
+                            environment_id.cloud_provider_region(): traits,
+                        }
+                    }),
                 );
             }
             Err(e) => warn!("unable to collect telemetry traits: {e}"),
