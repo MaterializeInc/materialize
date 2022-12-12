@@ -115,6 +115,23 @@ pub enum PlanError {
     },
     /// Declaration of a recursive type did not match the inferred type.
     RecursiveTypeMismatch(String, mz_repr::RelationType, mz_repr::RelationType),
+    UnknownFunction {
+        name: String,
+        arg_types: Vec<String>,
+        alternative_hint: Option<String>,
+    },
+    IndistinctFunction {
+        name: String,
+        arg_types: Vec<String>,
+    },
+    UnknownOperator {
+        name: String,
+        arg_types: Vec<String>,
+    },
+    IndistinctOperator {
+        name: String,
+        arg_types: Vec<String>,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -178,7 +195,22 @@ impl PlanError {
                 }
                 None
             }
-            Self::InvalidOptionValue {  err, .. } => err.hint(),
+            Self::InvalidOptionValue { err, .. } => err.hint(),
+            Self::UnknownFunction { alternative_hint, ..} => {
+                match alternative_hint {
+                    Some(_) => alternative_hint.clone(),
+                    None => Some("No function matches the given name and argument types. You might need to add explicit type casts.".into()),
+                }
+            }
+            Self::IndistinctFunction {..} => {
+                Some("Could not choose a best candidate function. You might need to add explicit type casts.".into())
+            }
+            Self::UnknownOperator {..} => {
+                Some("No operator matches the given name and argument types. You might need to add explicit type casts.".into())
+            }
+            Self::IndistinctOperator {..} => {
+                Some("Could not choose a best candidate operator. You might need to add explicit type casts.".into())
+            }
             _ => None,
         }
     }
@@ -305,6 +337,30 @@ impl fmt::Display for PlanError {
             Self::UnexpectedDuplicateReference { name } => write!(f, "unexpected multiple references to {}", name.to_ast_string()),
             Self::RecursiveTypeMismatch(name, declared, inferred) => {
                 write!(f, "declared type of WITH MUTUALLY RECURSIVE query {} did not match inferred type: {:?}, {:?}", name, declared, inferred)
+            },
+            Self::UnknownFunction {name, arg_types, ..} => {
+                write!(f, "function {}({}) does not exist", name, arg_types.join(", "))
+            },
+            Self::IndistinctFunction {name, arg_types, ..} => {
+                write!(f, "function {}({}) is not unique", name, arg_types.join(", "))
+            },
+            Self::UnknownOperator {name, arg_types, ..} => {
+                write!(f, "operator does not exist: {}", match arg_types.as_slice(){
+                    [typ] => format!("{} {}", name, typ),
+                    [ltyp, rtyp] => {
+                        format!("{} {} {}", ltyp, name, rtyp)
+                    }
+                    _ => unreachable!("non-unary non-binary operator"),
+                })
+            },
+            Self::IndistinctOperator {name, arg_types, ..} => {
+                write!(f, "operator is not unique: {}", match arg_types.as_slice(){
+                    [typ] => format!("{} {}", name, typ),
+                    [ltyp, rtyp] => {
+                        format!("{} {} {}", ltyp, name, rtyp)
+                    }
+                    _ => unreachable!("non-unary non-binary operator"),
+                })
             },
         }
     }

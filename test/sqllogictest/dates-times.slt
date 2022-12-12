@@ -203,7 +203,7 @@ SELECT DATE '2000-01-01' - INTERVAL '1' YEAR
 ----
 1999-01-01 00:00:00
 
-query error no overload for interval - date
+query error db error: ERROR: operator does not exist: interval \- date
 SELECT INTERVAL '1' YEAR - DATE '2000-01-01'
 
 query T
@@ -268,7 +268,7 @@ SELECT TIMESTAMP '2000-01-01 00:00:00' - INTERVAL '1' YEAR
 ----
 1999-01-01 00:00:00
 
-query error no overload for interval - timestamp
+query error db error: ERROR: operator does not exist: interval \- timestamp
 SELECT INTERVAL '1' YEAR - TIMESTAMP '2000-01-01 00:00:00'
 
 # Date arithmetic with duration intervals.
@@ -548,7 +548,7 @@ SELECT TIMESTAMPTZ '2000-01-01 00:00:00-7' - INTERVAL '4' MONTH
 ----
 1999-09-01 07:00:00+00
 
-query error no overload for interval - timestamp with time zone
+query error db error: ERROR: operator does not exist: interval \- timestamp with time zone
 SELECT INTERVAL '1' YEAR - TIMESTAMPTZ '2000-01-01 00:00:00-4:00'
 
 # Timestamptz arithmetic with duration intervals.
@@ -573,19 +573,19 @@ SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' - INTERVAL '2' HOUR
 ----
 2000-01-01 02:00:00+00
 
-query error no overload for interval - timestamp with time zone
+query error db error: ERROR: operator does not exist: interval \- timestamp with time zone
 SELECT INTERVAL '2' HOUR - TIMESTAMPTZ '2000-01-01 00:00:00-04'
 
-query error no overload for timestamp with time zone \* interval
+query error db error: ERROR: operator does not exist: timestamp with time zone \* interval
 SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' * INTERVAL '2' HOUR
 
-query error no overload for timestamp with time zone / interval
+query error db error: ERROR: operator does not exist: timestamp with time zone / interval
 SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' / INTERVAL '2' HOUR
 
-query error no overload for timestamp with time zone \+ timestamp with time zone
+query error db error: ERROR: operator does not exist: timestamp with time zone \+ timestamp with time zone
 SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' + TIMESTAMPTZ '1999-01-01 00:00:00z'
 
-query error no overload for timestamp with time zone \+ timestamp
+query error db error: ERROR: operator does not exist: timestamp with time zone \+ timestamp
 SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' + TIMESTAMP '1999-01-01 00:00:00'
 
 # Tests with comparison operators and timestamptz
