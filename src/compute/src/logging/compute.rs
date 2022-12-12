@@ -351,6 +351,7 @@ pub fn construct<A: Allocate>(
 
         let frontier_delay = frontier_delay
             .as_collection()
+            // TODO(#16549): Use explicit arrangement
             .count_total_core::<i64>()
             .map({
                 move |((dataflow, source_id, worker, delay_pow), count)| {
@@ -376,15 +377,19 @@ pub fn construct<A: Allocate>(
         });
 
         // Duration statistics derive from the non-rounded event times.
-        let peek_duration = peek_duration.as_collection().count_total_core().map({
-            move |((worker, pow), count)| {
-                Row::pack_slice(&[
-                    Datum::UInt64(u64::cast_from(worker)),
-                    Datum::UInt64(pow.try_into().expect("pow too big")),
-                    Datum::UInt64(count),
-                ])
-            }
-        });
+        let peek_duration = peek_duration
+            .as_collection()
+            // TODO(#16549): Use explicit arrangement
+            .count_total_core()
+            .map({
+                move |((worker, pow), count)| {
+                    Row::pack_slice(&[
+                        Datum::UInt64(u64::cast_from(worker)),
+                        Datum::UInt64(pow.try_into().expect("pow too big")),
+                        Datum::UInt64(count),
+                    ])
+                }
+            });
 
         let logs = vec![
             (
