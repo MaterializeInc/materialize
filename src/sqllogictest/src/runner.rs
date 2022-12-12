@@ -153,6 +153,26 @@ impl<'a> Outcome<'a> {
     fn success(&self) -> bool {
         matches!(self, Outcome::Success)
     }
+
+    /// Returns an error message that will match self. Appropriate for
+    /// rewriting error messages (i.e. not inserting error messages where we
+    /// currently expect success).
+    fn err_msg(&self) -> Option<String> {
+        match self {
+            Outcome::Unsupported { error, .. }
+            | Outcome::ParseFailure { error, .. }
+            | Outcome::PlanFailure { error, .. } => Some(
+                // This value gets fed back into regex to check that it matches
+                // `self`, so escape its meta characters.
+                regex::escape(
+                    // Take only first string in error message, which should be
+                    // sufficient for meaningfully matching error.
+                    error.to_string().split('\n').next().unwrap(),
+                ),
+            ),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Outcome<'_> {
@@ -1400,92 +1420,111 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
         let record = record;
         let outcome = runner.run_record(&record).await?;
 
-        // If we see an output failure for a query, rewrite the expected output
-        // to match the observed output.
-        if let (
-            Record::Query {
-                output:
-                    Ok(QueryOutput {
-                        mode,
-                        output: Output::Values(_),
-                        output_str: expected_output,
-                        types,
-                        ..
-                    }),
-                ..
-            },
-            Outcome::OutputFailure {
-                actual_output: Output::Values(actual_output),
-                ..
-            },
-        ) = (&record, &outcome)
-        {
-            buf.append_header(&input, expected_output);
+        match (&record, &outcome) {
+            // If we see an output failure for a query, rewrite the expected output
+            // to match the observed output.
+            (
+                Record::Query {
+                    output:
+                        Ok(QueryOutput {
+                            mode,
+                            output: Output::Values(_),
+                            output_str: expected_output,
+                            types,
+                            ..
+                        }),
+                    ..
+                },
+                Outcome::OutputFailure {
+                    actual_output: Output::Values(actual_output),
+                    ..
+                },
+            ) => {
+                {
+                    buf.append_header(&input, expected_output);
 
-            for (i, row) in actual_output.chunks(types.len()).enumerate() {
-                match mode {
-                    // In Cockroach mode, output each row on its own line, with
-                    // two spaces between each column.
-                    Mode::Cockroach => {
-                        if i != 0 {
-                            buf.append("\n");
-                        }
-                        buf.append(&row.join("  "));
-                    }
-                    // In standard mode, output each value on its own line,
-                    // and ignore row boundaries.
-                    Mode::Standard => {
-                        for (j, col) in row.iter().enumerate() {
-                            if i != 0 || j != 0 {
-                                buf.append("\n");
+                    for (i, row) in actual_output.chunks(types.len()).enumerate() {
+                        match mode {
+                            // In Cockroach mode, output each row on its own line, with
+                            // two spaces between each column.
+                            Mode::Cockroach => {
+                                if i != 0 {
+                                    buf.append("\n");
+                                }
+                                buf.append(&row.join("  "));
                             }
-                            buf.append(col);
+                            // In standard mode, output each value on its own line,
+                            // and ignore row boundaries.
+                            Mode::Standard => {
+                                for (j, col) in row.iter().enumerate() {
+                                    if i != 0 || j != 0 {
+                                        buf.append("\n");
+                                    }
+                                    buf.append(col);
+                                }
+                            }
                         }
                     }
                 }
             }
-        } else if let (
-            Record::Query {
-                output:
-                    Ok(QueryOutput {
-                        output: Output::Hashed { .. },
-                        output_str: expected_output,
-                        ..
-                    }),
-                ..
-            },
-            Outcome::OutputFailure {
-                actual_output: Output::Hashed { num_values, md5 },
-                ..
-            },
-        ) = (&record, &outcome)
-        {
-            buf.append_header(&input, expected_output);
+            (
+                Record::Query {
+                    output:
+                        Ok(QueryOutput {
+                            output: Output::Hashed { .. },
+                            output_str: expected_output,
+                            ..
+                        }),
+                    ..
+                },
+                Outcome::OutputFailure {
+                    actual_output: Output::Hashed { num_values, md5 },
+                    ..
+                },
+            ) => {
+                buf.append_header(&input, expected_output);
 
-            buf.append(format!("{} values hashing to {}\n", num_values, md5).as_str())
-        } else if let (
-            Record::Simple {
-                output_str: expected_output,
-                ..
-            },
-            Outcome::OutputFailure {
-                actual_output: Output::Values(actual_output),
-                ..
-            },
-        ) = (&record, &outcome)
-        {
-            buf.append_header(&input, expected_output);
-
-            for (i, row) in actual_output.iter().enumerate() {
-                if i != 0 {
-                    buf.append("\n");
-                }
-                buf.append(row);
+                buf.append(format!("{} values hashing to {}\n", num_values, md5).as_str())
             }
-        } else if let Outcome::Success = outcome {
-            // Ok.
-        } else {
-            bail!("unexpected: {:?} {:?}", record, outcome);
+            (
+                Record::Simple {
+                    output_str: expected_output,
+                    ..
+                },
+                Outcome::OutputFailure {
+                    actual_output: Output::Values(actual_output),
+                    ..
+                },
+            ) => {
+                buf.append_header(&input, expected_output);
+
+                for (i, row) in actual_output.iter().enumerate() {
+                    if i != 0 {
+                        buf.append("\n");
+                    }
+                    buf.append(row);
+                }
+            }
+            (
+                Record::Query {
+                    sql,
+                    output: Err(err),
+                    ..
+                },
+                outcome,
+            )
+            | (
+                Record::Statement {
+                    expected_error: Some(err),
+                    sql,
+                    ..
+                },
+                outcome,
+            ) if outcome.err_msg().is_some() => {
+                buf.rewrite_expected_error(&input, err, &outcome.err_msg().unwrap(), sql)
+            }
+            (_, Outcome::Success) => {}
+            _ => bail!("unexpected: {:?} {:?}", record, outcome),
         }
     }
 
@@ -1496,6 +1535,15 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
     Ok(())
 }
 
+/// Provides a means to rewrite the `.slt` file while iterating over it.
+///
+/// This struct takes the slt file as its `input`, tracks a cursor into it
+/// (`input_offset`), and provides a buffe (`output`) to store the rewritten
+/// results.
+///
+/// Functions that modify the file will lazily move `input` into `output` using
+/// `flush_to`. However, those calls should all be interior to other functions.
+#[derive(Debug)]
 struct RewriteBuffer<'a> {
     input: &'a str,
     input_offset: usize,
@@ -1542,6 +1590,22 @@ impl<'a> RewriteBuffer<'a> {
         } else if self.peek_last(6) != "\n----\n" {
             self.append("\n----\n");
         }
+    }
+
+    fn rewrite_expected_error(
+        &mut self,
+        input: &String,
+        old_err: &str,
+        new_err: &str,
+        query: &str,
+    ) {
+        // Output everything before this error message.
+        let err_offset = old_err.as_ptr() as usize - input.as_ptr() as usize;
+        self.flush_to(err_offset);
+        self.append(new_err);
+        self.append("\n");
+        self.append(query);
+        self.skip_to(query.as_ptr() as usize - input.as_ptr() as usize + query.len())
     }
 
     fn peek_last(&self, n: usize) -> &str {
