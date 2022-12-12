@@ -18,7 +18,7 @@ use mz_compute_client::controller::{
     ProcessId, ReplicaId,
 };
 use mz_expr::MirScalarExpr;
-use mz_orchestrator::{MemoryLimit, ServiceProcessMetrics, CpuLimit};
+use mz_orchestrator::{CpuLimit, MemoryLimit, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -895,8 +895,11 @@ impl CatalogState {
                         workers,
                     },
                 )| {
+                    // Just invent something when the limits are `None`,
+                    // which only happens in non-prod environments (tests, process orchestrator, etc.)
                     let cpu_limit = cpu_limit.unwrap_or(CpuLimit::MAX);
-                    let MemoryLimit(ByteSize(memory_bytes)) = (*memory_limit).unwrap_or(MemoryLimit::MAX);
+                    let MemoryLimit(ByteSize(memory_bytes)) =
+                        (*memory_limit).unwrap_or(MemoryLimit::MAX);
                     let row = Row::pack_slice(&[
                         size.as_str().into(),
                         u64::cast_from(scale.get()).into(),
