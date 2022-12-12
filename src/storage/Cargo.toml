@@ -17,7 +17,7 @@ aws-sdk-sqs = { version = "0.21.0", default-features = false, features = ["nativ
 axum = "0.5.17"
 bytesize = "1.1.0"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
-clap = { version = "3.2.20", features = ["derive", "env"] }
+clap = { version = "4.0.29", features = ["derive", "env"] }
 crossbeam-channel = { version = "0.5.6" }
 csv-core = { version = "0.1.10" }
 dec = "0.4.8"

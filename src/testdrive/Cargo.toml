@@ -21,7 +21,7 @@ aws-types = { version = "0.51.0", features = ["hardcoded-credentials"] }
 byteorder = "1.4.3"
 bytes = "1.3.0"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
-clap = { version = "3.2.20", features = ["derive"] }
+clap = { version = "4.0.29", features = ["derive"] }
 flate2 = "1.0.24"
 futures = "0.3.25"
 globset = "0.4.9"
