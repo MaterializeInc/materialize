@@ -12,7 +12,6 @@ use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use mz_orchestrator::{CpuLimit, MemoryLimit};
 use serde::Deserialize;
 
 use mz_build_info::BuildInfo;
@@ -97,8 +96,8 @@ impl Default for ClusterReplicaSizeMap {
                 (
                     workers.to_string(),
                     ComputeReplicaAllocation {
-                        memory_limit: MemoryLimit::MAX,
-                        cpu_limit: CpuLimit::MAX,
+                        memory_limit: None,
+                        cpu_limit: None,
                         scale: NonZeroUsize::new(1).unwrap(),
                         workers: NonZeroUsize::new(workers).unwrap(),
                     },
@@ -111,8 +110,8 @@ impl Default for ClusterReplicaSizeMap {
             inner.insert(
                 format!("{scale}-1"),
                 ComputeReplicaAllocation {
-                    memory_limit: MemoryLimit::MAX,
-                    cpu_limit: CpuLimit::MAX,
+                    memory_limit: None,
+                    cpu_limit: None,
                     scale: NonZeroUsize::new(scale).unwrap(),
                     workers: NonZeroUsize::new(1).unwrap(),
                 },
@@ -121,8 +120,8 @@ impl Default for ClusterReplicaSizeMap {
             inner.insert(
                 format!("{scale}-{scale}"),
                 ComputeReplicaAllocation {
-                    memory_limit: MemoryLimit::MAX,
-                    cpu_limit: CpuLimit::MAX,
+                    memory_limit: None,
+                    cpu_limit: None,
                     scale: NonZeroUsize::new(scale).unwrap(),
                     workers: NonZeroUsize::new(scale).unwrap(),
                 },
@@ -132,8 +131,8 @@ impl Default for ClusterReplicaSizeMap {
         inner.insert(
             "2-4".to_string(),
             ComputeReplicaAllocation {
-                memory_limit: MemoryLimit::MAX,
-                cpu_limit: CpuLimit::MAX,
+                memory_limit: None,
+                cpu_limit: None,
                 scale: NonZeroUsize::new(2).unwrap(),
                 workers: NonZeroUsize::new(4).unwrap(),
             },

@@ -210,9 +210,9 @@ impl ComputeReplicaLocation {
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ComputeReplicaAllocation {
     /// The memory limit for each process in the replica.
-    pub memory_limit: MemoryLimit,
+    pub memory_limit: Option<MemoryLimit>,
     /// The CPU limit for each process in the replica.
-    pub cpu_limit: CpuLimit,
+    pub cpu_limit: Option<CpuLimit>,
     /// The number of processes in the replica.
     pub scale: NonZeroUsize,
     /// The number of worker threads in the replica.

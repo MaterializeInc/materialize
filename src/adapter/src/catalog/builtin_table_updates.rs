@@ -18,7 +18,7 @@ use mz_compute_client::controller::{
     ProcessId, ReplicaId,
 };
 use mz_expr::MirScalarExpr;
-use mz_orchestrator::{MemoryLimit, ServiceProcessMetrics};
+use mz_orchestrator::{MemoryLimit, ServiceProcessMetrics, CpuLimit};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -889,18 +889,20 @@ impl CatalogState {
                 |(
                     size,
                     ComputeReplicaAllocation {
-                        memory_limit: MemoryLimit(ByteSize(memory_bytes)),
+                        memory_limit,
                         cpu_limit,
                         scale,
                         workers,
                     },
                 )| {
+                    let cpu_limit = cpu_limit.unwrap_or(CpuLimit::MAX);
+                    let MemoryLimit(ByteSize(memory_bytes)) = (*memory_limit).unwrap_or(MemoryLimit::MAX);
                     let row = Row::pack_slice(&[
                         size.as_str().into(),
                         u64::cast_from(scale.get()).into(),
                         u64::cast_from(workers.get()).into(),
                         cpu_limit.as_nanocpus().into(),
-                        (*memory_bytes).into(),
+                        memory_bytes.into(),
                     ]);
                     BuiltinTableUpdate { id, row, diff: 1 }
                 },
