@@ -19,4 +19,9 @@ ci_try bin/lint
 ci_try cargo --locked fmt -- --check
 ci_try cargo --locked deny check licenses bans sources
 
+# Smoke out failures in generating the license metadata page, even though we
+# don't care about its output in the test pipeline, so that we don't only
+# discover the failures after a merge to main.
+ci_try cargo --locked about generate ci/deploy/licenses.hbs > /dev/null
+
 ci_status_report

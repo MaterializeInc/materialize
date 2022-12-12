@@ -1,0 +1,17 @@
+# Must be manually kept in sync with deny.toml.
+# See: https://github.com/EmbarkStudios/cargo-about/issues/201
+accepted = [
+    "Apache-2.0",
+    "CC0-1.0",
+    "0BSD",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ICU",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "OpenSSL",
+    "Zlib",
+]
+private = { ignore = true }
+workarounds = ["ring"]

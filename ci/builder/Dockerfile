@@ -151,6 +151,7 @@ RUN mkdir rust \
         ;; \
     esac \
     && rm -rf rust \
+    && cargo install --root /usr/local --version "=0.5.2" cargo-about \
     && cargo install --root /usr/local --version "=1.40.5" cargo-deb \
     && cargo install --root /usr/local --version "=0.12.2" cargo-deny \
     && cargo install --root /usr/local --version "=0.9.44" cargo-nextest \

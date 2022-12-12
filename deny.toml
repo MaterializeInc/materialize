@@ -117,6 +117,8 @@ wrappers = [
     "pulldown-cmark",
 ]
 
+# Must be manually kept in sync with about.toml.
+# See: https://github.com/EmbarkStudios/cargo-about/issues/201
 [licenses]
 allow = [
     "Apache-2.0",
@@ -131,7 +133,6 @@ allow = [
 ]
 copyleft = "deny"
 private = { ignore = true }
-
 [[licenses.clarify]]
 name = "ring"
 expression = "ISC"
