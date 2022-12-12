@@ -217,7 +217,8 @@ where
     /// `source_ids` at the time of the function call.
     #[allow(unused)]
     #[allow(clippy::unused_async)]
-    pub async fn recent_timestamp(&self, source_ids: &[GlobalId]) -> T {
+    pub async fn recent_timestamp(&self, source_ids: impl Iterator<Item = GlobalId>) -> T {
+        // Dummy implementation
         T::minimum()
     }
 }
