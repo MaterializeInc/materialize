@@ -95,7 +95,7 @@ impl Healthchecker {
         let (write_handle, read_handle) = persist_client
             .open(
                 storage_metadata.status_shard.unwrap(),
-                &format!("healthchecker {}", source_id),
+                &format!("healthcheck {}", source_id),
             )
             .await
             .context("error opening Healthchecker persist shard")?;
@@ -103,7 +103,7 @@ impl Healthchecker {
         let (since, upper) = (read_handle.since().clone(), write_handle.upper().clone());
 
         let bootstrap_read_handle = read_handle
-            .clone(&format!("healthchecker::bootstrap {}", source_id))
+            .clone(&format!("healthcheck::bootstrap {}", source_id))
             .await;
 
         // More details on why the listener starts at `since` instead of `upper` in the docstring for [`bootstrap_state`]
