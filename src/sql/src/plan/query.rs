@@ -4369,15 +4369,19 @@ pub fn resolve_func(
         }
     };
 
-    let types: Vec<_> = cexprs
-        .iter()
-        .map(|e| match ecx.scalar_type(e) {
+    let arg_types: Vec<_> = cexprs
+        .into_iter()
+        .map(|ty| match ecx.scalar_type(&ty) {
             Some(ty) => ecx.humanize_scalar_type(&ty),
             None => "unknown".to_string(),
         })
         .collect();
 
-    sql_bail!("function {}({}) does not exist", name, types.join(", "))
+    Err(PlanError::UnknownFunction {
+        name: name.to_string(),
+        arg_types,
+        alternative_hint: None,
+    })
 }
 
 fn plan_is_expr<'a>(

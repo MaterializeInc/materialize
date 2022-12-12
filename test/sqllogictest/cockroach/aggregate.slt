@@ -47,7 +47,7 @@ SELECT array_agg(1) FROM kv
 ----
 NULL
 
-statement error supported
+statement error db error: ERROR: function json_agg\(integer\) does not exist
 SELECT json_agg(1) FROM kv
 ----
 NULL
@@ -77,7 +77,7 @@ SELECT array_agg(v) FROM kv
 ----
 NULL
 
-statement error supported
+statement error db error: ERROR: function json_agg\(integer\) does not exist
 SELECT json_agg(v) FROM kv
 ----
 NULL
@@ -99,7 +99,7 @@ SELECT array_agg(1)
 ----
 {1}
 
-statement error supported
+statement error db error: ERROR: function json_agg\(integer\) does not exist
 SELECT json_agg(1)
 
 query T
@@ -114,7 +114,7 @@ SELECT count(NULL)
 ----
 0
 
-statement error supported
+statement error db error: ERROR: function json_agg\(unknown\) does not exist
 SELECT json_agg(NULL)
 
 query T
@@ -122,7 +122,7 @@ SELECT jsonb_agg(NULL)
 ----
 [null]
 
-query error unable to determine which implementation to use
+query error db error: ERROR: function array_agg\(unknown\) is not unique
 SELECT array_agg(NULL)
 
 # With an explicit cast, this works as expected.
@@ -186,7 +186,7 @@ SELECT array_agg(1) FROM kv
 ----
 {1,1,1,1,1,1}
 
-statement error supported
+statement error db error: ERROR: function json_agg\(integer\) does not exist
 SELECT json_agg(1) FROM kv
 
 query T
@@ -461,7 +461,7 @@ SELECT count(1) from kv
 ----
 6
 
-query error arguments cannot be implicitly cast to any implementation's parameters
+query error db error: ERROR: function count\(integer, integer\) does not exist
 SELECT count(k, v) FROM kv
 
 # Note: Result differs from Cockroach but matches Postgres.
@@ -588,7 +588,7 @@ SELECT array_agg(k), array_agg(s) FROM (SELECT k, s FROM kv ORDER BY k)
 ----
 {1,3,5,6,7,8} {NULL,A,a,a,b,b}
 
-query error arguments cannot be implicitly cast
+query error db error: ERROR: operator does not exist: integer\[\] \|\| integer
 SELECT array_agg(k) || 1 FROM (SELECT k FROM kv ORDER BY k)
 
 query T
@@ -596,7 +596,7 @@ SELECT array_agg(s) FROM kv WHERE s IS NULL
 ----
 {NULL}
 
-query error supported
+query error db error: ERROR: function json_agg\(text\) does not exist
 SELECT json_agg(s) FROM kv WHERE s IS NULL
 
 query T
@@ -693,22 +693,22 @@ SELECT avg(b), sum(b) FROM abc
 # ----
 # 3 years 5 mons 7 days 00:00:19
 
-query error arguments cannot be implicitly cast to any implementation's parameters
+query error db error: ERROR: function pg_catalog\.sum\(character varying\) does not exist
 SELECT avg(a) FROM abc
 
-query error arguments cannot be implicitly cast to any implementation's parameters
+query error db error: ERROR: function pg_catalog\.sum\(boolean\) does not exist
 SELECT avg(c) FROM abc
 
-query error arguments cannot be implicitly cast to any implementation's parameters
+query error db error: ERROR: function pg_catalog\.sum\(record\(f1: character varying,f2: boolean\?\)\) does not exist
 SELECT avg((a,c)) FROM abc
 
-query error arguments cannot be implicitly cast to any implementation's parameters
+query error db error: ERROR: function sum\(character varying\) does not exist
 SELECT sum(a) FROM abc
 
-query error arguments cannot be implicitly cast to any implementation's parameters
+query error db error: ERROR: function sum\(boolean\) does not exist
 SELECT sum(c) FROM abc
 
-query error arguments cannot be implicitly cast to any implementation's parameters
+query error db error: ERROR: function sum\(record\(f1: character varying,f2: boolean\?\)\) does not exist
 SELECT sum((a,c)) FROM abc
 
 statement ok
@@ -898,7 +898,7 @@ SELECT bool_and(b), bool_or(b) FROM bools
 query error concat_agg not yet supported
 SELECT concat_agg(s) FROM (SELECT s FROM kv ORDER BY k)
 
-query error json_agg not yet supported
+query error db error: ERROR: function json_agg\(text\) does not exist
 SELECT json_agg(s) FROM (SELECT s FROM kv ORDER BY k)
 
 # This is arguably wrong--we don't respect the inner ORDER BY--because we don't
@@ -1087,7 +1087,7 @@ SELECT 1 FROM kv GROUP BY v, w::DECIMAL HAVING w::DECIMAL > 1
 1
 
 # Regression test for distsql aggregator crash when using hash aggregation.
-query error unable to determine which implementation to use
+query error db error: ERROR: function array_agg\(unknown\) is not unique
 SELECT v, array_agg('a') FROM kv GROUP BY v
 
 query I

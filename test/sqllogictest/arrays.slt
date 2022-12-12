@@ -63,7 +63,7 @@ SELECT array_to_string(NULL::text[], ','), array_to_string(NULL::text[], 'foo', 
 ----
 NULL  NULL
 
-query error Cannot call function array_to_string\(unknown, unknown\): could not determine polymorphic type because input has type unknown
+query error db error: ERROR: could not determine polymorphic type because input has type unknown
 SELECT array_to_string(NULL, ','), array_to_string(NULL, 'foo', 'zerp')
 
 # Handle empty arrays as an input
@@ -89,7 +89,7 @@ SELECT 1 = ANY(ARRAY[2])
 ----
 false
 
-query error no overload for integer = text: arguments cannot be implicitly cast
+query error db error: ERROR: operator does not exist: integer = text
 SELECT 1 = ANY(ARRAY['1', '2'])
 
 query B
@@ -97,7 +97,7 @@ SELECT 3 = ANY(ARRAY[ARRAY[1, 2], ARRAY[3,4]])
 ----
 true
 
-query error no overload for integer = text: arguments cannot be implicitly cast
+query error db error: ERROR: operator does not exist: integer = text
 SELECT 1 = ANY(ARRAY['hi'::text])
 
 query error invalid input syntax for type integer: invalid digit found in string: "hi"
@@ -173,7 +173,7 @@ query T rowsort
 SELECT unnest::text FROM unnest(NULL::int[])
 ----
 
-query error Cannot call function unnest\(unknown\): unable to determine which implementation to use; try providing explicit casts to match parameter types
+query error db error: ERROR: function unnest\(unknown\) is not unique
 SELECT * FROM unnest(NULL)
 
 # array_agg
@@ -229,7 +229,7 @@ SELECT array_agg(a) FILTER (WHERE a IS NULL) FROM t1
 ----
 {NULL,NULL}
 
-query error arguments cannot be implicitly cast to any implementation's parameters
+query error db error: ERROR: function array_agg\(integer, integer\) does not exist
 SELECT array_agg(1, 2)
 
 statement ok
@@ -466,22 +466,22 @@ true true
 #----
 #false false
 
-query error no overload for integer\[\] = text\[\]: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: operator does not exist: integer\[\] = text\[\]
 SELECT ARRAY[1,2,3] = ARRAY['1','2','3']
 
-query error no overload for integer\[\] <> text\[\]: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: operator does not exist: integer\[\] <> text\[\]
 SELECT ARRAY[1,2,3] != ARRAY['1','2','3']
 
-query error no overload for integer\[\] < text\[\]: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: operator does not exist: integer\[\] < text\[\]
 SELECT ARRAY[1,2,3] < ARRAY['1','2','3']
 
-query error no overload for integer\[\] <= text\[\]: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: operator does not exist: integer\[\] <= text\[\]
 SELECT ARRAY[1,2,3] <= ARRAY['1','2','3']
 
-query error no overload for integer\[\] > text\[\]: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: operator does not exist: integer\[\] > text\[\]
 SELECT ARRAY[1,2,3] > ARRAY['1','2','3']
 
-query error no overload for integer\[\] >= text\[\]: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: operator does not exist: integer\[\] >= text\[\]
 SELECT ARRAY[1,2,3] >= ARRAY['1','2','3']
 
 query T

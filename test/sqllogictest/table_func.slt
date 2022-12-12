@@ -72,7 +72,7 @@ query I
 SELECT generate_series FROM generate_series(1, null)
 ----
 
-query error unable to determine which implementation to use
+query error db error: ERROR: function generate_series\(unknown, unknown\) is not unique
 SELECT generate_series FROM generate_series(null, null)
 ----
 
@@ -82,7 +82,7 @@ SELECT generate_series FROM generate_series('foo', 2)
 statement error invalid input syntax for type integer: invalid digit found in string: "foo"
 SELECT generate_series FROM generate_series(1, 'foo')
 
-statement error arguments cannot be implicitly cast to any implementation's parameters
+statement error db error: ERROR: function generate_series\(integer\) does not exist
 SELECT generate_series FROM generate_series(2)
 
 query T multiline
@@ -469,10 +469,10 @@ EOF
 
 # information_schema._pg_expandarray
 
-query error arguments cannot be implicitly cast
+query error db error: ERROR: function information_schema\._pg_expandarray\(\) does not exist
 SELECT information_schema._pg_expandarray()
 
-query error arguments cannot be implicitly cast
+query error db error: ERROR: function information_schema\._pg_expandarray\(\) does not exist
 SELECT * FROM information_schema._pg_expandarray()
 
 query error cannot determine type of empty array

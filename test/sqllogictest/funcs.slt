@@ -889,7 +889,7 @@ SELECT array_upper(NULL::text[], 1)
 NULL
 
 # TODO(fix)
-query error Cannot call function array_upper\(unknown, integer\): could not determine polymorphic type because input has type unknown
+query error db error: ERROR: could not determine polymorphic type because input has type unknown
 SELECT array_upper(NULL, 1)
 
 query I
@@ -957,7 +957,7 @@ SELECT upper('ALREADYUP')
 ----
 ALREADYUP
 
-query error Cannot call function upper\(numeric\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: function upper\(numeric\) does not exist
 SELECT upper(2.2)
 
 query T
@@ -970,7 +970,7 @@ SELECT lower('alreadylow')
 ----
 alreadylow
 
-query error Cannot call function lower\(interval\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: function lower\(interval\) does not exist
 SELECT lower('1ms'::interval)
 
 # Test trigonometric functions.

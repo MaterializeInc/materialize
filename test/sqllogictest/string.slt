@@ -722,7 +722,7 @@ SELECT '你' || '好'
 ----
 你好
 
-query error no overload for boolean \|\| boolean
+query error db error: ERROR: operator does not exist: boolean \|\| boolean
 SELECT true || false
 
 query T
@@ -753,13 +753,13 @@ SELECT split_part('', 'not', 1)
 query error field position must be greater than zero
 SELECT split_part('abc~@~def~@~ghi', '~@~', 0)
 
-query error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: function split_part\(\) does not exist
 SELECT split_part()
 
-query error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: function split_part\(unknown, unknown\) does not exist
 SELECT split_part('one', 'two')
 
-query error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: function split_part\(integer, integer, integer\) does not exist
 SELECT split_part(1, 2, 3)
 
 ### lpad ###
@@ -1002,10 +1002,10 @@ SELECT position(42)
 statement error Expected IN, found right parenthesis
 SELECT position('str')
 
-statement error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+statement error db error: ERROR: function position\(integer, unknown\) does not exist
 SELECT position(42 IN 'str')
 
-statement error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+statement error db error: ERROR: function position\(unknown, integer\) does not exist
 SELECT position('str' IN 42)
 
 statement error Expected right parenthesis, found comma
@@ -1169,7 +1169,7 @@ SELECT left('hello', -2147483647)
 (empty)
 
 # i64
-query error arguments cannot be implicitly cast to any implementation's parameters
+query error db error: ERROR: function left\(unknown, bigint\) does not exist
 SELECT left('hello', 2147483648)
 
 ### right ###
@@ -1291,7 +1291,7 @@ SELECT right('hello', -2147483647)
 (empty)
 
 # i64
-query error arguments cannot be implicitly cast to any implementation's parameters
+query error db error: ERROR: function right\(unknown, bigint\) does not exist
 SELECT right('hello', 2147483648)
 
 query T

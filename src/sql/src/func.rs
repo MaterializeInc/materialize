@@ -1056,50 +1056,52 @@ where
     let name = spec.to_string();
     let ecx = &ecx.with_name(&name);
     let types: Vec<_> = args.iter().map(|e| ecx.scalar_type(e)).collect();
-    select_impl_inner(ecx, impls, args, &types, order_by).map_err(|e| {
-        let types: Vec<_> = types
-            .into_iter()
-            .map(|ty| match ty {
-                Some(ty) => ecx.humanize_scalar_type(&ty),
-                None => "unknown".to_string(),
-            })
-            .collect();
-        let context = match (spec, types.as_slice()) {
-            (FuncSpec::Func(name), _) => {
-                format!("Cannot call function {}({})", name, types.join(", "))
-            }
-            (FuncSpec::Op(name), [typ]) => format!("no overload for {} {}", name, typ),
-            (FuncSpec::Op(name), [ltyp, rtyp]) => {
-                format!("no overload for {} {} {}", ltyp, name, rtyp)
-            }
-            (FuncSpec::Op(_), [..]) => unreachable!("non-unary non-binary operator"),
-        };
-        sql_err!("{}: {}", context, e)
-    })
-}
 
-fn select_impl_inner<R>(
-    ecx: &ExprContext,
-    impls: &[FuncImpl<R>],
-    cexprs: Vec<CoercibleScalarExpr>,
-    types: &[Option<ScalarType>],
-    order_by: Vec<ColumnOrder>,
-) -> Result<R, PlanError>
-where
-    R: fmt::Debug,
-{
     // 4.a. Discard candidate functions for which the input types do not
     // match and cannot be converted (using an implicit conversion) to
     // match. unknown literals are assumed to be convertible to anything for
     // this purpose.
     let impls: Vec<_> = impls
         .iter()
-        .filter(|i| i.params.matches_argtypes(ecx, types))
+        .filter(|i| i.params.matches_argtypes(ecx, &types))
         .collect();
 
-    let f = find_match(ecx, types, impls)?;
+    let f = find_match(ecx, &types, impls).map_err(|candidates| {
+        let arg_types: Vec<_> = types
+            .into_iter()
+            .map(|ty| match ty {
+                Some(ty) => ecx.humanize_scalar_type(&ty),
+                None => "unknown".to_string(),
+            })
+            .collect();
 
-    (f.op.0)(ecx, cexprs, &f.params, order_by)
+        if candidates == 0 {
+            match spec {
+                FuncSpec::Func(name) => PlanError::UnknownFunction {
+                    name: name.to_string(),
+                    arg_types,
+                    alternative_hint: None,
+                },
+                FuncSpec::Op(name) => PlanError::UnknownOperator {
+                    name: name.to_string(),
+                    arg_types,
+                },
+            }
+        } else {
+            match spec {
+                FuncSpec::Func(name) => PlanError::IndistinctFunction {
+                    name: name.to_string(),
+                    arg_types,
+                },
+                FuncSpec::Op(name) => PlanError::IndistinctOperator {
+                    name: name.to_string(),
+                    arg_types,
+                },
+            }
+        }
+    })?;
+
+    (f.op.0)(ecx, args, &f.params, order_by)
 }
 
 /// Finds an exact match based on the arguments, or, if no exact match, finds
@@ -1111,7 +1113,7 @@ fn find_match<'a, R: std::fmt::Debug>(
     ecx: &ExprContext,
     types: &[Option<ScalarType>],
     impls: Vec<&'a FuncImpl<R>>,
-) -> Result<&'a FuncImpl<R>, PlanError> {
+) -> Result<&'a FuncImpl<R>, usize> {
     let all_types_known = types.iter().all(|t| t.is_some());
 
     // Check for exact match.
@@ -1183,10 +1185,7 @@ fn find_match<'a, R: std::fmt::Debug>(
     }
 
     if candidates.is_empty() {
-        sql_bail!(
-            "arguments cannot be implicitly cast to any implementation's parameters; \
-        try providing explicit casts"
-        )
+        return Err(0);
     }
 
     maybe_get_last_candidate!();
@@ -1219,10 +1218,7 @@ fn find_match<'a, R: std::fmt::Debug>(
     maybe_get_last_candidate!();
 
     if all_types_known {
-        sql_bail!(
-            "unable to determine which implementation to use; try providing \
-            explicit casts to match parameter types"
-        )
+        return Err(candidates.len());
     }
 
     let mut found_known = false;
@@ -1321,10 +1317,7 @@ fn find_match<'a, R: std::fmt::Debug>(
         maybe_get_last_candidate!();
     }
 
-    sql_bail!(
-        "unable to determine which implementation to use; try providing \
-        explicit casts to match parameter types"
-    )
+    Err(candidates.len())
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]

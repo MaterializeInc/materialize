@@ -124,7 +124,7 @@ inhseqno            false   integer
 inhdetachpending    false   boolean
 
 ! SELECT current_schemas()
-contains:Cannot call function current_schemas(): arguments cannot be implicitly cast to any implementation's parameters;
+contains:function current_schemas() does not exist
 
 > SELECT current_schemas(true)
 {mz_catalog,pg_catalog,public}
