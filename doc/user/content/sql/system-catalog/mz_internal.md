@@ -69,6 +69,40 @@ Field               | Type                          | Meaning
 `status`            | [`text`]                      | The status of the cluster replica: `ready` or `not-ready`.
 `updated_at`        | [`timestamp with time zone`]  | The time at which the status was last updated.
 
+### `mz_cluster_replica_sizes`
+
+The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
+(e.g. "xlarge") to physical sizes (number of processes, and CPU and memory allocations per process).
+
+{{< warning >}}
+The values in this table may change at any time, and users should not rely on
+them for any kind of capacity planning. For a view that is potentially more useful,
+see [`mz_cluster_replica_utilization`](#mz_cluster_replica_utilization).
+{{< /warning >}}
+
+| Field            | Type      | Meaning                                                       |
+|------------------|-----------|---------------------------------------------------------------|
+| `size`           | [`text`]  | The human-readable replica size.                              |
+| `processes`      | [`uint8`] | The number of processes in the replica.                       |
+| `workers`        | [`uint8`] | The number of Timely Dataflow workers per process.            |
+| `cpu_nano_cores` | [`uint8`] | The CPU allocation per process, in billionths of a vCPU core. |
+| `memory_bytes`   | [`uint8`] | The RAM allocation per process, in billionths of a vCPU core. |
+
+### `mz_cluster_replica_utilization`
+
+The `mz_cluster_replica_utilization` table gives the last known CPU and RAM utilization statistics
+for all processes of all extant cluster replicas, as a percentage of the total allocation.
+
+At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+
+| Field            | Type      | Meaning                                                    |
+|------------------|-----------|------------------------------------------------------------|
+| `replica_id`     | [`uint8`] | The ID of a cluster replica.                               |
+| `process_id`     | [`uint8`] | An identifier of a compute process within a replica.       |
+| `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
+| `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
+
+
 ### `mz_dataflows`
 
 The `mz_dataflows` view describes the [dataflows][dataflow] in the system.
