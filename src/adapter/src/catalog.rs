@@ -87,7 +87,8 @@ pub use crate::catalog::config::{
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
-use crate::session::vars::SystemVars;
+use crate::config::SynchronizedParameters;
+use crate::session::vars::{SystemVars, Var, CONFIG_HAS_SYNCED_ONCE};
 use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
@@ -854,12 +855,22 @@ impl CatalogState {
     }
 
     /// Insert system configuration `name` with `value`.
-    fn insert_system_configuration(&mut self, name: &str, value: &str) -> Result<(), AdapterError> {
+    ///
+    /// Return a `bool` value indicating whether the configuration was modified
+    /// by the call.
+    fn insert_system_configuration(
+        &mut self,
+        name: &str,
+        value: &str,
+    ) -> Result<bool, AdapterError> {
         self.system_configuration.set(name, value)
     }
 
-    /// Remove system configuration `name`.
-    fn remove_system_configuration(&mut self, name: &str) -> Result<(), AdapterError> {
+    /// Reset system configuration `name`.
+    ///
+    /// Return a `bool` value indicating whether the configuration was modified
+    /// by the call.
+    fn remove_system_configuration(&mut self, name: &str) -> Result<bool, AdapterError> {
         self.system_configuration.reset(name)
     }
 
@@ -2469,6 +2480,36 @@ impl<S: Append> Catalog<S> {
         for (name, value) in system_config {
             catalog.state.insert_system_configuration(&name, &value)?;
         }
+        if let Some(system_parameter_frontend) = config.system_parameter_frontend {
+            if !catalog.state.system_config().config_has_synced_once() {
+                tracing::info!("parameter sync on boot: start sync");
+                system_parameter_frontend.ensure_initialized().await;
+
+                let mut params = SynchronizedParameters::new(catalog.state.system_config().clone());
+                system_parameter_frontend.pull(&mut params);
+                let ops = params
+                    .modified()
+                    .into_iter()
+                    .map(|param| {
+                        let name = param.name;
+                        let value = param.value;
+                        tracing::debug!(name, value, "sync parameter");
+                        Op::UpdateSystemConfiguration { name, value }
+                    })
+                    .chain(std::iter::once({
+                        let name = CONFIG_HAS_SYNCED_ONCE.name().to_string();
+                        let value = true.to_string();
+                        tracing::debug!(name, value, "sync parameter");
+                        Op::UpdateSystemConfiguration { name, value }
+                    }))
+                    .collect::<Vec<_>>();
+
+                catalog.transact(None, ops, |_| Ok(())).await.unwrap();
+                tracing::info!("parameter sync on boot: end sync");
+            } else {
+                tracing::info!("parameter sync on boot: skipping sync as config has synced once");
+            }
+        }
 
         let last_seen_version = catalog
             .storage()
@@ -3085,6 +3126,7 @@ impl<S: Append> Catalog<S> {
             secrets_reader,
             egress_ips: vec![],
             aws_principal_context: None,
+            system_parameter_frontend: None,
         })
         .await?;
         Ok(catalog)

@@ -12,18 +12,19 @@ use std::fmt;
 use std::time::Duration;
 
 use const_format::concatcp;
-use mz_sql::ast::{Ident, SetVariableValue, Value as AstValue};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use uncased::UncasedStr;
 
 use mz_ore::cast;
+use mz_sql::ast::{Ident, SetVariableValue, Value as AstValue};
 use mz_sql::DEFAULT_SCHEMA;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_sql_parser::parser::parse_set_variable_value;
 
+use crate::catalog::SYSTEM_USER;
 use crate::error::AdapterError;
-use crate::session::EndTransactionAction;
+use crate::session::{EndTransactionAction, User};
 
 // We pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
 // be. Too new and some clients will emit a "server too new" warning. Too old
@@ -46,18 +47,21 @@ const APPLICATION_NAME: ServerVar<str> = ServerVar {
     name: UncasedStr::new("application_name"),
     value: "",
     description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
+    internal: false,
 };
 
 const CLIENT_ENCODING: ServerVar<str> = ServerVar {
     name: UncasedStr::new("client_encoding"),
     value: "UTF8",
     description: "Sets the client's character set encoding (PostgreSQL).",
+    internal: false,
 };
 
 const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
     name: UncasedStr::new("client_min_messages"),
     value: &ClientSeverity::Notice,
     description: "Sets the message levels that are sent to the client (PostgreSQL).",
+    internal: false,
 };
 pub const CLUSTER_VAR_NAME: &UncasedStr = UncasedStr::new("cluster");
 
@@ -65,12 +69,14 @@ const CLUSTER: ServerVar<str> = ServerVar {
     name: CLUSTER_VAR_NAME,
     value: "default",
     description: "Sets the current cluster (Materialize).",
+    internal: false,
 };
 
 const CLUSTER_REPLICA: ServerVar<Option<String>> = ServerVar {
     name: UncasedStr::new("cluster_replica"),
     value: &None,
     description: "Sets a target cluster replica for SELECT queries (Materialize).",
+    internal: false,
 };
 
 pub const DATABASE_VAR_NAME: &UncasedStr = UncasedStr::new("database");
@@ -79,6 +85,7 @@ const DATABASE: ServerVar<str> = ServerVar {
     name: DATABASE_VAR_NAME,
     value: DEFAULT_DATABASE_NAME,
     description: "Sets the current database (CockroachDB).",
+    internal: false,
 };
 
 const DATE_STYLE: ServerVar<str> = ServerVar {
@@ -86,24 +93,28 @@ const DATE_STYLE: ServerVar<str> = ServerVar {
     name: UncasedStr::new("DateStyle"),
     value: "ISO, MDY",
     description: "Sets the display format for date and time values (PostgreSQL).",
+    internal: false,
 };
 
 const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
     name: UncasedStr::new("extra_float_digits"),
     value: &3,
     description: "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
+    internal: false,
 };
 
 const FAILPOINTS: ServerVar<str> = ServerVar {
     name: UncasedStr::new("failpoints"),
     value: "",
     description: "Allows failpoints to be dynamically activated.",
+    internal: false,
 };
 
 const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("integer_datetimes"),
     value: &true,
     description: "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL).",
+    internal: false,
 };
 
 const INTERVAL_STYLE: ServerVar<str> = ServerVar {
@@ -111,12 +122,14 @@ const INTERVAL_STYLE: ServerVar<str> = ServerVar {
     name: UncasedStr::new("IntervalStyle"),
     value: "postgres",
     description: "Sets the display format for interval values (PostgreSQL).",
+    internal: false,
 };
 
 const QGM_OPTIMIZATIONS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("qgm_optimizations_experimental"),
     value: &false,
     description: "Enables optimizations based on a Query Graph Model (QGM) query representation.",
+    internal: false,
 };
 
 static DEFAULT_SEARCH_PATH: Lazy<[String; 1]> = Lazy::new(|| [DEFAULT_SCHEMA.to_owned()]);
@@ -125,6 +138,7 @@ static SEARCH_PATH: Lazy<ServerVar<[String]>> = Lazy::new(|| ServerVar {
     value: &*DEFAULT_SEARCH_PATH,
     description:
         "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
+    internal: false,
 });
 
 const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
@@ -132,6 +146,7 @@ const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
     value: &Duration::from_secs(10),
     description:
         "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations.",
+    internal: false,
 };
 
 const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: ServerVar<Duration> = ServerVar {
@@ -140,6 +155,7 @@ const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: ServerVar<Duration> = ServerVar {
     description:
         "Sets the maximum allowed duration that a session can sit idle in a transaction before \
          being terminated. A value of zero disables the timeout (PostgreSQL).",
+    internal: false,
 };
 
 const SERVER_VERSION: ServerVar<str> = ServerVar {
@@ -152,6 +168,7 @@ const SERVER_VERSION: ServerVar<str> = ServerVar {
         SERVER_PATCH_VERSION
     ),
     description: "Shows the server version (PostgreSQL).",
+    internal: false,
 };
 
 const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
@@ -160,18 +177,21 @@ const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
         + (cast::u8_to_i32(SERVER_MINOR_VERSION) * 100)
         + cast::u8_to_i32(SERVER_PATCH_VERSION)),
     description: "Shows the server version as an integer (PostgreSQL).",
+    internal: false,
 };
 
 const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("sql_safe_updates"),
     value: &false,
     description: "Prohibits SQL statements that may be overly destructive (CockroachDB).",
+    internal: false,
 };
 
 const STANDARD_CONFORMING_STRINGS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("standard_conforming_strings"),
     value: &true,
     description: "Causes '...' strings to treat backslashes literally (PostgreSQL).",
+    internal: false,
 };
 
 const TIMEZONE: ServerVar<TimeZone> = ServerVar {
@@ -179,36 +199,42 @@ const TIMEZONE: ServerVar<TimeZone> = ServerVar {
     name: UncasedStr::new("TimeZone"),
     value: &TimeZone::UTC,
     description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
+    internal: false,
 };
 
 const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
     name: UncasedStr::new("transaction_isolation"),
     value: &IsolationLevel::StrictSerializable,
     description: "Sets the current transaction's isolation level (PostgreSQL).",
+    internal: false,
 };
 
 const MAX_AWS_PRIVATELINK_CONNECTIONS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_aws_privatelink_connections"),
     value: &0,
     description: "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
+    internal: false,
 };
 
 const MAX_TABLES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_tables"),
     value: &25,
     description: "The maximum number of tables in the region, across all schemas (Materialize).",
+    internal: false,
 };
 
 const MAX_SOURCES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_sources"),
     value: &25,
     description: "The maximum number of sources in the region, across all schemas (Materialize).",
+    internal: false,
 };
 
 const MAX_SINKS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_sinks"),
     value: &25,
     description: "The maximum number of sinks in the region, across all schemas (Materialize).",
+    internal: false,
 };
 
 const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
@@ -216,48 +242,56 @@ const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
     value: &100,
     description:
         "The maximum number of materialized views in the region, across all schemas (Materialize).",
+    internal: false,
 };
 
 const MAX_CLUSTERS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_clusters"),
     value: &10,
     description: "The maximum number of clusters in the region (Materialize).",
+    internal: false,
 };
 
 const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_replicas_per_cluster"),
     value: &5,
     description: "The maximum number of replicas of a single cluster (Materialize).",
+    internal: false,
 };
 
 const MAX_DATABASES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_databases"),
     value: &1000,
     description: "The maximum number of databases in the region (Materialize).",
+    internal: false,
 };
 
 const MAX_SCHEMAS_PER_DATABASE: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_schemas_per_database"),
     value: &1000,
     description: "The maximum number of schemas in a database (Materialize).",
+    internal: false,
 };
 
 const MAX_OBJECTS_PER_SCHEMA: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_objects_per_schema"),
     value: &1000,
     description: "The maximum number of objects in a schema (Materialize).",
+    internal: false,
 };
 
 const MAX_SECRETS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_secrets"),
     value: &100,
     description: "The maximum number of secrets in the region, across all schemas (Materialize).",
+    internal: false,
 };
 
 const MAX_ROLES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_roles"),
     value: &1000,
     description: "The maximum number of roles in the region (Materialize).",
+    internal: false,
 };
 
 // Cloud environmentd is configured with 4 GiB of RAM, so 1 GiB is a good heuristic for a single
@@ -268,6 +302,7 @@ pub const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
     // 1 GiB
     value: &1_073_741_824,
     description: "The maximum size in bytes for a single query's result (Materialize).",
+    internal: false,
 };
 
 static DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<Vec<String>> = Lazy::new(Vec::new);
@@ -275,13 +310,24 @@ static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<String>>> = Lazy::new(|
     name: UncasedStr::new("allowed_cluster_replica_sizes"),
     value: &DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES,
     description: "The allowed sizes when creating a new cluster replica (Materialize).",
+    internal: false,
 });
 
 /// Feature flag indicating whether window functions are enabled.
 static WINDOW_FUNCTIONS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("window_functions"),
     value: &true,
-    description: "Feature flag indicating whether window functions are enabled.",
+    description: "Feature flag indicating whether window functions are enabled (Materialize).",
+    internal: false,
+};
+
+/// Boolean flag indicating that the remote configuration was synchronized at
+/// least once with the persistent [SessionVars].
+pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("config_has_synced_once"),
+    value: &false,
+    description: "Boolean flag indicating that the remote configuration was synchronized at least once (Materialize).",
+    internal: true,
 };
 
 /// Session variables.
@@ -841,6 +887,7 @@ pub struct SystemVars {
     max_result_size: SystemVar<u32>,
     allowed_cluster_replica_sizes: SystemVar<Vec<String>>, // TODO: BTreeSet<String> will be better
     window_functions: SystemVar<bool>,
+    config_has_synced_once: SystemVar<bool>,
 }
 
 impl Default for SystemVars {
@@ -861,6 +908,7 @@ impl Default for SystemVars {
             max_result_size: SystemVar::new(&MAX_RESULT_SIZE),
             allowed_cluster_replica_sizes: SystemVar::new(&ALLOWED_CLUSTER_REPLICA_SIZES),
             window_functions: SystemVar::new(&WINDOW_FUNCTIONS),
+            config_has_synced_once: SystemVar::new(&CONFIG_HAS_SYNCED_ONCE),
         }
     }
 }
@@ -885,8 +933,16 @@ impl SystemVars {
             &self.max_result_size,
             &self.allowed_cluster_replica_sizes,
             &self.window_functions,
+            &self.config_has_synced_once,
         ]
         .into_iter()
+    }
+
+    /// Returns an iterator over the configuration parameters and their current
+    /// values on disk.
+    pub fn iter_synced(&self) -> impl Iterator<Item = &dyn Var> {
+        self.iter()
+            .filter(|v| v.name() != CONFIG_HAS_SYNCED_ONCE.name)
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the
@@ -899,6 +955,11 @@ impl SystemVars {
     /// named accessor to access the variable with its true Rust type. For
     /// example, `self.get("max_tables").value()` returns the string
     /// `"25"` or the current value, while `self.max_tables()` returns an i32.
+    ///
+    /// # Errors
+    ///
+    /// The call will return an error:
+    /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     pub fn get(&self, name: &str) -> Result<&dyn Var, AdapterError> {
         if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
             Ok(&self.max_aws_privatelink_connections)
@@ -930,6 +991,55 @@ impl SystemVars {
             Ok(&self.allowed_cluster_replica_sizes)
         } else if name == WINDOW_FUNCTIONS.name {
             Ok(&self.window_functions)
+        } else if name == CONFIG_HAS_SYNCED_ONCE.name {
+            Ok(&self.config_has_synced_once)
+        } else {
+            Err(AdapterError::UnknownParameter(name.into()))
+        }
+    }
+
+    /// Check if the given `value` is the default value for the [`Var`]
+    /// identified by `name`.
+    ///
+    /// # Errors
+    ///
+    /// The call will return an error:
+    /// 1. If `name` does not refer to a valid [`SystemVars`] field.
+    /// 2. If `value` does not represent a valid [`SystemVars`] value for
+    ///    `name`.
+    pub fn is_default(&self, name: &str, value: &str) -> Result<bool, AdapterError> {
+        if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
+            self.max_aws_privatelink_connections.is_default(value)
+        } else if name == MAX_TABLES.name {
+            self.max_tables.is_default(value)
+        } else if name == MAX_SOURCES.name {
+            self.max_sources.is_default(value)
+        } else if name == MAX_SINKS.name {
+            self.max_sinks.is_default(value)
+        } else if name == MAX_MATERIALIZED_VIEWS.name {
+            self.max_materialized_views.is_default(value)
+        } else if name == MAX_CLUSTERS.name {
+            self.max_clusters.is_default(value)
+        } else if name == MAX_REPLICAS_PER_CLUSTER.name {
+            self.max_replicas_per_cluster.is_default(value)
+        } else if name == MAX_DATABASES.name {
+            self.max_databases.is_default(value)
+        } else if name == MAX_SCHEMAS_PER_DATABASE.name {
+            self.max_schemas_per_database.is_default(value)
+        } else if name == MAX_OBJECTS_PER_SCHEMA.name {
+            self.max_objects_per_schema.is_default(value)
+        } else if name == MAX_SECRETS.name {
+            self.max_secrets.is_default(value)
+        } else if name == MAX_ROLES.name {
+            self.max_roles.is_default(value)
+        } else if name == MAX_RESULT_SIZE.name {
+            self.max_result_size.is_default(value)
+        } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
+            self.allowed_cluster_replica_sizes.is_default(value)
+        } else if name == WINDOW_FUNCTIONS.name {
+            self.window_functions.is_default(value)
+        } else if name == CONFIG_HAS_SYNCED_ONCE.name {
+            self.config_has_synced_once.is_default(value)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -942,7 +1052,18 @@ impl SystemVars {
     /// insensitively. If `value` is not valid, as determined by the underlying
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
-    pub fn set(&mut self, name: &str, value: &str) -> Result<(), AdapterError> {
+    ///
+    /// Return a `bool` value indicating whether the [`Var`] identified by
+    /// `name` was modified by this call (it won't be if it already had the
+    /// given `value`).
+    ///
+    /// # Errors
+    ///
+    /// The call will return an error:
+    /// 1. If `name` does not refer to a valid [`SystemVars`] field.
+    /// 2. If `value` does not represent a valid [`SystemVars`] value for
+    ///    `name`.
+    pub fn set(&mut self, name: &str, value: &str) -> Result<bool, AdapterError> {
         if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
             self.max_aws_privatelink_connections.set(value)
         } else if name == MAX_TABLES.name {
@@ -973,6 +1094,8 @@ impl SystemVars {
             self.allowed_cluster_replica_sizes.set(value)
         } else if name == WINDOW_FUNCTIONS.name {
             self.window_functions.set(value)
+        } else if name == CONFIG_HAS_SYNCED_ONCE.name {
+            self.config_has_synced_once.set(value)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -983,41 +1106,50 @@ impl SystemVars {
     /// Like with [`SystemVars::get`], configuration parameters are matched case
     /// insensitively. If the named configuration parameter does not exist, an
     /// error is returned.
-    pub fn reset(&mut self, name: &str) -> Result<(), AdapterError> {
+    ///
+    /// Return a `bool` value indicating whether the [`Var`] identified by
+    /// `name` was modified by this call (it won't be if was already reset).
+    ///
+    /// # Errors
+    ///
+    /// The call will return an error:
+    /// 1. If `name` does not refer to a valid [`SystemVars`] field.
+    pub fn reset(&mut self, name: &str) -> Result<bool, AdapterError> {
         if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
-            self.max_aws_privatelink_connections.reset()
+            Ok(self.max_aws_privatelink_connections.reset())
         } else if name == MAX_TABLES.name {
-            self.max_tables.reset()
+            Ok(self.max_tables.reset())
         } else if name == MAX_SOURCES.name {
-            self.max_sources.reset()
+            Ok(self.max_sources.reset())
         } else if name == MAX_SINKS.name {
-            self.max_sinks.reset()
+            Ok(self.max_sinks.reset())
         } else if name == MAX_MATERIALIZED_VIEWS.name {
-            self.max_materialized_views.reset()
+            Ok(self.max_materialized_views.reset())
         } else if name == MAX_CLUSTERS.name {
-            self.max_clusters.reset()
+            Ok(self.max_clusters.reset())
         } else if name == MAX_REPLICAS_PER_CLUSTER.name {
-            self.max_replicas_per_cluster.reset()
+            Ok(self.max_replicas_per_cluster.reset())
         } else if name == MAX_DATABASES.name {
-            self.max_databases.reset()
+            Ok(self.max_databases.reset())
         } else if name == MAX_SCHEMAS_PER_DATABASE.name {
-            self.max_schemas_per_database.reset()
+            Ok(self.max_schemas_per_database.reset())
         } else if name == MAX_OBJECTS_PER_SCHEMA.name {
-            self.max_objects_per_schema.reset()
+            Ok(self.max_objects_per_schema.reset())
         } else if name == MAX_SECRETS.name {
-            self.max_secrets.reset()
+            Ok(self.max_secrets.reset())
         } else if name == MAX_ROLES.name {
-            self.max_roles.reset()
+            Ok(self.max_roles.reset())
         } else if name == MAX_RESULT_SIZE.name {
-            self.max_result_size.reset()
+            Ok(self.max_result_size.reset())
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
-            self.allowed_cluster_replica_sizes.reset()
+            Ok(self.allowed_cluster_replica_sizes.reset())
         } else if name == WINDOW_FUNCTIONS.name {
-            self.window_functions.reset()
+            Ok(self.window_functions.reset())
+        } else if name == CONFIG_HAS_SYNCED_ONCE.name {
+            Ok(self.config_has_synced_once.reset())
         } else {
-            return Err(AdapterError::UnknownParameter(name.into()));
+            Err(AdapterError::UnknownParameter(name.into()))
         }
-        Ok(())
     }
 
     /// Returns the value of the `max_aws_privatelink_connections` configuration parameter.
@@ -1094,6 +1226,11 @@ impl SystemVars {
     pub fn window_functions(&self) -> bool {
         *self.window_functions.value()
     }
+
+    /// Returns the `config_has_synced_once` configuration parameter.
+    pub fn config_has_synced_once(&self) -> bool {
+        *self.config_has_synced_once.value()
+    }
 }
 
 /// A `Var` represents a configuration parameter of an arbitrary type.
@@ -1111,6 +1248,12 @@ pub trait Var: fmt::Debug {
 
     /// Returns the name of the type of this variable.
     fn type_name(&self) -> &'static str;
+
+    /// Indicates wither the [`Var`] is visible for the given [`User`].
+    ///
+    /// Variables marked as `internal` are only visible for the
+    /// [`crate::catalog::SYSTEM_USER`] user.
+    fn visible(&self, user: &User) -> bool;
 
     /// Indicates wither the [`Var`] is experimental.
     ///
@@ -1130,6 +1273,7 @@ where
     name: &'static UncasedStr,
     value: &'static V,
     description: &'static str,
+    internal: bool,
 }
 
 impl<V> Var for ServerVar<V>
@@ -1151,6 +1295,10 @@ where
     fn type_name(&self) -> &'static str {
         V::TYPE_NAME
     }
+
+    fn visible(&self, user: &User) -> bool {
+        !self.internal || user == &*SYSTEM_USER
+    }
 }
 
 /// A `SystemVar` is persisted on disk value for a configuration parameter. If unset,
@@ -1159,7 +1307,7 @@ where
 struct SystemVar<V>
 where
     V: Value + fmt::Debug + ?Sized + 'static,
-    V::Owned: fmt::Debug,
+    V::Owned: fmt::Debug + PartialEq + Eq,
 {
     persisted_value: Option<V::Owned>,
     parent: &'static ServerVar<V>,
@@ -1167,8 +1315,8 @@ where
 
 impl<V> SystemVar<V>
 where
-    V: Value + fmt::Debug + ?Sized + 'static,
-    V::Owned: fmt::Debug,
+    V: Value + fmt::Debug + PartialEq + Eq + ?Sized + 'static,
+    V::Owned: fmt::Debug + PartialEq + Eq + PartialEq + Eq,
 {
     fn new(parent: &'static ServerVar<V>) -> SystemVar<V> {
         SystemVar {
@@ -1177,18 +1325,27 @@ where
         }
     }
 
-    fn set(&mut self, s: &str) -> Result<(), AdapterError> {
+    fn set(&mut self, s: &str) -> Result<bool, AdapterError> {
         match V::parse(s) {
             Ok(v) => {
-                self.persisted_value = Some(v);
-                Ok(())
+                if self.persisted_value.as_ref() != Some(&v) {
+                    self.persisted_value = Some(v);
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
             }
             Err(()) => Err(AdapterError::InvalidParameterType(self.parent)),
         }
     }
 
-    fn reset(&mut self) {
-        self.persisted_value = None;
+    fn reset(&mut self) -> bool {
+        if self.persisted_value.as_ref() != None {
+            self.persisted_value = None;
+            true
+        } else {
+            false
+        }
     }
 
     fn value(&self) -> &V {
@@ -1197,12 +1354,19 @@ where
             .map(|v| v.borrow())
             .unwrap_or(self.parent.value)
     }
+
+    fn is_default(&self, s: &str) -> Result<bool, AdapterError> {
+        match V::parse(s) {
+            Ok(v) => Ok(self.parent.value == v.borrow()),
+            Err(()) => Err(AdapterError::InvalidParameterType(self.parent)),
+        }
+    }
 }
 
 impl<V> Var for SystemVar<V>
 where
-    V: Value + ToOwned + fmt::Debug + ?Sized + 'static,
-    V::Owned: fmt::Debug,
+    V: Value + ToOwned + fmt::Debug + PartialEq + Eq + ?Sized + 'static,
+    V::Owned: fmt::Debug + PartialEq + Eq + PartialEq + Eq,
 {
     fn name(&self) -> &'static str {
         self.parent.name()
@@ -1218,6 +1382,10 @@ where
 
     fn type_name(&self) -> &'static str {
         V::TYPE_NAME
+    }
+
+    fn visible(&self, user: &User) -> bool {
+        self.parent.visible(user)
     }
 }
 
@@ -1314,9 +1482,13 @@ where
     fn type_name(&self) -> &'static str {
         V::TYPE_NAME
     }
+
+    fn visible(&self, user: &User) -> bool {
+        self.parent.visible(user)
+    }
 }
 
-/// A value that can be stored in a session variable.
+/// A value that can be stored in a session or server variable.
 pub trait Value: ToOwned + Send + Sync {
     /// The name of the value type.
     const TYPE_NAME: &'static str;
@@ -1532,25 +1704,29 @@ impl Value for Vec<String> {
     const TYPE_NAME: &'static str = "string list";
 
     fn parse(s: &str) -> Result<Vec<String>, ()> {
-        match parse_set_variable_value(s) {
-            Ok(SetVariableValue::Ident(ident)) => {
-                let value = vec![ident.into_string()];
-                Ok(value)
+        if s.is_empty() {
+            Ok(vec![]) // The empty vector might be a valid default and should be allowed.
+        } else {
+            match parse_set_variable_value(s) {
+                Ok(SetVariableValue::Ident(ident)) => {
+                    let value = vec![ident.into_string()];
+                    Ok(value)
+                }
+                Ok(SetVariableValue::Literal(value)) => {
+                    // Don't assume that value matches AstValue::String(...) here, as
+                    // a single string might be wrongly parsed as a non-string literal.
+                    let value = vec![value.to_string()];
+                    Ok(value)
+                }
+                Ok(SetVariableValue::Literals(values)) => values
+                    .into_iter()
+                    .map(|value| match value {
+                        AstValue::String(value) => Ok(value),
+                        _ => Err(()),
+                    })
+                    .collect(),
+                _ => Err(()),
             }
-            Ok(SetVariableValue::Literal(value)) => {
-                // Don't assume that value matches AstValue::String(...) here, as
-                // a single string might be wrongly parsed as a non-string literal.
-                let value = vec![value.to_string()];
-                Ok(value)
-            }
-            Ok(SetVariableValue::Literals(values)) => values
-                .into_iter()
-                .map(|value| match value {
-                    AstValue::String(value) => Ok(value),
-                    _ => Err(()),
-                })
-                .collect(),
-            _ => Err(()),
         }
     }
 

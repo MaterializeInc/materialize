@@ -414,6 +414,20 @@ pub struct Args {
         use_delimiter = true
     )]
     announce_egress_ip: Vec<Ipv4Addr>,
+    /// An SDK key for LaunchDarkly.
+    ///
+    /// Setting this will enable synchronization of LaunchDarkly features with
+    /// system configuration parameters.
+    #[clap(long, env = "LAUNCHDARKLY_SDK_KEY")]
+    launchdarkly_sdk_key: Option<String>,
+    /// The interval in seconds at which to synchronize system parameter values.
+    #[clap(
+        long,
+        env = "CONFIG_SYNC_LOOP_INTERVAL",
+        parse(try_from_str = humantime::parse_duration),
+        default_value = "15s"
+    )]
+    config_sync_loop_interval: Duration,
 
     /// The 12-digit AWS account id, which is used to generate an AWS Principal.
     #[clap(long, env = "AWS_ACCOUNT_ID")]
@@ -767,6 +781,8 @@ max log level: {max_log_level}",
         segment_api_key: args.segment_api_key,
         egress_ips: args.announce_egress_ip,
         aws_account_id: args.aws_account_id,
+        launchdarkly_sdk_key: args.launchdarkly_sdk_key,
+        config_sync_loop_interval: args.config_sync_loop_interval,
     }))?;
 
     metrics.start_time_environmentd.set(

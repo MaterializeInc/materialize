@@ -373,7 +373,7 @@ async fn execute_stmt(
         | ExecuteResponse::Updated(_)
         | ExecuteResponse::AlteredObject(_)
         | ExecuteResponse::AlteredIndexLogicalCompaction
-        | ExecuteResponse::AlteredSystemConfiguraion
+        | ExecuteResponse::AlteredSystemConfiguration
         | ExecuteResponse::Deallocate { .. }
         | ExecuteResponse::Prepare) => SqlResult::ok(client, res),
         ExecuteResponse::SendingRows {

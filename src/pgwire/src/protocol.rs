@@ -1273,7 +1273,7 @@ where
 
             ExecuteResponse::AlteredIndexLogicalCompaction
             | ExecuteResponse::AlteredObject(..)
-            | ExecuteResponse::AlteredSystemConfiguraion
+            | ExecuteResponse::AlteredSystemConfiguration
             | ExecuteResponse::CreatedComputeInstance { .. }
             | ExecuteResponse::CreatedComputeReplica { .. }
             | ExecuteResponse::CreatedConnection { .. }

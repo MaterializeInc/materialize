@@ -44,8 +44,7 @@ standard_conforming_strings             on                     "Causes '...' str
 statement_timeout                       "10 s"                 "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations."
 TimeZone                                UTC                    "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation                   "strict serializable"  "Sets the current transaction's isolation level (PostgreSQL)."
-window_functions                        on                     "Feature flag indicating whether window functions are enabled."
-
+window_functions                        on                     "Feature flag indicating whether window functions are enabled (Materialize)."
 
 > SET application_name = 'foo'
 

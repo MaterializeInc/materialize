@@ -180,7 +180,7 @@ pub enum ExecuteResponse {
     /// The index was altered.
     AlteredIndexLogicalCompaction,
     /// The system configuration was altered.
-    AlteredSystemConfiguraion,
+    AlteredSystemConfiguration,
     /// The query was canceled.
     Canceled,
     /// The requested cursor was closed.
@@ -313,7 +313,7 @@ impl ExecuteResponse {
         match self {
             AlteredObject(o) => Some(format!("ALTER {}", o)),
             AlteredIndexLogicalCompaction => Some("ALTER INDEX".into()),
-            AlteredSystemConfiguraion => Some("ALTER SYSTEM".into()),
+            AlteredSystemConfiguration => Some("ALTER SYSTEM".into()),
             Canceled => None,
             ClosedCursor => Some("CLOSE CURSOR".into()),
             CopyTo { .. } => None,
@@ -393,7 +393,7 @@ impl ExecuteResponse {
                 vec![AlteredObject, AlteredIndexLogicalCompaction]
             }
             AlterSystemSet | AlterSystemReset | AlterSystemResetAll => {
-                vec![AlteredSystemConfiguraion]
+                vec![AlteredSystemConfiguration]
             }
             Close => vec![ClosedCursor],
             PlanKind::CopyFrom => vec![ExecuteResponseKind::CopyFrom],

@@ -252,6 +252,8 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         segment_api_key: None,
         egress_ips: vec![],
         aws_account_id: None,
+        launchdarkly_sdk_key: None,
+        config_sync_loop_interval: Duration::ZERO,
     }))?;
     let server = Server {
         inner,
