@@ -4377,10 +4377,24 @@ pub fn resolve_func(
         })
         .collect();
 
+    // Suggest using the `jsonb_` version of `json_` functions if they exist.
+    let alternative_hint = match name.0.split_last() {
+        Some((i, q)) if i.as_str().starts_with("json_") => {
+            let mut jsonb_version = q.to_vec();
+            jsonb_version.push(Ident::new(i.as_str().replace("json_", "jsonb_")));
+            let jsonb_version = UnresolvedObjectName(jsonb_version);
+            match resolve_func(ecx, &jsonb_version, args) {
+                Ok(_) => Some(format!("Try using {}", jsonb_version)),
+                Err(_) => None,
+            }
+        }
+        _ => None,
+    };
+
     Err(PlanError::UnknownFunction {
         name: name.to_string(),
         arg_types,
-        alternative_hint: None,
+        alternative_hint,
     })
 }
 
