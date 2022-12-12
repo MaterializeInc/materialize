@@ -552,10 +552,10 @@ SELECT replica_id, process_id, cpu_percent, memory_percent FROM mz_internal.mz_c
 1  0  0  0
 2  0  0  0
 3  0  0  0
-23  0  0  0
 24  0  0  0
 25  0  0  0
-25  1  0  0
+26  0  0  0
+26  1  0  0
 
 statement ok
 DROP CLUSTER foo CASCADE
