@@ -33,13 +33,12 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
 use mz_build_info::BuildInfo;
-use mz_compute_client::command::{
-    BuildDesc, ComputeCommand, ComputeCommandHistory, DataflowDescription,
-};
 use mz_compute_client::command::{CommunicationConfig, ComputeStartupEpoch};
+use mz_compute_client::command::{ComputeCommand, ComputeCommandHistory};
 use mz_compute_client::metrics::ComputeMetrics;
 use mz_compute_client::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
+use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;

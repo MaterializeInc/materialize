@@ -13,8 +13,8 @@ pub(crate) mod text;
 
 use std::collections::HashMap;
 
-use mz_compute_client::command::DataflowDescription;
 use mz_compute_client::plan::Plan;
+use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
 
 use super::{AnnotatedPlan, ExplainContext, ExplainMultiPlan, Explainable};

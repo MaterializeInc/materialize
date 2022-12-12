@@ -32,10 +32,9 @@ use mz_audit_log::{
     VersionedStorageUsage,
 };
 use mz_build_info::DUMMY_BUILD_INFO;
-use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::{
     ComputeInstanceEvent, ComputeInstanceId, ComputeInstanceStatus, ComputeReplicaAllocation,
-    ComputeReplicaConfig, ComputeReplicaLocation, ComputeReplicaLogging,
+    ComputeReplicaConfig, ComputeReplicaLocation, ComputeReplicaLogging, ProcessId, ReplicaId,
 };
 use mz_compute_client::logging::{LogVariant, LogView, DEFAULT_LOG_VARIANTS, DEFAULT_LOG_VIEWS};
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};

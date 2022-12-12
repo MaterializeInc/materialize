@@ -15,7 +15,7 @@ import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
 import "storage-client/src/controller.proto";
 
-package mz_compute_client.sinks;
+package mz_compute_client.types.sinks;
 
 message ProtoComputeSinkDesc {
     mz_repr.global_id.ProtoGlobalId from = 1;

@@ -27,7 +27,6 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
-use mz_stash::PostgresFactory;
 use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
@@ -35,9 +34,8 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
-use mz_compute_client::command::ReplicaId;
 use mz_compute_client::controller::{
-    ActiveComputeController, ComputeController, ComputeControllerResponse,
+    ActiveComputeController, ComputeController, ComputeControllerResponse, ReplicaId,
 };
 use mz_compute_client::response::{PeekResponse, SubscribeResponse};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
@@ -49,6 +47,7 @@ use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::{GlobalId, TimestampManipulation};
+use mz_stash::PostgresFactory;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };

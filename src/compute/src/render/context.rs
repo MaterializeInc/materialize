@@ -28,7 +28,7 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
-use mz_compute_client::command::DataflowDescription;
+use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
 use mz_storage_client::controller::CollectionMetadata;

@@ -21,9 +21,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use mz_compute_client::command::{DataflowDescription, ReplicaId};
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
 use mz_compute_client::response::PeekResponse;
+use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_expr::explain::Indices;
 use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::str::Indent;

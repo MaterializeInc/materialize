@@ -18,8 +18,7 @@ use timely::progress::Timestamp;
 use tokio::sync::mpsc;
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
-use mz_compute_client::command::ReplicaId;
-use mz_compute_client::controller::{ComputeInstanceId, ComputeReplicaConfig};
+use mz_compute_client::controller::{ComputeInstanceId, ComputeReplicaConfig, ReplicaId};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::EpochMillis;

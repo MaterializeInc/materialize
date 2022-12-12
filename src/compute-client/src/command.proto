@@ -10,17 +10,12 @@
 syntax = "proto3";
 
 import "compute-client/src/logging.proto";
-import "compute-client/src/plan.proto";
-import "compute-client/src/sinks.proto";
+import "compute-client/src/types/dataflows.proto";
 import "expr/src/linear.proto";
 import "expr/src/relation.proto";
-import "expr/src/scalar.proto";
 import "proto/src/proto.proto";
-import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
-import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
-import "storage-client/src/controller.proto";
 import "storage-client/src/client.proto";
 
 import "google/protobuf/empty.proto";
@@ -34,7 +29,7 @@ message ProtoComputeStartupEpoch {
 
 message ProtoComputeCommand {
     message ProtoCreateDataflows {
-        repeated ProtoDataflowDescription dataflows = 1;
+        repeated types.dataflows.ProtoDataflowDescription dataflows = 1;
     }
 
     message ProtoCancelPeeks {
@@ -59,7 +54,7 @@ message ProtoComputeCommand {
 }
 
 message ProtoInstanceConfig {
-    mz_compute_client.logging.ProtoLoggingConfig logging = 1;
+    logging.ProtoLoggingConfig logging = 1;
     uint32 max_result_size = 2;
 }
 
@@ -67,62 +62,6 @@ message ProtoCommunicationConfig {
     uint64 workers = 1;
     uint64 process = 2;
     repeated string addresses = 3;
-}
-
-message ProtoDataflowDescription {
-    message ProtoSourceImport {
-        mz_repr.global_id.ProtoGlobalId id = 1;
-        ProtoSourceInstanceDesc source_instance_desc = 2;
-        bool monotonic = 3;
-    }
-
-    message ProtoIndexImport {
-        mz_repr.global_id.ProtoGlobalId id = 1;
-        ProtoIndexDesc index_desc = 2;
-        mz_repr.relation_and_scalar.ProtoRelationType typ = 3;
-        bool monotonic = 4;
-    }
-
-    message ProtoIndexExport {
-        mz_repr.global_id.ProtoGlobalId id = 1;
-        ProtoIndexDesc index_desc = 2;
-        mz_repr.relation_and_scalar.ProtoRelationType typ = 3;
-    }
-
-    message ProtoSinkExport {
-        mz_repr.global_id.ProtoGlobalId id = 1;
-        mz_compute_client.sinks.ProtoComputeSinkDesc sink_desc = 2;
-    }
-
-    repeated ProtoSourceImport source_imports = 1;
-    repeated ProtoIndexImport index_imports = 2;
-    repeated ProtoBuildDesc objects_to_build = 3;
-    repeated ProtoIndexExport index_exports = 4;
-    repeated ProtoSinkExport sink_exports = 5;
-    optional mz_repr.antichain.ProtoU64Antichain as_of = 6;
-    mz_repr.antichain.ProtoU64Antichain until = 9;
-    string debug_name = 7;
-    reserved 8;
-}
-
-message ProtoIndexDesc {
-    mz_repr.global_id.ProtoGlobalId on_id = 1;
-    repeated mz_expr.scalar.ProtoMirScalarExpr key = 3;
-}
-
-message ProtoBuildDesc {
-    mz_repr.global_id.ProtoGlobalId id = 1;
-    mz_compute_client.plan.ProtoPlan plan = 2;
-}
-
-message ProtoSourceInstanceDesc {
-    ProtoSourceInstanceArguments arguments = 1;
-    mz_storage_client.controller.ProtoCollectionMetadata storage_metadata = 2;
-    mz_repr.relation_and_scalar.ProtoRelationType typ = 3;
-}
-
-message ProtoSourceInstanceArguments {
-    optional mz_expr.linear.ProtoMapFilterProject operators = 2;
 }
 
 message ProtoPeek {

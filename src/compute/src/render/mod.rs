@@ -114,8 +114,8 @@ use timely::progress::Timestamp;
 use timely::worker::Worker as TimelyWorker;
 use timely::PartialOrder;
 
-use mz_compute_client::command::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_compute_client::plan::Plan;
+use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_expr::Id;
 use mz_ore::collections::CollectionExt as IteratorExt;
 use mz_repr::{Diff, GlobalId, Row};
