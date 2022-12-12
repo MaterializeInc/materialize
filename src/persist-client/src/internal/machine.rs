@@ -1374,6 +1374,7 @@ pub mod datadriven {
             datadriven.shard_id.clone(),
             WriterId::new(),
             Antichain::from_elem(0),
+            Some(upper.clone()),
         );
         for ((k, ()), t, d) in updates {
             builder.add(&k, &(), &t, &d).await.expect("invalid batch");

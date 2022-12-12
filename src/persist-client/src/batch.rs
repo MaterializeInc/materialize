@@ -206,6 +206,7 @@ where
     val_buf: Vec<u8>,
 
     since: Antichain<T>,
+    upper: Option<Antichain<T>>,
 
     // These provide a bit more safety against appending a batch with the wrong
     // type to a shard.
@@ -229,6 +230,7 @@ where
         shard_id: ShardId,
         writer_id: WriterId,
         since: Antichain<T>,
+        upper: Option<Antichain<T>>,
     ) -> Self {
         let parts = BatchParts::new(
             cfg.batch_builder_max_outstanding_parts,
@@ -258,6 +260,7 @@ where
             key_buf: Vec::new(),
             val_buf: Vec::new(),
             since,
+            upper,
             _phantom: PhantomData,
         }
     }
@@ -355,7 +358,7 @@ where
             // part, but it doesn't really tell us anything. Figure out how
             // to make a tighter bound, possibly by changing the part
             // description to be an _inclusive_ upper.
-            let upper = Antichain::new();
+            let upper = self.upper.clone().unwrap_or_else(|| Antichain::new());
             Self::write_run(
                 &mut self.parts,
                 &mut self.current_part,

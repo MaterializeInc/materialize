@@ -607,6 +607,7 @@ where
             shard_id.clone(),
             writer_id,
             desc.since().clone(),
+            Some(desc.upper().clone()),
         );
 
         start_prefetches(prefetch_budget_bytes, &mut runs, shard_id, &blob, &metrics);

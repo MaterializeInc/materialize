@@ -533,6 +533,7 @@ where
             self.machine.shard_id().clone(),
             self.writer_id.clone(),
             Antichain::from_elem(T::minimum()),
+            None,
         )
     }
 
