@@ -20,7 +20,7 @@ fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
 itertools = "0.10.5"
 once_cell = "1.16.0"
-launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", default_features = false, features = ["hypertls"]}
+launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", default_features = false, features = ["hypertls"] }
 maplit = "1.0.2"
 mz-audit-log = { path = "../audit-log" }
 mz-build-info = { path = "../build-info" }

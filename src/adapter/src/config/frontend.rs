@@ -22,8 +22,9 @@ pub struct SystemParameterFrontend {
     /// An SDK client to mediate interactions with the LaunchDarkly client.
     #[derivative(Debug = "ignore")]
     ld_client: ld::Client,
-    /// The user to use when quering LaunchDarkly using the SDK.
-    ld_user: ld::User,
+    /// The context to use when quering LaunchDarkly using the SDK.
+    /// This scopes down queries to a specific key.
+    ld_ctx: ld::Context,
     /// A map from parameter names to LaunchDarkly feature keys
     /// to use when populating the the [SynchronizedParameters]
     /// instance in [SystemParameterFrontend::pull].
@@ -34,16 +35,18 @@ impl SystemParameterFrontend {
     /// Construct a new [SystemParameterFrontend] instance.
     pub fn new(
         ld_sdk_key: &str,
-        ld_user_key: &str,
+        ld_context_key: &str,
         ld_key_map: BTreeMap<String, String>,
     ) -> Result<Self, anyhow::Error> {
         let ld_config = ld::ConfigBuilder::new(ld_sdk_key).build();
         let ld_client = ld::Client::build(ld_config)?;
-        let ld_user = ld::User::with_key(ld_user_key).build();
+        let ld_ctx = ld::ContextBuilder::new(ld_context_key)
+            .build()
+            .map_err(|e| anyhow::anyhow!(e))?;
 
         Ok(Self {
             ld_client,
-            ld_user,
+            ld_ctx,
             ld_key_map,
         })
     }
@@ -84,7 +87,7 @@ impl SystemParameterFrontend {
 
             let flag_var =
                 self.ld_client
-                    .variation(&self.ld_user, flag_name, params.get(param_name));
+                    .variation(&self.ld_ctx, flag_name, params.get(param_name));
 
             let flag_str = match flag_var {
                 ld::FlagValue::Bool(v) => v.to_string(),

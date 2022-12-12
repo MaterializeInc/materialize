@@ -201,11 +201,6 @@ allow-git = [
     # to make it into a release.
     "https://github.com/MaterializeInc/rust-eventsource-client.git",
 
-    # Waiting on
-    # https://github.com/launchdarkly/rust-server-sdk-evaluation/pull/1 to make
-    # it into a release.
-    "https://github.com/MaterializeInc/rust-server-sdk-evaluation",
-
     # Waiting on https://github.com/launchdarkly/rust-server-sdk/pull/20 to make
     # it into a release.
     "https://github.com/MaterializeInc/rust-server-sdk",

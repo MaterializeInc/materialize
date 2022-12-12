@@ -300,7 +300,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
 
     // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
     let system_parameter_frontend = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
-        let ld_user_key = config
+        let ld_ctx_key = config
             .frontegg
             .as_ref()
             .map(|frontegg| frontegg.tenant_id().to_string())
@@ -313,7 +313,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         let system_parameter_frontend = task::spawn_blocking(
             || "SystemParameterFrontend::new",
             move || {
-                SystemParameterFrontend::new(ld_sdk_key.as_str(), ld_user_key.as_str(), ld_key_map)
+                SystemParameterFrontend::new(ld_sdk_key.as_str(), ld_ctx_key.as_str(), ld_key_map)
             },
         )
         .await??;

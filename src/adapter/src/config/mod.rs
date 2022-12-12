@@ -51,10 +51,10 @@ pub async fn system_parameter_sync(
 
     let mut params = SynchronizedParameters::default();
     loop {
+        interval.tick().await;
         backend.pull(&mut params).await;
         if frontend.pull(&mut params) {
             backend.push(&mut params).await;
         }
-        interval.tick().await;
     }
 }

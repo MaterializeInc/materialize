@@ -2601,6 +2601,7 @@ checksum = "10a35a97730320ffe8e2d410b5d3b69279b98d2c14bdb8b70ea89ecf7888d41e"
 dependencies = [
  "autocfg",
  "hashbrown",
+ "serde",
 ]
 
 [[package]]
@@ -2842,8 +2843,8 @@ dependencies = [
 
 [[package]]
 name = "launchdarkly-server-sdk"
-version = "1.0.0-beta.4"
-source = "git+https://github.com/MaterializeInc/rust-server-sdk#4d02461c887ce754304b4c76a7faeb5395af47f4"
+version = "1.0.0"
+source = "git+https://github.com/MaterializeInc/rust-server-sdk#d866421dbcaeee81679d06861594493797a8e7be"
 dependencies = [
  "built",
  "chrono",
@@ -2851,18 +2852,18 @@ dependencies = [
  "data-encoding",
  "eventsource-client",
  "futures",
+ "hyper",
+ "hyper-tls",
  "launchdarkly-server-sdk-evaluation",
  "lazy_static",
  "log",
  "lru",
  "moka",
  "parking_lot",
- "reqwest",
  "ring",
  "serde",
  "serde_json",
  "thiserror",
- "threadpool",
  "tokio",
  "tokio-stream",
  "uuid",
@@ -2870,18 +2871,23 @@ dependencies = [
 
 [[package]]
 name = "launchdarkly-server-sdk-evaluation"
-version = "1.0.0-beta.5"
-source = "git+https://github.com/MaterializeInc/rust-server-sdk-evaluation#c085b34eba2bb48269152f2641ee128af2d71732"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c27dd31ce69c55fca526d1c22c2dcca96fd0c98e496529d37eeef6c41652173"
 dependencies = [
  "base16ct",
  "chrono",
+ "itertools",
  "lazy_static",
  "log",
+ "maplit",
  "regex",
  "semver",
  "serde",
  "serde_json",
+ "serde_with",
  "sha1",
+ "urlencoding",
 ]
 
 [[package]]
@@ -6539,6 +6545,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_with"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25bf4a5a814902cd1014dbccfa4d4560fb8432c779471e96e035602519f82eef"
+dependencies = [
+ "base64",
+ "chrono",
+ "hex",
+ "indexmap",
+ "serde",
+ "serde_json",
+ "serde_with_macros",
+ "time",
+]
+
+[[package]]
+name = "serde_with_macros"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3452b4c0f6c1e357f73fdb87cd1efabaa12acf328c7a528e252893baeb3f4aa"
+dependencies = [
+ "darling",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "serde_yaml"
 version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6965,15 +6999,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5516c27b78311c50bf42c071425c560ac799b11c30b31f87e3081965fe5e0180"
 dependencies = [
  "once_cell",
-]
-
-[[package]]
-name = "threadpool"
-version = "1.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d050e60b33d41c19108b32cea32164033a9013fe3b46cbd4457559bfbf77afaa"
-dependencies = [
- "num_cpus",
 ]
 
 [[package]]
