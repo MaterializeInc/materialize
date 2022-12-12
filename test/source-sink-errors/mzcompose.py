@@ -87,13 +87,13 @@ class KafkaDisruption:
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source-topic-${testdrive.seed}')
                   FORMAT BYTES
                   ENVELOPE NONE
-                  /* TODO(bkirwi) WITH ( REMOTE 'storaged:2100' ) REMOTE causes the status source to be empty */
+                # WITH ( REMOTE 'storaged:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
 
                 > CREATE SINK sink1 FROM source1
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
-                  /* WITH ( REMOTE 'storaged:2100' ) REMOTE causes the status source to be empty */
+                # WITH ( REMOTE 'storaged:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
                 """
             )
         )
@@ -196,23 +196,21 @@ class PgDisruption:
                 DROP PUBLICATION IF EXISTS mz_source;
                 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-                CREATE TABLE pk_table (pk INTEGER PRIMARY KEY, f2 TEXT);
-                INSERT INTO pk_table VALUES (1, 'one');
-                ALTER TABLE pk_table REPLICA IDENTITY FULL;
-                INSERT INTO pk_table VALUES (2, 'two');
-                INSERT INTO pk_table VALUES (3, 'three');
+                CREATE TABLE t1 (f1 INTEGER PRIMARY KEY, f2 integer[]);
+                INSERT INTO t1 VALUES (1, NULL);
+                ALTER TABLE t1 REPLICA IDENTITY FULL;
+                INSERT INTO t1 VALUES (2, NULL);
 
                 > CREATE SOURCE "source1"
                   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-                  FOR TABLES ("pk_table");
+                  FOR TABLES ("t1");
 
                 # Currently, we don't correctly capture or report errors that happen during the initial postgres
                 # snapshot. (The source will go directly from `running` to `starting`.) Wait for the initial
                 # snapshot to complete to get more interesting errors.
-                > SELECT * FROM pk_table ORDER BY pk ASC;
-                1 one
-                2 two
-                3 three
+                > SELECT f1 FROM t1;
+                1
+                2
                 """
             )
         )
@@ -234,12 +232,17 @@ class PgDisruption:
             dedent(
                 """
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO pk_table VALUES (4, 'four');
+                INSERT INTO t1 VALUES (3);
 
                 > SELECT status, error
                   FROM mz_internal.mz_source_status
                   WHERE name = 'source1'
                 running <null>
+
+                > SELECT f1 FROM t1;
+                1
+                2
+                3
                 """
             )
         )
@@ -266,8 +269,8 @@ disruptions: List[Disruption] = [
         expected_error="BrokerTransportFailure|Resolve",
         fixage=lambda c, _: c.up("redpanda"),
     ),
-    # Can not be tested ATM due to REMOTE breaking things
-    # Disruption(
+    # https://github.com/MaterializeInc/materialize/issues/16582
+    # KafkaDisruption(
     #     name="kill-redpanda-storaged",
     #     breakage=lambda c, _: c.kill("redpanda", "storaged"),
     #     expected_error="???",
@@ -286,12 +289,24 @@ disruptions: List[Disruption] = [
                 """
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 DROP PUBLICATION mz_source;
-                INSERT INTO pk_table VALUES (100, 'advance the LSN');
+                INSERT INTO t1 VALUES (3, NULL);
                 """
             )
         ),
         expected_error="publication .+ does not exist",
         # Can't recover when publication state is deleted.
+        fixage=None,
+    ),
+    PgDisruption(
+        name="alter-postgres",
+        breakage=lambda c, _: alter_pg_table(c),
+        expected_error="source table t1 with oid .+ has been altered",
+        fixage=None,
+    ),
+    PgDisruption(
+        name="unsupported-postgres",
+        breakage=lambda c, _: unsupported_pg_table(c),
+        expected_error="invalid input syntax for type array",
         fixage=None,
     ),
 ]
@@ -309,3 +324,26 @@ def workflow_default(c: Composition) -> None:
 def redpanda_topics(c: Composition, action: str, seed: int) -> None:
     for topic in ["source", "sink", "progress"]:
         c.exec("redpanda", "rpk", "topic", action, f"testdrive-{topic}-topic-{seed}")
+
+
+def alter_pg_table(c: Composition) -> None:
+    c.testdrive(
+        dedent(
+            """
+                 $ postgres-execute connection=postgres://postgres:postgres@postgres
+                 ALTER TABLE t1 ADD COLUMN f3 INTEGER;
+                 INSERT INTO t1 VALUES (3, NULL, 4)
+                 """
+        )
+    )
+
+
+def unsupported_pg_table(c: Composition) -> None:
+    c.testdrive(
+        dedent(
+            """
+                 $ postgres-execute connection=postgres://postgres:postgres@postgres
+                 INSERT INTO t1 VALUES (3, '{{1},{2}}')
+                 """
+        )
+    )
