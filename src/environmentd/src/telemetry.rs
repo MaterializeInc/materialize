@@ -120,13 +120,19 @@ async fn report_traits_loop(
     }: Config,
 ) {
     const QUERY: &str = "SELECT
+    (SELECT count(*) FROM mz_materialized_views WHERE id LIKE 'u%') AS active_materialized_views,
     (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%') AS active_sources,
-    (SELECT count(*) FROM mz_sinks WHERE id LIKE 'u%') AS active_sinks";
+    (SELECT count(*) FROM mz_sinks WHERE id LIKE 'u%') AS active_sinks,
+    (SELECT count(*) FROM mz_views WHERE id LIKE 'u%') AS active_views";
 
     #[derive(Debug, Serialize)]
     struct Traits {
+        // Gathered from SQL
+        active_materialized_views: i64,
         active_sources: i64,
         active_sinks: i64,
+        active_views: i64,
+        // Gathered from metrics
         active_subscribes: i64,
     }
 
@@ -142,8 +148,10 @@ async fn report_traits_loop(
                 let row = rows.into_element();
                 let mut row = row.iter();
                 Ok::<_, anyhow::Error>(serde_json::to_value(Traits {
+                    active_materialized_views: row.next().unwrap().unwrap_int64(),
                     active_sources: row.next().unwrap().unwrap_int64(),
                     active_sinks: row.next().unwrap().unwrap_int64(),
+                    active_views: row.next().unwrap().unwrap_int64(),
                     active_subscribes: adapter_client
                         .metrics()
                         .active_subscribes
