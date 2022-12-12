@@ -10,40 +10,40 @@
 # Compaction with multipart inputs and outputs
 
 write-batch output=b0 lower=0 upper=3 target_size=0
-zero 0 1
-one 1 1
-two 2 1
+a 0 1
+b 1 1
+c 2 1
 ----
 parts=3 len=3
 
 fetch-batch input=b0
 ----
 <part 0>
-zero 0 1
+a 0 1
 <part 1>
-one 1 1
+b 1 1
 <part 2>
-two 2 1
+c 2 1
 <run 0>
 part 0
 part 1
 part 2
 
 write-batch output=b1 lower=3 upper=6 target_size=0
-zero 3 1
-one 4 1
-two 5 1
+a 3 1
+b 4 1
+c 5 1
 ----
 parts=3 len=3
 
 fetch-batch input=b1
 ----
 <part 0>
-zero 3 1
+a 3 1
 <part 1>
-one 4 1
+b 4 1
 <part 2>
-two 5 1
+c 5 1
 <run 0>
 part 0
 part 1
@@ -56,8 +56,8 @@ parts=1 len=3
 fetch-batch input=b0_1
 ----
 <part 0>
-one 6 2
-two 6 2
-zero 6 2
+a 6 2
+b 6 2
+c 6 2
 <run 0>
 part 0

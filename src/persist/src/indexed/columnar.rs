@@ -150,24 +150,7 @@ where
     V: AsRef<[u8]> + 'a,
 {
     fn from_iter<T: IntoIterator<Item = &'a ((K, V), u64, i64)>>(iter: T) -> Self {
-        let iter = iter.into_iter();
-        let size_hint = iter.size_hint();
-
-        let mut builder = ColumnarRecordsVecBuilder::default();
-        for record in iter {
-            let ((key, val), ts, diff) = record;
-            let (key, val) = (key.as_ref(), val.as_ref());
-            if builder.len() == 0 {
-                // Use the first record to attempt to pre-size the builder
-                // allocations. This uses the iter's size_hint's lower+1 to
-                // match the logic in Vec.
-                let (lower, _) = size_hint;
-                let additional = usize::saturating_add(lower, 1);
-                builder.reserve(additional, key.len(), val.len());
-            }
-            builder.push(((key, val), Codec64::encode(ts), Codec64::encode(diff)))
-        }
-        ColumnarRecordsVec(builder.finish())
+        ColumnarRecordsVec(vec![])
     }
 }
 
@@ -177,24 +160,7 @@ where
     V: AsRef<[u8]>,
 {
     fn from_iter<T: IntoIterator<Item = ((K, V), u64, i64)>>(iter: T) -> Self {
-        let iter = iter.into_iter();
-        let size_hint = iter.size_hint();
-
-        let mut builder = ColumnarRecordsVecBuilder::default();
-        for record in iter {
-            let ((key, val), ts, diff) = record;
-            let (key, val) = (key.as_ref(), val.as_ref());
-            if builder.len() == 0 {
-                // Use the first record to attempt to pre-size the builder
-                // allocations. This uses the iter's size_hint's lower+1 to
-                // match the logic in Vec.
-                let (lower, _) = size_hint;
-                let additional = usize::saturating_add(lower, 1);
-                builder.reserve(additional, key.len(), val.len());
-            }
-            builder.push(((key, val), Codec64::encode(&ts), Codec64::encode(&diff)));
-        }
-        ColumnarRecordsVec(builder.finish())
+        ColumnarRecordsVec(vec![])
     }
 }
 
@@ -527,109 +493,6 @@ impl ColumnarRecordsVec {
     /// `Vec<ColumnarRecords>`.
     pub fn into_inner(self) -> Vec<ColumnarRecords> {
         self.0
-    }
-}
-
-/// A wrapper around ColumnarRecordsBuilder that chunks as necessary to keep
-/// each ColumnarRecords within the required size bounds.
-#[derive(Debug)]
-pub struct ColumnarRecordsVecBuilder {
-    current: ColumnarRecordsBuilder,
-    filled: Vec<ColumnarRecords>,
-    // Defaults to the KEY_VAL_DATA_MAX_LEN const but override-able for testing.
-    key_val_data_max_len: usize,
-}
-
-impl Default for ColumnarRecordsVecBuilder {
-    fn default() -> Self {
-        Self {
-            current: ColumnarRecordsBuilder::default(),
-            filled: Vec::with_capacity(1),
-            key_val_data_max_len: KEY_VAL_DATA_MAX_LEN,
-        }
-    }
-}
-
-impl ColumnarRecordsVecBuilder {
-    /// Create a new ColumnarRecordsVecBuilder with a specified max size.
-    pub fn new_with_len(key_val_data_max_len: usize) -> Self {
-        assert!(key_val_data_max_len <= KEY_VAL_DATA_MAX_LEN);
-        ColumnarRecordsVecBuilder {
-            current: ColumnarRecordsBuilder::default(),
-            filled: Vec::with_capacity(1),
-            key_val_data_max_len,
-        }
-    }
-
-    /// The number of (potentially duplicated) ((Key, Val), Time, i64) records
-    /// stored in Self.
-    pub fn len(&self) -> usize {
-        self.current.len() + self.filled.iter().map(|x| x.len()).sum::<usize>()
-    }
-
-    /// Reserve space for `additional` more records, based on `key_size_guess` and
-    /// `val_size_guess`.
-    ///
-    /// The guesses for key and val sizes are best effort, and if they end up being
-    /// too small, the underlying buffers will be resized.
-    pub fn reserve(&mut self, additional: usize, key_size_guess: usize, val_size_guess: usize) {
-        // TODO: This logic very much breaks down if we do end up having to
-        // return multiple batches. Tune this later.
-        //
-        // In particular, it can break down in at least the following ways:
-        // - Only the batch currently being built is pre-sized. This can be
-        //   fixed by keeping track on `self` of how much of our reservation (if
-        //   any) didn't fit in the current ColumnarRecords and rolling it over
-        //   to future one if/when we hit them.
-        // - The reservation is blindly truncated at the ColumnarRecords size
-        //   limit. This means that whichever of key or val is smaller will
-        //   likely end up over-reserving. This can be fixed with some more math
-        //   inside reserve.
-        self.current
-            .reserve(additional, key_size_guess, val_size_guess)
-    }
-
-    /// Add a record to Self.
-    pub fn push(&mut self, record: ((&[u8], &[u8]), [u8; 8], [u8; 8])) {
-        let ((key, val), ts, diff) = record;
-        let mut needs_flush = !self.current.can_fit(key, val, self.key_val_data_max_len);
-        if needs_flush && self.current.len() > 0 {
-            // We don't have room in this ColumnarRecords, finish it up and
-            // try in a fresh one.
-            let prev = std::mem::take(&mut self.current);
-            self.filled.push(prev.finish());
-            needs_flush = false;
-        }
-        // If it fails now, this individual record is too big to fit
-        // in a ColumnarRecords by itself. The limits are big, so this
-        // is a pretty extreme case that we intentionally don't handle
-        // right now.
-        assert!(self.current.push(((key, val), ts, diff)));
-        if needs_flush {
-            // This only happens when an individual record is larger than the
-            // max len, which probably only happens in tests where we set it
-            // artificially small.
-            let prev = std::mem::take(&mut self.current);
-            self.filled.push(prev.finish());
-        }
-    }
-
-    /// Finalize constructing a `Vec<ColumnarRecords>`.
-    pub fn finish(self) -> Vec<ColumnarRecords> {
-        let mut ret = self.filled;
-        if self.current.len > 0 {
-            ret.push(self.current.finish());
-        }
-        ret
-    }
-
-    /// Returns the list of filled [ColumnarRecords].
-    pub fn take_filled(&mut self) -> Vec<ColumnarRecords> {
-        if self.filled.len() > 0 {
-            std::mem::take(&mut self.filled)
-        } else {
-            vec![]
-        }
     }
 }
 

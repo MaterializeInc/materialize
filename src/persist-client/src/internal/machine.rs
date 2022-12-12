@@ -1373,6 +1373,7 @@ pub mod datadriven {
             Arc::clone(&datadriven.client.cpu_heavy_runtime),
             datadriven.shard_id.clone(),
             WriterId::new(),
+            Antichain::from_elem(0),
         );
         for ((k, ()), t, d) in updates {
             builder.add(&k, &(), &t, &d).await.expect("invalid batch");

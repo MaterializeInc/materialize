@@ -532,6 +532,7 @@ where
             Arc::clone(&self.cpu_heavy_runtime),
             self.machine.shard_id().clone(),
             self.writer_id.clone(),
+            Antichain::from_elem(T::minimum()),
         )
     }
 

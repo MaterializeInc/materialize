@@ -17,16 +17,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::TryFutureExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::spawn;
-use mz_persist::indexed::columnar::{
-    ColumnarRecordsBuilder, ColumnarRecordsVecBuilder, KEY_VAL_DATA_MAX_LEN,
-};
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
@@ -38,7 +34,7 @@ use tracing::log::warn;
 use tracing::{debug, debug_span, trace, Instrument, Span};
 
 use crate::async_runtime::CpuHeavyRuntime;
-use crate::batch::BatchParts;
+use crate::batch::{BatchBuilder, BatchParts};
 use crate::fetch::{fetch_batch_part, EncodedPart};
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
@@ -395,34 +391,25 @@ where
                 .runs_compacted
                 .inc_by(u64::cast_from(runs.len()));
 
-            // given the runs we actually have in our batch, we might have extra memory
-            // available. we reserved enough space to always have 1 in-progress part in
-            // flight, but if we have excess, we can use it to increase our write parallelism
-            let extra_outstanding_parts = (run_reserved_memory_bytes
-                .saturating_sub(run_chunk_max_memory_usage))
-                / cfg.blob_target_size;
-
-            let batch_parts = BatchParts::new(
-                1 + extra_outstanding_parts,
-                Arc::clone(&metrics),
-                req.shard_id,
-                writer_id.clone(),
-                req.desc.lower().clone(),
-                Arc::clone(&blob),
-                Arc::clone(&cpu_heavy_runtime),
-                &metrics.compaction.batch,
-            );
-
-            let (parts, runs, updates) = Self::compact_runs(
+            /// WIP: do we still need this?
+            // // given the runs we actually have in our batch, we might have extra memory
+            // // available. we reserved enough space to always have 1 in-progress part in
+            // // flight, but if we have excess, we can use it to increase our write parallelism
+            // let extra_outstanding_parts = (run_reserved_memory_bytes
+            //     .saturating_sub(run_chunk_max_memory_usage))
+            //     / cfg.blob_target_size;
+            let batch = Self::compact_runs(
                 &cfg,
                 &req.shard_id,
                 &req.desc,
                 runs,
-                batch_parts,
                 Arc::clone(&blob),
                 Arc::clone(&metrics),
+                Arc::clone(&cpu_heavy_runtime),
+                writer_id.clone(),
             )
             .await?;
+            let (parts, runs, updates) = (batch.parts, batch.runs, batch.len);
             assert!((updates == 0 && parts.len() == 0) || (updates > 0 && parts.len() > 0));
 
             if updates == 0 {
@@ -573,10 +560,11 @@ where
         shard_id: &'a ShardId,
         desc: &'a Description<T>,
         runs: Vec<(&'a Description<T>, &'a [HollowBatchPart])>,
-        mut batch_parts: BatchParts<T>,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
-    ) -> Result<(Vec<HollowBatchPart>, Vec<usize>, usize), anyhow::Error> {
+        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        writer_id: WriterId,
+    ) -> Result<HollowBatch<T>, anyhow::Error> {
         // TODO: Figure out a more principled way to allocate our memory budget.
         // Currently, we give any excess budget to write parallelism. If we had
         // to pick between 100% towards writes vs 100% towards reads, then reads
@@ -586,14 +574,7 @@ where
         // For now, invent some some extra budget out of thin air for prefetch.
         let prefetch_budget_bytes = 2 * cfg.blob_target_size;
 
-        let mut compaction_runs = vec![];
-        let mut compaction_parts_count = 0;
-        let mut total_updates = 0;
-
         let mut sorted_updates = BinaryHeap::new();
-        let mut update_buffer: Vec<((Vec<u8>, Vec<u8>), T, D)> = Vec::new();
-        let mut update_buffer_size_bytes = 0;
-        let mut greatest_kv: Option<(Vec<u8>, Vec<u8>)> = None;
 
         let mut remaining_updates_by_run = vec![0; runs.len()];
         let mut runs: Vec<_> = runs
@@ -610,6 +591,18 @@ where
             .collect();
 
         let mut timings = Timings::default();
+
+        let mut batch = BatchBuilder::new(
+            cfg.clone(),
+            Arc::clone(&metrics),
+            100,
+            desc.lower().clone(),
+            Arc::clone(&blob),
+            cpu_heavy_runtime,
+            shard_id.clone(),
+            writer_id,
+            desc.since().clone(),
+        );
 
         start_prefetches(prefetch_budget_bytes, &mut runs, shard_id, &blob, &metrics);
 
@@ -682,122 +675,83 @@ where
                 }
             }
 
-            let update_size_bytes = ColumnarRecordsBuilder::columnar_record_size(&k, &v);
-
-            // flush the buffer if adding this latest update would cause it to exceed our target size
-            if update_size_bytes + update_buffer_size_bytes > cfg.blob_target_size {
-                total_updates += Self::consolidate_run(
-                    &mut update_buffer,
-                    &mut compaction_runs,
-                    compaction_parts_count,
-                    &mut greatest_kv,
-                    &mut timings,
-                );
-                Self::write_run(
-                    &mut batch_parts,
-                    &mut update_buffer,
-                    &mut compaction_parts_count,
-                    desc.clone(),
-                    &mut timings,
-                )
-                .await;
-                update_buffer_size_bytes = 0;
-            }
-
-            update_buffer_size_bytes += update_size_bytes;
-            update_buffer.push(((k, v), t, d));
-        }
-
-        if update_buffer.len() > 0 {
-            total_updates += Self::consolidate_run(
-                &mut update_buffer,
-                &mut compaction_runs,
-                compaction_parts_count,
-                &mut greatest_kv,
-                &mut timings,
-            );
-            Self::write_run(
-                &mut batch_parts,
-                &mut update_buffer,
-                &mut compaction_parts_count,
-                desc.clone(),
-                &mut timings,
-            )
-            .await;
+            // WIP: handle result here
+            let _ = batch.add(&k, &v, &t, &d);
         }
 
         let start = Instant::now();
-        let compaction_parts = batch_parts.finish().await;
+        let batch = batch.finish(desc.upper().clone()).await?;
+        let hollow_batch = batch.into_hollow_batch();
         timings.part_writing += start.elapsed();
-        assert_eq!(compaction_parts.len(), compaction_parts_count);
 
         timings.record(&metrics);
 
-        Ok((compaction_parts, compaction_runs, total_updates))
+        Ok(hollow_batch)
     }
 
-    /// Consolidates `updates`, and determines whether the updates should extend the
-    /// current run (if any).  A new run will be created if `updates` contains a key
-    /// that overlaps with the current or any previous run.
-    fn consolidate_run(
-        updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
-        compaction_runs: &mut Vec<usize>,
-        number_of_compacted_runs: usize,
-        greatest_kv: &mut Option<(Vec<u8>, Vec<u8>)>,
-        timings: &mut Timings,
-    ) -> usize {
-        let start = Instant::now();
-        consolidate_updates(updates);
-
-        match (&greatest_kv, updates.last()) {
-            // our updates contain a key that exists within the range of a run we've
-            // already created, we should start a new run, as this part is no longer
-            // contiguous with the previous run/part
-            (Some(greatest_kv_seen), Some(greatest_kv_in_batch))
-                if *greatest_kv_seen > greatest_kv_in_batch.0 =>
-            {
-                compaction_runs.push(number_of_compacted_runs);
-            }
-            (_, Some(greatest_kv_in_batch)) => *greatest_kv = Some(greatest_kv_in_batch.0.clone()),
-            (Some(_), None) | (None, None) => {}
-        };
-
-        timings.consolidation += start.elapsed();
-        updates.len()
-    }
-
-    /// Encodes `updates` into columnar format and writes them as a single part to blob. It is the
-    /// caller's responsibility to chunk `updates` into a batch no greater than [crate::PersistConfig::blob_target_size]
-    /// and must absolutely be less than [mz_persist::indexed::columnar::KEY_VAL_DATA_MAX_LEN]
-    async fn write_run(
-        batch_parts: &mut BatchParts<T>,
-        updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
-        compaction_parts_count: &mut usize,
-        desc: Description<T>,
-        timings: &mut Timings,
-    ) {
-        if updates.is_empty() {
-            return;
-        }
-        *compaction_parts_count += 1;
-
-        let mut builder = ColumnarRecordsVecBuilder::new_with_len(KEY_VAL_DATA_MAX_LEN);
-        let start = Instant::now();
-        for ((k, v), t, d) in updates.drain(..) {
-            builder.push(((&k, &v), T::encode(&t), D::encode(&d)));
-        }
-        let chunks = builder.finish();
-        timings.part_columnar_encoding += start.elapsed();
-        debug_assert_eq!(chunks.len(), 1);
-
-        let start = Instant::now();
-        for chunk in chunks {
-            batch_parts
-                .write(chunk, desc.upper().clone(), desc.since().clone())
-                .await;
-        }
-        timings.part_writing += start.elapsed();
-    }
+    // /// Consolidates `updates`, and determines whether the updates should extend the
+    // /// current run (if any).  A new run will be created if `updates` contains a key
+    // /// that overlaps with the current or any previous run.
+    // fn consolidate_run(
+    //     updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
+    //     compaction_runs: &mut Vec<usize>,
+    //     number_of_compacted_runs: usize,
+    //     greatest_kv: &mut Option<(Vec<u8>, Vec<u8>)>,
+    //     timings: &mut Timings,
+    // ) -> usize {
+    //     let start = Instant::now();
+    //     consolidate_updates(updates);
+    //
+    //     match (&greatest_kv, updates.last()) {
+    //         // our updates contain a key that exists within the range of a run we've
+    //         // already created, we should start a new run, as this part is no longer
+    //         // contiguous with the previous run/part
+    //         (Some(greatest_kv_seen), Some(greatest_kv_in_batch))
+    //             if *greatest_kv_seen > greatest_kv_in_batch.0 =>
+    //         {
+    //             compaction_runs.push(number_of_compacted_runs);
+    //         }
+    //         (_, Some(greatest_kv_in_batch)) => *greatest_kv = Some(greatest_kv_in_batch.0.clone()),
+    //         (Some(_), None) | (None, None) => {}
+    //     };
+    //
+    //     timings.consolidation += start.elapsed();
+    //     updates.len()
+    // }
+    //
+    // /// Encodes `updates` into columnar format and writes them as a single part to blob. It is the
+    // /// caller's responsibility to chunk `updates` into a batch no greater than [crate::PersistConfig::blob_target_size]
+    // /// and must absolutely be less than [mz_persist::indexed::columnar::KEY_VAL_DATA_MAX_LEN]
+    // async fn write_run(
+    //     batch_parts: &mut BatchParts<T>,
+    //     updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
+    //     compaction_parts_count: &mut usize,
+    //     desc: Description<T>,
+    //     timings: &mut Timings,
+    // ) {
+    //     if updates.is_empty() {
+    //         return;
+    //     }
+    //     *compaction_parts_count += 1;
+    //
+    //     let mut builder = ColumnarRecordsBuilder::default();
+    //     let start = Instant::now();
+    //     for ((k, v), t, d) in updates.drain(..) {
+    //         // WIP: convert this into a BatchBuilder
+    //         builder.push(((&k, &v), T::encode(&t), D::encode(&d)));
+    //     }
+    //     let chunks = builder.finish();
+    //     timings.part_columnar_encoding += start.elapsed();
+    //     debug_assert_eq!(chunks.len(), 1);
+    //
+    //     let start = Instant::now();
+    //     for chunk in chunks {
+    //         batch_parts
+    //             .write(chunk, desc.upper().clone(), desc.since().clone())
+    //             .await;
+    //     }
+    //     timings.part_writing += start.elapsed();
+    // }
 
     fn validate_req(req: &CompactReq<T>) -> Result<(), anyhow::Error> {
         let mut frontier = req.desc.lower();
