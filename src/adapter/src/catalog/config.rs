@@ -12,7 +12,7 @@ use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use mz_orchestrator::{MemoryLimit, CpuLimit};
+use mz_orchestrator::{CpuLimit, MemoryLimit};
 use serde::Deserialize;
 
 use mz_build_info::BuildInfo;
