@@ -113,9 +113,3 @@ s1 mz_system
 s2 mz_introspection
 u1 default
 u3 bar
-
-statement ok
-DROP CLUSTER bar CASCADE;
-
-statement ok
-DROP DATABASE bar CASCADE;

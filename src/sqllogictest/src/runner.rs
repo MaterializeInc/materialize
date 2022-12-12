@@ -312,20 +312,6 @@ pub struct Runner<'a> {
     inner: Option<RunnerInner>,
 }
 
-impl std::ops::Deref for Runner<'_> {
-    type Target = RunnerInner;
-
-    fn deref(&self) -> &Self::Target {
-        self.inner.as_ref().unwrap()
-    }
-}
-
-impl std::ops::DerefMut for Runner<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.inner.as_mut().unwrap()
-    }
-}
-
 pub struct RunnerInner {
     server_addr: SocketAddr,
     internal_server_addr: SocketAddr,
@@ -643,88 +629,114 @@ impl<'a> Runner<'a> {
         Ok(runner)
     }
 
-    async fn run_record<'r>(
-        &mut self,
-        record: &'r Record<'r>,
-    ) -> Result<Outcome<'r>, anyhow::Error> {
-        match &record {
-            Record::Statement {
-                expected_error,
-                rows_affected,
-                sql,
-                location,
-            } => {
-                match self
-                    .run_statement(*expected_error, *rows_affected, sql, location.clone())
-                    .await?
-                {
-                    Outcome::Success => {
-                        if self.auto_index_tables {
-                            let additional = mutate(sql);
-                            for stmt in additional {
-                                self.client.execute(&stmt, &[]).await?;
-                            }
-                        }
-                        Ok(Outcome::Success)
-                    }
-                    other => {
-                        if expected_error.is_some() {
-                            Ok(other)
-                        } else {
-                            // If we failed to execute a statement that was supposed to succeed,
-                            // running the rest of the tests in this file will probably cause
-                            // false positives, so just give up on the file entirely.
-                            Ok(Outcome::Bail {
-                                cause: Box::new(other),
-                                location: location.clone(),
-                            })
-                        }
-                    }
-                }
-            }
-            Record::Query {
-                sql,
-                output,
-                location,
-            } => self.run_query(sql, output, location.clone()).await,
-            Record::Simple {
-                conn,
-                user,
-                sql,
-                output,
-                location,
-                ..
-            } => {
-                self.run_simple(*conn, *user, sql, output, location.clone())
-                    .await
-            }
-            Record::Copy {
-                table_name,
-                tsv_path,
-            } => {
-                let tsv = tokio::fs::read(tsv_path).await?;
-                let copy = self
-                    .client
-                    .copy_in(&*format!("COPY {} FROM STDIN", table_name))
-                    .await?;
-                tokio::pin!(copy);
-                copy.send(bytes::Bytes::from(tsv)).await?;
-                copy.finish().await?;
-                Ok(Outcome::Success)
-            }
-            Record::ResetServer => {
-                self.reset().await?;
-                Ok(Outcome::Success)
-            }
-            _ => Ok(Outcome::Success),
-        }
-    }
-
     pub async fn reset(&mut self) -> Result<(), anyhow::Error> {
         // Explicitly drop the old runner here to ensure that we wait for threads to terminate
         // before starting a new runner
         drop(self.inner.take());
         self.inner = Some(RunnerInner::start(self.config).await?);
+
+        Ok(())
+    }
+
+    async fn run_record<'r>(
+        &mut self,
+        record: &'r Record<'r>,
+    ) -> Result<Outcome<'r>, anyhow::Error> {
+        if let Record::ResetServer = record {
+            self.reset().await?;
+            Ok(Outcome::Success)
+        } else {
+            self.inner
+                .as_mut()
+                .expect("RunnerInner missing")
+                .run_record(record)
+                .await
+        }
+    }
+
+    async fn reset_database(&mut self) -> Result<(), anyhow::Error> {
+        let inner = self.inner.as_mut().expect("RunnerInner missing");
+
+        inner
+            .client
+            .batch_execute(
+                "ROLLBACK;
+                 SET cluster = mz_introspection;
+                 RESET cluster_replica;",
+            )
+            .await?;
+
+        // Drop all databases, then recreate the `materialize` database.
+        for row in inner
+            .client
+            .query("SELECT name FROM mz_databases", &[])
+            .await?
+        {
+            let name: &str = row.get("name");
+            inner
+                .client
+                .batch_execute(&format!("DROP DATABASE {name}"))
+                .await?;
+        }
+        inner
+            .client
+            .batch_execute("CREATE DATABASE materialize")
+            .await?;
+
+        // Ensure default cluster exists with one replica of size '1'. We don't
+        // destroy the existing default cluster replica if it exists, as turning
+        // on a cluster replica is exceptionally slow.
+        let mut needs_default_cluster = true;
+        for row in inner
+            .client
+            .query("SELECT name FROM mz_clusters WHERE id LIKE 'u%'", &[])
+            .await?
+        {
+            match row.get("name") {
+                "default" => needs_default_cluster = false,
+                name => {
+                    inner
+                        .client
+                        .batch_execute(&format!("DROP CLUSTER {name}"))
+                        .await?
+                }
+            }
+        }
+        if needs_default_cluster {
+            inner
+                .client
+                .batch_execute("CREATE CLUSTER default REPLICAS ()")
+                .await?;
+        }
+        let mut needs_default_replica = true;
+        for row in inner
+            .client
+            .query(
+                "SELECT name, size FROM mz_cluster_replicas
+                 WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'default')",
+                &[],
+            )
+            .await?
+        {
+            match (row.get("name"), row.get("size")) {
+                ("r1", "1") => needs_default_replica = false,
+                (name, _) => {
+                    inner
+                        .client
+                        .batch_execute(&format!("DROP CLUSTER REPLICA {name}"))
+                        .await?
+                }
+            }
+        }
+        if needs_default_replica {
+            inner
+                .client
+                .batch_execute("CREATE CLUSTER REPLICA default.r1 SIZE '1'")
+                .await?;
+        }
+
+        inner.client = connect(inner.server_addr, None).await;
+        inner.clients = HashMap::new();
 
         Ok(())
     }
@@ -887,6 +899,79 @@ impl RunnerInner {
             clients: HashMap::new(),
             auto_index_tables: config.auto_index_tables,
         })
+    }
+
+    async fn run_record<'r>(
+        &mut self,
+        record: &'r Record<'r>,
+    ) -> Result<Outcome<'r>, anyhow::Error> {
+        match &record {
+            Record::Statement {
+                expected_error,
+                rows_affected,
+                sql,
+                location,
+            } => {
+                match self
+                    .run_statement(*expected_error, *rows_affected, sql, location.clone())
+                    .await?
+                {
+                    Outcome::Success => {
+                        if self.auto_index_tables {
+                            let additional = mutate(sql);
+                            for stmt in additional {
+                                self.client.execute(&stmt, &[]).await?;
+                            }
+                        }
+                        Ok(Outcome::Success)
+                    }
+                    other => {
+                        if expected_error.is_some() {
+                            Ok(other)
+                        } else {
+                            // If we failed to execute a statement that was supposed to succeed,
+                            // running the rest of the tests in this file will probably cause
+                            // false positives, so just give up on the file entirely.
+                            Ok(Outcome::Bail {
+                                cause: Box::new(other),
+                                location: location.clone(),
+                            })
+                        }
+                    }
+                }
+            }
+            Record::Query {
+                sql,
+                output,
+                location,
+            } => self.run_query(sql, output, location.clone()).await,
+            Record::Simple {
+                conn,
+                user,
+                sql,
+                output,
+                location,
+                ..
+            } => {
+                self.run_simple(*conn, *user, sql, output, location.clone())
+                    .await
+            }
+            Record::Copy {
+                table_name,
+                tsv_path,
+            } => {
+                let tsv = tokio::fs::read(tsv_path).await?;
+                let copy = self
+                    .client
+                    .copy_in(&*format!("COPY {} FROM STDIN", table_name))
+                    .await?;
+                tokio::pin!(copy);
+                copy.send(bytes::Bytes::from(tsv)).await?;
+                copy.finish().await?;
+                Ok(Outcome::Success)
+            }
+            _ => Ok(Outcome::Success),
+        }
     }
 
     async fn run_statement<'a>(
@@ -1230,7 +1315,7 @@ pub async fn run_string(
     source: &str,
     input: &str,
 ) -> Result<Outcomes, anyhow::Error> {
-    reset_database(runner).await?;
+    runner.reset_database().await?;
 
     let mut outcomes = Outcomes::default();
     let mut parser = crate::parser::Parser::new(source, input);
@@ -1282,21 +1367,6 @@ pub async fn run_string(
     Ok(outcomes)
 }
 
-pub async fn reset_database(runner: &mut Runner<'_>) -> Result<(), anyhow::Error> {
-    for reset_query in &[
-        "ROLLBACK",
-        "DROP DATABASE IF EXISTS materialize CASCADE",
-        "CREATE DATABASE materialize",
-    ] {
-        runner.client.simple_query(reset_query).await?;
-    }
-
-    runner.client = connect(runner.server_addr, None).await;
-    runner.clients = HashMap::new();
-
-    Ok(())
-}
-
 pub async fn run_file(runner: &mut Runner<'_>, filename: &Path) -> Result<Outcomes, anyhow::Error> {
     let mut input = String::new();
     File::open(filename)?.read_to_string(&mut input)?;
@@ -1304,7 +1374,7 @@ pub async fn run_file(runner: &mut Runner<'_>, filename: &Path) -> Result<Outcom
 }
 
 pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<(), anyhow::Error> {
-    reset_database(runner).await?;
+    runner.reset_database().await?;
 
     let mut file = OpenOptions::new().read(true).write(true).open(filename)?;
 

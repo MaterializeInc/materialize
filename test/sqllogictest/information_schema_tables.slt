@@ -907,6 +907,3 @@ materialize
 public
 v
 VIEW
-
-statement ok
-DROP DATABASE other CASCADE

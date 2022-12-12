@@ -24,6 +24,3 @@ SELECT * FROM information_schema.columns WHERE table_name = 'v'
 table_catalog  table_schema  table_name  column_name  ordinal_position  data_type  character_maximum_length  numeric_precision  numeric_scale
 materialize    public        v           num          1                 integer    NULL                      NULL               NULL
 materialize    public        v           char         2                 text       NULL                      NULL               NULL
-
-statement ok
-DROP DATABASE other CASCADE

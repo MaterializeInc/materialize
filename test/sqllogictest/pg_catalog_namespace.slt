@@ -36,6 +36,3 @@ mz_catalog   NULL NULL
 mz_internal  NULL  NULL
 pg_catalog   NULL  NULL
 public   NULL  NULL
-
-statement ok
-DROP DATABASE other CASCADE

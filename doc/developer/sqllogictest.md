@@ -101,8 +101,7 @@ the `reset-server` can be used to bring about a new, pristine Mz instance.
 
 For tests that involve object Ids (such as certain `EXPLAIN` tests and
 those that consult the introspection tables), `reset-server` should
-be used at the start of the .slt file. For tests that manipulate clusters,
-`reset-server` should be used at the end of the .slt file.
+be used at the start of the .slt file.
 
 ### `simple` extension
 

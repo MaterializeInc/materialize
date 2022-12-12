@@ -60,6 +60,3 @@ SELECT relname FROM pg_catalog.pg_class WHERE relname IN ('a', 'foo', 'bar', 'pg
 bar
 foo
 pg_class
-
-statement ok
-DROP DATABASE other CASCADE;
