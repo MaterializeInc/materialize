@@ -1023,7 +1023,6 @@ where
                         batch_upper.clone(),
                     )
                     .await
-                    .expect("Indeterminate")
                     .expect("Invalid usage");
 
                 if sink_id.is_user() {

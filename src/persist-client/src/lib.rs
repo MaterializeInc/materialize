@@ -1322,7 +1322,7 @@ mod tests {
                 Antichain::from_elem(3),
             )
             .await;
-        assert_eq!(res, Ok(Ok(Err(Upper(Antichain::from_elem(3))))));
+        assert_eq!(res, Ok(Err(Upper(Antichain::from_elem(3)))));
 
         // A failed write updates our local cache of the shard upper.
         assert_eq!(write2.upper(), &Antichain::from_elem(3));
@@ -1501,8 +1501,7 @@ mod tests {
                 Antichain::from_elem(5),
                 Antichain::from_elem(6),
             )
-            .await
-            .expect("external error");
+            .await;
         assert_eq!(result, Ok(Err(Upper(Antichain::from_elem(3)))));
 
         // Writing with the correct expected upper to make the write contiguous should make the

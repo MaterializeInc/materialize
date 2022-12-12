@@ -12,29 +12,28 @@
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
-use mz_persist::location::{Blob, Indeterminate};
-use mz_persist::retry::Retry;
+use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
-use tracing::{debug, debug_span, info, instrument, warn, Instrument};
+use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
 use crate::batch::{validate_truncate_batch, Added, Batch, BatchBuilder};
 use crate::error::InvalidUsage;
 use crate::internal::compact::Compactor;
 use crate::internal::encoding::SerdeWriterEnrichedHollowBatch;
-use crate::internal::machine::{Machine, INFO_MIN_ATTEMPTS};
+use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HollowBatch, Upper};
 use crate::{parse_id, CpuHeavyRuntime, GarbageCollector, PersistConfig, ShardId};
@@ -276,20 +275,13 @@ where
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
-    ///
-    /// SUBTLE! Unlike the other methods on WriteHandle, it is not always safe
-    /// to retry [Indeterminate]s in compare_and_append (depends on the usage
-    /// pattern). We should be able to structure timestamp binding, source, and
-    /// sink code so it is always safe to retry [Indeterminate]s, but SQL txns
-    /// will have to pass the error back to the user (or risk double committing
-    /// the txn).
     #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn compare_and_append<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, Indeterminate>
+    ) -> Result<Result<(), Upper<T>>, InvalidUsage<T>>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
         KB: Borrow<K>,
@@ -299,19 +291,14 @@ where
         I: IntoIterator<Item = SB>,
         D: Send + Sync,
     {
-        let mut batch = match self
+        let mut batch = self
             .batch(updates, expected_upper.clone(), new_upper.clone())
-            .await
-        {
-            Ok(batch) => batch,
-            Err(invalid_usage) => return Ok(Err(invalid_usage)),
-        };
-
+            .await?;
         match self
             .compare_and_append_batch(&mut [&mut batch], expected_upper, new_upper)
             .await
         {
-            ok @ Ok(Ok(Ok(()))) => ok,
+            ok @ Ok(Ok(())) => ok,
             err => {
                 // We cannot delete the batch in compare_and_append_batch()
                 // because the caller owns the batch and might want to retry
@@ -358,48 +345,16 @@ where
     where
         D: Send + Sync,
     {
-        let mut retry = self
-            .metrics
-            .retries
-            .append_batch
-            .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
             let res = self
                 .compare_and_append_batch(&mut [&mut batch], lower.clone(), upper.clone())
-                .await;
-            // Unlike compare_and_append, the contract of append is constructed
-            // such that it's correct to retry Indeterminate errors.
-            // Specifically, compare_and_append can hit an Indeterminate error
-            // (but actually succeed). If we retried, then it would get a upper
-            // mismatch, which could lead to e.g. a txn double apply. Append, on
-            // the other hand, simply guarantees that the requested frontier
-            // bounds have been written.
-            let res = match res {
-                Ok(x) => x,
-                Err(err) => {
-                    if retry.attempt() >= INFO_MIN_ATTEMPTS {
-                        info!(
-                            "external operation append::caa failed, retrying in {:?}: {}",
-                            retry.next_sleep(),
-                            err
-                        );
-                    } else {
-                        debug!(
-                            "external operation append::caa failed, retrying in {:?}: {}",
-                            retry.next_sleep(),
-                            err
-                        );
-                    }
-                    retry = retry.sleep().await;
-                    continue;
-                }
-            };
+                .await?;
             match res {
-                Ok(Ok(())) => {
+                Ok(()) => {
                     self.upper = upper;
                     return Ok(Ok(()));
                 }
-                Ok(Err(current_upper)) => {
+                Err(current_upper) => {
                     let Upper(current_upper) = current_upper;
 
                     // it's possible a client using `append_batch` continually fails if
@@ -435,11 +390,6 @@ where
                         return Ok(Ok(()));
                     }
                 }
-                Err(err) => {
-                    batch.delete().await;
-
-                    return Err(err);
-                }
             }
         }
     }
@@ -469,28 +419,22 @@ where
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
-    ///
-    /// SUBTLE! Unlike the other methods, it is not always safe to retry
-    /// [Indeterminate]s in compare_and_append (depends on the usage pattern).
-    /// We should be able to structure timestamp binding, source, and sink code
-    /// so it is always safe to retry [Indeterminate]s, but SQL txns will have
-    /// to pass the error back to the user (or risk double committing the txn).
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn compare_and_append_batch(
         &mut self,
         batches: &mut [&mut Batch<K, V, T, D>],
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, Indeterminate>
+    ) -> Result<Result<(), Upper<T>>, InvalidUsage<T>>
     where
         D: Send + Sync,
     {
         for batch in batches.iter() {
             if self.machine.shard_id() != batch.shard_id() {
-                return Ok(Err(InvalidUsage::BatchNotFromThisShard {
+                return Err(InvalidUsage::BatchNotFromThisShard {
                     batch_shard: batch.shard_id(),
                     handle_shard: self.machine.shard_id(),
-                }));
+                });
             }
         }
 
@@ -501,9 +445,7 @@ where
 
         let (mut parts, mut num_updates) = (Vec::new(), 0);
         for batch in batches.iter() {
-            if let Err(err) = validate_truncate_batch(&batch.batch.desc, &desc) {
-                return Ok(Err(err));
-            }
+            let () = validate_truncate_batch(&batch.batch.desc, &desc)?;
             parts.extend_from_slice(&batch.batch.parts);
             num_updates += batch.batch.len;
         }
@@ -532,18 +474,18 @@ where
                 }
                 maintenance
             }
-            Ok(Err(invalid_usage)) => return Ok(Err(invalid_usage)),
+            Ok(Err(invalid_usage)) => return Err(invalid_usage),
             Err(current_upper) => {
                 // We tried to to a compare_and_append with the wrong expected upper, that
                 // won't work. Update the cached upper to the current upper.
                 self.upper = current_upper.0.clone();
-                return Ok(Ok(Err(current_upper)));
+                return Ok(Err(current_upper));
             }
         };
 
         maintenance.start_performing(&self.machine, &self.gc, self.compact.as_ref());
 
-        Ok(Ok(Ok(())))
+        Ok(Ok(()))
     }
 
     /// Turns the given [`WriterEnrichedHollowBatch`] back into a [`Batch`]
@@ -717,7 +659,6 @@ where
             Antichain::from_elem(new_upper),
         )
         .await
-        .expect("external durability failed")
         .expect("invalid usage")
         .expect("unexpected upper")
     }
@@ -738,7 +679,6 @@ where
             Antichain::from_elem(new_upper),
         )
         .await
-        .expect("external durability failed")
         .expect("invalid usage")
         .expect("unexpected upper")
     }

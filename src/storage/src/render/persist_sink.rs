@@ -231,7 +231,6 @@ where
                                 )
                                 .await
                                 .expect("cannot append updates")
-                                .expect("cannot append updates")
                                 .expect("invalid/outdated upper");
 
                             metrics.processed_batches.inc();
