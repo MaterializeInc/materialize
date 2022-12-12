@@ -10,16 +10,18 @@
 //! A source that reads from an a persist shard.
 
 use std::any::Any;
+use std::convert::Infallible;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use std::time::Instant;
 
 use differential_dataflow::Hashable;
-use futures::Stream as FuturesStream;
-use timely::dataflow::channels::pact::Exchange;
+use futures::StreamExt;
+use mz_ore::collections::CollectionExt;
+use mz_ore::vec::VecExt;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::OkErr;
+use timely::dataflow::operators::{CapabilitySet, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -28,7 +30,6 @@ use tracing::trace;
 
 use mz_expr::MfpPlan;
 use mz_ore::cast::CastFrom;
-use mz_ore::vec::VecExt;
 use mz_persist::location::ExternalError;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::SerdeLeasedBatchPart;
@@ -69,7 +70,9 @@ pub fn persist_source<G, YFn>(
     as_of: Option<Antichain<Timestamp>>,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
-    flow_control_input: &Stream<G, ()>,
+    // Use Infallible to statically ensure that no data can ever be sent. TODO:
+    // Replace Infallible with `!` once the latter is stabilized.
+    flow_control_input: &Stream<G, Infallible>,
     flow_control_max_inflight_bytes: usize,
     yield_fn: YFn,
 ) -> (
@@ -118,7 +121,9 @@ pub fn persist_source_core<G, YFn>(
     as_of: Option<Antichain<Timestamp>>,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
-    flow_control_input: &Stream<G, ()>,
+    // Use Infallible to statically ensure that no data can ever be sent. TODO:
+    // Replace Infallible with `!` once the latter is stabilized.
+    flow_control_input: &Stream<G, Infallible>,
     flow_control_max_inflight_bytes: usize,
     yield_fn: YFn,
 ) -> (
@@ -292,23 +297,87 @@ where
 
     let mut pinned_stream = Box::pin(async_stream);
 
-    let (inner, token) = crate::source::util::source(
-        scope,
+    let mut builder_dist = AsyncOperatorBuilder::new(
         format!("persist_source {}: part distribution", source_id),
-        flow_control_input,
-        move |info| {
-            let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
-            let waker = futures::task::waker(waker_activator);
+        scope.clone(),
+    );
+    let mut flow_control_input = builder_dist.new_input(flow_control_input, Pipeline);
+    let (mut parts_output, parts_stream) = builder_dist.new_output();
+    let shutdown_button = builder_dist.build(move |caps| async move {
+        let mut cap_set = CapabilitySet::from_elem(caps.into_element());
 
-            let mut current_ts = timely::progress::Timestamp::minimum();
-            let mut inflight_bytes = 0;
-            let mut inflight_parts: Vec<(Antichain<Timestamp>, usize)> = Vec::new();
+        let mut current_ts = timely::progress::Timestamp::minimum();
+        let mut inflight_bytes = 0;
+        let mut inflight_parts: Vec<(Antichain<Timestamp>, usize)> = Vec::new();
 
-            move |cap_set, flow_control_upper, output| {
-                let mut context = Context::from_waker(&waker);
+        loop {
+            // While we have budget left for fetching more parts, read from the
+            // subscription and pass them on.
+            while inflight_bytes < flow_control_max_inflight_bytes {
+                match pinned_stream.next().await {
+                    Some(Ok((parts, progress, size_in_bytes))) => {
+                        let session_cap = cap_set.delayed(&current_ts);
+                        let mut parts_output = parts_output.activate();
+                        let mut session = parts_output.session(&session_cap);
+
+                        if size_in_bytes > 0 {
+                            inflight_parts.push((progress.clone(), size_in_bytes));
+                            inflight_bytes += size_in_bytes;
+                            trace!(
+                                "shard {} putting {} bytes inflight. total: {}. batch frontier {:?}",
+                                data_shard,
+                                size_in_bytes,
+                                inflight_bytes,
+                                progress,
+                            );
+                        }
+
+                        for part in parts {
+                            // Give the part to a random worker.
+                            let worker_idx = usize::cast_from(Instant::now().hashed()) % peers;
+                            session.give((worker_idx, part.into_exchangeable_part()));
+                        }
+
+                        cap_set.downgrade(progress.iter());
+                        match progress.into_option() {
+                            Some(ts) => {
+                                current_ts = ts;
+                            }
+                            None => {
+                                cap_set.downgrade(&[]);
+                                return;
+                            }
+                        }
+                    }
+                    Some(Err::<_, ExternalError>(e)) => {
+                        panic!("unexpected error from persist {e}")
+                    }
+                    // We never expect any further output from
+                    // `pinned_stream`, so propagate that information
+                    // downstream.
+                    None => {
+                        cap_set.downgrade(&[]);
+                        return;
+                    }
+                }
+            }
+
+            // We've exhausted our budget, listen for updates to the
+            // flow_control input's frontier until we free up new budget.
+            // Progress ChangeBatches are consumed even if you don't interact
+            // with the handle, so even if we never make it to this block (e.g.
+            // budget of usize::MAX), because the stream has no data, we don't
+            // cause unbounded buffering in timely.
+            while inflight_bytes >= flow_control_max_inflight_bytes {
+                // Get an upper bound until which we should produce data
+                let flow_control_upper = match flow_control_input.next().await {
+                    Some(Event::Progress(frontier)) => frontier,
+                    Some(Event::Data(_, _)) => unreachable!("flow_control_input should not contain data"),
+                    None => Antichain::new(),
+                };
 
                 let retired_parts = inflight_parts.drain_filter_swapping(|(upper, _size)| {
-                    PartialOrder::less_equal(&upper.borrow(), &flow_control_upper)
+                    PartialOrder::less_equal(&*upper, &flow_control_upper)
                 });
 
                 for (_upper, size_in_bytes) in retired_parts {
@@ -322,58 +391,9 @@ where
                         flow_control_upper,
                     );
                 }
-
-                while inflight_bytes < flow_control_max_inflight_bytes {
-                    match pinned_stream.as_mut().poll_next(&mut context) {
-                        Poll::Ready(Some(Ok((parts, progress, size_in_bytes)))) => {
-                            let session_cap = cap_set.delayed(&current_ts);
-                            let mut session = output.session(&session_cap);
-
-                            if size_in_bytes > 0 {
-                                inflight_parts.push((progress.clone(), size_in_bytes));
-                                inflight_bytes += size_in_bytes;
-                                trace!(
-                                    "shard {} putting {} bytes inflight. total: {}. batch frontier {:?}",
-                                    data_shard,
-                                    size_in_bytes,
-                                    inflight_bytes,
-                                    progress,
-                                );
-                            }
-
-                            for part in parts {
-                                // Give the part to a random worker.
-                                let worker_idx = usize::cast_from(Instant::now().hashed()) % peers;
-                                session.give((worker_idx, part.into_exchangeable_part()));
-                            }
-
-                            cap_set.downgrade(progress.iter());
-                            match progress.into_option() {
-                                Some(ts) => {
-                                    current_ts = ts;
-                                }
-                                None => {
-                                    cap_set.downgrade(&[]);
-                                    return;
-                                }
-                            }
-                        }
-                        Poll::Ready(Some(Err::<_, ExternalError>(e))) => {
-                            panic!("unexpected error from persist {e}")
-                        }
-                        // We never expect any further output from
-                        // `pinned_stream`, so propagate that information
-                        // downstream.
-                        Poll::Ready(None) => {
-                            cap_set.downgrade(&[]);
-                            return;
-                        }
-                        Poll::Pending => break,
-                    }
-                }
             }
-        },
-    );
+        }
+    });
 
     let mut fetcher_builder = AsyncOperatorBuilder::new(
         format!("persist_source {}: part fetcher", source_id),
@@ -381,7 +401,7 @@ where
     );
 
     let mut fetcher_input = fetcher_builder.new_input(
-        &inner,
+        &parts_stream,
         Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
     );
     let (mut update_output, update_output_stream) = fetcher_builder.new_output();
@@ -539,7 +559,7 @@ where
         Exchange::new(move |_| u64::cast_from(chosen_worker)),
     );
 
-    let last_token = Rc::new(token);
+    let last_token = Rc::new(shutdown_button.press_on_drop());
     let token = Rc::clone(&last_token);
 
     consumed_part_builder.build(|_initial_capabilities| {
