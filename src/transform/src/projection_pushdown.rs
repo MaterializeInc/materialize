@@ -112,9 +112,13 @@ impl ProjectionPushdown {
                 let desired_value_projection =
                     desired_value_projection.into_iter().collect::<Vec<_>>();
                 self.action(value, &desired_value_projection, gets)?;
+                let new_type = value.typ();
                 self.update_projection_around_get(
                     body,
-                    &HashMap::from_iter(std::iter::once((id, desired_value_projection))),
+                    &HashMap::from_iter(std::iter::once((
+                        id,
+                        (desired_value_projection, new_type),
+                    ))),
                 )?;
                 desired_projection.clone()
             }
@@ -346,12 +350,13 @@ impl ProjectionPushdown {
     pub fn update_projection_around_get(
         &self,
         relation: &mut MirRelationExpr,
-        applied_projections: &HashMap<Id, Vec<usize>>,
+        applied_projections: &HashMap<Id, (Vec<usize>, mz_repr::RelationType)>,
     ) -> Result<(), TransformError> {
         relation.visit_mut_pre(&mut |e| {
             if let MirRelationExpr::Project { input, outputs } = e {
-                if let MirRelationExpr::Get { id: inner_id, .. } = &**input {
-                    if let Some(new_projection) = applied_projections.get(inner_id) {
+                if let MirRelationExpr::Get { id: inner_id, typ } = &mut **input {
+                    if let Some((new_projection, new_type)) = applied_projections.get(inner_id) {
+                        typ.clone_from(new_type);
                         reverse_permute_columns(outputs.iter_mut(), new_projection.iter());
                         if outputs.len() == new_projection.len()
                             && outputs.iter().enumerate().all(|(i, o)| i == *o)
