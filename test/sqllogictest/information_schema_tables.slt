@@ -274,14 +274,14 @@ BASE TABLE
 materialize
 mz_internal
 mz_cluster_replica_sizes
-VIEW
-materialize
-mz_internal
-mz_cluster_replica_utilization
 BASE TABLE
 materialize
 mz_internal
 mz_cluster_replica_statuses
+VIEW
+materialize
+mz_internal
+mz_cluster_replica_utilization
 BASE TABLE
 materialize
 mz_internal
