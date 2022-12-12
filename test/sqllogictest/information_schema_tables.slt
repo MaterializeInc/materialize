@@ -278,11 +278,11 @@ BASE TABLE
 materialize
 mz_internal
 mz_cluster_replica_statuses
-VIEW
+BASE TABLE
 materialize
 mz_internal
 mz_cluster_replica_utilization
-BASE TABLE
+VIEW
 materialize
 mz_internal
 mz_compute_exports
