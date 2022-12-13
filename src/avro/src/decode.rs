@@ -21,7 +21,7 @@
 // The original source code is subject to the terms of the MIT license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
-use std::cmp;
+use std::cmp::{self, Ordering};
 use std::fmt::{self, Display};
 use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
@@ -110,23 +110,116 @@ impl Display for TsUnit {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use chrono::NaiveDateTime;
+
+    use crate::types::Value;
+    use crate::util::TsUnit;
+
+    use super::build_ts_value;
+
+    #[test]
+    fn test_negative_timestamps() {
+        // TODO[btv] The currently released `from_timestamp_millis` is buggy,
+        // so we use `from_timestamp_opt` everywhere here.
+        //
+        // See discussion at https://github.com/chronotope/chrono/issues/903 .
+        // We should update to the new version of Chrono whenever that
+        // goes to master.
+        assert_eq!(
+            build_ts_value(-1, TsUnit::Millis).unwrap(),
+            Value::Timestamp(NaiveDateTime::from_timestamp_opt(-1, 999_000_000).unwrap())
+        );
+        assert_eq!(
+            build_ts_value(-1000, TsUnit::Millis).unwrap(),
+            Value::Timestamp(NaiveDateTime::from_timestamp_opt(-1, 0).unwrap())
+        );
+        assert_eq!(
+            build_ts_value(-1000, TsUnit::Micros).unwrap(),
+            Value::Timestamp(NaiveDateTime::from_timestamp_opt(-1, 999_000_000).unwrap())
+        );
+        assert_eq!(
+            build_ts_value(-1, TsUnit::Micros).unwrap(),
+            Value::Timestamp(NaiveDateTime::from_timestamp_opt(-1, 999_999_000).unwrap())
+        );
+        assert_eq!(
+            build_ts_value(-123_456_789_123, TsUnit::Micros).unwrap(),
+            Value::Timestamp(
+                NaiveDateTime::from_timestamp_opt(-123_457, (1_000_000 - 789_123) * 1_000).unwrap()
+            )
+        );
+    }
+}
+
 fn build_ts_value(value: i64, unit: TsUnit) -> Result<Value, AvroError> {
+    // The algorithm here is taken from NaiveDateTime::from_timestamp_millis
+    // on the unreleased 0.4.x branch,
+    // made general to work with either millis or micros.
+    //
+    // That function is reproduced below for clarity.
+    //
+    // pub fn from_timestamp_millis(millis: i64) -> Option<NaiveDateTime> {
+    //     let (secs, subsec_millis) = (millis / 1000, millis % 1000);
+
+    //     match subsec_millis.cmp(&0) {
+    //         Ordering::Less => {
+    //             // in the case where our subsec part is negative, then we are actually in the earlier second
+    //             // hence we subtract one from the seconds part, and we then add a whole second worth of nanos
+    //             // to our nanos part. Due to the use of u32 datatype, it is more convenient to subtract
+    //             // the absolute value of the subsec nanos from a whole second worth of nanos
+    //             let nsecs = u32::try_from(subsec_millis.abs()).ok()? * NANOS_IN_MILLISECOND;
+    //             NaiveDateTime::from_timestamp_opt(
+    //                 secs.checked_sub(1)?,
+    //                 NANOS_IN_SECOND.checked_sub(nsecs)?,
+    //             )
+    //         }
+    //         Ordering::Equal => NaiveDateTime::from_timestamp_opt(secs, 0),
+    //         Ordering::Greater => {
+    //             // convert the subsec millis into nanosecond scale so they can be supplied
+    //             // as the nanoseconds parameter
+    //             let nsecs = u32::try_from(subsec_millis).ok()? * NANOS_IN_MILLISECOND;
+    //             NaiveDateTime::from_timestamp_opt(secs, nsecs)
+    //         }
+    //     }
+    // }
+    const NANOS_PER_SECOND: u32 = 1_000_000_000;
     let units_per_second = match unit {
         TsUnit::Millis => 1_000,
         TsUnit::Micros => 1_000_000,
     };
-    let nanos_per_unit = 1_000_000_000 / units_per_second as u32;
-    let seconds = value / units_per_second;
-    let fraction = (value % units_per_second) as u32;
-    Ok(Value::Timestamp(
-        NaiveDateTime::from_timestamp_opt(seconds, fraction * nanos_per_unit).ok_or(
-            AvroError::Decode(DecodeError::BadTimestamp {
-                unit,
-                seconds,
-                fraction,
-            }),
-        )?,
-    ))
+    let nanos_per_unit = NANOS_PER_SECOND / units_per_second as u32;
+
+    let (secs, subsec_units) = (value / units_per_second, value % units_per_second);
+    // See comment in copied Chrono code above for explanation of what's
+    // going on in this match statement.
+    //
+    // TODO[btv] - The expects below should never fail and are just here to document assumptions.
+    // Since they're potentially being called in a tight loop,
+    // we can optimize with `as` or unsafe code, if this ever proves to
+    // be a bottleneck.
+    let result = match subsec_units.cmp(&0) {
+        Ordering::Less => {
+            let nsecs = u32::try_from(subsec_units.abs())
+                .expect("abs(subsec_units) can't be greater than 1M")
+                * nanos_per_unit;
+            NaiveDateTime::from_timestamp_opt(
+                secs.checked_sub(1)
+                    .expect("secs is the result of a division by at least 1000"),
+                NANOS_PER_SECOND
+                    .checked_sub(nsecs)
+                    .expect("abs(nsecs) can't be greater than 1B"),
+            )
+        }
+        Ordering::Equal => NaiveDateTime::from_timestamp_opt(secs, 0),
+        Ordering::Greater => {
+            let nsecs = u32::try_from(subsec_units).expect("subsec_units can't be greater than 1M")
+                * nanos_per_unit;
+            NaiveDateTime::from_timestamp_opt(secs, nsecs)
+        }
+    };
+    let ndt = result.ok_or(AvroError::Decode(DecodeError::BadTimestamp { unit, value }))?;
+    Ok(Value::Timestamp(ndt))
 }
 
 /// A convenience trait for types that are both readable and skippable.

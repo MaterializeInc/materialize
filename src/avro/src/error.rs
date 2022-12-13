@@ -41,8 +41,7 @@ pub enum DecodeError {
     ExpectedNonnegInteger(i64),
     BadTimestamp {
         unit: TsUnit,
-        seconds: i64,
-        fraction: u32,
+        value: i64,
     },
     BadBoolean(u8),
     BadDate(i32),
@@ -108,11 +107,9 @@ impl DecodeError {
             DecodeError::ExpectedNonnegInteger(i) => {
                 write!(f, "Expected non-negative integer, got {}", i)
             }
-            DecodeError::BadTimestamp {
-                unit,
-                seconds,
-                fraction,
-            } => write!(f, "Invalid {} timestamp {}.{}", unit, seconds, fraction),
+            DecodeError::BadTimestamp { unit, value } => {
+                write!(f, "Invalid timestamp {value} {unit}")
+            }
             DecodeError::BadBoolean(byte) => write!(f, "Invalid boolean: {:x}", byte),
             DecodeError::BadDate(since_epoch) => {
                 write!(f, "Invalid num days since epoch: {}", since_epoch)
