@@ -79,7 +79,9 @@ use crate::error::AdapterError;
 use crate::explain_new::optimizer_trace::OptimizerTrace;
 use crate::metrics;
 use crate::notice::AdapterNotice;
-use crate::session::vars::{IsolationLevel, CLUSTER_VAR_NAME, DATABASE_VAR_NAME};
+use crate::session::vars::{
+    IsolationLevel, CLUSTER_VAR_NAME, DATABASE_VAR_NAME, REAL_TIME_RECENCY_VAR_NAME,
+};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
     WriteOp,
@@ -297,7 +299,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 );
             }
             Plan::Explain(plan) => {
-                tx.send(self.sequence_explain(&session, plan), session);
+                tx.send(self.sequence_explain(&session, plan).await, session);
             }
             Plan::SendDiffs(plan) => {
                 tx.send(self.sequence_send_diffs(&mut session, plan), session);
@@ -1956,6 +1958,10 @@ impl<S: Append + 'static> Coordinator<S> {
             value => Some(value.to_string()), // or else use the AstDisplay for SetVariableValue
         };
 
+        if name.as_str() == REAL_TIME_RECENCY_VAR_NAME {
+            self.catalog.require_unsafe_mode("REAL TIME RECENCY")?;
+        }
+
         match &value {
             Some(v) => {
                 vars.set(&name, v, local)?;
@@ -2152,18 +2158,20 @@ impl<S: Append + 'static> Coordinator<S> {
         let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
             && when == QueryWhen::Immediately;
 
-        let mut peek_plan = self.plan_peek(
-            source,
-            session,
-            &when,
-            compute_instance,
-            &mut target_replica,
-            view_id,
-            index_id,
-            timeline_context,
-            &source_ids,
-            in_immediate_multi_stmt_txn,
-        )?;
+        let mut peek_plan = self
+            .plan_peek(
+                source,
+                session,
+                &when,
+                compute_instance,
+                &mut target_replica,
+                view_id,
+                index_id,
+                timeline_context,
+                &source_ids,
+                in_immediate_multi_stmt_txn,
+            )
+            .await?;
 
         let compute_instance = compute_instance.id;
 
@@ -2199,7 +2207,8 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    fn plan_peek(
+    // TODO(jkosh44) Once RTR is pulled off the main coord loop, we can remove async from this method.
+    async fn plan_peek(
         &self,
         source: MirRelationExpr,
         session: &Session,
@@ -2232,6 +2241,9 @@ impl<S: Append + 'static> Coordinator<S> {
         // single-statement transaction (TransactionStatus::Started), we don't
         // need to worry about preventing compaction or choosing a valid
         // timestamp context for future queries.
+        let real_time_recency_ts = self
+            .recent_timestamp(session, source_ids.iter().cloned())
+            .await?;
         let timestamp_context = if in_immediate_multi_stmt_txn {
             match session.get_transaction_timestamp_context() {
                 Some(ts_context @ TimestampContext::TimelineTimestamp(_, _)) => ts_context,
@@ -2244,7 +2256,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         conn_id,
                         compute_instance,
                     )?;
-
                     // We want to prevent compaction of the indexes consulted by
                     // determine_timestamp, not the ones listed in the query.
                     let timestamp = self.determine_timestamp(
@@ -2253,6 +2264,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         &QueryWhen::Immediately,
                         compute_instance,
                         timeline_context,
+                        real_time_recency_ts,
                     )?;
                     // We only need read holds if the read depends on a timestamp.
                     if timestamp.timestamp_context.contains_timestamp() {
@@ -2268,6 +2280,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 when,
                 compute_instance,
                 timeline_context,
+                real_time_recency_ts,
             )?
             .timestamp_context
         };
@@ -2387,6 +2400,33 @@ impl<S: Append + 'static> Coordinator<S> {
         })
     }
 
+    /// Checks to see if the session needs a real time recency timestamp and if so acquires and
+    /// returns one. This may wait for an unbounded amount for the timestamp.
+    async fn recent_timestamp(
+        &self,
+        session: &Session,
+        source_ids: impl Iterator<Item = GlobalId>,
+    ) -> Result<Option<Timestamp>, AdapterError> {
+        // Ideally this logic belongs inside of
+        // `mz-adapter::coord::timestamp_selection::determine_timestamp`. However, including the
+        // logic in there would make it extremely difficult and inconvenient to pull the waiting off
+        // of the main coord thread.
+        Ok(
+            if session.vars().real_time_recency()
+                && session.vars().transaction_isolation() == &IsolationLevel::StrictSerializable
+                && !session.contains_read_timestamp()
+            {
+                // We should have prevented anyone from turning on rtr outside of unsafe
+                // mode, but just incase check again.
+                // TODO(jkosh44) DO NOT remove unsafe until this waiting is removed from the main Coord loop.
+                self.catalog.require_unsafe_mode("REAL TIME RECENCY")?;
+                Some(self.controller.recent_timestamp(source_ids).await)
+            } else {
+                None
+            },
+        )
+    }
+
     async fn sequence_subscribe(
         &mut self,
         session: &mut Session,
@@ -2421,7 +2461,14 @@ impl<S: Append + 'static> Coordinator<S> {
             let timeline = coord.validate_timeline_context(id_bundle.iter())?;
             // If a timestamp was explicitly requested, use that.
             let frontier = coord
-                .determine_timestamp(session, &id_bundle, &when, compute_instance_id, timeline)?
+                .determine_timestamp(
+                    session,
+                    &id_bundle,
+                    &when,
+                    compute_instance_id,
+                    timeline,
+                    None,
+                )?
                 .timestamp_context
                 .antichain();
 
@@ -2515,13 +2562,13 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    fn sequence_explain(
+    async fn sequence_explain(
         &mut self,
         session: &Session,
         plan: ExplainPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         match plan.stage {
-            ExplainStage::Timestamp => self.sequence_explain_timestamp(session, plan),
+            ExplainStage::Timestamp => self.sequence_explain_timestamp(session, plan).await,
             _ => self.sequence_explain_plan(session, plan),
         }
     }
@@ -2708,7 +2755,7 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(send_immediate_rows(rows))
     }
 
-    fn sequence_explain_timestamp(
+    async fn sequence_explain_timestamp(
         &mut self,
         session: &Session,
         plan: ExplainPlan,
@@ -2733,15 +2780,16 @@ impl<S: Append + 'static> Coordinator<S> {
         let id_bundle = self
             .index_oracle(compute_instance)
             .sufficient_collections(&source_ids);
-        // TODO: determine_timestamp takes a mut self to modify the oracle
-        // timestamp, so explaining a plan involving tables has side effects.
-        // Removing those side effects would be good.
+        let real_time_recency_ts = self
+            .recent_timestamp(session, source_ids.iter().cloned())
+            .await?;
         let determination = self.determine_timestamp(
             session,
             &id_bundle,
             &QueryWhen::Immediately,
             compute_instance,
             timeline_context,
+            real_time_recency_ts,
         )?;
         let mut sources = Vec::new();
         {

@@ -428,6 +428,20 @@ impl<T: TimestampManipulation> Session<T> {
         }
     }
 
+    /// Whether this session has a timestamp for a read transaction.
+    pub fn contains_read_timestamp(&self) -> bool {
+        matches!(
+            self.transaction.inner(),
+            Some(Transaction {
+                pcx: _,
+                ops: TransactionOps::Peeks(TimestampContext::TimelineTimestamp(_, _)),
+                write_lock_guard: _,
+                access: _,
+                id: _,
+            })
+        )
+    }
+
     /// Registers the prepared statement under `name`.
     pub fn set_prepared_statement(&mut self, name: String, statement: PreparedStatement) {
         self.prepared_statements.insert(name, statement);

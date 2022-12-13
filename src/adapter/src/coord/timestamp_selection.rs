@@ -118,6 +118,7 @@ impl<S: Append + 'static> Coordinator<S> {
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
         timeline_context: TimelineContext,
+        real_time_recency_ts: Option<mz_repr::Timestamp>,
     ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
@@ -144,7 +145,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let isolation_level = session.vars().transaction_isolation();
         let timeline = match &timeline_context {
             TimelineContext::TimelineDependent(timeline) => Some(timeline.clone()),
-            // // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
+            // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
             TimelineContext::TimestampDependent => Some(Timeline::EpochMilliseconds),
             TimelineContext::TimestampIndependent => None,
         };
@@ -171,8 +172,23 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.join_assign(&largest_not_in_advance_of_upper);
         }
 
+        if let Some(real_time_recency_ts) = real_time_recency_ts {
+            assert!(
+                session.vars().real_time_recency()
+                    && isolation_level == &vars::IsolationLevel::StrictSerializable,
+                "real time recency timestamp should only be supplied when real time recency \
+                    is enabled and the isolation level is strict serializable"
+            );
+            candidate.join_assign(&real_time_recency_ts);
+        }
+
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
+        //
+        // It's ok for this timestamp to be larger than the current timestamp of
+        // the timestamp oracle. For Strict Serializable queries, the Coord will
+        // linearize the query by holding back the result until the timestamp
+        // oracle catches up.
         let timestamp = if since.less_equal(&candidate) {
             event!(
                 Level::DEBUG,

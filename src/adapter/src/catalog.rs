@@ -5411,6 +5411,18 @@ impl<S: Append> Catalog<S> {
     pub fn set_most_recent_storage_usage_collection(&mut self, ts: EpochMillis) {
         self.state.most_recent_storage_usage_collection = ts;
     }
+
+    pub fn unsafe_mode(&self) -> bool {
+        self.config().unsafe_mode
+    }
+
+    pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
+        if !self.unsafe_mode() {
+            Err(AdapterError::Unsupported(feature_name))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 pub fn is_reserved_name(name: &str) -> bool {

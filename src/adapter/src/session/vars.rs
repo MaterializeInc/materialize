@@ -330,6 +330,15 @@ pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+pub const REAL_TIME_RECENCY_VAR_NAME: &UncasedStr = UncasedStr::new("real_time_recency");
+/// Feature flag indicating whether real time recency is enabled.
+static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
+    name: REAL_TIME_RECENCY_VAR_NAME,
+    value: &false,
+    description: "Feature flag indicating whether real time recency is enabled (Materialize).",
+    internal: true,
+};
+
 /// Session variables.
 ///
 /// Materialize roughly follows the PostgreSQL configuration model, which works
@@ -381,6 +390,7 @@ pub struct SessionVars {
     idle_in_transaction_session_timeout: SessionVar<Duration>,
     timezone: SessionVar<TimeZone>,
     transaction_isolation: SessionVar<IsolationLevel>,
+    real_time_recency: SessionVar<bool>,
 }
 
 impl Default for SessionVars {
@@ -409,6 +419,7 @@ impl Default for SessionVars {
             ),
             timezone: SessionVar::new(&TIMEZONE),
             transaction_isolation: SessionVar::new(&TRANSACTION_ISOLATION),
+            real_time_recency: SessionVar::new(&REAL_TIME_RECENCY),
         }
     }
 }
@@ -427,7 +438,7 @@ impl SessionVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values for this session.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 21] = [
+        let vars: [&dyn Var; 22] = [
             &self.application_name,
             &self.client_encoding,
             &self.client_min_messages,
@@ -449,6 +460,7 @@ impl SessionVars {
             &self.idle_in_transaction_session_timeout,
             &self.timezone,
             &self.transaction_isolation,
+            &self.real_time_recency,
         ];
         vars.into_iter()
     }
@@ -523,6 +535,8 @@ impl SessionVars {
             Ok(&self.timezone)
         } else if name == TRANSACTION_ISOLATION.name {
             Ok(&self.transaction_isolation)
+        } else if name == REAL_TIME_RECENCY.name {
+            Ok(&self.real_time_recency)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -659,6 +673,8 @@ impl SessionVars {
                     valid_values: Some(IsolationLevel::valid_values()),
                 });
             }
+        } else if name == REAL_TIME_RECENCY.name {
+            self.real_time_recency.set(value, local)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -701,6 +717,8 @@ impl SessionVars {
             self.timezone.reset(local);
         } else if name == TRANSACTION_ISOLATION.name {
             self.transaction_isolation.reset(local);
+        } else if name == REAL_TIME_RECENCY.name {
+            self.real_time_recency.reset(local);
         } else if name == CLIENT_ENCODING.name
             || name == DATE_STYLE.name
             || name == FAILPOINTS.name
@@ -744,6 +762,7 @@ impl SessionVars {
             idle_in_transaction_session_timeout,
             timezone,
             transaction_isolation,
+            real_time_recency,
         } = self;
         application_name.end_transaction(action);
         client_min_messages.end_transaction(action);
@@ -758,6 +777,7 @@ impl SessionVars {
         idle_in_transaction_session_timeout.end_transaction(action);
         timezone.end_transaction(action);
         transaction_isolation.end_transaction(action);
+        real_time_recency.end_transaction(action);
     }
 
     /// Returns the value of the `application_name` configuration parameter.
@@ -864,6 +884,11 @@ impl SessionVars {
     /// parameter.
     pub fn transaction_isolation(&self) -> &IsolationLevel {
         self.transaction_isolation.value()
+    }
+
+    /// Returns the value of `real_time_recency` configuration parameter.
+    pub fn real_time_recency(&self) -> bool {
+        *self.real_time_recency.value()
     }
 }
 
