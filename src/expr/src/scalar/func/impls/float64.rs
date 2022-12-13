@@ -451,7 +451,6 @@ sqlfunc!(
                 secs = secs.checked_sub(1)?;
                 nanosecs = 1_000_000_000_i64.checked_add(nanosecs)?;
             }
-            assert!(nanosecs >= 0);
             let nanosecs = u32::try_from(nanosecs).ok()?;
             match NaiveDateTime::from_timestamp_opt(secs, nanosecs) {
                 Some(ts) => {
