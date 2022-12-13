@@ -51,6 +51,9 @@ pub mod critical;
 pub mod error;
 pub mod fetch;
 pub mod inspect;
+pub mod operators {
+    pub mod shard_source;
+}
 pub mod read;
 pub mod usage;
 pub mod write;
