@@ -34,7 +34,7 @@ use tracing::log::warn;
 use tracing::{debug, debug_span, trace, Instrument, Span};
 
 use crate::async_runtime::CpuHeavyRuntime;
-use crate::batch::{BatchBuilder, BatchParts};
+use crate::batch::BatchBuilder;
 use crate::fetch::{fetch_batch_part, EncodedPart};
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
@@ -391,15 +391,16 @@ where
                 .runs_compacted
                 .inc_by(u64::cast_from(runs.len()));
 
-            /// WIP: do we still need this?
-            // // given the runs we actually have in our batch, we might have extra memory
-            // // available. we reserved enough space to always have 1 in-progress part in
-            // // flight, but if we have excess, we can use it to increase our write parallelism
-            // let extra_outstanding_parts = (run_reserved_memory_bytes
-            //     .saturating_sub(run_chunk_max_memory_usage))
-            //     / cfg.blob_target_size;
+            // given the runs we actually have in our batch, we might have extra memory
+            // available. we reserved enough space to always have 1 in-progress part in
+            // flight, but if we have excess, we can use it to increase our write parallelism
+            let extra_outstanding_parts = (run_reserved_memory_bytes
+                .saturating_sub(run_chunk_max_memory_usage))
+                / cfg.blob_target_size;
+            let mut compact_cfg = cfg.clone();
+            compact_cfg.batch_builder_max_outstanding_parts = 1 + extra_outstanding_parts;
             let batch = Self::compact_runs(
-                &cfg,
+                &compact_cfg,
                 &req.shard_id,
                 &req.desc,
                 runs,

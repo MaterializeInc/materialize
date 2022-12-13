@@ -1500,8 +1500,6 @@ pub mod datadriven {
         let target_size = args.optional("target_size");
         let memory_bound = args.optional("memory_bound");
 
-        println!("compact: {:?}", output);
-
         let mut inputs = Vec::new();
         for input in args.args.get("inputs").expect("missing inputs") {
             inputs.push(

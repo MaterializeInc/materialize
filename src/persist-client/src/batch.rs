@@ -195,6 +195,7 @@ where
 
     current_part: Vec<((Vec<u8>, Vec<u8>), T, D)>,
     current_part_bytes: usize,
+
     greatest_kv_seen: Option<(Vec<u8>, Vec<u8>)>,
     runs: Vec<usize>,
     parts_written: usize,
@@ -273,6 +274,7 @@ where
     pub async fn finish(
         mut self,
         upper: Antichain<T>,
+        // WIP: return metrics with success case
     ) -> Result<Batch<K, V, T, D>, InvalidUsage<T>> {
         if PartialOrder::less_than(&upper, &self.lower) {
             return Err(InvalidUsage::InvalidBounds {
@@ -280,19 +282,24 @@ where
                 upper,
             });
         }
-        // if upper.less_equal(&self.max_ts) {
-        //     return Err(InvalidUsage::UpdateBeyondUpper {
-        //         max_ts: self.max_ts,
-        //         expected_upper: upper.clone(),
-        //     });
-        // }
+        // WIP: explain what's up here. compaction is allowed to create updates with ts > upper
+        // because since can be arbitrarily far ahead of upper. but if since is min, then we
+        // declare an update with ts > upper to be invalid usage
+        if self.since == Antichain::from_elem(T::minimum()) {
+            if upper.less_equal(&self.max_ts) {
+                return Err(InvalidUsage::UpdateBeyondUpper {
+                    max_ts: self.max_ts,
+                    expected_upper: upper.clone(),
+                });
+            }
+        }
 
-        info!(
-            "{}: finishing batch. {} updates in current part, {} updates total",
-            self.shard_id,
-            self.current_part.len(),
-            self.num_updates
-        );
+        // info!(
+        //     "{}: finishing batch. {} updates in current part, {} updates total",
+        //     self.shard_id,
+        //     self.current_part.len(),
+        //     self.num_updates
+        // );
 
         Self::consolidate_run(
             &mut self.current_part,
@@ -301,7 +308,8 @@ where
             &mut self.greatest_kv_seen,
             &mut self.num_updates,
         );
-        Self::write_run(
+        // WIP: this should use the same upper as in `add`
+        Self::write_part(
             &mut self.parts,
             &mut self.current_part,
             &mut self.parts_written,
@@ -327,8 +335,8 @@ where
         Ok(batch)
     }
 
-    /// TODO
-    pub async fn add_encoded(&mut self, ts: &T, diff: &D) -> Result<Added, InvalidUsage<T>> {
+    /// WIP: breaking this out into a separate fn is no longer needed
+    async fn add_encoded(&mut self, ts: &T, diff: &D) -> Result<Added, InvalidUsage<T>> {
         if !self.lower.less_equal(ts) {
             return Err(InvalidUsage::UpdateNotBeyondLower {
                 ts: ts.clone(),
@@ -344,10 +352,10 @@ where
         // WIP: If we've filled up a chunk of ColumnarRecords, flush it out now to blob storage to keep our memory usage capped.
         let mut part_written = false;
         if size + self.current_part_bytes > self.blob_target_size {
-            println!(
-                "flushing part. target size: {}, size: {}, current batch part: {}",
-                self.blob_target_size, size, self.current_part_bytes
-            );
+            // println!(
+            //     "flushing part. target size: {}, size: {}, current batch part: {}",
+            //     self.blob_target_size, size, self.current_part_bytes
+            // );
             // TODO: we currently consolidate a part when we've reached our target size of
             // _unconsolidated_ updates. This means the part we actually write to Blob may
             // be (substantially) smaller post-consolidation. We could alternatively create
@@ -367,7 +375,7 @@ where
             // to make a tighter bound, possibly by changing the part
             // description to be an _inclusive_ upper.
             let upper = self.upper.clone().unwrap_or_else(|| Antichain::new());
-            Self::write_run(
+            Self::write_part(
                 &mut self.parts,
                 &mut self.current_part,
                 &mut self.parts_written,
@@ -419,54 +427,54 @@ where
     /// current run (if any).  A new run will be created if `updates` contains a key
     /// that overlaps with the current or any previous run.
     fn consolidate_run(
-        updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
+        part_updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
         runs: &mut Vec<usize>,
-        number_of_compacted_runs: usize,
+        number_of_parts_written: usize,
         greatest_kv: &mut Option<(Vec<u8>, Vec<u8>)>,
-        num_updates: &mut usize,
+        num_consolidated_updates: &mut usize,
         // timings: &mut Timings,
     ) -> usize {
         // let start = Instant::now();
-        consolidate_updates(updates);
+        consolidate_updates(part_updates);
 
-        *num_updates += updates.len();
+        *num_consolidated_updates += part_updates.len();
 
-        match (&greatest_kv, updates.last()) {
+        match (&greatest_kv, part_updates.last()) {
             // our updates contain a key that exists within the range of a run we've
             // already created, we should start a new run, as this part is no longer
             // contiguous with the previous run/part
             (Some(greatest_kv_seen), Some(greatest_kv_in_batch))
                 if *greatest_kv_seen > greatest_kv_in_batch.0 =>
             {
-                runs.push(number_of_compacted_runs);
+                runs.push(number_of_parts_written);
             }
             (_, Some(greatest_kv_in_batch)) => *greatest_kv = Some(greatest_kv_in_batch.0.clone()),
             (Some(_), None) | (None, None) => {}
         };
 
         // timings.consolidation += start.elapsed();
-        updates.len()
+        part_updates.len()
     }
 
     /// Encodes `updates` into columnar format and writes them as a single part to blob. It is the
     /// caller's responsibility to chunk `updates` into a batch no greater than [crate::PersistConfig::blob_target_size]
     /// and must absolutely be less than [mz_persist::indexed::columnar::KEY_VAL_DATA_MAX_LEN]
-    async fn write_run(
+    async fn write_part(
         batch_parts: &mut BatchParts<T>,
-        updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
-        compaction_parts_count: &mut usize,
+        part_updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
+        num_parts_written: &mut usize,
         desc: Description<T>,
         // timings: &mut Timings,
     ) {
-        if updates.is_empty() {
-            info!("skipping update, is empty");
+        if part_updates.is_empty() {
             return;
         }
-        *compaction_parts_count += 1;
+        *num_parts_written += 1;
 
         let mut builder = ColumnarRecordsBuilder::default();
+        // WIP: use size_hint to determine builder reservations
         // let start = Instant::now();
-        for ((k, v), t, d) in updates.drain(..) {
+        for ((k, v), t, d) in part_updates.drain(..) {
             // WIP: handle return
             builder.push(((&k, &v), T::encode(&t), D::encode(&d)));
         }
