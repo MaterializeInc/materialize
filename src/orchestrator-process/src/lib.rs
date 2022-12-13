@@ -179,6 +179,9 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                     match system.process(pid) {
                         None => (None, None),
                         Some(process) => {
+                            // TODO(benesch): find a way to express this that
+                            // does not involve using `as`.
+                            #[allow(clippy::as_conversions)]
                             let cpu = (process.cpu_usage() * 10_000_000.0) as u64;
                             let memory = process.memory();
                             (Some(cpu), Some(memory))

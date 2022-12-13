@@ -116,9 +116,9 @@ async fn create_file_pg_client(
     let file = FileBlobConfig::from(dir.path());
 
     let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
-    let blob = Arc::new(FileBlob::open(file).await?) as Arc<dyn Blob + Send + Sync>;
+    let blob = Arc::new(FileBlob::open(file).await?);
     let postgres_consensus = Arc::new(PostgresConsensus::open(pg).await?);
-    let consensus = Arc::clone(&postgres_consensus) as Arc<dyn Consensus + Send + Sync>;
+    let consensus = Arc::clone(&postgres_consensus);
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
     let client = PersistClient::new(cfg, blob, consensus, metrics, cpu_heavy_runtime)?;
@@ -137,9 +137,9 @@ async fn create_s3_pg_client(
     };
 
     let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
-    let blob = Arc::new(S3Blob::open(s3).await?) as Arc<dyn Blob + Send + Sync>;
+    let blob = Arc::new(S3Blob::open(s3).await?);
     let postgres_consensus = Arc::new(PostgresConsensus::open(pg).await?);
-    let consensus = Arc::clone(&postgres_consensus) as Arc<dyn Consensus + Send + Sync>;
+    let consensus = Arc::clone(&postgres_consensus);
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
     let client = PersistClient::new(cfg, blob, consensus, metrics, cpu_heavy_runtime)?;
@@ -205,7 +205,7 @@ fn bench_all_blob<BenchBlobFn>(
     {
         g.bench_function(BenchmarkId::new("mem", data.goodput_pretty()), |b| {
             let mem_blob = MemBlob::open(MemBlobConfig::default());
-            let mem_blob = Arc::new(mem_blob) as Arc<dyn Blob + Send + Sync>;
+            let mem_blob: Arc<dyn Blob + Send + Sync> = Arc::new(mem_blob);
             bench_blob_fn(b, &mem_blob);
         });
     }
@@ -217,7 +217,7 @@ fn bench_all_blob<BenchBlobFn>(
         let file_blob = runtime
             .block_on(FileBlob::open(FileBlobConfig::from(temp_dir.path())))
             .expect("failed to create file blob");
-        let file_blob = Arc::new(file_blob) as Arc<dyn Blob + Send + Sync>;
+        let file_blob: Arc<dyn Blob + Send + Sync> = Arc::new(file_blob);
         g.bench_function(BenchmarkId::new("file", data.goodput_pretty()), |b| {
             bench_blob_fn(b, &file_blob);
         });
@@ -232,7 +232,7 @@ fn bench_all_blob<BenchBlobFn>(
         let s3_blob = runtime
             .block_on(S3Blob::open(config))
             .expect("failed to create s3 blob");
-        let s3_blob = Arc::new(s3_blob) as Arc<dyn Blob + Send + Sync>;
+        let s3_blob: Arc<dyn Blob + Send + Sync> = Arc::new(s3_blob);
         g.bench_function(BenchmarkId::new("s3", data.goodput_pretty()), |b| {
             bench_blob_fn(b, &s3_blob);
         });
@@ -251,8 +251,7 @@ fn bench_all_consensus<BenchConsensusFn>(
     // bench_consensus_fn and drop it after to keep mem usage down.
     {
         g.bench_function(BenchmarkId::new("mem", data.goodput_pretty()), |b| {
-            let mem_consensus =
-                Arc::new(MemConsensus::default()) as Arc<dyn Consensus + Send + Sync>;
+            let mem_consensus: Arc<dyn Consensus + Send + Sync> = Arc::new(MemConsensus::default());
             bench_consensus_fn(b, &mem_consensus);
         });
     }
@@ -265,14 +264,13 @@ fn bench_all_consensus<BenchConsensusFn>(
             .block_on(PostgresConsensus::open(config))
             .expect("failed to create postgres consensus");
         let postgres_consensus = Arc::new(postgres_consensus);
+        let consensus: Arc<dyn Consensus + Send + Sync> =
+            Arc::<PostgresConsensus>::clone(&postgres_consensus);
         g.bench_function(BenchmarkId::new("postgres", data.goodput_pretty()), |b| {
             runtime
                 .block_on(postgres_consensus.drop_and_recreate())
                 .expect("failed to drop and recreate postgres consensus");
-            bench_consensus_fn(
-                b,
-                &(Arc::clone(&postgres_consensus) as Arc<dyn Consensus + Send + Sync>),
-            );
+            bench_consensus_fn(b, &consensus);
         });
     }
 }

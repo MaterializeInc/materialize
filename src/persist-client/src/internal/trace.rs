@@ -55,6 +55,7 @@ use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
+use mz_ore::cast::CastFrom;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
 
@@ -474,8 +475,9 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
     ///
     /// If `fuel` is non-zero after the call, the merging is complete and one
     /// should call `done` to extract the merged results.
+    // TODO(benesch): rewrite to avoid usage of `as`.
+    #[allow(clippy::as_conversions)]
     fn work(&mut self, _: &SpineBatch<T>, _: &SpineBatch<T>, fuel: &mut isize) {
-        #[allow(clippy::cast_sign_loss)]
         let used = std::cmp::min(*fuel as usize, self.remaining_work);
         self.remaining_work = self.remaining_work.saturating_sub(used);
         *fuel -= used as isize;
@@ -666,7 +668,11 @@ impl<T: Timestamp + Lattice> Spine<T> {
 
         // Normal insertion for the batch.
         let index = batch.len().next_power_of_two();
-        self.introduce_batch(Some(batch), index.trailing_zeros() as usize, merge_reqs);
+        self.introduce_batch(
+            Some(batch),
+            usize::cast_from(index.trailing_zeros()),
+            merge_reqs,
+        );
     }
 
     /// Apply some amount of effort to trace maintenance.
@@ -688,8 +694,10 @@ impl<T: Timestamp + Lattice> Spine<T> {
             else {
                 // Introduce an empty batch with roughly *effort number of
                 // virtual updates.
-                #[allow(clippy::cast_sign_loss)]
-                let level = (*effort as usize).next_power_of_two().trailing_zeros() as usize;
+                // TODO(benesch): rewrite to avoid `as`.
+                #[allow(clippy::as_conversions)]
+                let level =
+                    usize::cast_from((*effort as usize).next_power_of_two().trailing_zeros());
                 self.introduce_batch(None, level, merge_reqs);
             }
         }
@@ -777,6 +785,8 @@ impl<T: Timestamp + Lattice> Spine<T> {
         // minimum amount of effort.
         fuel *= self.effort;
         // Convert to an `isize` so we can observe any fuel shortfall.
+        // TODO(benesch): avoid dangerous usage of `as`.
+        #[allow(clippy::as_conversions)]
         let mut fuel = fuel as isize;
 
         // Step 1.  Apply fuel to each in-progress merge.
@@ -944,10 +954,12 @@ impl<T: Timestamp + Lattice> Spine<T> {
                 // records that the lower level is appropriate, and that moving
                 // the batch would not create a merge violating our invariant.
 
-                let appropriate_level = self.merging[length - 1]
-                    .len()
-                    .next_power_of_two()
-                    .trailing_zeros() as usize;
+                let appropriate_level = usize::cast_from(
+                    self.merging[length - 1]
+                        .len()
+                        .next_power_of_two()
+                        .trailing_zeros(),
+                );
 
                 // Continue only as far as is appropriate
                 while appropriate_level < length - 1 {

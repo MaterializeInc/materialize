@@ -42,3 +42,4 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", feat
 tower-http = { version = "0.3.4", features = ["cors"] }
 uuid = "1.2.2"
 walkdir = "2.3.2"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

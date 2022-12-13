@@ -65,7 +65,7 @@ impl CastTemplate {
         C: FnOnce(HirScalarExpr) -> HirScalarExpr + 'static,
     {
         CastTemplate(Box::new(move |ecx, ccx, from_ty, to_ty| {
-            t(ecx, ccx, from_ty, to_ty).map(|o| Box::new(o) as Cast)
+            Some(Box::new(t(ecx, ccx, from_ty, to_ty)?))
         }))
     }
 }

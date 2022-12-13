@@ -211,6 +211,8 @@ impl FronteggAuthentication {
                 let expire_in = claims.exp - frontegg.now.as_secs();
                 // Using max(0, X) here ensures we don't have a negative, and thus have a
                 // lossless conversion to u64.
+                // TODO(benesch): rewrite to avoid `as`.
+                #[allow(clippy::as_conversions)]
                 let check_in = std::cmp::max(0, expire_in - frontegg.refresh_before_secs) as u64;
                 tokio::time::sleep(Duration::from_secs(check_in)).await;
 
@@ -246,6 +248,8 @@ impl FronteggAuthentication {
                         }
                     }
                 };
+                // TODO(benesch): rewrite to avoid `as`.
+                #[allow(clippy::as_conversions)]
                 let expire_in = std::cmp::max(0, claims.exp - frontegg.now.as_secs()) as u64;
                 let expire_in = tokio::time::sleep(Duration::from_secs(expire_in));
 

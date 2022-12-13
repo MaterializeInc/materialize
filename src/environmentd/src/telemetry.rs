@@ -17,7 +17,6 @@
 // environment in real time:
 // https://app.segment.com/materializeinc/sources/cloud_dev/debugger.
 
-use serde::Serialize;
 use serde_json::json;
 use tokio::time::{self, Duration};
 use tracing::warn;
@@ -26,6 +25,7 @@ use mz_adapter::telemetry::EnvironmentIdExt;
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::task;
+use mz_repr::adt::jsonb::Jsonb;
 use mz_sql::catalog::EnvironmentId;
 
 /// How frequently to send a summary to Segment.
@@ -109,25 +109,6 @@ async fn report_traits_loop(
         environment_id,
     }: Config,
 ) {
-    const QUERY: &str = "SELECT
-    (SELECT count(*) FROM mz_materialized_views WHERE id LIKE 'u%') AS active_materialized_views,
-    (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%') AS active_sources,
-    (SELECT count(*) FROM mz_sinks WHERE id LIKE 'u%') AS active_sinks,
-    (SELECT count(*) FROM mz_tables WHERE id LIKE 'u%') AS active_tables,
-    (SELECT count(*) FROM mz_views WHERE id LIKE 'u%') AS active_views";
-
-    #[derive(Debug, Serialize)]
-    struct Traits {
-        // Gathered from SQL
-        active_materialized_views: i64,
-        active_sources: i64,
-        active_sinks: i64,
-        active_tables: i64,
-        active_views: i64,
-        // Gathered from metrics
-        active_subscribes: i64,
-    }
-
     let mut interval = time::interval(REPORT_INTERVAL);
     loop {
         interval.tick().await;
@@ -136,21 +117,28 @@ async fn report_traits_loop(
             .initial_backoff(Duration::from_secs(1))
             .max_tries(5)
             .retry_async(|_state| async {
-                let rows = adapter_client.introspection_execute_one(QUERY).await?;
+                let active_subscribes = adapter_client
+                    .metrics()
+                    .active_subscribes
+                    .with_label_values(&["user"])
+                    .get();
+                let rows = adapter_client.introspection_execute_one(&format!("
+                    SELECT jsonb_build_object(
+                        'active_materialized_views', (SELECT count(*) FROM mz_materialized_views WHERE id LIKE 'u%')::int4,
+                        'active_sources', (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%')::int4,
+                        'active_kafka_sources', (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%' AND type = 'kafka')::int4,
+                        'active_load_generator_sources', (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%' AND type = 'load-generator')::int4,
+                        'active_postgres_sources', (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%' AND type = 'postgres')::int4,
+                        'active_sinks', (SELECT count(*) FROM mz_sinks WHERE id LIKE 'u%')::int4,
+                        'active_kafka_sinks', (SELECT count(*) FROM mz_sinks WHERE id LIKE 'u%' AND type = 'kafka')::int4,
+                        'active_tables', (SELECT count(*) FROM mz_tables WHERE id LIKE 'u%')::int4,
+                        'active_views', (SELECT count(*) FROM mz_views WHERE id LIKE 'u%')::int4,
+                        'active_subscribes', {active_subscribes}
+                    )",
+                )).await?;
                 let row = rows.into_element();
-                let mut row = row.iter();
-                Ok::<_, anyhow::Error>(serde_json::to_value(Traits {
-                    active_materialized_views: row.next().unwrap().unwrap_int64(),
-                    active_sources: row.next().unwrap().unwrap_int64(),
-                    active_sinks: row.next().unwrap().unwrap_int64(),
-                    active_tables: row.next().unwrap().unwrap_int64(),
-                    active_views: row.next().unwrap().unwrap_int64(),
-                    active_subscribes: adapter_client
-                        .metrics()
-                        .active_subscribes
-                        .with_label_values(&["user"])
-                        .get(),
-                })?)
+                let jsonb = Jsonb::from_row(row);
+                Ok::<_, anyhow::Error>(jsonb.as_ref().to_serde_json())
             })
             .await;
 

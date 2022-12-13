@@ -18,6 +18,9 @@
 //!
 //! Currently only works on Linux
 
+// TODO(benesch): remove potentially dangerous `as` conversions.
+#![allow(clippy::as_conversions)]
+
 /// Gets the GNU build IDs for all loaded images, including the main
 /// program binary as well as all dynamically loaded libraries.
 /// Intended to be useful for profilers, who can use the supplied IDs
@@ -49,17 +52,20 @@ pub unsafe fn all_build_ids(
     use std::os::unix::ffi::OsStrExt;
     use std::path::{Path, PathBuf};
 
-    use mz_ore::bits::align_up;
-    use mz_ore::cast::CastFrom;
-
     use anyhow::Context;
     use libc::{c_void, dl_iterate_phdr, dl_phdr_info, size_t, Elf64_Word, PT_NOTE};
+
+    use mz_ore::bits::align_up;
+    use mz_ore::cast::CastFrom;
 
     struct CallbackState {
         map: HashMap<PathBuf, Vec<u8>>,
         is_first: bool,
         fatal_error: Option<anyhow::Error>,
     }
+
+    // TODO(benesch): rewrite to avoid potentially dangerous usage of `as`.
+    #[allow(clippy::as_conversions)]
     extern "C" fn iterate_cb(info: *mut dl_phdr_info, _size: size_t, data: *mut c_void) -> c_int {
         // SAFETY: `data` is a pointer to a `CallbackState`, and no mutable reference
         // aliases with it in Rust. Furthermore, `dl_iterate_phdr` doesn't do anything

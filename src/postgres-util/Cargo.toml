@@ -23,6 +23,7 @@ thiserror = "1.0.37"
 tokio = { version = "1.23.0", features = ["fs", "rt", "sync"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tracing = "0.1.37"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
 protobuf-src = "1.1.0"

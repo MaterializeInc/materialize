@@ -376,7 +376,7 @@ impl<'a> Lowerer<'a> {
                             .distinct(),
                     );
                     if self.model.get_quantifier(lhs_id).quantifier_type
-                        == QuantifierType::PreservedForeach
+                        == QuantifierType::PRESERVED_FOREACH
                     {
                         // Rows in `left` that are matched in the inner equijoin.
                         let left_present = mz_expr::MirRelationExpr::join(
@@ -403,7 +403,7 @@ impl<'a> Lowerer<'a> {
                     }
 
                     if self.model.get_quantifier(rhs_id).quantifier_type
-                        == QuantifierType::PreservedForeach
+                        == QuantifierType::PRESERVED_FOREACH
                     {
                         // Rows in `right` that are matched in the inner equijoin.
                         let right_present = mz_expr::MirRelationExpr::join(
@@ -442,7 +442,7 @@ impl<'a> Lowerer<'a> {
                 } else {
                     // General join case
                     if self.model.get_quantifier(lhs_id).quantifier_type
-                        == QuantifierType::PreservedForeach
+                        == QuantifierType::PRESERVED_FOREACH
                     {
                         let left_outer = lhs.anti_lookup(
                             &mut self.id_gen,
@@ -454,7 +454,7 @@ impl<'a> Lowerer<'a> {
                         result = result.union(left_outer);
                     }
                     if self.model.get_quantifier(rhs_id).quantifier_type
-                        == QuantifierType::PreservedForeach
+                        == QuantifierType::PRESERVED_FOREACH
                     {
                         let right_outer = rhs
                             .anti_lookup(
@@ -596,11 +596,11 @@ impl<'a> Lowerer<'a> {
         let input_box = quantifier.input_box;
         let mut input = self.apply(input_box, get_outer.clone(), outer_column_map)?;
 
-        match &quantifier.quantifier_type {
-            QuantifierType::Foreach | QuantifierType::PreservedForeach => {
+        match quantifier.quantifier_type {
+            QuantifierType::FOREACH | QuantifierType::PRESERVED_FOREACH => {
                 // No special handling required
             }
-            QuantifierType::Scalar => {
+            QuantifierType::SCALAR => {
                 // Add the machinery to ensure the lowered plan always produce one row,
                 // but one row at most, per outer key.
                 let col_type = input.typ().column_types.into_last();

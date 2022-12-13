@@ -527,6 +527,8 @@ impl DebeziumDeduplicationState {
                         let file = match self.filenames_to_indices.get(filename) {
                             Some(idx) => *idx,
                             None => {
+                                // TODO(benesch): rewrite to avoid `as`.
+                                #[allow(clippy::as_conversions)]
                                 let next_idx = self.filenames_to_indices.len() as i64;
                                 self.filenames_to_indices
                                     .insert(filename.to_owned(), next_idx);

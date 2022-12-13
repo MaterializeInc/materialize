@@ -519,6 +519,8 @@ where
             let outputs = dataflow.sink_exports.len() + dataflow.index_exports.len();
             let mut changes = ChangeBatch::new();
             for time in as_of.iter() {
+                // TODO(benesch): fix this dangerous use of `as`.
+                #[allow(clippy::as_conversions)]
                 changes.update(time.clone(), outputs as i64);
             }
             // Update storage read capabilities for inputs.

@@ -45,7 +45,7 @@ impl Attribute for RelationType {
     }
 
     fn requires(&self) -> Vec<Box<dyn Attribute>> {
-        vec![Box::new(RejectedNulls) as Box<dyn Attribute>]
+        vec![Box::new(RejectedNulls)]
     }
 
     #[allow(unused_variables)]
@@ -140,7 +140,7 @@ impl Model {
         // the type of All and Existential quantifiers is always BOOLEAN NOT NULL
         if matches!(
             quantifier.quantifier_type,
-            QuantifierType::Existential | QuantifierType::All
+            QuantifierType::EXISTENTIAL | QuantifierType::ALL
         ) {
             return ColumnType {
                 scalar_type: ScalarType::Bool,
@@ -153,7 +153,7 @@ impl Model {
 
         let parent_box = self.get_box(quantifier.parent_box);
         let nullable = if enclosing_box_id == parent_box.id {
-            if quantifier.quantifier_type == QuantifierType::Scalar {
+            if quantifier.quantifier_type == QuantifierType::SCALAR {
                 // scalar quantifiers can always be NULL if the subquery is empty
                 true
             } else {
@@ -215,7 +215,7 @@ fn outer_join_introduces_nulls(r#box: &BoundRef<'_, QueryBox>, cref: &ColumnRefe
     r#box
         .input_quantifiers()
         .filter(|q| q.id != cref.quantifier_id)
-        .any(|q| q.quantifier_type == QuantifierType::PreservedForeach)
+        .any(|q| q.quantifier_type == QuantifierType::PRESERVED_FOREACH)
 }
 
 /// A quantifier referenced the given [`ColumnReference`] introduces nulls if:
@@ -260,7 +260,7 @@ mod tests {
         }
 
         let s_id = model.make_box(Select::default().into());
-        let q_id = model.make_quantifier(QuantifierType::Foreach, g_id, s_id);
+        let q_id = model.make_quantifier(QuantifierType::FOREACH, g_id, s_id);
         {
             let mut b = model.get_mut_box(s_id);
             // C0: (#0 + #1)
@@ -316,8 +316,8 @@ mod tests {
         }
 
         let o_id = model.make_box(OuterJoin::default().into());
-        let l_id = model.make_quantifier(QuantifierType::PreservedForeach, g_id, o_id);
-        let r_id = model.make_quantifier(QuantifierType::Foreach, g_id, o_id);
+        let l_id = model.make_quantifier(QuantifierType::PRESERVED_FOREACH, g_id, o_id);
+        let r_id = model.make_quantifier(QuantifierType::FOREACH, g_id, o_id);
         {
             let mut b = model.get_mut_box(o_id);
             // C0: Q0.0
@@ -372,7 +372,7 @@ mod tests {
         let u_id = model.make_box(BoxType::Union);
         let q_ids = g_ids
             .iter()
-            .map(|g_id| model.make_quantifier(QuantifierType::Foreach, *g_id, u_id))
+            .map(|g_id| model.make_quantifier(QuantifierType::FOREACH, *g_id, u_id))
             .collect::<Vec<_>>();
 
         {
@@ -429,8 +429,8 @@ mod tests {
 
         let s_id = model.make_box(Select::default().into());
         let q_ids = vec![
-            model.make_quantifier(QuantifierType::Foreach, g_ids[0], s_id),
-            model.make_quantifier(QuantifierType::Existential, g_ids[1], s_id),
+            model.make_quantifier(QuantifierType::FOREACH, g_ids[0], s_id),
+            model.make_quantifier(QuantifierType::EXISTENTIAL, g_ids[1], s_id),
         ];
         {
             let mut b = model.get_mut_box(s_id);
@@ -475,8 +475,8 @@ mod tests {
 
         let s_id = model.make_box(Select::default().into());
         let q_ids = vec![
-            model.make_quantifier(QuantifierType::Foreach, g_ids[0], s_id),
-            model.make_quantifier(QuantifierType::Scalar, g_ids[1], s_id),
+            model.make_quantifier(QuantifierType::FOREACH, g_ids[0], s_id),
+            model.make_quantifier(QuantifierType::SCALAR, g_ids[1], s_id),
         ];
         {
             let mut b = model.get_mut_box(s_id);

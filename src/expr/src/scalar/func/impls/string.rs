@@ -645,9 +645,13 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "ascii"]
     fn ascii<'a>(a: &'a str) -> i32 {
-        match a.chars().next() {
+        match a
+            .chars()
+            .next()
+            .and_then(|c| i32::try_from(u32::from(c)).ok())
+        {
             None => 0,
-            Some(v) => v as i32,
+            Some(v) => v,
         }
     }
 );

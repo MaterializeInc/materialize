@@ -49,6 +49,7 @@ uncased = "0.9.7"
 uuid = "1.2.2"
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 criterion = { version = "0.4.0" }

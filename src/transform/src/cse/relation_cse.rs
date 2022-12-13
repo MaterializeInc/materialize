@@ -155,6 +155,8 @@ impl Bindings {
                 // Do nothing, as the expression is already a local `Get` expression.
             } else {
                 // Either find an instance of `relation` or insert this one.
+                // TODO(benesch): fix this dangerous use of `as`.
+                #[allow(clippy::as_conversions)]
                 let bindings_len = this.bindings.len() as u64;
                 let id = this
                     .bindings

@@ -19,6 +19,7 @@ use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
 use timely::PartialOrder;
 
+use mz_ore::cast::CastFrom;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;
@@ -81,7 +82,7 @@ where
     // multiple persist shards. Then we should set it up such that each worker can write to one
     // shard.
     let hashed_id = src_id.hashed();
-    let active_write_worker = (hashed_id as usize) % scope.peers() == scope.index();
+    let active_write_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
 
     let mut input = persist_op.new_input(&source_data.inner, Exchange::new(move |_| hashed_id));
 

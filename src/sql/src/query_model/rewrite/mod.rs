@@ -219,16 +219,16 @@ mod tests {
             .collect::<Vec<_>>();
 
         let exp_result = vec![
-            (BoxId(4), QuantifierType::Existential),
-            (BoxId(1), QuantifierType::Existential),
-            (BoxId(0), QuantifierType::Existential),
-            (BoxId(0), QuantifierType::All),
-            (BoxId(1), QuantifierType::All),
-            (BoxId(2), QuantifierType::Existential),
-            (BoxId(2), QuantifierType::All),
-            (BoxId(3), QuantifierType::Existential),
-            (BoxId(3), QuantifierType::All),
-            (BoxId(4), QuantifierType::All),
+            (BoxId(4), QuantifierType::EXISTENTIAL),
+            (BoxId(1), QuantifierType::EXISTENTIAL),
+            (BoxId(0), QuantifierType::EXISTENTIAL),
+            (BoxId(0), QuantifierType::ALL),
+            (BoxId(1), QuantifierType::ALL),
+            (BoxId(2), QuantifierType::EXISTENTIAL),
+            (BoxId(2), QuantifierType::ALL),
+            (BoxId(3), QuantifierType::EXISTENTIAL),
+            (BoxId(3), QuantifierType::ALL),
+            (BoxId(4), QuantifierType::ALL),
         ];
 
         assert_eq!(act_result, exp_result);
@@ -248,14 +248,14 @@ mod tests {
         let b4 = model.make_box(Select::default().into());
 
         // edges
-        model.make_quantifier(QuantifierType::Foreach, b0, b1);
-        model.make_quantifier(QuantifierType::Foreach, b0, b2);
-        model.make_quantifier(QuantifierType::Foreach, b1, b3);
-        model.make_quantifier(QuantifierType::Foreach, b2, b3);
-        model.make_quantifier(QuantifierType::Foreach, b1, b4);
-        model.make_quantifier(QuantifierType::Foreach, b1, b4);
-        model.make_quantifier(QuantifierType::Foreach, b2, b4);
-        model.make_quantifier(QuantifierType::Foreach, b3, b4);
+        model.make_quantifier(QuantifierType::FOREACH, b0, b1);
+        model.make_quantifier(QuantifierType::FOREACH, b0, b2);
+        model.make_quantifier(QuantifierType::FOREACH, b1, b3);
+        model.make_quantifier(QuantifierType::FOREACH, b2, b3);
+        model.make_quantifier(QuantifierType::FOREACH, b1, b4);
+        model.make_quantifier(QuantifierType::FOREACH, b1, b4);
+        model.make_quantifier(QuantifierType::FOREACH, b2, b4);
+        model.make_quantifier(QuantifierType::FOREACH, b3, b4);
 
         // top box
         model.top_box = b4;
@@ -280,15 +280,15 @@ mod tests {
 
         fn quantifier_type(&self) -> QuantifierType {
             match self.visit_order {
-                VisitOrder::Pre => QuantifierType::Existential,
-                VisitOrder::Post => QuantifierType::All,
+                VisitOrder::Pre => QuantifierType::EXISTENTIAL,
+                VisitOrder::Post => QuantifierType::ALL,
             }
         }
 
         fn matches_quantifer(&self, quantifier_type: QuantifierType) -> bool {
             match self.visit_order {
-                VisitOrder::Pre => matches!(quantifier_type, QuantifierType::Existential),
-                VisitOrder::Post => matches!(quantifier_type, QuantifierType::All),
+                VisitOrder::Pre => matches!(quantifier_type, QuantifierType::EXISTENTIAL),
+                VisitOrder::Post => matches!(quantifier_type, QuantifierType::ALL),
             }
         }
 

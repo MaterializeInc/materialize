@@ -152,6 +152,8 @@ where
                 (Some(key), row)
             })
         } else {
+            // TODO(benesch): rewrite to avoid `as`.
+            #[allow(clippy::as_conversions)]
             collection.map(|row| {
                 (
                     Some(Row::pack(Some(Datum::Int64(row.hashed() as i64)))),

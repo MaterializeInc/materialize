@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::LocalId;
+use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::GlobalId;
 
@@ -825,8 +826,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 
                 for (offset, cte) in ctes.into_iter().enumerate() {
                     let cte_name = normalize::ident(cte.alias.name.clone());
-                    use mz_ore::cast::CastFrom;
-                    let local_id = LocalId::new((u64::cast_from(initial_id + offset)) as u64);
+                    let local_id = LocalId::new(u64::cast_from(initial_id + offset));
 
                     result_ctes.push(Cte {
                         alias: cte.alias,
@@ -847,13 +847,13 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 // The identifiers for each CTE will be `initial_id` plus their offset in `q.ctes`.
                 for (offset, cte) in ctes.iter().enumerate() {
                     let cte_name = normalize::ident(cte.name.clone());
-                    let local_id = LocalId::new((initial_id + offset) as u64);
+                    let local_id = LocalId::new(u64::cast_from(initial_id + offset));
                     let shadowed_id = self.ctes.insert(cte_name.clone(), local_id);
                     shadowed_cte_ids.push((cte_name, shadowed_id));
                 }
 
                 for (offset, cte) in ctes.into_iter().enumerate() {
-                    let local_id = LocalId::new((initial_id + offset) as u64);
+                    let local_id = LocalId::new(u64::cast_from(initial_id + offset));
 
                     let columns = cte
                         .columns

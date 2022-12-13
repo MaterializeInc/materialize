@@ -86,6 +86,7 @@
 //! ```
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
@@ -150,7 +151,7 @@ impl PgConn {
                     Message::ReadyForQuery(body) => (
                         "ReadyForQuery",
                         serde_json::to_string(&ReadyForQuery {
-                            status: (body.status() as char).to_string(),
+                            status: char::from(body.status()).to_string(),
                         })?,
                     ),
                     Message::RowDescription(body) => (
@@ -211,7 +212,7 @@ impl PgConn {
                             fields: body
                                 .fields()
                                 .filter_map(|f| {
-                                    let typ = f.type_() as char;
+                                    let typ = char::from(f.type_());
                                     if err_field_typs.contains(&typ) {
                                         Ok(Some(ErrorField {
                                             typ,
@@ -231,7 +232,7 @@ impl PgConn {
                             fields: body
                                 .fields()
                                 .filter_map(|f| {
-                                    let typ = f.type_() as char;
+                                    let typ = char::from(f.type_());
                                     if err_field_typs.contains(&typ) {
                                         Ok(Some(ErrorField {
                                             typ,
@@ -251,7 +252,7 @@ impl PgConn {
                             format: format_name(body.format()),
                             column_formats: body
                                 .column_formats()
-                                .map(|format| Ok(format_name(format as u8)))
+                                .map(|format| Ok(format_name(format)))
                                 .collect()
                                 .unwrap(),
                         })?,
@@ -262,7 +263,7 @@ impl PgConn {
                             format: format_name(body.format()),
                             column_formats: body
                                 .column_formats()
-                                .map(|format| Ok(format_name(format as u8)))
+                                .map(|format| Ok(format_name(format)))
                                 .collect()
                                 .unwrap(),
                         })?,
@@ -318,7 +319,7 @@ impl PgConn {
             }
             let mut ch: char = '0';
             if self.recv_buf.len() > 0 {
-                ch = self.recv_buf[0] as char;
+                ch = char::from(self.recv_buf[0]);
             }
             if let Some(msg) = Message::parse(&mut self.recv_buf)? {
                 return Ok((ch, msg));
@@ -445,10 +446,13 @@ impl Drop for PgTest {
     }
 }
 
-fn format_name(format: u8) -> String {
-    match format {
-        0 => "text".to_string(),
-        1 => "binary".to_string(),
+fn format_name<T>(format: T) -> String
+where
+    T: Copy + TryInto<u16> + fmt::Display,
+{
+    match format.try_into() {
+        Ok(0) => "text".to_string(),
+        Ok(1) => "binary".to_string(),
         _ => format!("unknown: {}", format),
     }
 }

@@ -281,6 +281,10 @@ mz_cluster_replica_statuses
 BASE TABLE
 materialize
 mz_internal
+mz_cluster_replica_utilization
+VIEW
+materialize
+mz_internal
 mz_compute_exports
 SOURCE
 materialize

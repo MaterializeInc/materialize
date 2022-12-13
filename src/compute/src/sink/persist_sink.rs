@@ -29,6 +29,7 @@ use tokio::sync::Mutex;
 use tracing::trace;
 
 use mz_compute_client::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
+use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::Batch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
@@ -254,7 +255,7 @@ where
     // workers must write batches with the same description, to ensure that they
     // can be combined into one batch that gets appended to Consensus state.
     let hashed_id = sink_id.hashed();
-    let active_worker = (hashed_id as usize) % scope.peers() == scope.index();
+    let active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
 
     // Only the "active" operator will mint batches. All other workers have an
     // empty frontier. It's necessary to insert all of these into
@@ -829,7 +830,7 @@ where
     let (mut _output, output_stream) = append_op.new_output();
 
     let hashed_id = sink_id.hashed();
-    let active_worker = (hashed_id as usize) % scope.peers() == scope.index();
+    let active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
 
     // This operator wants to completely control the frontier on it's output
     // because it's used to track the latest persist frontier. We update this

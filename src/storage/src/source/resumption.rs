@@ -22,6 +22,7 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::timestamp::Timestamp as _;
 
+use mz_ore::cast::CastFrom;
 use mz_repr::Timestamp;
 use mz_storage_client::controller::ResumptionFrontierCalculator;
 use mz_timely_util::builder_async::OperatorBuilder;
@@ -55,7 +56,7 @@ where
         ..
     } = config;
 
-    let chosen_worker = (id.hashed() % worker_count as u64) as usize;
+    let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
     let active_worker = chosen_worker == worker_id;
 
     let operator_name = format!("resumption({})", id);

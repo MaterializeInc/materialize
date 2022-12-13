@@ -251,6 +251,8 @@ mod enabled {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             const TOKENS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
 
+            // TODO(benesch): rewrite to avoid `as`.
+            #[allow(clippy::as_conversions)]
             let mut counter = self.0 as f64;
             let mut tok_i = 0;
             while counter >= 1024.0 && tok_i < TOKENS.len() - 1 {

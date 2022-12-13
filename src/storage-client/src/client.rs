@@ -366,6 +366,8 @@ where
                 for ingestion in ingestions {
                     for &export_id in ingestion.description.source_exports.keys() {
                         let mut frontier = MutableAntichain::new();
+                        // TODO(benesch): fix this dangerous use of `as`.
+                        #[allow(clippy::as_conversions)]
                         frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
                         let part_frontiers =
                             vec![Some(Antichain::from_elem(T::minimum())); self.parts];
@@ -377,6 +379,8 @@ where
             StorageCommand::CreateSinks(exports) => {
                 for export in exports {
                     let mut frontier = MutableAntichain::new();
+                    // TODO(benesch): fix this dangerous use of `as`.
+                    #[allow(clippy::as_conversions)]
                     frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
                     let part_frontiers = vec![Some(Antichain::from_elem(T::minimum())); self.parts];
                     let previous = self.uppers.insert(export.id, (frontier, part_frontiers));

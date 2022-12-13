@@ -682,6 +682,8 @@ fn to_metadata_row(
                     IncludedColumnSource::Timestamp => {
                         let ts =
                             upstream_time_millis.expect("kafka sources always have upstream_time");
+                        // TODO(benesch): rewrite to avoid `as`.
+                        #[allow(clippy::as_conversions)]
                         let (secs, mut millis) = (ts / 1000, (ts.abs() % 1000) as u32);
                         if secs < 0 {
                             millis = 1000 - millis;

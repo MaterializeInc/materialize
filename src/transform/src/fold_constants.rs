@@ -420,6 +420,9 @@ impl FoldConstants {
         Ok(())
     }
 
+    // TODO(benesch): remove this once this function no longer makes use of
+    // potentially dangerous `as` conversions.
+    #[allow(clippy::as_conversions)]
     fn fold_reduce_constant(
         group_key: &[MirScalarExpr],
         aggregates: &[AggregateExpr],

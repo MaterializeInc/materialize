@@ -59,6 +59,7 @@ members = [
     "src/transform",
     "src/cloud-resources",
     "src/walkabout",
+    "src/workspace-hack",
     "test/metabase/smoketest",
     "test/perf-kinesis",
     "test/test-util",

@@ -16,6 +16,7 @@ use serde_json::Value;
 use mz_expr::explain::ViewExplanation;
 use mz_expr::{EvalError, Id, LocalId, MirRelationExpr, MirScalarExpr};
 use mz_lowertest::*;
+use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_ore::str::separated;
 use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
@@ -131,9 +132,9 @@ impl<'a> TestCatalog {
             return Err(format!("Object {} already exists in catalog", name));
         }
         let id = if transient {
-            GlobalId::Transient(self.objects.len() as u64)
+            GlobalId::Transient(u64::cast_from(self.objects.len()))
         } else {
-            GlobalId::User(self.objects.len() as u64)
+            GlobalId::User(u64::cast_from(self.objects.len()))
         };
         self.objects.insert(name.to_string(), (id, typ));
         self.names.insert(id, name.to_string());
@@ -703,7 +704,7 @@ struct Scope {
 impl Scope {
     fn insert(&mut self, name: &str, typ: RelationType) -> (LocalId, Option<(Id, RelationType)>) {
         let old_val = self.get(name);
-        let id = LocalId::new(self.objects.len() as u64);
+        let id = LocalId::new(u64::cast_from(self.objects.len()));
         self.set(name, Id::Local(id), typ);
         (id, old_val)
     }

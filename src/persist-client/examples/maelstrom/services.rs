@@ -60,7 +60,7 @@ impl MaelstromConsensus {
         Arc::new(MaelstromConsensus {
             handle,
             cache: Mutex::new(HashMap::new()),
-        }) as Arc<dyn Consensus + Send + Sync>
+        })
     }
 
     pub async fn hydrate_seqno(
@@ -176,7 +176,7 @@ pub struct MaelstromBlob {
 
 impl MaelstromBlob {
     pub fn new(handle: Handle) -> Arc<dyn Blob + Send + Sync> {
-        Arc::new(MaelstromBlob { handle }) as Arc<dyn Blob + Send + Sync>
+        Arc::new(MaelstromBlob { handle })
     }
 }
 
@@ -246,7 +246,7 @@ impl CachingBlob {
         Arc::new(CachingBlob {
             blob,
             cache: Mutex::new(HashMap::new()),
-        }) as Arc<dyn Blob + Send + Sync>
+        })
     }
 }
 

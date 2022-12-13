@@ -1507,10 +1507,8 @@ fn get_encoding_inner(
             };
             DataEncodingInner::Csv(CsvEncoding {
                 columns,
-                delimiter: match *delimiter as u32 {
-                    0..=127 => *delimiter as u8,
-                    _ => sql_bail!("CSV delimiter must be an ASCII character"),
-                },
+                delimiter: u8::try_from(*delimiter)
+                    .map_err(|_| sql_err!("CSV delimiter must be an ASCII character"))?,
             })
         }
         Format::Json => bail_unsupported!("JSON sources"),

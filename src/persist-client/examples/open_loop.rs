@@ -190,6 +190,8 @@ where
 
     // The batch interarrival time. We'll use this quantity to rate limit the
     // data generation.
+    // No other known way to convert `usize` to `f64`.
+    #[allow(clippy::as_conversions)]
     let time_per_batch = {
         let records_per_second_f64 = args.records_per_second as f64;
         let batch_size_f64 = args.batch_size as f64;
@@ -350,6 +352,8 @@ where
         write_handles.push(writer_handle);
     }
 
+    // TODO(benesch): rewrite to avoid dangerous `as` conversions.
+    #[allow(clippy::as_conversions)]
     for (idx, mut reader) in readers.into_iter().enumerate() {
         let b = Arc::clone(&barrier);
         // Intentionally create the span outside the task to set the parent.

@@ -29,6 +29,7 @@ use std::collections::BTreeMap;
 
 use mz_expr::RECURSION_LIMIT;
 use mz_expr::{Id, LocalId, MirRelationExpr};
+use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionGuard;
 use mz_repr::RelationType;
@@ -194,7 +195,7 @@ impl NormalizeLets {
         let renumber = to_emit
             .keys()
             .enumerate()
-            .any(|(i, b)| LocalId::new(i as u64) != *b);
+            .any(|(i, b)| LocalId::new(u64::cast_from(i)) != *b);
 
         // Reconstitute the stack of let bindings from `to_emit`.
         for (id, value) in to_emit.into_iter().rev() {

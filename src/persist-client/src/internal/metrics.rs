@@ -119,7 +119,7 @@ impl Metrics {
         // that the overhead of our blob format is included.
         let total_written = self.blob.set.bytes.get();
         let user_written = self.user.goodbytes.get();
-        #[allow(clippy::cast_precision_loss)]
+        #[allow(clippy::as_conversions)]
         {
             total_written as f64 / user_written as f64
         }
