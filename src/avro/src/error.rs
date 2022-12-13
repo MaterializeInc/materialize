@@ -110,10 +110,9 @@ impl DecodeError {
             DecodeError::ExpectedNonnegInteger(i) => {
                 write!(f, "Expected non-negative integer, got {}", i)
             }
-            DecodeError::BadTimestamp {
-                unit,
-                value,
-            } => write!(f, "Invalid timestamp {value} {unit}"),
+            DecodeError::BadTimestamp { unit, value } => {
+                write!(f, "Invalid timestamp {value} {unit}")
+            }
             DecodeError::BadBoolean(byte) => write!(f, "Invalid boolean: {:x}", byte),
             DecodeError::BadDate(since_epoch) => {
                 write!(f, "Invalid num days since epoch: {}", since_epoch)
