@@ -343,8 +343,11 @@ where
 
         // WIP: If we've filled up a chunk of ColumnarRecords, flush it out now to blob storage to keep our memory usage capped.
         let mut part_written = false;
-        if size + self.current_part_bytes >= self.blob_target_size {
-            info!("flushing part");
+        if size + self.current_part_bytes > self.blob_target_size {
+            println!(
+                "flushing part. target size: {}, size: {}, current batch part: {}",
+                self.blob_target_size, size, self.current_part_bytes
+            );
             Self::consolidate_run(
                 &mut self.current_part,
                 &mut self.runs,
