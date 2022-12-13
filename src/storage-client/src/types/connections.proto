@@ -68,7 +68,7 @@ message ProtoCsrConnection {
     ProtoStringOrSecret tls_root_cert = 2;
     ProtoTlsIdentity tls_identity = 3;
     ProtoCsrConnectionHttpAuth http_auth = 4;
-    mz_repr.global_id.ProtoGlobalId aws_privatelink_id = 5;
+    ProtoTunnel tunnel = 6;
 }
 
 message ProtoCsrConnectionHttpAuth {

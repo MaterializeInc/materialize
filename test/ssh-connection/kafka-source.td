@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Test creating a Kafka source using SSH
+# Test creating a Kafka source using SSH, with and without the CSR
 
 $ kafka-create-topic topic=thetopic
 
@@ -35,3 +35,32 @@ text
 ----
 one
 two
+
+> CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}',
+    SSH TUNNEL thancred
+  );
+
+$ set schema={
+        "type" : "record",
+        "name" : "test",
+        "fields" : [
+            {"name":"f1", "type":"string"},
+            {"name":"f2", "type":"long"}
+        ]
+    }
+
+$ kafka-create-topic topic=avroavro
+
+$ kafka-ingest format=avro topic=avroavro schema=${schema}
+{"f1": "fish", "f2": 1000}
+
+> CREATE SOURCE csr_source
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avroavro-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE NONE
+
+> SELECT * FROM csr_source
+f1    f2
+----------
+fish  1000
