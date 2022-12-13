@@ -1,0 +1,61 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# batches are sorted
+write-batch output=b0 lower=0 upper=2
+d 0 1
+a 0 1
+b 0 1
+c 0 1
+----
+parts=1 len=4
+
+fetch-batch input=b0
+----
+<part 0>
+a 0 1
+b 0 1
+c 0 1
+d 0 1
+<run 0>
+part 0
+
+# runs within batches are tracked. target part size is set so that each part contains 2 (sorted) keys.
+write-batch output=b0 lower=0 upper=2 target_size=50
+a 0 1
+b 0 1
+d 0 1
+c 0 1
+g 0 1
+h 0 1
+f 0 1
+e 0 1
+----
+parts=4 len=8
+
+fetch-batch input=b0
+----
+<part 0>
+a 0 1
+b 0 1
+<part 1>
+c 0 1
+d 0 1
+<part 2>
+g 0 1
+h 0 1
+<part 3>
+e 0 1
+f 0 1
+<run 0>
+part 0
+part 1
+part 2
+<run 1>
+part 3
