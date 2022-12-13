@@ -1072,6 +1072,11 @@ SELECT to_timestamp(1262349296.7890123)
 ----
 2010-01-01 12:34:56.789012+00
 
+query T
+SELECT to_timestamp(1.999999999)
+----
+1970-01-01 00:00:02+00
+
 query error timestamp out of range
 SELECT to_timestamp('inf'::double)
 

@@ -436,6 +436,7 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "tots"]
     fn to_timestamp(f: f64) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+        const NANO_SECONDS_PER_SECOND: i64 = 1_000_000_000;
         if f.is_nan() {
             Err(EvalError::TimestampCannotBeNan)
         } else if f.is_infinite() {
@@ -448,14 +449,20 @@ sqlfunc!(
             // nanosecond precision, here we round to the nearest microsecond because
             // f64s lose quite a bit of accuracy in the nanosecond digits when dealing
             // with common Unix timestamp values (> 1 billion).
-            let mut nanosecs = f64_to_i64(((f.fract() * 1_000_000.0).round()) * 1_000.0)
-                .ok_or(EvalError::TimestampOutOfRange)?;
+            let microsecs = (f.fract() * 1_000_000.0).round();
+            let mut nanosecs =
+                f64_to_i64(microsecs * 1_000.0).ok_or(EvalError::TimestampOutOfRange)?;
             if nanosecs < 0 {
                 secs = secs.checked_sub(1).ok_or(EvalError::TimestampOutOfRange)?;
-                nanosecs = 1_000_000_000_i64
+                nanosecs = NANO_SECONDS_PER_SECOND
                     .checked_add(nanosecs)
                     .ok_or(EvalError::TimestampOutOfRange)?;
             }
+            // Ensure `nanosecs` is less than 1 second.
+            secs = secs
+                .checked_add(nanosecs / NANO_SECONDS_PER_SECOND)
+                .ok_or(EvalError::TimestampOutOfRange)?;
+            nanosecs %= NANO_SECONDS_PER_SECOND;
             let nanosecs = u32::try_from(nanosecs).map_err(|_| EvalError::TimestampOutOfRange)?;
             match NaiveDateTime::from_timestamp_opt(secs, nanosecs) {
                 Some(ts) => {
