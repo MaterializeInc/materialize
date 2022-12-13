@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::error::Error;
+use std::future;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
@@ -27,7 +28,7 @@ use tokio_postgres::SimpleQueryMessage;
 use tracing::{error, info, warn};
 
 use mz_expr::{MirScalarExpr, PartitionId};
-use mz_ore::{halt, task};
+use mz_ore::task;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_storage_client::types::connections::ConnectionContext;
@@ -41,7 +42,7 @@ use super::metrics::SourceBaseMetrics;
 use crate::source::commit::LogCommitter;
 
 use crate::source::source_reader_pipeline::HealthStatus;
-use crate::source::types::{OffsetCommitter, SourceConnectionBuilder};
+use crate::source::types::{HealthStatusUpdate, OffsetCommitter, SourceConnectionBuilder};
 use crate::source::{
     NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
 };
@@ -142,7 +143,7 @@ macro_rules! try_indefinite {
 // Message used to communicate between `get_next_message` and the tokio task
 enum InternalMessage {
     Err(SourceReaderError),
-    Status(HealthStatus),
+    Status(HealthStatusUpdate),
     Value {
         output: usize,
         value: Row,
@@ -429,17 +430,26 @@ async fn postgres_replication_loop_inner(
                 );
             }
             Err(ReplicationError::Indefinite(e)) => {
-                // TODO: In the future we probably want to handle this more gracefully,
-                // but for now halting is the easiest way to dump the data in the pipe.
-                // The restarted storaged instance will restart the snapshot fresh, which will
-                // avoid any inconsistencies. Note that if the same lsn is chosen in the
-                // next snapshotting, the remapped timestamp chosen will be the same for
-                // both instances of storaged.
-                halt!(
+                warn!(
                     "replication snapshot for source {} failed: {}",
-                    &task_info.source_id,
-                    e
+                    &task_info.source_id, e
                 );
+                // If the channel is shutting down, so is the source.
+                let _ = task_info
+                    .sender
+                    .send(InternalMessage::Status(HealthStatusUpdate {
+                        update: HealthStatus::StalledWithError(e.to_string()),
+                        // TODO: In the future we probably want to handle this more gracefully,
+                        // but for now halting is the easiest way to dump the data in the pipe.
+                        // The restarted storaged instance will restart the snapshot fresh, which will
+                        // avoid any inconsistencies. Note that if the same lsn is chosen in the
+                        // next snapshotting, the remapped timestamp chosen will be the same for
+                        // both instances of storaged.
+                        should_halt: true,
+                    }))
+                    .await;
+
+                future::pending().await
             }
             Err(ReplicationError::Definite(e)) => {
                 return Err(SourceReaderError {
@@ -455,9 +465,10 @@ async fn postgres_replication_loop_inner(
                 // If the channel is shutting down, so is the source.
                 let _ = task_info
                     .sender
-                    .send(InternalMessage::Status(HealthStatus::StalledWithError(
-                        e.to_string(),
-                    )))
+                    .send(InternalMessage::Status(HealthStatusUpdate {
+                        update: HealthStatus::StalledWithError(e.to_string()),
+                        should_halt: false,
+                    }))
                     .await;
                 warn!(
                     "replication for source {} interrupted, retrying: {}",
