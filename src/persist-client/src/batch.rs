@@ -348,6 +348,11 @@ where
                 "flushing part. target size: {}, size: {}, current batch part: {}",
                 self.blob_target_size, size, self.current_part_bytes
             );
+            // TODO: we currently consolidate a part when we've reached our target size of
+            // _unconsolidated_ updates. This means the part we actually write to Blob may
+            // be (substantially) smaller post-consolidation. We could alternatively create
+            // a `BTreeMap<(&[u8], &[u8], T), D>`, consolidate as we go, and only write out
+            // a part once the data referenced by the map reaches our target size.
             Self::consolidate_run(
                 &mut self.current_part,
                 &mut self.runs,
