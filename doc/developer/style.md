@@ -122,6 +122,16 @@ Some key principles to highlight are:
 * Avoid contractions and spell out words in full.
 * Word choices to be mindful of: find vs. exists, may vs. can vs. might.
 
+### System catalog naming
+We adhere to naming standards for our system catalog relations (tables, views), which includes both the stable `mz_catalog` relations and the unstable `mz_internal` relations.
+
+Catalog relation names should be consistent with the user-facing naming and messaging in our docs. The names should not reference internal-only concepts when possible.
+
+Singular vs Plural:
+* Relations representing objects in our system are plural. Tables and views that list "all items of type x in the system" are the typical case. Examples are `mz_sources`, `mz_connections`. This is consistent with the precedent set in the existing `mz_catalog` relations.
+* Relations representing properties of an objects, where each record has a mapping to a system objects, are singular. Examples are `mz_source_status` and `mz_source_status_history`.
+* When in doubt, use singular.
+
 ## Log message style
 
 We use the [`tracing` crate](https://docs.rs/tracing/latest/tracing/)'s log
