@@ -619,7 +619,8 @@ pub struct StorageControllerState<
     /// without blocking the storage controller.
     persist_read_handles: persist_read_handles::PersistWorker<T>,
     stashed_response: Option<StorageResponse<T>>,
-    /// Storage hosts that should be deprovisioned during the next call to `StorageController::process`.
+    /// Storage hosts that should be deprovisioned during the next call to `StorageController::process`,
+    /// along with the status collection to report the drop to.
     pending_host_deprovisions: BTreeSet<(GlobalId, GlobalId)>,
 
     /// Interface for managed collections
