@@ -196,7 +196,7 @@ fn build_ts_value(value: i64, unit: TsUnit) -> Result<Value, AvroError> {
     //
     // TODO[btv] - The expects below should never fail and are just here to document assumptions.
     // Since they're potentially being called in a tight loop,
-    // we can optimize with `as` or unsafe code, if thisever proves to
+    // we can optimize with `as` or unsafe code, if this ever proves to
     // be a bottleneck.
     let result = match subsec_units.cmp(&0) {
         Ordering::Less => {
