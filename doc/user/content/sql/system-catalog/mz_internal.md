@@ -90,7 +90,7 @@ see [`mz_cluster_replica_utilization`](#mz_cluster_replica_utilization).
 
 ### `mz_cluster_replica_utilization`
 
-The `mz_cluster_replica_utilization` table gives the last known CPU and RAM utilization statistics
+The `mz_cluster_replica_utilization` view gives the last known CPU and RAM utilization statistics
 for all processes of all extant cluster replicas, as a percentage of the total allocation.
 
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
