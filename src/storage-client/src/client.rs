@@ -29,6 +29,7 @@ use timely::PartialOrder;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 
+use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
@@ -335,7 +336,7 @@ impl Arbitrary for StorageResponse<mz_repr::Timestamp> {
 #[derive(Debug)]
 pub struct PartitionedStorageState<T> {
     /// Number of partitions the state machine represents.
-    parts: usize,
+    parts: u32,
     /// Upper frontiers for sources and sinks, both unioned across all partitions and from each
     /// individual partition.
     uppers: HashMap<GlobalId, (MutableAntichain<T>, Vec<Option<Antichain<T>>>)>,
@@ -350,7 +351,7 @@ where
 
     fn new(parts: usize) -> PartitionedStorageState<T> {
         PartitionedStorageState {
-            parts,
+            parts: parts.try_into().expect("more than 4 billion partitions"),
             uppers: HashMap::new(),
         }
     }
@@ -366,11 +367,11 @@ where
                 for ingestion in ingestions {
                     for &export_id in ingestion.description.source_exports.keys() {
                         let mut frontier = MutableAntichain::new();
-                        // TODO(benesch): fix this dangerous use of `as`.
-                        #[allow(clippy::as_conversions)]
-                        frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-                        let part_frontiers =
-                            vec![Some(Antichain::from_elem(T::minimum())); self.parts];
+                        frontier.update_iter(iter::once((T::minimum(), i64::from(self.parts))));
+                        let part_frontiers = vec![
+                            Some(Antichain::from_elem(T::minimum()));
+                            usize::cast_from(self.parts)
+                        ];
                         let previous = self.uppers.insert(export_id, (frontier, part_frontiers));
                         assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export_id, command);
                     }
@@ -379,10 +380,11 @@ where
             StorageCommand::CreateSinks(exports) => {
                 for export in exports {
                     let mut frontier = MutableAntichain::new();
-                    // TODO(benesch): fix this dangerous use of `as`.
-                    #[allow(clippy::as_conversions)]
-                    frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-                    let part_frontiers = vec![Some(Antichain::from_elem(T::minimum())); self.parts];
+                    frontier.update_iter(iter::once((T::minimum(), i64::from(self.parts))));
+                    let part_frontiers = vec![
+                        Some(Antichain::from_elem(T::minimum()));
+                        usize::cast_from(self.parts)
+                    ];
                     let previous = self.uppers.insert(export.id, (frontier, part_frontiers));
                     assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export.id, command);
                 }
@@ -401,7 +403,7 @@ where
     fn split_command(&mut self, command: StorageCommand<T>) -> Vec<Option<StorageCommand<T>>> {
         self.observe_command(&command);
 
-        vec![Some(command); self.parts]
+        vec![Some(command); usize::cast_from(self.parts)]
     }
 
     fn absorb_response(
