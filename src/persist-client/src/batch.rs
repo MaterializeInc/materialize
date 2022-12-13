@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::Bytes;
-use differential_dataflow::consolidation::consolidate_updates;
+use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -194,7 +194,9 @@ where
     metrics: Arc<Metrics>,
 
     current_part: Vec<((Vec<u8>, Vec<u8>), T, D)>,
-    current_part_bytes: usize,
+    current_part_total_bytes: usize,
+    current_part_key_bytes: usize,
+    current_part_value_bytes: usize,
 
     greatest_kv_seen: Option<(Vec<u8>, Vec<u8>)>,
     runs: Vec<usize>,
@@ -203,11 +205,8 @@ where
     num_updates: usize,
     parts: BatchParts<T>,
 
-    key_buf: Vec<u8>,
-    val_buf: Vec<u8>,
-
     since: Antichain<T>,
-    upper: Option<Antichain<T>>,
+    inline_upper: Antichain<T>,
 
     // These provide a bit more safety against appending a batch with the wrong
     // type to a shard.
@@ -231,7 +230,7 @@ where
         shard_id: ShardId,
         writer_id: WriterId,
         since: Antichain<T>,
-        upper: Option<Antichain<T>>,
+        inline_upper: Option<Antichain<T>>,
     ) -> Self {
         let parts = BatchParts::new(
             cfg.batch_builder_max_outstanding_parts,
@@ -251,17 +250,23 @@ where
             blob,
             metrics,
             current_part: Vec::new(),
-            current_part_bytes: 0,
+            current_part_total_bytes: 0,
+            current_part_key_bytes: 0,
+            current_part_value_bytes: 0,
             greatest_kv_seen: None,
             parts_written: 0,
             runs: Vec::new(),
             num_updates: 0,
             parts,
             shard_id,
-            key_buf: Vec::new(),
-            val_buf: Vec::new(),
             since,
-            upper,
+            // TODO: The default case would ideally be `[self.max_ts+1]` but
+            // there's nothing that lets us increment a timestamp. An empty
+            // antichain is guaranteed to correctly bound the data in this
+            // part, but it doesn't really tell us anything. Figure out how
+            // to make a tighter bound, possibly by changing the part
+            // description to be an _inclusive_ upper.
+            inline_upper: inline_upper.unwrap_or_else(|| Antichain::new()),
             _phantom: PhantomData,
         }
     }
@@ -273,53 +278,33 @@ where
     #[instrument(level = "debug", name = "batch::finish", skip_all, fields(shard = %self.shard_id))]
     pub async fn finish(
         mut self,
-        upper: Antichain<T>,
+        registered_upper: Antichain<T>,
         // WIP: return metrics with success case
     ) -> Result<Batch<K, V, T, D>, InvalidUsage<T>> {
-        if PartialOrder::less_than(&upper, &self.lower) {
+        if PartialOrder::less_than(&registered_upper, &self.lower) {
             return Err(InvalidUsage::InvalidBounds {
                 lower: self.lower.clone(),
-                upper,
+                upper: registered_upper,
             });
         }
-        // WIP: explain what's up here. compaction is allowed to create updates with ts > upper
-        // because since can be arbitrarily far ahead of upper. but if since is min, then we
-        // declare an update with ts > upper to be invalid usage
-        if self.since == Antichain::from_elem(T::minimum()) {
-            if upper.less_equal(&self.max_ts) {
-                return Err(InvalidUsage::UpdateBeyondUpper {
-                    max_ts: self.max_ts,
-                    expected_upper: upper.clone(),
-                });
-            }
+        // disallow updates with timestamps beyond the registered `upper` of the batch,
+        // with an exception made when `since` is beyond `upper` (as these may have been
+        // produced by compaction, which is allowed to produce batches with an arbitrary
+        // `since`)
+        if registered_upper.less_equal(&self.max_ts)
+            && !PartialOrder::less_equal(&registered_upper, &self.since)
+        {
+            return Err(InvalidUsage::UpdateBeyondUpper {
+                max_ts: self.max_ts,
+                expected_upper: registered_upper.clone(),
+            });
         }
 
-        // info!(
-        //     "{}: finishing batch. {} updates in current part, {} updates total",
-        //     self.shard_id,
-        //     self.current_part.len(),
-        //     self.num_updates
-        // );
-
-        Self::consolidate_run(
-            &mut self.current_part,
-            &mut self.runs,
-            self.parts_written,
-            &mut self.greatest_kv_seen,
-            &mut self.num_updates,
-        );
-        // WIP: this should use the same upper as in `add`
-        Self::write_part(
-            &mut self.parts,
-            &mut self.current_part,
-            &mut self.parts_written,
-            Description::new(self.lower.clone(), upper.clone(), self.since.clone()),
-        )
-        .await;
+        self.flush_current_part().await;
 
         let parts = self.parts.finish().await;
 
-        let desc = Description::new(self.lower, upper, self.since);
+        let desc = Description::new(self.lower, registered_upper, self.since);
         let batch = Batch::new(
             self.blob,
             self.shard_id.clone(),
@@ -330,73 +315,8 @@ where
                 runs: self.runs,
             },
         );
-        info!("{}: Created batch {:?}", self.shard_id, batch.batch);
 
         Ok(batch)
-    }
-
-    /// WIP: breaking this out into a separate fn is no longer needed
-    async fn add_encoded(&mut self, ts: &T, diff: &D) -> Result<Added, InvalidUsage<T>> {
-        if !self.lower.less_equal(ts) {
-            return Err(InvalidUsage::UpdateNotBeyondLower {
-                ts: ts.clone(),
-                lower: self.lower.clone(),
-            });
-        }
-
-        self.max_ts.join_assign(ts);
-
-        let size = ColumnarRecordsBuilder::columnar_record_size(&self.key_buf, &self.val_buf);
-        let (ts, diff) = (ts.clone(), diff.clone());
-
-        // WIP: If we've filled up a chunk of ColumnarRecords, flush it out now to blob storage to keep our memory usage capped.
-        let mut part_written = false;
-        if size + self.current_part_bytes > self.blob_target_size {
-            // println!(
-            //     "flushing part. target size: {}, size: {}, current batch part: {}",
-            //     self.blob_target_size, size, self.current_part_bytes
-            // );
-            // TODO: we currently consolidate a part when we've reached our target size of
-            // _unconsolidated_ updates. This means the part we actually write to Blob may
-            // be (substantially) smaller post-consolidation. We could alternatively create
-            // a `BTreeMap<(&[u8], &[u8], T), D>`, consolidate as we go, and only write out
-            // a part once the data referenced by the map reaches our target size.
-            Self::consolidate_run(
-                &mut self.current_part,
-                &mut self.runs,
-                self.parts_written,
-                &mut self.greatest_kv_seen,
-                &mut self.num_updates,
-            );
-            // TODO: This upper would ideally be `[self.max_ts+1]` but
-            // there's nothing that lets us increment a timestamp. An empty
-            // antichain is guaranteed to correctly bound the data in this
-            // part, but it doesn't really tell us anything. Figure out how
-            // to make a tighter bound, possibly by changing the part
-            // description to be an _inclusive_ upper.
-            let upper = self.upper.clone().unwrap_or_else(|| Antichain::new());
-            Self::write_part(
-                &mut self.parts,
-                &mut self.current_part,
-                &mut self.parts_written,
-                Description::new(self.lower.clone(), upper.clone(), self.since.clone()),
-            )
-            .await;
-
-            part_written = true;
-            self.current_part_bytes = 0;
-        }
-
-        // WIP remove the clone here if possible
-        self.current_part
-            .push(((self.key_buf.clone(), self.val_buf.clone()), ts, diff));
-        self.current_part_bytes += size;
-
-        if part_written {
-            Ok(Added::RecordAndParts)
-        } else {
-            Ok(Added::Record)
-        }
     }
 
     /// Adds the given update to the batch.
@@ -410,83 +330,111 @@ where
         ts: &T,
         diff: &D,
     ) -> Result<Added, InvalidUsage<T>> {
-        self.key_buf.clear();
-        self.val_buf.clear();
+        if !self.lower.less_equal(ts) {
+            return Err(InvalidUsage::UpdateNotBeyondLower {
+                ts: ts.clone(),
+                lower: self.lower.clone(),
+            });
+        }
+
+        let mut key_buf = Vec::new();
+        let mut val_buf = Vec::new();
         self.metrics
             .codecs
             .key
-            .encode(|| K::encode(key, &mut self.key_buf));
+            .encode(|| K::encode(key, &mut key_buf));
         self.metrics
             .codecs
             .val
-            .encode(|| V::encode(val, &mut self.val_buf));
-        self.add_encoded(ts, diff).await
+            .encode(|| V::encode(val, &mut val_buf));
+
+        self.max_ts.join_assign(ts);
+
+        let size = ColumnarRecordsBuilder::columnar_record_size(&key_buf, &val_buf);
+        let (ts, diff) = (ts.clone(), diff.clone());
+
+        let mut part_written = false;
+        // if we've filled up a chunk of ColumnarRecords, flush it
+        // out now to blob storage to keep our memory usage capped.
+        if size + self.current_part_total_bytes > self.blob_target_size {
+            // TODO: we currently consolidate a part when we've reached our target size of
+            // _unconsolidated_ updates. This means the part we actually write to Blob may
+            // be (substantially) smaller post-consolidation. We could alternatively create
+            // a `BTreeMap<(&[u8], &[u8], T), D>`, consolidate as we go, and only write out
+            // a part once the data referenced by the map reaches our target size.
+            self.flush_current_part().await;
+            part_written = true;
+        }
+
+        self.current_part_total_bytes += size;
+        self.current_part_key_bytes += key_buf.len();
+        self.current_part_value_bytes += val_buf.len();
+        self.current_part.push(((key_buf, val_buf), ts, diff));
+
+        if part_written {
+            Ok(Added::RecordAndParts)
+        } else {
+            Ok(Added::Record)
+        }
     }
 
-    /// Consolidates `updates`, and determines whether the updates should extend the
-    /// current run (if any).  A new run will be created if `updates` contains a key
-    /// that overlaps with the current or any previous run.
-    fn consolidate_run(
-        part_updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
-        runs: &mut Vec<usize>,
-        number_of_parts_written: usize,
-        greatest_kv: &mut Option<(Vec<u8>, Vec<u8>)>,
-        num_consolidated_updates: &mut usize,
-        // timings: &mut Timings,
-    ) -> usize {
-        // let start = Instant::now();
-        consolidate_updates(part_updates);
+    /// Flushes the current part to Blob storage, first consolidating and then columnar encoding
+    /// the updates. It is the caller's responsibility to chunk `current_part` to be no greater
+    /// than [crate::PersistConfig::blob_target_size], and must absolutely be less than
+    /// [mz_persist::indexed::columnar::KEY_VAL_DATA_MAX_LEN]
+    async fn flush_current_part(&mut self) {
+        consolidate_updates(&mut self.current_part);
+        if self.current_part.is_empty() {
+            return;
+        }
 
-        *num_consolidated_updates += part_updates.len();
+        self.num_updates += self.current_part.len();
 
-        match (&greatest_kv, part_updates.last()) {
+        match (&self.greatest_kv_seen, self.current_part.last()) {
             // our updates contain a key that exists within the range of a run we've
-            // already created, we should start a new run, as this part is no longer
+            // already created. we should start a new run, as this part is no longer
             // contiguous with the previous run/part
-            (Some(greatest_kv_seen), Some(greatest_kv_in_batch))
-                if *greatest_kv_seen > greatest_kv_in_batch.0 =>
+            (Some(greatest_kv_seen), Some(greatest_kv_in_part))
+                if *greatest_kv_seen > greatest_kv_in_part.0 =>
             {
-                runs.push(number_of_parts_written);
+                self.runs.push(self.parts_written);
             }
-            (_, Some(greatest_kv_in_batch)) => *greatest_kv = Some(greatest_kv_in_batch.0.clone()),
+            (_, Some(greatest_kv_in_batch)) => {
+                self.greatest_kv_seen = Some(greatest_kv_in_batch.0.clone())
+            }
             (Some(_), None) | (None, None) => {}
         };
 
-        // timings.consolidation += start.elapsed();
-        part_updates.len()
-    }
-
-    /// Encodes `updates` into columnar format and writes them as a single part to blob. It is the
-    /// caller's responsibility to chunk `updates` into a batch no greater than [crate::PersistConfig::blob_target_size]
-    /// and must absolutely be less than [mz_persist::indexed::columnar::KEY_VAL_DATA_MAX_LEN]
-    async fn write_part(
-        batch_parts: &mut BatchParts<T>,
-        part_updates: &mut Vec<((Vec<u8>, Vec<u8>), T, D)>,
-        num_parts_written: &mut usize,
-        desc: Description<T>,
-        // timings: &mut Timings,
-    ) {
-        if part_updates.is_empty() {
-            return;
-        }
-        *num_parts_written += 1;
+        // let start = Instant::now();
 
         let mut builder = ColumnarRecordsBuilder::default();
-        // WIP: use size_hint to determine builder reservations
-        // let start = Instant::now();
-        for ((k, v), t, d) in part_updates.drain(..) {
-            // WIP: handle return
-            builder.push(((&k, &v), T::encode(&t), D::encode(&d)));
+        builder.reserve_exact(
+            self.current_part.len(),
+            self.current_part_key_bytes,
+            self.current_part_value_bytes,
+        );
+        for ((k, v), t, d) in self.current_part.drain(..) {
+            // if this fails, the individual record is too big to fit in
+            // a ColumnarRecords by itself. The limits are big, so this
+            // is a pretty extreme case that we intentionally don't handle
+            // right now.
+            assert!(builder.push(((&k, &v), T::encode(&t), D::encode(&d))));
         }
         // timings.part_columnar_encoding += start.elapsed();
 
         let columnar = builder.finish();
 
         // let start = Instant::now();
-        batch_parts
-            .write(columnar, desc.upper().clone(), desc.since().clone())
+        self.parts
+            .write(columnar, self.inline_upper.clone(), self.since.clone())
             .await;
         // timings.part_writing += start.elapsed();
+
+        self.parts_written += 1;
+        self.current_part_total_bytes = 0;
+        self.current_part_key_bytes = 0;
+        self.current_part_value_bytes = 0;
+        assert_eq!(self.current_part.len(), 0);
     }
 }
 
