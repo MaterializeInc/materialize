@@ -549,17 +549,6 @@ size_1  1  1  18446744073709000000  18446744073709551615  1
 size_2_2  2-2  2  18446744073709000000  18446744073709551615  2
 size_32  32  1  18446744073709000000  18446744073709551615  32
 
-query TTTT
-SELECT replica_id, process_id, cpu_percent, memory_percent FROM mz_internal.mz_cluster_replica_utilization
-----
-1  0  0  0
-2  0  0  0
-3  0  0  0
-23  0  0  0
-24  0  0  0
-25  0  0  0
-25  1  0  0
-
 statement ok
 DROP CLUSTER foo CASCADE
 
