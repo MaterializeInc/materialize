@@ -327,6 +327,10 @@
 //! [Materialize](https://github.com/MaterializeInc/materialize/blob/main/src/interchange/src/avro.rs)
 //! furnishes the most complete example.
 
+// TODO(benesch): remove this once this crate no longer makes use of potentially
+// dangerous `as` conversions.
+#![allow(clippy::as_conversions)]
+
 mod codec;
 mod decode;
 pub mod encode;

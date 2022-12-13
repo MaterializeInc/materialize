@@ -219,8 +219,10 @@ pub async fn run_ingest(
         }
         Some("bytes") => Some(Format::Bytes {
             terminator: match cmd.args.opt_parse::<char>("key-terminator")? {
-                Some(c) if c.is_ascii() => Some(c as u8),
-                Some(_) => bail!("key terminator must be single ASCII character"),
+                Some(c) => match u8::try_from(c) {
+                    Ok(c) => Some(c),
+                    Err(_) => bail!("key terminator must be single ASCII character"),
+                },
                 None => Some(b':'),
             },
         }),

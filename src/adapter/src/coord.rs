@@ -78,8 +78,6 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::StreamExt;
 use itertools::Itertools;
-use mz_orchestrator::ServiceProcessMetrics;
-use mz_ore::task::spawn;
 use rand::seq::SliceRandom;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
@@ -89,12 +87,13 @@ use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
-use mz_compute_client::command::ReplicaId;
-use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
+use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId, ReplicaId};
+use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
+use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{stack, task};
@@ -103,6 +102,7 @@ use mz_persist_client::ShardId;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
+use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::Aug;
 use mz_sql::plan::{MutationKind, Params};
 use mz_stash::Append;
@@ -122,6 +122,7 @@ use crate::catalog::{
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
+use crate::config::SystemParameterFrontend;
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
@@ -129,6 +130,7 @@ use crate::coord::read_policy::ReadCapability;
 use crate::coord::timeline::{
     TimelineState, WriteTimestamp, TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
 };
+use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, Session};
@@ -138,6 +140,8 @@ use crate::AdapterNotice;
 
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
+pub(crate) mod timeline;
+pub(crate) mod timestamp_selection;
 
 mod appends;
 mod command_handler;
@@ -148,8 +152,6 @@ mod message_handler;
 mod read_policy;
 mod sequencer;
 mod sql;
-mod timeline;
-mod timestamp_selection;
 
 /// The default is set to a second to track the default timestamp frequency for sources.
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<mz_repr::Timestamp> =
@@ -238,7 +240,7 @@ pub struct Config<S> {
     pub unsafe_mode: bool,
     pub persisted_introspection: bool,
     pub build_info: &'static BuildInfo,
-    pub environment_id: String,
+    pub environment_id: EnvironmentId,
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
     pub secrets_controller: Arc<dyn SecretsController>,
@@ -253,6 +255,7 @@ pub struct Config<S> {
     pub storage_usage_collection_interval: Duration,
     pub segment_client: Option<mz_segment::Client>,
     pub egress_ips: Vec<Ipv4Addr>,
+    pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
     pub consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
     pub consolidations_rx: mpsc::UnboundedReceiver<Vec<mz_stash::Id>>,
     pub aws_account_id: Option<String>,
@@ -290,15 +293,6 @@ struct ConnMeta {
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,
 }
 
-struct TxnReads {
-    // True iff all statements run so far in the transaction are independent
-    // of the chosen logical timestamp (not the PlanContext walltime). This
-    // happens if both 1) there are no referenced sources or indexes and 2)
-    // `mz_now()` is not present.
-    timestamp_independent: bool,
-    read_holds: crate::coord::read_policy::ReadHolds<mz_repr::Timestamp>,
-}
-
 #[derive(Debug)]
 /// A pending transaction waiting to be committed.
 pub struct PendingTxn {
@@ -318,8 +312,8 @@ pub enum PendingReadTxn {
     Read {
         /// The inner transaction.
         txn: PendingTxn,
-        /// The timestamp of the transaction, if one exists.
-        timestamp: Option<(mz_repr::Timestamp, Option<Timeline>)>,
+        /// The timestamp context of the transaction.
+        timestamp_context: TimestampContext<mz_repr::Timestamp>,
     },
     ReadThenWrite {
         /// Channel used to alert the transaction that the read has been linearized.
@@ -330,14 +324,16 @@ pub enum PendingReadTxn {
 }
 
 impl PendingReadTxn {
-    /// Return the timestamp and timeline of the pending transaction, if one exists.
-    pub fn timestamp(&self) -> Option<(mz_repr::Timestamp, Option<Timeline>)> {
+    /// Return the timestamp context of the pending read transaction.
+    pub fn timestamp_context(&self) -> TimestampContext<mz_repr::Timestamp> {
         match &self {
-            PendingReadTxn::Read { timestamp, .. } => timestamp.clone(),
+            PendingReadTxn::Read {
+                timestamp_context, ..
+            } => timestamp_context.clone(),
             PendingReadTxn::ReadThenWrite {
                 timestamp: (timestamp, timeline),
                 ..
-            } => Some((*timestamp, Some(timeline.clone()))),
+            } => TimestampContext::TimelineTimestamp(timeline.clone(), timestamp.clone()),
         }
     }
 
@@ -415,7 +411,7 @@ pub struct Coordinator<S> {
     ///
     /// Upon completing a transaction, this timestamp should be removed from the holds
     /// in `self.read_capability[id]`, using the `release_read_holds` method.
-    txn_reads: HashMap<ConnectionId, TxnReads>,
+    txn_reads: HashMap<ConnectionId, crate::coord::read_policy::ReadHolds<mz_repr::Timestamp>>,
 
     /// Access to the peek fields should be restricted to methods in the [`peek`] API.
     /// A map from pending peek ids to the queue into which responses are sent, and
@@ -840,6 +836,9 @@ impl<S: Append + 'static> Coordinator<S> {
             )
         }
 
+        // Expose mapping from T-shirt sizes to actual sizes
+        builtin_table_updates.extend(self.catalog.state().pack_all_replica_size_updates());
+
         // Advance all tables to the current timestamp
         info!("coordinator init: advancing all tables to current timestamp");
         let WriteTimestamp {
@@ -1037,6 +1036,7 @@ pub async fn serve<S: Append + 'static>(
         consolidations_tx,
         consolidations_rx,
         aws_account_id,
+        system_parameter_frontend,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
     info!("coordinator init: beginning");
@@ -1088,6 +1088,7 @@ pub async fn serve<S: Append + 'static>(
             secrets_reader: secrets_controller.reader(),
             egress_ips,
             aws_principal_context,
+            system_parameter_frontend,
         })
         .await?;
     let session_id = catalog.config().session_id;

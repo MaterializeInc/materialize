@@ -178,24 +178,9 @@ impl Transactor {
         let ts_min = u64::minimum();
         let initial_upper = Antichain::from_elem(ts_min);
         let new_upper = Antichain::from_elem(ts_min + 1);
-        // Unreliable, if selected, is hooked up at this point so we need to
-        // retry ExternalError here. No point in having a backoff since it's
-        // also happy to use the frontier of an expected upper mismatch.
-        let cas_res = loop {
-            let res = write
-                .compare_and_append(EMPTY_UPDATES, initial_upper.clone(), new_upper.clone())
-                .await;
-            match res {
-                Ok(x) => break x,
-                Err(err) => {
-                    info!(
-                        "external operation maybe_init_shard::caa failed, retrying: {}",
-                        err
-                    );
-                    continue;
-                }
-            }
-        };
+        let cas_res = write
+            .compare_and_append(EMPTY_UPDATES, initial_upper.clone(), new_upper.clone())
+            .await;
         let read_ts = match cas_res? {
             Ok(()) => 0,
             Err(current) => Self::extract_ts(&current.0)? - 1,
@@ -224,7 +209,7 @@ impl Transactor {
             let cas_res = self
                 .write
                 .compare_and_append(updates, expected_upper.clone(), new_upper)
-                .await??;
+                .await?;
             match cas_res {
                 Ok(()) => {
                     self.read_ts = write_ts;
@@ -613,8 +598,8 @@ impl Service for TransactorService {
             Some(blob_uri) => BlobConfig::try_from(blob_uri).await?.open().await?,
             None => MaelstromBlob::new(handle.clone()),
         };
-        let blob =
-            Arc::new(UnreliableBlob::new(blob, unreliable.clone())) as Arc<dyn Blob + Send + Sync>;
+        let blob: Arc<dyn Blob + Send + Sync> =
+            Arc::new(UnreliableBlob::new(blob, unreliable.clone()));
         // Normal production persist usage (even including a real SQL txn impl)
         // isn't particularly benefitted by a cache, so we don't have one baked
         // into persist. In contrast, our Maelstrom transaction model
@@ -629,6 +614,8 @@ impl Service for TransactorService {
         // to simplify some downstream logic (+ a bit more stress testing),
         // always downgrade the since of critical handles when asked
         config.critical_downgrade_interval = Duration::from_secs(0);
+        // set a live diff scan limit such that we'll explore both the fast and slow paths
+        config.state_versions_recent_live_diffs_limit = 5;
         let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
         let consensus = match &args.consensus_uri {
             Some(consensus_uri) => {
@@ -642,8 +629,8 @@ impl Service for TransactorService {
             }
             None => MaelstromConsensus::new(handle.clone()),
         };
-        let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable))
-            as Arc<dyn Consensus + Send + Sync>;
+        let consensus: Arc<dyn Consensus + Send + Sync> =
+            Arc::new(UnreliableConsensus::new(consensus, unreliable));
 
         // Wire up the TransactorService.
         let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());

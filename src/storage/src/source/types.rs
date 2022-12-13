@@ -459,6 +459,8 @@ impl SourceMetrics {
 
             metric.messages_ingested.inc_by(count);
 
+            // TODO(benesch): rewrite to avoid `as`.
+            #[allow(clippy::as_conversions)]
             metric.record_offset(
                 &self.source_name,
                 self.source_id,

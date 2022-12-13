@@ -24,9 +24,9 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
     CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
-    CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
-    IfExistsBehavior, Op, Query, Statement, TableFactor, TableFunction, UnresolvedObjectName,
-    UnresolvedSchemaName, Value, ViewDefinition,
+    CreateTableStatement, CreateTypeStatement, CreateViewStatement, CteBlock, Function,
+    FunctionArgs, Ident, IfExistsBehavior, Op, Query, Statement, TableFactor, TableFunction,
+    UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
 };
 
 use crate::names::{
@@ -212,8 +212,17 @@ pub fn create_statement(
     impl<'a, 'ast> VisitMut<'ast, Aug> for QueryNormalizer<'a> {
         fn visit_query_mut(&mut self, query: &'ast mut Query<Aug>) {
             let n = self.ctes.len();
-            for cte in &query.ctes {
-                self.ctes.push(cte.alias.name.clone());
+            match &query.ctes {
+                CteBlock::Simple(ctes) => {
+                    for cte in ctes.iter() {
+                        self.ctes.push(cte.alias.name.clone());
+                    }
+                }
+                CteBlock::MutuallyRecursive(ctes) => {
+                    for cte in ctes.iter() {
+                        self.ctes.push(cte.name.clone());
+                    }
+                }
             }
             visit_mut::visit_query_mut(self, query);
             self.ctes.truncate(n);

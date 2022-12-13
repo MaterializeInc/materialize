@@ -32,10 +32,9 @@ use mz_audit_log::{
     VersionedStorageUsage,
 };
 use mz_build_info::DUMMY_BUILD_INFO;
-use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::{
     ComputeInstanceEvent, ComputeInstanceId, ComputeInstanceStatus, ComputeReplicaAllocation,
-    ComputeReplicaConfig, ComputeReplicaLocation, ComputeReplicaLogging,
+    ComputeReplicaConfig, ComputeReplicaLocation, ComputeReplicaLogging, ProcessId, ReplicaId,
 };
 use mz_compute_client::logging::{LogVariant, LogView, DEFAULT_LOG_VARIANTS, DEFAULT_LOG_VIEWS};
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
@@ -51,8 +50,8 @@ use mz_sql::ast::Expr;
 use mz_sql::catalog::{
     CatalogComputeInstance, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
-    CatalogSchema, CatalogType, CatalogTypeDetails, IdReference, NameReference, SessionCatalog,
-    TypeReference,
+    CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference, NameReference,
+    SessionCatalog, TypeReference,
 };
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
@@ -87,7 +86,8 @@ pub use crate::catalog::config::{
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
-use crate::session::vars::SystemVars;
+use crate::config::SynchronizedParameters;
+use crate::session::vars::{SystemVars, Var, CONFIG_HAS_SYNCED_ONCE};
 use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
@@ -854,12 +854,22 @@ impl CatalogState {
     }
 
     /// Insert system configuration `name` with `value`.
-    fn insert_system_configuration(&mut self, name: &str, value: &str) -> Result<(), AdapterError> {
+    ///
+    /// Return a `bool` value indicating whether the configuration was modified
+    /// by the call.
+    fn insert_system_configuration(
+        &mut self,
+        name: &str,
+        value: &str,
+    ) -> Result<bool, AdapterError> {
         self.system_configuration.set(name, value)
     }
 
-    /// Remove system configuration `name`.
-    fn remove_system_configuration(&mut self, name: &str) -> Result<(), AdapterError> {
+    /// Reset system configuration `name`.
+    ///
+    /// Return a `bool` value indicating whether the configuration was modified
+    /// by the call.
+    fn remove_system_configuration(&mut self, name: &str) -> Result<bool, AdapterError> {
         self.system_configuration.reset(name)
     }
 
@@ -2469,6 +2479,36 @@ impl<S: Append> Catalog<S> {
         for (name, value) in system_config {
             catalog.state.insert_system_configuration(&name, &value)?;
         }
+        if let Some(system_parameter_frontend) = config.system_parameter_frontend {
+            if !catalog.state.system_config().config_has_synced_once() {
+                tracing::info!("parameter sync on boot: start sync");
+                system_parameter_frontend.ensure_initialized().await;
+
+                let mut params = SynchronizedParameters::new(catalog.state.system_config().clone());
+                system_parameter_frontend.pull(&mut params);
+                let ops = params
+                    .modified()
+                    .into_iter()
+                    .map(|param| {
+                        let name = param.name;
+                        let value = param.value;
+                        tracing::debug!(name, value, "sync parameter");
+                        Op::UpdateSystemConfiguration { name, value }
+                    })
+                    .chain(std::iter::once({
+                        let name = CONFIG_HAS_SYNCED_ONCE.name().to_string();
+                        let value = true.to_string();
+                        tracing::debug!(name, value, "sync parameter");
+                        Op::UpdateSystemConfiguration { name, value }
+                    }))
+                    .collect::<Vec<_>>();
+
+                catalog.transact(None, ops, |_| Ok(())).await.unwrap();
+                tracing::info!("parameter sync on boot: end sync");
+            } else {
+                tracing::info!("parameter sync on boot: skipping sync as config has synced once");
+            }
+        }
 
         let last_seen_version = catalog
             .storage()
@@ -2555,12 +2595,11 @@ impl<S: Append> Catalog<S> {
             builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
             let instance = &catalog.state.compute_instances_by_id[id];
             for (replica_name, replica_id) in &instance.replica_id_by_name {
-                builtin_table_updates.extend(
-                    catalog
-                        .state
-                        .pack_compute_replica_updates(*id, replica_name, 1)
-                        .into_iter(),
-                );
+                builtin_table_updates.push(catalog.state.pack_compute_replica_update(
+                    *id,
+                    replica_name,
+                    1,
+                ));
                 let replica = catalog.state.get_compute_replica(*id, *replica_id);
                 for process_id in 0..replica.config.location.num_processes() {
                     let update = catalog.state.pack_compute_replica_status_update(
@@ -3073,7 +3112,7 @@ impl<S: Append> Catalog<S> {
             unsafe_mode: true,
             persisted_introspection: true,
             build_info: &DUMMY_BUILD_INFO,
-            environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
+            environment_id: EnvironmentId::for_tests(),
             now,
             skip_migrations: true,
             metrics_registry,
@@ -3085,6 +3124,7 @@ impl<S: Append> Catalog<S> {
             secrets_reader,
             egress_ips: vec![],
             aws_principal_context: None,
+            system_parameter_frontend: None,
         })
         .await?;
         Ok(catalog)
@@ -4483,11 +4523,11 @@ impl<S: Append> Catalog<S> {
                         builtin_table_updates.push(update);
                     }
 
-                    builtin_table_updates.extend(
-                        state
-                            .pack_compute_replica_updates(instance.id, &name, -1)
-                            .into_iter(),
-                    );
+                    builtin_table_updates.push(state.pack_compute_replica_update(
+                        instance.id,
+                        &name,
+                        -1,
+                    ));
 
                     let details =
                         EventDetails::DropComputeReplicaV1(mz_audit_log::DropComputeReplicaV1 {
@@ -4854,11 +4894,11 @@ impl<S: Append> Catalog<S> {
                     for id in introspection_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
-                    builtin_table_updates.extend(
-                        state
-                            .pack_compute_replica_updates(on_cluster_id, &name, 1)
-                            .into_iter(),
-                    );
+                    builtin_table_updates.push(state.pack_compute_replica_update(
+                        on_cluster_id,
+                        &name,
+                        1,
+                    ));
                     for process_id in 0..num_processes {
                         let update = state.pack_compute_replica_status_update(
                             on_cluster_id,
@@ -5813,13 +5853,9 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         compute_instance_name: Option<&str>,
     ) -> Result<&dyn mz_sql::catalog::CatalogComputeInstance, SqlCatalogError> {
-        self.state
-            .resolve_compute_instance(
-                compute_instance_name.unwrap_or_else(|| self.active_compute_instance()),
-            )
-            .map(|compute_instance| {
-                compute_instance as &dyn mz_sql::catalog::CatalogComputeInstance
-            })
+        Ok(self.state.resolve_compute_instance(
+            compute_instance_name.unwrap_or_else(|| self.active_compute_instance()),
+        )?)
     }
 
     fn resolve_item(
@@ -5847,9 +5883,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn try_get_item(&self, id: &GlobalId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
-        self.state
-            .try_get_entry(id)
-            .map(|item| item as &dyn mz_sql::catalog::CatalogItem)
+        Some(self.state.try_get_entry(id)?)
     }
 
     fn get_item(&self, id: &GlobalId) -> &dyn mz_sql::catalog::CatalogItem {

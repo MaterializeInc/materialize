@@ -33,6 +33,11 @@ More installation options are available here [https://kind.sigs.k8s.io/docs/user
 
 ```
 kind create cluster --config=misc/kind/cluster.yaml
+for yaml in "misc/kind/configmaps/"*; do
+    kubectl --context kind-kind apply -f "$yaml"
+done
+
+docker exec kind-control-plane kubectl rollout restart -n kube-system deployment/coredns
 ```
 
 # Running tests

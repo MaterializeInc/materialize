@@ -14,7 +14,7 @@ pub(crate) mod text;
 use std::collections::HashMap;
 use std::iter::once;
 
-use mz_compute_client::command::DataflowDescription;
+use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_expr::{visit::Visit, Id, LocalId, MirRelationExpr, OptimizedMirRelationExpr};
 use mz_ore::{cast::CastFrom, stack::RecursionLimitError, str::bracketed, str::separated};
 use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};

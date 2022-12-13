@@ -208,7 +208,7 @@ fn test_binary_int_encoding() {
     for (number, hex_encoding) in BINARY_ENCODINGS.iter() {
         let encoded = to_avro_datum(
             &Schema::from_str("\"int\"").unwrap(),
-            Value::Int(*number as i32),
+            Value::Int(i32::try_from(*number).unwrap()),
         )
         .unwrap();
         assert_eq!(&encoded, hex_encoding);
@@ -218,11 +218,8 @@ fn test_binary_int_encoding() {
 #[test]
 fn test_binary_long_encoding() {
     for (number, hex_encoding) in BINARY_ENCODINGS.iter() {
-        let encoded = to_avro_datum(
-            &Schema::from_str("\"long\"").unwrap(),
-            Value::Long(*number as i64),
-        )
-        .unwrap();
+        let encoded =
+            to_avro_datum(&Schema::from_str("\"long\"").unwrap(), Value::Long(*number)).unwrap();
         assert_eq!(&encoded, hex_encoding);
     }
 }

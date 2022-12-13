@@ -99,7 +99,7 @@ pub async fn create_price_table(
     mz_client: &Client,
     source_name: &str,
     seed: u64,
-    num_clients: u32,
+    num_clients: i32,
 ) -> Result<()> {
     let query = format!(
         "CREATE TABLE {source_name} (client_id text, price_per_cpu_ms text, price_per_gb_ms text)",

@@ -528,7 +528,7 @@ mod tests {
 
     #[tokio::test]
     async fn trace_batch_meta_validate_data() -> Result<(), Error> {
-        let blob = Arc::new(MemBlob::open(MemBlobConfig::default())) as Arc<dyn Blob + Send + Sync>;
+        let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
         let format = ProtoBatchFormat::ParquetKvtd;
 
         let batch_desc = u64_desc_since(0, 3, 0);

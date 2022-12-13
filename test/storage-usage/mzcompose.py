@@ -87,10 +87,10 @@ database_objects = [
         testdrive=dedent(
             """
             > CREATE TABLE obj (f1 TEXT)
-            > INSERT INTO obj SELECT REPEAT('x', 1024) FROM generate_series(1, 1024)
+            > INSERT INTO obj SELECT REPEAT('x', 1024 * 1024) FROM generate_series(1, 1024)
             """
         ),
-        expected_size=5 * 1024,
+        expected_size=1024 * 1024,
     ),
     # Deleted/updated rows should be garbage-collected
     # https://github.com/MaterializeInc/materialize/issues/15093
@@ -154,7 +154,7 @@ database_objects = [
             > CREATE MATERIALIZED VIEW obj AS SELECT COUNT(*) FROM t1;
             """
         ),
-        expected_size=9 * 1024,
+        expected_size=7 * 1024,
     ),
     # The pg-cdc source is expected to be empty. The data is in the sub-source
     DatabaseObject(
@@ -224,6 +224,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ):
             continue
 
+        print(f"Running scenario {database_object.name} ...")
+
         c.testdrive(
             dedent(
                 """
@@ -232,8 +234,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 """
             )
         )
-
-        print(database_object.testdrive)
 
         c.testdrive(database_object.testdrive)
 

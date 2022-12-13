@@ -16,29 +16,33 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use mz_stash::Stash;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::sync::{mpsc, oneshot};
 use tower_http::cors::AllowOrigin;
 
 use mz_adapter::catalog::storage::BootstrapArgs;
 use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
+use mz_adapter::config::{system_parameter_sync, SystemParameterBackend, SystemParameterFrontend};
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::FronteggAuthentication;
+use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task;
 use mz_ore::tracing::TracingTargetCallbacks;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
+use mz_sql::catalog::EnvironmentId;
+use mz_stash::Stash;
 use mz_storage_client::types::connections::ConnectionContext;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
@@ -97,7 +101,7 @@ pub struct Config {
 
     // === Cloud options. ===
     /// The cloud ID of this environment.
-    pub environment_id: String,
+    pub environment_id: EnvironmentId,
     /// Availability zones in which storage and compute resources may be
     /// deployed.
     pub availability_zones: Vec<String>,
@@ -122,6 +126,14 @@ pub struct Config {
     pub egress_ips: Vec<Ipv4Addr>,
     /// 12-digit AWS account id, which will be used to generate an AWS Principal.
     pub aws_account_id: Option<String>,
+    /// An SDK key for LaunchDarkly. Enables system parameter synchronization
+    /// with LaunchDarkly.
+    pub launchdarkly_sdk_key: Option<String>,
+    /// The interval in seconds at which to synchronize system parameter values.
+    pub config_sync_loop_interval: Option<Duration>,
+    /// An invertible map from system parameter names to LaunchDarkly feature
+    /// keys to use when propagating values from the latter to the former.
+    pub launchdarkly_key_map: BTreeMap<String, String>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -286,6 +298,30 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Initialize controller.
     let controller = mz_controller::Controller::new(config.controller, envd_epoch).await;
 
+    // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
+    let system_parameter_frontend = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
+        let ld_user_key = config
+            .frontegg
+            .as_ref()
+            .map(|frontegg| frontegg.tenant_id().to_string())
+            .unwrap_or_else(|| "anonymous-dev@materialize.com".to_string());
+        let ld_key_map = config.launchdarkly_key_map;
+        // The `SystemParameterFrontend::new` call needs to be wrapped in a
+        // spawn_blocking call because the LaunchDarkly SDK initialization uses
+        // `reqwest::blocking::client`. This should be revisited after the SDK
+        // is updated to 1.0.0.
+        let system_parameter_frontend = task::spawn_blocking(
+            || "SystemParameterFrontend::new",
+            move || {
+                SystemParameterFrontend::new(ld_sdk_key.as_str(), ld_user_key.as_str(), ld_key_map)
+            },
+        )
+        .await??;
+        Some(Arc::new(system_parameter_frontend))
+    } else {
+        None
+    };
+
     // Initialize adapter.
     let segment_client = config.segment_api_key.map(mz_segment::Client::new);
     let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
@@ -294,7 +330,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         unsafe_mode: config.unsafe_mode,
         persisted_introspection: config.persisted_introspection,
         build_info: &BUILD_INFO,
-        environment_id: config.environment_id,
+        environment_id: config.environment_id.clone(),
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,
         secrets_controller: config.secrets_controller,
@@ -309,6 +345,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         storage_usage_collection_interval: config.storage_usage_collection_interval,
         segment_client: segment_client.clone(),
         egress_ips: config.egress_ips,
+        system_parameter_frontend: system_parameter_frontend.clone(),
         consolidations_tx,
         consolidations_rx,
         aws_account_id: config.aws_account_id,
@@ -357,12 +394,27 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     });
 
     // Start telemetry reporting loop.
-    if let (Some(segment_client), Some(frontegg)) = (segment_client, config.frontegg) {
+    if let Some(segment_client) = segment_client {
         telemetry::start_reporting(telemetry::Config {
             segment_client,
-            adapter_client,
-            organization_id: frontegg.tenant_id(),
+            adapter_client: adapter_client.clone(),
+            environment_id: config.environment_id,
         });
+    }
+
+    // If system_parameter_frontend and config_sync_loop_interval are present,
+    // start the system_parameter_sync loop.
+    if let Some(system_parameter_frontend) = system_parameter_frontend {
+        let system_parameter_backend = SystemParameterBackend::new(adapter_client).await?;
+        task::spawn(
+            || "system_parameter_sync",
+            AssertUnwindSafe(system_parameter_sync(
+                system_parameter_frontend,
+                system_parameter_backend,
+                config.config_sync_loop_interval,
+            ))
+            .ore_catch_unwind(),
+        );
     }
 
     Ok(Server {

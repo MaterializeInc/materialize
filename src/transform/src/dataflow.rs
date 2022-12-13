@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use mz_compute_client::command::DataflowDesc;
+use mz_compute_client::types::dataflows::DataflowDesc;
 use mz_expr::visit::Visit;
 use mz_expr::{CollectionPlan, Id, LocalId, MapFilterProject, MirRelationExpr};
 
@@ -282,18 +282,15 @@ where
             // Push down the projection consisting of the entries of `columns`
             // in increasing order.
             projection_pushdown.action(view, &projection_pushed_down, demand)?;
-            applied_projection.insert(id, projection_pushed_down);
+            let new_type = view.typ();
+            applied_projection.insert(id, (projection_pushed_down, new_type));
         }
         view_refs.push(view);
     }
 
-    let typ_update = crate::normalize_lets::NormalizeLets::new(false);
     for view in view_refs {
-        // Update column references to views where projections were pushed down.
+        // Update `Get` nodes to reflect any columns that have been projected away.
         projection_pushdown.update_projection_around_get(view, &applied_projection)?;
-        // Types need to be updated after ProjectionPushdown
-        // because the width of each view may have changed.
-        typ_update.action(view)?;
     }
 
     Ok(())

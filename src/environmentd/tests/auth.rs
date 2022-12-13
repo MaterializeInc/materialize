@@ -512,14 +512,14 @@ fn test_auth_expiry() {
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
-    const EXPIRES_IN_SECS: u64 = 10;
-    const REFRESH_BEFORE_SECS: u64 = 9;
+    const EXPIRES_IN_SECS: u64 = 20;
+    const REFRESH_BEFORE_SECS: u64 = 10;
     let frontegg_server = start_mzcloud(
         encoding_key,
         tenant_id,
         users,
         SYSTEM_TIME.clone(),
-        EXPIRES_IN_SECS as i64,
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
     )
     .unwrap();
     let frontegg_auth = FronteggAuthentication::new(FronteggConfig {
@@ -527,7 +527,7 @@ fn test_auth_expiry() {
         decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
         tenant_id,
         now: SYSTEM_TIME.clone(),
-        refresh_before_secs: REFRESH_BEFORE_SECS as i64,
+        refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
         password_prefix: "mzauth_".to_string(),
     });
     let frontegg_user = "user@_.com";

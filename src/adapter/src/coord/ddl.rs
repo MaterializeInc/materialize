@@ -41,6 +41,7 @@ use crate::coord::appends::BuiltinTableUpdateSource;
 use crate::coord::Coordinator;
 use crate::session::vars::SystemVars;
 use crate::session::Session;
+use crate::telemetry::EnvironmentIdExt;
 use crate::util::ComputeSinkId;
 use crate::{catalog, AdapterError};
 
@@ -70,7 +71,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// function successfully returns on any built `DataflowDesc`.
     ///
     /// [`CatalogState`]: crate::catalog::CatalogState
-    /// [`DataflowDesc`]: mz_compute_client::command::DataflowDesc
+    /// [`DataflowDesc`]: mz_compute_client::types::dataflows::DataflowDesc
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn catalog_transact_with<F, R>(
         &mut self,
@@ -309,9 +310,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         "event_source": "environmentd",
                         "details": event.details.as_json(),
                     }),
-                    Some(json!({
-                        "groupId": user_metadata.group_id,
-                    })),
+                    Some(self.catalog.config().environment_id.as_segment_context()),
                 );
             }
         }
@@ -457,7 +456,9 @@ impl<S: Append + 'static> Coordinator<S> {
         // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean
         // that only things going forward are exported.
         let timeline = self
-            .get_timeline(sink.from)
+            .get_timeline_context(sink.from)
+            .timeline()
+            .cloned()
             .unwrap_or(Timeline::EpochMilliseconds);
         let now = self.ensure_timeline_state(&timeline).await.oracle.read_ts();
         let frontier = Antichain::from_elem(now);

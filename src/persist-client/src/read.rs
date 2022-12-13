@@ -893,9 +893,9 @@ where
 #[cfg(test)]
 mod tests {
     use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_ore::cast::CastFrom;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
-    use mz_persist::location::Consensus;
     use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
     use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
     use serde::{Deserialize, Serialize};
@@ -958,7 +958,11 @@ mod tests {
 
         for i in offset..offset + width {
             write
-                .expect_compare_and_append(&data[i..i + 1], i as u64, i as u64 + 1)
+                .expect_compare_and_append(
+                    &data[i..i + 1],
+                    u64::cast_from(i),
+                    u64::cast_from(i) + 1,
+                )
                 .await;
         }
         offset += width;
@@ -991,7 +995,11 @@ mod tests {
                 .await;
 
             write
-                .expect_compare_and_append(&data[i..i + 1], i as u64, i as u64 + 1)
+                .expect_compare_and_append(
+                    &data[i..i + 1],
+                    u64::cast_from(i),
+                    u64::cast_from(i) + 1,
+                )
                 .await;
 
             // SeqNo is not downgraded
@@ -1043,7 +1051,11 @@ mod tests {
             // Write more new values
             i += offset;
             write
-                .expect_compare_and_append(&data[i..i + 1], i as u64, i as u64 + 1)
+                .expect_compare_and_append(
+                    &data[i..i + 1],
+                    u64::cast_from(i),
+                    u64::cast_from(i) + 1,
+                )
                 .await;
 
             // We should expect the SeqNo to be downgraded if this part's SeqNo
@@ -1125,8 +1137,7 @@ mod tests {
         let consensus = Arc::new(MemConsensus::default());
         let unreliable = UnreliableHandle::default();
         unreliable.totally_available();
-        let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable.clone()))
-            as Arc<dyn Consensus + Send + Sync>;
+        let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable.clone()));
         let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
         let (mut write, mut read) = PersistClient::new(
             cfg,

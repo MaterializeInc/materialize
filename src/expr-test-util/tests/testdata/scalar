@@ -80,12 +80,12 @@ build-scalar
 build-scalar
 (ok)
 ----
-error: expected literal after Ident(ok)
+error: expected literal after Ident { sym: ok, span: bytes(4055..4057) }
 
 build-scalar
 (ok (ok true))
 ----
-error: expected literal after Ident(ok)
+error: expected literal after Ident { sym: ok, span: bytes(4061..4063) }
 
 build-scalar
 (err)

@@ -448,7 +448,7 @@ pub fn plan_create_source(
                 topic,
                 start_offsets,
                 group_id_prefix,
-                environment_id: scx.catalog.config().environment_id.clone(),
+                environment_id: scx.catalog.config().environment_id.to_string(),
                 include_timestamp: None,
                 include_partition: None,
                 include_topic: None,
@@ -1507,10 +1507,8 @@ fn get_encoding_inner(
             };
             DataEncodingInner::Csv(CsvEncoding {
                 columns,
-                delimiter: match *delimiter as u32 {
-                    0..=127 => *delimiter as u8,
-                    _ => sql_bail!("CSV delimiter must be an ASCII character"),
-                },
+                delimiter: u8::try_from(*delimiter)
+                    .map_err(|_| sql_err!("CSV delimiter must be an ASCII character"))?,
             })
         }
         Format::Json => bail_unsupported!("JSON sources"),

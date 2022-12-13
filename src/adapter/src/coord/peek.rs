@@ -21,9 +21,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use mz_compute_client::command::{DataflowDescription, ReplicaId};
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
 use mz_compute_client::response::PeekResponse;
+use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_expr::explain::Indices;
 use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::str::Indent;
@@ -34,6 +34,7 @@ use mz_repr::{Diff, GlobalId, RelationType, Row};
 use mz_stash::Append;
 
 use crate::client::ConnectionId;
+use crate::coord::timestamp_selection::TimestampContext;
 use crate::explain_new::Displayable;
 use crate::util::send_immediate_rows;
 use crate::{AdapterError, AdapterNotice};
@@ -133,7 +134,7 @@ where
 pub struct PlannedPeek {
     pub plan: PeekPlan,
     pub read_holds: Option<CollectionIdBundle>,
-    pub timestamp: mz_repr::Timestamp,
+    pub timestamp_context: TimestampContext<mz_repr::Timestamp>,
     pub conn_id: ConnectionId,
     pub source_arity: usize,
     pub id_bundle: CollectionIdBundle,
@@ -300,7 +301,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         let PlannedPeek {
             plan: fast_path,
             read_holds: _,
-            timestamp,
+            timestamp_context,
             conn_id,
             source_arity,
             id_bundle: _,
@@ -312,17 +313,6 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 Ok(rows) => rows,
                 Err(e) => return Err(e.into()),
             };
-            // retain exactly those updates less or equal to `timestamp`.
-            for (_, time, diff) in rows.iter_mut() {
-                use timely::PartialOrder;
-                if time.less_equal(&timestamp) {
-                    // clobber the timestamp, so consolidation occurs.
-                    *time = timestamp.clone();
-                } else {
-                    // zero the difference, to prevent a contribution.
-                    *diff = 0;
-                }
-            }
             // Consolidate down the results to get correct totals.
             differential_dataflow::consolidation::consolidate_updates(&mut rows);
 
@@ -335,6 +325,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     )))?
                 };
                 if count > 0 {
+                    // TODO(benesch): rewrite to avoid `as`.
+                    #[allow(clippy::as_conversions)]
                     results.push((row, NonZeroUsize::new(count as usize).unwrap()));
                 }
             }
@@ -344,6 +336,8 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 Err(e) => Err(AdapterError::ResultSize(e)),
             };
         }
+
+        let timestamp = timestamp_context.timestamp_or_default();
 
         // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
         // In both cases we will want to peek, and the main difference is that we might want to

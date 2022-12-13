@@ -128,7 +128,7 @@ impl FromHir {
                 let select_id = self.model.make_select_box();
                 let quantifier_id =
                     self.model
-                        .make_quantifier(QuantifierType::Foreach, input_box_id, select_id);
+                        .make_quantifier(QuantifierType::FOREACH, input_box_id, select_id);
                 let mut select_box = self.model.get_mut_box(select_id);
                 for position in outputs {
                     select_box.add_column(BoxScalarExpr::ColumnReference(ColumnReference {
@@ -233,23 +233,23 @@ impl FromHir {
                 let (box_type, left_q_type, right_q_type) = match kind {
                     JoinKind::Inner { .. } => (
                         BoxType::Select(Select::default()),
-                        QuantifierType::Foreach,
-                        QuantifierType::Foreach,
+                        QuantifierType::FOREACH,
+                        QuantifierType::FOREACH,
                     ),
                     JoinKind::LeftOuter { .. } => (
                         BoxType::OuterJoin(OuterJoin::default()),
-                        QuantifierType::PreservedForeach,
-                        QuantifierType::Foreach,
+                        QuantifierType::PRESERVED_FOREACH,
+                        QuantifierType::FOREACH,
                     ),
                     JoinKind::RightOuter => (
                         BoxType::OuterJoin(OuterJoin::default()),
-                        QuantifierType::Foreach,
-                        QuantifierType::PreservedForeach,
+                        QuantifierType::FOREACH,
+                        QuantifierType::PRESERVED_FOREACH,
                     ),
                     JoinKind::FullOuter => (
                         BoxType::OuterJoin(OuterJoin::default()),
-                        QuantifierType::PreservedForeach,
-                        QuantifierType::PreservedForeach,
+                        QuantifierType::PRESERVED_FOREACH,
+                        QuantifierType::PRESERVED_FOREACH,
                     ),
                 };
                 let join_box = self.model.make_box(box_type);
@@ -288,13 +288,13 @@ impl FromHir {
                 let select_id = self.model.make_select_box();
                 let input_q_id =
                     self.model
-                        .make_quantifier(QuantifierType::Foreach, input_box_id, select_id);
+                        .make_quantifier(QuantifierType::FOREACH, input_box_id, select_id);
                 let group_box_id = self
                     .model
                     .make_box(BoxType::Grouping(Grouping { key: Vec::new() }));
                 let select_q_id =
                     self.model
-                        .make_quantifier(QuantifierType::Foreach, select_id, group_box_id);
+                        .make_quantifier(QuantifierType::FOREACH, select_id, group_box_id);
                 let mut key = Vec::new();
                 for k in group_key.into_iter() {
                     // Make sure the input select box projects the source column needed
@@ -363,8 +363,6 @@ impl FromHir {
             // HirRelationExpr::Negate { input } => todo!(),
             // HirRelationExpr::Threshold { input } => todo!(),
             HirRelationExpr::Union { base, inputs } => {
-                use QuantifierType::Foreach;
-
                 // recurse to inputs
                 let mut input_ids = vec![self.generate_internal(*base)?];
                 for input in inputs {
@@ -375,7 +373,10 @@ impl FromHir {
                 let union_id = self.model.make_box(BoxType::Union);
                 let quant_ids = input_ids
                     .iter()
-                    .map(|input_id| self.model.make_quantifier(Foreach, *input_id, union_id))
+                    .map(|input_id| {
+                        self.model
+                            .make_quantifier(QuantifierType::FOREACH, *input_id, union_id)
+                    })
                     .collect::<Vec<_>>();
 
                 // project all columns from the first input (convention-based constraint)
@@ -402,7 +403,7 @@ impl FromHir {
     fn wrap_within_select(&mut self, box_id: BoxId) -> BoxId {
         let select_id = self.model.make_select_box();
         self.model
-            .make_quantifier(QuantifierType::Foreach, box_id, select_id);
+            .make_quantifier(QuantifierType::FOREACH, box_id, select_id);
         self.model.get_mut_box(select_id).add_all_input_columns();
         select_id
     }
@@ -457,7 +458,7 @@ impl FromHir {
                 })?;
                 let quantifier_id =
                     self.model
-                        .make_quantifier(QuantifierType::Scalar, box_id, context_box);
+                        .make_quantifier(QuantifierType::SCALAR, box_id, context_box);
                 Ok(BoxScalarExpr::ColumnReference(ColumnReference {
                     quantifier_id,
                     position: 0,
@@ -469,7 +470,7 @@ impl FromHir {
                 })?;
                 let quantifier_id =
                     self.model
-                        .make_quantifier(QuantifierType::Existential, box_id, context_box);
+                        .make_quantifier(QuantifierType::EXISTENTIAL, box_id, context_box);
                 Ok(BoxScalarExpr::ColumnReference(ColumnReference {
                     quantifier_id,
                     position: 0,

@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::gen::billing::{Batch, Record, ResourceInfo};
 
-pub static NUM_CLIENTS: u32 = 100;
+pub static NUM_CLIENTS: i32 = 100;
 
 pub trait Randomizer {
     fn random(rng: &mut impl Rng) -> Self;
@@ -31,6 +31,8 @@ pub struct RecordState {
 fn protobuf_timestamp(time: DateTime<Utc>) -> Timestamp {
     Timestamp {
         seconds: time.timestamp(),
+        // TODO(benesch): avoid dangerous `as` conversion.
+        #[allow(clippy::as_conversions)]
         nanos: time.timestamp_subsec_nanos() as i32,
     }
 }
@@ -91,6 +93,8 @@ fn random_record(rng: &mut impl Rng, start_at: DateTime<Utc>, max_secs: i64) -> 
         interval_start: Some(protobuf_timestamp(interval_start)),
         interval_end: Some(protobuf_timestamp(interval_end)),
         meter,
+        // TODO(benesch): avoid potentially dangerous `as` conversion.
+        #[allow(clippy::as_conversions)]
         value: val as i32,
         info: Some(ResourceInfo::random(rng)),
     }
@@ -105,7 +109,7 @@ impl Randomizer for ResourceInfo {
             cpu_num: *POSSIBLE_CPUS.choose(rng).unwrap(),
             memory_gb: *POSSIBLE_MEM.choose(rng).unwrap(),
             disk_gb: *POSSIBLE_DISK.choose(rng).unwrap(),
-            client_id: rng.gen_range(1..NUM_CLIENTS as i32),
+            client_id: rng.gen_range(1..NUM_CLIENTS),
             vm_id: rng.gen_range(1000..2000),
         }
     }

@@ -10,6 +10,7 @@ publish = false
 anyhow = "1.0.66"
 aws-arn = "0.3.1"
 aws-sdk-sts = { version = "0.21.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+bitflags = "1.3.2"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
 enum-kinds = "0.5.1"
 globset = "0.4.9"
@@ -35,19 +36,20 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-storage-client = { path = "../storage-client" }
 paste = "1.0"
 protobuf-native = "0.2.1"
-prost = { version = "0.11.2", features = ["no-recursion-limit"] }
+prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.7.0"
 reqwest = "0.11.13"
 serde = { version = "1.0.147", features = ["derive"] }
 serde_json = "1.0.89"
 thiserror = "1.0.37"
-tokio = { version = "1.22.0", features = ["fs"] }
+tokio = { version = "1.23.0", features = ["fs"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
 tracing = "0.1.37"
 typemap_rev = "0.3.0"
 uncased = "0.9.7"
 uuid = { version = "1.2.2", features = ["serde", "v4"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 datadriven = "0.6.0"

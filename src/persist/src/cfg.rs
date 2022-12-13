@@ -40,16 +40,9 @@ impl BlobConfig {
     /// Opens the associated implementation of [Blob].
     pub async fn open(self) -> Result<Arc<dyn Blob + Send + Sync>, ExternalError> {
         match self {
-            BlobConfig::File(config) => FileBlob::open(config)
-                .await
-                .map(|x| Arc::new(x) as Arc<dyn Blob + Send + Sync>),
-            BlobConfig::S3(config) => S3Blob::open(config)
-                .await
-                .map(|x| Arc::new(x) as Arc<dyn Blob + Send + Sync>),
-            BlobConfig::Mem => {
-                Ok(Arc::new(MemBlob::open(MemBlobConfig::default()))
-                    as Arc<dyn Blob + Send + Sync>)
-            }
+            BlobConfig::File(config) => Ok(Arc::new(FileBlob::open(config).await?)),
+            BlobConfig::S3(config) => Ok(Arc::new(S3Blob::open(config).await?)),
+            BlobConfig::Mem => Ok(Arc::new(MemBlob::open(MemBlobConfig::default()))),
         }
     }
 
@@ -144,12 +137,10 @@ impl ConsensusConfig {
     /// Opens the associated implementation of [Consensus].
     pub async fn open(self) -> Result<Arc<dyn Consensus + Send + Sync>, ExternalError> {
         match self {
-            ConsensusConfig::Postgres(config) => PostgresConsensus::open(config)
-                .await
-                .map(|x| Arc::new(x) as Arc<dyn Consensus + Send + Sync>),
-            ConsensusConfig::Mem => {
-                Ok(Arc::new(MemConsensus::default()) as Arc<dyn Consensus + Send + Sync>)
+            ConsensusConfig::Postgres(config) => {
+                Ok(Arc::new(PostgresConsensus::open(config).await?))
             }
+            ConsensusConfig::Mem => Ok(Arc::new(MemConsensus::default())),
         }
     }
 

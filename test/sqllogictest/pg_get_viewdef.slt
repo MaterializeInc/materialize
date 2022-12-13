@@ -14,6 +14,9 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+# Start from a pristine server
+reset-server
+
 statement ok
 CREATE TABLE t (a int, b int, c int)
 

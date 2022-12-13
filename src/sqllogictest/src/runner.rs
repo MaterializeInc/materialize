@@ -45,8 +45,6 @@ use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use md5::{Digest, Md5};
-use mz_persist_client::cache::PersistClientCache;
-use mz_repr::adt::date::Date;
 use once_cell::sync::Lazy;
 use postgres_protocol::types;
 use regex::Regex;
@@ -61,18 +59,20 @@ use tower_http::cors::AllowOrigin;
 use uuid::Uuid;
 
 use mz_controller::ControllerConfig;
-use mz_orchestrator::Orchestrator;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_pgrepr::{oid, Interval, Jsonb, Numeric, Value};
+use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
 use mz_sql::ast::{Expr, Raw, ShowStatement, Statement};
+use mz_sql::catalog::EnvironmentId;
 use mz_sql_parser::{
     ast::{display::AstDisplay, CreateIndexStatement, RawObjectName, Statement as AstStatement},
     parser,
@@ -307,7 +307,12 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
     }
 }
 
-pub(crate) struct Runner {
+pub struct Runner<'a> {
+    config: &'a RunConfig<'a>,
+    inner: Option<RunnerInner>,
+}
+
+pub struct RunnerInner {
     server_addr: SocketAddr,
     internal_server_addr: SocketAddr,
     // Drop order matters for these fields.
@@ -363,7 +368,7 @@ impl<'a> FromSql<'a> for Slt {
                 let num_fields = read_be_i32(&mut raw)?;
                 let mut tuple = vec![];
                 for _ in 0..num_fields {
-                    let oid = read_be_i32(&mut raw)? as u32;
+                    let oid = u32::from_ne_bytes(read_be_i32(&mut raw)?.to_ne_bytes());
                     let typ = match PgType::from_oid(oid) {
                         Some(typ) => typ,
                         None => return Err("unknown oid".into()),
@@ -388,6 +393,8 @@ impl<'a> FromSql<'a> for Slt {
                         // Map a Vec<Option<Slt>> to Vec<Option<Value>>.
                         .map(|v| v.map(|v| v.0))
                         .collect();
+                    // TODO(benesch): rewrite to avoid `as`.
+                    #[allow(clippy::as_conversions)]
                     Self(Value::Array {
                         dims: arr
                             .dimensions()
@@ -492,6 +499,8 @@ where
     T: FromSql<'a>,
 {
     let len = read_be_i32(buf)?;
+    // TODO(benesch): rewrite to avoid `as`.
+    #[allow(clippy::as_conversions)]
     let value = if len < 0 {
         None
     } else {
@@ -516,7 +525,11 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         (Type::Integer, Value::UInt4(u)) => u.to_string(),
         (Type::Integer, Value::UInt8(u)) => u.to_string(),
         (Type::Integer, Value::Oid(i)) => i.to_string(),
+        // TODO(benesch): rewrite to avoid `as`.
+        #[allow(clippy::as_conversions)]
         (Type::Integer, Value::Float4(f)) => format!("{}", f as i64),
+        // TODO(benesch): rewrite to avoid `as`.
+        #[allow(clippy::as_conversions)]
         (Type::Integer, Value::Float8(f)) => format!("{}", f as i64),
         // This is so wrong, but sqlite needs it.
         (Type::Integer, Value::Text(_)) => "0".to_string(),
@@ -614,10 +627,133 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
     }
 }
 
-impl Runner {
-    pub async fn start(config: &RunConfig<'_>) -> Result<Self, anyhow::Error> {
+impl<'a> Runner<'a> {
+    pub async fn start(config: &'a RunConfig<'a>) -> Result<Runner<'a>, anyhow::Error> {
+        let mut runner = Self {
+            config,
+            inner: None,
+        };
+        runner.reset().await?;
+        Ok(runner)
+    }
+
+    pub async fn reset(&mut self) -> Result<(), anyhow::Error> {
+        // Explicitly drop the old runner here to ensure that we wait for threads to terminate
+        // before starting a new runner
+        drop(self.inner.take());
+        self.inner = Some(RunnerInner::start(self.config).await?);
+
+        Ok(())
+    }
+
+    async fn run_record<'r>(
+        &mut self,
+        record: &'r Record<'r>,
+    ) -> Result<Outcome<'r>, anyhow::Error> {
+        if let Record::ResetServer = record {
+            self.reset().await?;
+            Ok(Outcome::Success)
+        } else {
+            self.inner
+                .as_mut()
+                .expect("RunnerInner missing")
+                .run_record(record)
+                .await
+        }
+    }
+
+    async fn reset_database(&mut self) -> Result<(), anyhow::Error> {
+        let inner = self.inner.as_mut().expect("RunnerInner missing");
+
+        inner
+            .client
+            .batch_execute(
+                "ROLLBACK;
+                 SET cluster = mz_introspection;
+                 RESET cluster_replica;",
+            )
+            .await?;
+
+        // Drop all databases, then recreate the `materialize` database.
+        for row in inner
+            .client
+            .query("SELECT name FROM mz_databases", &[])
+            .await?
+        {
+            let name: &str = row.get("name");
+            inner
+                .client
+                .batch_execute(&format!("DROP DATABASE {name}"))
+                .await?;
+        }
+        inner
+            .client
+            .batch_execute("CREATE DATABASE materialize")
+            .await?;
+
+        // Ensure default cluster exists with one replica of size '1'. We don't
+        // destroy the existing default cluster replica if it exists, as turning
+        // on a cluster replica is exceptionally slow.
+        let mut needs_default_cluster = true;
+        for row in inner
+            .client
+            .query("SELECT name FROM mz_clusters WHERE id LIKE 'u%'", &[])
+            .await?
+        {
+            match row.get("name") {
+                "default" => needs_default_cluster = false,
+                name => {
+                    inner
+                        .client
+                        .batch_execute(&format!("DROP CLUSTER {name}"))
+                        .await?
+                }
+            }
+        }
+        if needs_default_cluster {
+            inner
+                .client
+                .batch_execute("CREATE CLUSTER default REPLICAS ()")
+                .await?;
+        }
+        let mut needs_default_replica = true;
+        for row in inner
+            .client
+            .query(
+                "SELECT name, size FROM mz_cluster_replicas
+                 WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'default')",
+                &[],
+            )
+            .await?
+        {
+            match (row.get("name"), row.get("size")) {
+                ("r1", "1") => needs_default_replica = false,
+                (name, _) => {
+                    inner
+                        .client
+                        .batch_execute(&format!("DROP CLUSTER REPLICA {name}"))
+                        .await?
+                }
+            }
+        }
+        if needs_default_replica {
+            inner
+                .client
+                .batch_execute("CREATE CLUSTER REPLICA default.r1 SIZE '1'")
+                .await?;
+        }
+
+        inner.client = connect(inner.server_addr, None).await;
+        inner.clients = HashMap::new();
+
+        Ok(())
+    }
+}
+
+impl RunnerInner {
+    pub async fn start(config: &RunConfig<'_>) -> Result<RunnerInner, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
-        let environment_id = format!("environment-{}-0", Uuid::new_v4());
+        let environment_id = EnvironmentId::for_tests();
         let (consensus_uri, adapter_stash_url, storage_stash_url) = {
             let postgres_url = &config.postgres_url;
             let (client, conn) = tokio_postgres::connect(postgres_url, NoTls).await?;
@@ -642,11 +778,12 @@ impl Runner {
                 format!("{postgres_url}?options=--search_path=sqllogictest_storage"),
             )
         };
+
         let orchestrator = Arc::new(
             ProcessOrchestrator::new(ProcessOrchestratorConfig {
                 image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
                 suppress_output: false,
-                environment_id: environment_id.clone(),
+                environment_id: environment_id.to_string(),
                 secrets_dir: temp_dir.path().join("secrets"),
                 command_wrapper: vec![],
                 propagate_crashes: true,
@@ -661,11 +798,13 @@ impl Runner {
         );
         let persist_clients = Arc::new(Mutex::new(persist_clients));
         let postgres_factory = PostgresFactory::new(&metrics_registry);
+        let secrets_controller = Arc::clone(&orchestrator);
+        let connection_context = ConnectionContext::for_tests(orchestrator.reader());
         let server_config = mz_environmentd::Config {
             adapter_stash_url,
             controller: ControllerConfig {
                 build_info: &mz_environmentd::BUILD_INFO,
-                orchestrator: Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
+                orchestrator,
                 storaged_image: "storaged".into(),
                 computed_image: "computed".into(),
                 init_container_image: None,
@@ -678,7 +817,7 @@ impl Runner {
                 now: SYSTEM_TIME.clone(),
                 postgres_factory: postgres_factory.clone(),
             },
-            secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
+            secrets_controller,
             cloud_resource_controller: None,
             // Setting the port to 0 means that the OS will automatically
             // allocate an available port.
@@ -701,14 +840,15 @@ impl Runner {
             storage_host_sizes: Default::default(),
             default_storage_host_size: None,
             availability_zones: Default::default(),
-            connection_context: ConnectionContext::for_tests(
-                (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
-            ),
+            connection_context,
             tracing_target_callbacks: mz_ore::tracing::TracingTargetCallbacks::default(),
             storage_usage_collection_interval: Duration::from_secs(3600),
             segment_api_key: None,
             egress_ips: vec![],
             aws_account_id: None,
+            launchdarkly_sdk_key: None,
+            launchdarkly_key_map: Default::default(),
+            config_sync_loop_interval: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -747,9 +887,20 @@ impl Runner {
         });
         let server_addr = server_addr_rx.await??;
         let internal_server_addr = internal_server_addr_rx.await?;
+
         let client = connect(server_addr, None).await;
 
-        Ok(Runner {
+        // Some sqllogic tests require more than the default amount of tables, so we increase the
+        // limit for all tests.
+        {
+            let system_client = connect(internal_server_addr, Some("mz_system")).await;
+            system_client
+                .simple_query("ALTER SYSTEM SET max_tables = 100")
+                .await
+                .unwrap();
+        }
+
+        Ok(RunnerInner {
             server_addr,
             internal_server_addr,
             _shutdown_trigger: shutdown_trigger,
@@ -761,10 +912,10 @@ impl Runner {
         })
     }
 
-    async fn run_record<'a>(
+    async fn run_record<'r>(
         &mut self,
-        record: &'a Record<'a>,
-    ) -> Result<Outcome<'a>, anyhow::Error> {
+        record: &'r Record<'r>,
+    ) -> Result<Outcome<'r>, anyhow::Error> {
         match &record {
             Record::Statement {
                 expected_error,
@@ -1171,49 +1322,47 @@ fn print_record(config: &RunConfig<'_>, record: &Record) {
 }
 
 pub async fn run_string(
-    config: &RunConfig<'_>,
+    runner: &mut Runner<'_>,
     source: &str,
     input: &str,
 ) -> Result<Outcomes, anyhow::Error> {
+    runner.reset_database().await?;
+
     let mut outcomes = Outcomes::default();
-    let mut state = Runner::start(config).await.unwrap();
     let mut parser = crate::parser::Parser::new(source, input);
-    writeln!(config.stdout, "==> {}", source);
-    // Some sqllogic tests require more than the default amount of tables, so we increase the
-    // limit for all tests.
-    {
-        let client = state.get_conn(Some("mz_system"), Some("mz_system")).await;
-        client
-            .simple_query("ALTER SYSTEM SET max_tables = 100")
-            .await?;
-    }
+    writeln!(runner.config.stdout, "==> {}", source);
+
     for record in parser.parse_records()? {
         // In maximal-verbosity mode, print the query before attempting to run
         // it. Running the query might panic, so it is important to print out
         // what query we are trying to run *before* we panic.
-        if config.verbosity >= 2 {
-            print_record(config, &record);
+        if runner.config.verbosity >= 2 {
+            print_record(runner.config, &record);
         }
 
-        let outcome = state
+        let outcome = runner
             .run_record(&record)
             .await
             .map_err(|err| format!("In {}:\n{}", source, err))
             .unwrap();
 
         // Print failures in verbose mode.
-        if config.verbosity >= 1 && !outcome.success() {
-            if config.verbosity < 2 {
+        if runner.config.verbosity >= 1 && !outcome.success() {
+            if runner.config.verbosity < 2 {
                 // If `verbosity >= 2`, we'll already have printed the record,
                 // so don't print it again. Yes, this is an ugly bit of logic.
                 // Please don't try to consolidate it with the `print_record`
                 // call above, as it's important to have a mode in which records
                 // are printed before they are run, so that if running the
                 // record panics, you can tell which record caused it.
-                print_record(config, &record);
+                print_record(runner.config, &record);
             }
-            writeln!(config.stdout, "{}", util::indent(&outcome.to_string(), 4));
-            writeln!(config.stdout, "{}", util::indent("----", 4));
+            writeln!(
+                runner.config.stdout,
+                "{}",
+                util::indent(&outcome.to_string(), 4)
+            );
+            writeln!(runner.config.stdout, "{}", util::indent("----", 4));
         }
 
         outcomes.0[outcome.code()] += 1;
@@ -1222,20 +1371,22 @@ pub async fn run_string(
             break;
         }
 
-        if config.fail_fast && !outcome.success() {
+        if runner.config.fail_fast && !outcome.success() {
             break;
         }
     }
     Ok(outcomes)
 }
 
-pub async fn run_file(config: &RunConfig<'_>, filename: &Path) -> Result<Outcomes, anyhow::Error> {
+pub async fn run_file(runner: &mut Runner<'_>, filename: &Path) -> Result<Outcomes, anyhow::Error> {
     let mut input = String::new();
     File::open(filename)?.read_to_string(&mut input)?;
-    run_string(config, &format!("{}", filename.display()), &input).await
+    run_string(runner, &format!("{}", filename.display()), &input).await
 }
 
-pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(), anyhow::Error> {
+pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<(), anyhow::Error> {
+    runner.reset_database().await?;
+
     let mut file = OpenOptions::new().read(true).write(true).open(filename)?;
 
     let mut input = String::new();
@@ -1243,12 +1394,11 @@ pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(),
 
     let mut buf = RewriteBuffer::new(&input);
 
-    let mut state = Runner::start(config).await?;
     let mut parser = crate::parser::Parser::new(filename.to_str().unwrap_or(""), &input);
-    writeln!(config.stdout, "==> {}", filename.display());
+    writeln!(runner.config.stdout, "==> {}", filename.display());
     for record in parser.parse_records()? {
         let record = record;
-        let outcome = state.run_record(&record).await?;
+        let outcome = runner.run_record(&record).await?;
 
         // If we see an output failure for a query, rewrite the expected output
         // to match the observed output.
@@ -1379,6 +1529,8 @@ impl<'a> RewriteBuffer<'a> {
 
     fn append_header(&mut self, input: &String, expected_output: &str) {
         // Output everything before this record.
+        // TODO(benesch): is it possible to rewrite this to avoid `as`?
+        #[allow(clippy::as_conversions)]
         let offset = expected_output.as_ptr() as usize - input.as_ptr() as usize;
         self.flush_to(offset);
         self.skip_to(offset + expected_output.len());

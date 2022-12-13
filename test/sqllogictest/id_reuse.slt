@@ -11,6 +11,9 @@
 
 mode cockroach
 
+# Requires stable ids
+reset-server
+
 statement ok
 CREATE SCHEMA foo
 

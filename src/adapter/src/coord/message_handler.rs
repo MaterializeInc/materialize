@@ -30,6 +30,7 @@ use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
 use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice};
 
+use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
     Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, SendDiffs,
     SinkConnectionReady,
@@ -525,10 +526,12 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut deferred_txns = Vec::new();
 
         for read_txn in pending_read_txns {
-            if let Some((timestamp, Some(timeline))) = &read_txn.timestamp() {
-                let timestamp_oracle = self.get_timestamp_oracle_mut(timeline);
+            if let TimestampContext::TimelineTimestamp(timeline, timestamp) =
+                read_txn.timestamp_context()
+            {
+                let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
                 let read_ts = timestamp_oracle.read_ts();
-                if timestamp <= &read_ts {
+                if timestamp <= read_ts {
                     ready_txns.push(read_txn);
                 } else {
                     let wait = Duration::from_millis(timestamp.saturating_sub(read_ts).into());

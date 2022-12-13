@@ -13,6 +13,8 @@
 
 set -euo pipefail
 
+cargo about generate ci/deploy/licenses.hbs > misc/www/licenses.html
+
 aws s3 cp --recursive misc/www/ s3://materialize-dev-website/
 
 bin/doc

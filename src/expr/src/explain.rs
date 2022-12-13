@@ -142,9 +142,7 @@ impl<'a> ViewExplanation<'a> {
                 typ: None,
                 chain: explanation.chain,
             });
-            explanation
-                .expr_chains
-                .insert(expr as *const MirRelationExpr, explanation.chain);
+            explanation.expr_chains.insert(expr, explanation.chain);
         }
 
         fn walk_many<'a, E>(exprs: E, explanation: &mut ViewExplanation<'a>)
@@ -157,10 +155,9 @@ impl<'a> ViewExplanation<'a> {
                     id: Id::Local(id), ..
                 } = expr
                 {
-                    explanation.expr_chains.insert(
-                        expr as *const MirRelationExpr,
-                        explanation.local_id_chains[id],
-                    );
+                    explanation
+                        .expr_chains
+                        .insert(expr, explanation.local_id_chains[id]);
                 } else {
                     walk(expr, explanation);
                     explanation.chain += 1;
@@ -438,7 +435,8 @@ impl<'a> ViewExplanation<'a> {
     /// The `ExplanationNode` for `expr` must have already been inserted into
     /// the explanation.
     fn expr_chain(&self, expr: &MirRelationExpr) -> usize {
-        self.expr_chains[&(expr as *const MirRelationExpr)]
+        let expr: *const MirRelationExpr = expr;
+        self.expr_chains[&expr]
     }
 }
 

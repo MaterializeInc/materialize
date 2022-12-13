@@ -10,6 +10,7 @@
 //! Apache Arrow encodings and utils for persist data
 
 use std::collections::BTreeMap;
+use std::convert;
 use std::io::{Read, Seek, Write};
 use std::sync::Arc;
 
@@ -163,12 +164,12 @@ fn decode_arrow_file_kvtd<R: Read + Seek>(
 /// Converts a ColumnarRecords into an arrow [(K, V, T, D)] Chunk.
 pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Chunk<Box<dyn Array>> {
     Chunk::try_new(vec![
-        Box::new(BinaryArray::from_data(
+        convert::identity::<Box<dyn Array>>(Box::new(BinaryArray::from_data(
             DataType::Binary,
             x.key_offsets.clone(),
             x.key_data.clone(),
             None,
-        )) as Box<dyn Array>,
+        ))),
         Box::new(BinaryArray::from_data(
             DataType::Binary,
             x.val_offsets.clone(),

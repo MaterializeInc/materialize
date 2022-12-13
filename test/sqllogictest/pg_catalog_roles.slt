@@ -9,6 +9,9 @@
 
 mode cockroach
 
+# Start from a pristine server
+reset-server
+
 query IT
 SELECT oid, rolname FROM pg_roles ORDER BY oid
 ----

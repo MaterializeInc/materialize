@@ -378,7 +378,7 @@ impl RustType<u32> for char {
 
 impl RustType<u32> for u8 {
     fn into_proto(&self) -> u32 {
-        *self as u32
+        u32::from(*self)
     }
 
     fn from_proto(proto: u32) -> Result<Self, TryFromProtoError> {
@@ -388,7 +388,7 @@ impl RustType<u32> for u8 {
 
 impl RustType<u32> for u16 {
     fn into_proto(&self) -> u32 {
-        *self as u32
+        u32::from(*self)
     }
 
     fn from_proto(repr: u32) -> Result<Self, TryFromProtoError> {
@@ -397,14 +397,16 @@ impl RustType<u32> for u16 {
 }
 
 impl RustType<ProtoU128> for u128 {
+    // TODO(benesch): add a trait for explicitly performing truncating casts.
+    #[allow(clippy::as_conversions)]
     fn into_proto(&self) -> ProtoU128 {
-        let lo = (self & (u64::MAX as u128)) as u64;
+        let lo = (self & u128::from(u64::MAX)) as u64;
         let hi = (self >> 64) as u64;
         ProtoU128 { hi, lo }
     }
 
     fn from_proto(proto: ProtoU128) -> Result<Self, TryFromProtoError> {
-        Ok((proto.hi as u128) << 64 | (proto.lo as u128))
+        Ok(u128::from(proto.hi) << 64 | u128::from(proto.lo))
     }
 }
 

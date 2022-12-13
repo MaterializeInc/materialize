@@ -21,7 +21,7 @@ build
   [[#0]]
   [int64])
 ----
-error: Punct { char: '#', spacing: Alone } cannot be interpreted as a literal.
+error: Punct { char: '#', spacing: Alone, span: bytes(536..537) } cannot be interpreted as a literal.
 
 build
 (arrange_by

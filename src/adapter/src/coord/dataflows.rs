@@ -20,9 +20,11 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::warn;
 
-use mz_compute_client::command::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc};
 use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
-use mz_compute_client::sinks::{
+use mz_compute_client::types::dataflows::{
+    BuildDesc, DataflowDesc, DataflowDescription, IndexDesc,
+};
+use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection, SinkAsOf,
 };
 use mz_expr::visit::Visit;
@@ -311,7 +313,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
         }
-        let mut index_description = mz_compute_client::command::IndexDesc {
+        let mut index_description = IndexDesc {
             on_id: index.on,
             key: index.keys.clone(),
         };
@@ -656,7 +658,9 @@ fn eval_unmaterializable_func(
             pack(t)
         }
         UnmaterializableFunc::CurrentUser => pack(Datum::from(&*session.user().name)),
-        UnmaterializableFunc::MzEnvironmentId => pack(Datum::from(&*state.config().environment_id)),
+        UnmaterializableFunc::MzEnvironmentId => {
+            pack(Datum::from(&*state.config().environment_id.to_string()))
+        }
         UnmaterializableFunc::MzNow => match logical_time {
             None => coord_bail!("cannot call mz_now in this context"),
             Some(logical_time) => pack(Datum::MzTimestamp(logical_time)),
@@ -673,6 +677,9 @@ fn eval_unmaterializable_func(
         UnmaterializableFunc::MzVersionNum => {
             pack(Datum::Int32(state.config().build_info.version_num()))
         }
+        // TODO(benesch): rewrite this to make clear that presenting a large
+        // unsigned integer as a signed integer is fine.
+        #[allow(clippy::as_conversions)]
         UnmaterializableFunc::PgBackendPid => pack(Datum::Int32(session.conn_id() as i32)),
         UnmaterializableFunc::PgPostmasterStartTime => {
             let t: Datum = state.config().start_time.try_into()?;

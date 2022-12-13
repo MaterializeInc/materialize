@@ -297,9 +297,10 @@ where
 
     use differential_dataflow::collection::concatenate;
     concatenate(scope, to_concat)
+        .arrange_named::<RowSpine<_, _, _, _>>("Arrange ReduceCollation")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceCollation", {
             let mut row_buf = Row::default();
-            move |_key, input, output| {
+            move |key, input, output| {
                 // The inputs are pairs of a reduction type, and a row consisting of densely packed fused
                 // aggregate values.
                 // We need to reconstitute the final value by:
@@ -307,7 +308,6 @@ where
                 // 2. For each aggregate, figure out what type it is, and grab the relevant value
                 //    from the corresponding fused row.
                 // 3. Stitch all the values together into one row.
-
                 let mut accumulable = DatumList::empty().iter();
                 let mut hierarchical = DatumList::empty().iter();
                 let mut basic = DatumList::empty().iter();
@@ -339,16 +339,15 @@ where
                 // Merge results into the order they were asked for.
                 let mut row_packer = row_buf.packer();
                 for typ in aggregate_types.iter() {
-                    match typ {
-                        ReductionType::Accumulable => {
-                            row_packer.push(accumulable.next().unwrap())
-                        }
-                        ReductionType::Hierarchical => {
-                            row_packer.push(hierarchical.next().unwrap())
-                        }
-                        ReductionType::Basic => {
-                            row_packer.push(basic.next().unwrap())
-                        }
+                    let datum = match typ {
+                        ReductionType::Accumulable => accumulable.next(),
+                        ReductionType::Hierarchical => hierarchical.next(),
+                        ReductionType::Basic => basic.next(),
+                    };
+                    if let Some(datum) = datum {
+                        row_packer.push(datum);
+                    } else {
+                        panic!("[customer-data] Missing {typ:?} value for key: {key}");
                     }
                 }
                 output.push((row_buf.clone(), 1));
@@ -362,6 +361,7 @@ where
     G: Scope,
     G::Timestamp: Lattice,
 {
+    // TODO(#16549): Use explicit arrangement
     collection.reduce_abelian::<_, RowSpine<_, _, _, _>>("DistinctBy", {
         |_key, _input, output| {
             // We're pushing an empty row here because the key is implicitly added by the
@@ -383,6 +383,7 @@ where
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
+    // TODO(#16549): Use explicit arrangement
     let negated_result = collection.reduce_named("DistinctBy Retractions", {
         |key, input, output| {
             output.push((key.clone(), -1));
@@ -397,6 +398,7 @@ where
     negated_result
         .negate()
         .concat(&collection)
+        // TODO(#16549): Use explicit arrangement
         .consolidate()
         .inner
         .map(|((k, _), time, count)| (k, time, count))
@@ -431,6 +433,7 @@ where
         to_collect.push(result.as_collection(move |key, val| (key.clone(), (index, val.clone()))));
     }
     differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
+        // TODO(#16549): Use explicit arrangement
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceFuseBasic", {
             let mut row_buf = Row::default();
             move |_key, input, output| {
@@ -472,9 +475,11 @@ where
 
     // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
     if distinct {
+        // TODO(#16549): Use explicit arrangement
         partial = partial.distinct_core();
     }
 
+    // TODO(#16549): Use explicit arrangement
     partial.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceInaccumulable", {
         let mut row_buf = Row::default();
         move |_key, source, target| {
@@ -494,6 +499,8 @@ where
                 // We respect the multiplicity here (unlike in hierarchical aggregation)
                 // because we don't know that the aggregation method is not sensitive
                 // to the number of records.
+                // TODO(benesch): remove potentially dangerous usage of `as`.
+                #[allow(clippy::as_conversions)]
                 let iter = source.iter().flat_map(|(v, w)| {
                     std::iter::repeat(v.iter().next().unwrap()).take(*w as usize)
                 });
@@ -554,7 +561,8 @@ where
 
         // Build a series of stages for the reduction
         // Arrange the final result into (key, Row)
-        partial.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMinsMaxes", {
+        partial.arrange_named::<RowSpine<_,Vec<Row>,_,_>>("Arrange ReduceMinsMaxes")
+            .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMinsMaxes", {
             let mut row_buf = Row::default();
             move |_key, source, target| {
                 // Negative counts would be surprising, but until we are 100% certain we wont
@@ -600,6 +608,7 @@ where
     let input = input.map(move |((key, hash), values)| ((key, hash % buckets), values));
 
     let negated_output = input
+        // TODO(#16549): Use explicit arrangement
         .reduce_named("MinsMaxesHierarchical", {
             move |key, source, target| {
                 // Should negative accumulations reach us, we should loudly complain.
@@ -630,7 +639,11 @@ where
             }
         });
 
-    negated_output.negate().concat(&input).consolidate()
+    negated_output
+        .negate()
+        .concat(&input)
+        // TODO(#16549): Use explicit arrangement
+        .consolidate()
 }
 
 /// Build the dataflow to compute and arrange multiple hierarchical aggregations
@@ -664,6 +677,7 @@ where
     // We arrange the inputs ourself to force it into a leaner structure because we know we
     // won't care about values.
     let partial = collection
+        // TODO(#16549): Use explicit arrangement
         .consolidate()
         .inner
         .map(move |((key, values), time, diff)| {
@@ -1093,10 +1107,10 @@ where
                     x => panic!("Invalid argument to AggregateFunc::{:?}: {:?}", aggr, x),
                 };
 
-                let nans = n.is_nan() as Diff;
-                let pos_infs = (n == f64::INFINITY) as Diff;
-                let neg_infs = (n == f64::NEG_INFINITY) as Diff;
-                let non_nulls = (datum != Datum::Null) as Diff;
+                let nans = Diff::from(n.is_nan());
+                let pos_infs = Diff::from(n == f64::INFINITY);
+                let neg_infs = Diff::from(n == f64::NEG_INFINITY);
+                let non_nulls = Diff::from(datum != Datum::Null);
 
                 // Map the floating point value onto a fixed precision domain
                 // All special values should map to zero, since they are tracked separately
@@ -1104,7 +1118,11 @@ where
                     0
                 } else {
                     // This operation will truncate to i128::MAX if out of range.
-                    (n * float_scale) as i128
+                    // TODO(benesch): rewrite to avoid `as`.
+                    #[allow(clippy::as_conversions)]
+                    {
+                        (n * float_scale) as i128
+                    }
                 };
 
                 AccumInner::Float {
@@ -1229,6 +1247,7 @@ where
                 row_buf.packer().push(value);
                 (key, row_buf.clone())
             })
+            // TODO(#16549): Use explicit arrangement
             .distinct_core()
             .explode_one({
                 let zero_diffs = zero_diffs.clone();
@@ -1309,6 +1328,9 @@ where
                             | (AggregateFunc::SumInt32, AccumInner::SimpleNumber { accum, .. }) => {
                                 // This conversion is safe, as long as we have less than 2^32
                                 // summands.
+                                // TODO(benesch): are we guaranteed to have less than 2^32 summands?
+                                // If so, rewrite to avoid `as`.
+                                #[allow(clippy::as_conversions)]
                                 Datum::Int64(*accum as i64)
                             }
                             (AggregateFunc::SumInt64, AccumInner::SimpleNumber { accum, .. }) => {
@@ -1345,7 +1367,11 @@ where
                                 } else if *neg_infs > 0 {
                                     Datum::from(f32::NEG_INFINITY)
                                 } else {
-                                    Datum::from(((*accum as f64) / float_scale) as f32)
+                                    // TODO(benesch): remove potentially dangerous usage of `as`.
+                                    #[allow(clippy::as_conversions)]
+                                    {
+                                        Datum::from(((*accum as f64) / float_scale) as f32)
+                                    }
                                 }
                             }
                             (
@@ -1367,7 +1393,11 @@ where
                                 } else if *neg_infs > 0 {
                                     Datum::from(f64::NEG_INFINITY)
                                 } else {
-                                    Datum::from((*accum as f64) / float_scale)
+                                    // TODO(benesch): remove potentially dangerous usage of `as`.
+                                    #[allow(clippy::as_conversions)]
+                                    {
+                                        Datum::from((*accum as f64) / float_scale)
+                                    }
                                 }
                             }
                             (

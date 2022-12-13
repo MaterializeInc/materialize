@@ -21,4 +21,4 @@ pub mod metrics;
 pub mod plan;
 pub mod response;
 pub mod service;
-pub mod sinks;
+pub mod types;

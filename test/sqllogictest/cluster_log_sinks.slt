@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Start from a pristine server state
+reset-server
+
 ###   This file has been generated from the following python script:
 ###
 ### SRC = [

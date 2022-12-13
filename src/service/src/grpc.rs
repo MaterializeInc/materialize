@@ -298,7 +298,7 @@ where
             }
             info!("GrpcServer: remote client disconnected");
         };
-        Ok(Response::new(Box::pin(response) as ResponseStream<PR>))
+        Ok(Response::new(Box::pin(response)))
     }
 }
 

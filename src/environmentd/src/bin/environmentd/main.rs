@@ -31,7 +31,6 @@ use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
-use mz_ore::metric;
 use once_cell::sync::Lazy;
 use prometheus::IntGauge;
 use sysinfo::{CpuExt, SystemExt};
@@ -54,11 +53,13 @@ use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
+use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
+use mz_sql::catalog::EnvironmentId;
 use mz_stash::PostgresFactory;
 use mz_storage_client::types::connections::ConnectionContext;
 
@@ -345,10 +346,9 @@ pub struct Args {
     #[clap(
         long,
         env = "ENVIRONMENT_ID",
-        value_name = "ID",
-        default_value = "environment-00000000-0000-0000-0000-000000000000-0"
+        value_name = "<CLOUD>-<REGION>-<ORG-ID>-<ORDINAL>"
     )]
-    environment_id: String,
+    environment_id: EnvironmentId,
     /// Prefix for an external ID to be supplied to all AWS AssumeRole operations.
     ///
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
@@ -414,6 +414,37 @@ pub struct Args {
         use_delimiter = true
     )]
     announce_egress_ip: Vec<Ipv4Addr>,
+    /// An SDK key for LaunchDarkly.
+    ///
+    /// Setting this in combination with [`Self::config_sync_loop_interval`]
+    /// will enable synchronization of LaunchDarkly features with system
+    /// configuration parameters.
+    #[clap(long, env = "LAUNCHDARKLY_SDK_KEY")]
+    launchdarkly_sdk_key: Option<String>,
+    /// A list of PARAM_NAME=KEY_NAME pairs from system parameter names to
+    /// LaunchDarkly feature keys.
+    ///
+    /// This is used (so far only for testing purposes) when propagating values
+    /// from the latter to the former. The identity map is assumed for absent
+    /// parameter names.
+    #[clap(
+        long,
+        env = "LAUNCHDARKLY_KEY_MAP",
+        multiple = true,
+        value_delimiter = ';'
+    )]
+    launchdarkly_key_map: Vec<KeyValueArg<String, String>>,
+    /// The interval in seconds at which to synchronize system parameter values.
+    ///
+    /// If this is not explicitly set, the loop that synchronizes LaunchDarkly
+    /// features with system configuration parameters will not run _even if
+    /// [`Self::launchdarkly_sdk_key`] is present_.
+    #[clap(
+        long,
+        env = "CONFIG_SYNC_LOOP_INTERVAL",
+        parse(try_from_str = humantime::parse_duration),
+    )]
+    config_sync_loop_interval: Option<Duration>,
 
     /// The 12-digit AWS account id, which is used to generate an AWS Principal.
     #[clap(long, env = "AWS_ACCOUNT_ID")]
@@ -562,7 +593,11 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
 
     // Configure controller.
-    let (orchestrator, secrets_controller, cloud_resource_controller) = match args.orchestrator {
+    let (orchestrator, secrets_controller, cloud_resource_controller): (
+        Arc<dyn Orchestrator>,
+        Arc<dyn SecretsController>,
+        Option<Arc<dyn CloudResourceController>>,
+    ) = match args.orchestrator {
         OrchestratorKind::Kubernetes => {
             let orchestrator = Arc::new(
                 runtime
@@ -584,10 +619,12 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     }))
                     .context("creating kubernetes orchestrator")?,
             );
+            let secrets_controller = Arc::clone(&orchestrator);
+            let cloud_resource_controller = Arc::clone(&orchestrator);
             (
-                Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
-                Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
-                Some(orchestrator as Arc<dyn CloudResourceController>),
+                orchestrator,
+                secrets_controller,
+                Some(cloud_resource_controller),
             )
         }
         OrchestratorKind::Process => {
@@ -601,7 +638,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                         // binaries.
                         image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
                         suppress_output: false,
-                        environment_id: args.environment_id.clone(),
+                        environment_id: args.environment_id.to_string(),
                         secrets_dir: args
                             .orchestrator_process_secrets_directory
                             .expect("clap enforced"),
@@ -612,11 +649,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     }))
                     .context("creating process orchestrator")?,
             );
-            (
-                Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
-                orchestrator as Arc<dyn SecretsController>,
-                None,
-            )
+            let secrets_controller = Arc::clone(&orchestrator);
+            (orchestrator, secrets_controller, None)
         }
     };
     let secrets_reader = secrets_controller.reader();
@@ -679,16 +713,9 @@ max log level: {max_log_level}",
         dep_versions = build_info().join("\n"),
         invocation = {
             use shell_words::quote as escape;
-            env::vars_os()
-                .map(|(name, value)| {
-                    (
-                        name.to_string_lossy().into_owned(),
-                        value.to_string_lossy().into_owned(),
-                    )
-                })
-                .filter(|(name, _value)| name.starts_with("MZ_") || name == "FAILPOINTS")
-                .map(|(name, value)| format!("{}={}", escape(&name), escape(&value)))
-                .chain(env::args().into_iter().map(|arg| escape(&arg).into_owned()))
+            env::args()
+                .into_iter()
+                .map(|arg| escape(&arg).into_owned())
                 .join(" ")
         },
         os = os_info::get(),
@@ -767,6 +794,13 @@ max log level: {max_log_level}",
         segment_api_key: args.segment_api_key,
         egress_ips: args.announce_egress_ip,
         aws_account_id: args.aws_account_id,
+        launchdarkly_sdk_key: args.launchdarkly_sdk_key,
+        launchdarkly_key_map: args
+            .launchdarkly_key_map
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .collect(),
+        config_sync_loop_interval: args.config_sync_loop_interval,
     }))?;
 
     metrics.start_time_environmentd.set(

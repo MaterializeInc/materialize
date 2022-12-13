@@ -1,7 +1,7 @@
 [package]
 name = "mz-compute"
 description = "Materialize's compute layer."
-version = "0.35.0-dev"
+version = "0.37.0-dev"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -35,9 +35,10 @@ prometheus = { version = "0.13.3", default-features = false }
 scopeguard = "1.1.0"
 serde = { version = "1.0.147", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.22.0", features = ["fs", "rt", "sync", "net"] }
+tokio = { version = "1.23.0", features = ["fs", "rt", "sync", "net"] }
 tracing = "0.1.37"
 uuid = { version = "1.2.2", features = ["serde", "v4"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 # According to jemalloc developers, `background_threads` should always be

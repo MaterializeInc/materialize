@@ -11,11 +11,6 @@
 
 #![doc = include_str!("../README.md")]
 #![warn(missing_docs, missing_debug_implementations)]
-#![warn(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss
-)]
 
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -25,6 +20,7 @@ use std::time::Duration;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
+use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig, ConsensusKnobs};
 use mz_persist::location::{Blob, Consensus, ExternalError};
@@ -251,6 +247,16 @@ pub struct PersistConfig {
     /// is likely a good place to start so that all connections are rotated when the
     /// pool is fully used.
     pub consensus_connection_pool_ttl_stagger: Duration,
+    /// The # of diffs to initially scan when fetching the latest consensus state, to
+    /// determine which requests go down the fast vs slow path. Should be large enough
+    /// to fetch all live diffs in the steady-state, and small enough to query Consensus
+    /// at high volume. Steady-state usage should accommodate readers that require
+    /// seqno-holds for reasonable amounts of time, which to start we say is 10s of minutes.
+    ///
+    /// This value ought to be defined in terms of `NEED_ROLLUP_THRESHOLD` to approximate
+    /// when we expect rollups to be written and therefore when old states will be truncated
+    /// by GC.
+    pub state_versions_recent_live_diffs_limit: usize,
     /// Length of time after a writer's last operation after which the writer
     /// may be expired.
     pub writer_lease_duration: Duration,
@@ -326,6 +332,9 @@ impl PersistConfig {
             consensus_connection_pool_max_size: 50,
             consensus_connection_pool_ttl: Duration::from_secs(300),
             consensus_connection_pool_ttl_stagger: Duration::from_secs(6),
+            state_versions_recent_live_diffs_limit: usize::cast_from(
+                30 * Self::NEED_ROLLUP_THRESHOLD,
+            ),
             writer_lease_duration: 60 * Duration::from_secs(60),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
             critical_downgrade_interval: Duration::from_secs(30),
@@ -734,7 +743,6 @@ mod tests {
 
     use differential_dataflow::consolidation::consolidate_updates;
     use futures_task::noop_waker;
-    use mz_ore::cast::CastFrom;
     use mz_ore::future::OreFutureExt;
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist::workload::DataGenerator;
@@ -1308,7 +1316,7 @@ mod tests {
                 Antichain::from_elem(3),
             )
             .await;
-        assert_eq!(res, Ok(Ok(Err(Upper(Antichain::from_elem(3))))));
+        assert_eq!(res, Ok(Err(Upper(Antichain::from_elem(3)))));
 
         // A failed write updates our local cache of the shard upper.
         assert_eq!(write2.upper(), &Antichain::from_elem(3));
@@ -1487,8 +1495,7 @@ mod tests {
                 Antichain::from_elem(5),
                 Antichain::from_elem(6),
             )
-            .await
-            .expect("external error");
+            .await;
         assert_eq!(result, Ok(Err(Upper(Antichain::from_elem(3)))));
 
         // Writing with the correct expected upper to make the write contiguous should make the
@@ -1560,8 +1567,7 @@ mod tests {
             .expect_open::<String, String, u64, i64>(shard_id)
             .await;
 
-        let lease_duration_ms =
-            u64::cast_from(write.cfg.writer_lease_duration.as_millis() as usize);
+        let lease_duration_ms = u64::try_from(write.cfg.writer_lease_duration.as_millis()).unwrap();
 
         // we won't heartbeat if enough time hasn't passed
         let heartbeat = write.last_heartbeat;

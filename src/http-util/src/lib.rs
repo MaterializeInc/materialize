@@ -10,14 +10,15 @@
 //! HTTP utilities.
 
 use askama::Template;
-use axum::extract::Json;
 use axum::http::status::StatusCode;
 use axum::response::{Html, IntoResponse};
+use axum::Json;
 use axum::TypedHeader;
 use headers::ContentType;
 use mz_ore::metrics::MetricsRegistry;
 use prometheus::Encoder;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tracing_subscriber::filter::Targets;
 
 /// Renders a template into an HTTP response.
@@ -127,4 +128,15 @@ pub async fn handle_modify_filter_target(
         },
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),
     }
+}
+
+/// Returns information about the current status of tracing.
+#[allow(clippy::unused_async)]
+pub async fn handle_tracing() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(json!({
+            "current_level_filter": tracing::level_filters::LevelFilter::current().to_string()
+        })),
+    )
 }

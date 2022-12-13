@@ -1,0 +1,99 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+## Test a plausibly correct recursive query.
+statement error not supported in HIR
+WITH MUTUALLY RECURSIVE
+    foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
+    bar (a int) as (SELECT a FROM foo)
+SELECT * FROM bar;
+
+## Test a recursive query with mismatched types.
+statement error did not match inferred type
+WITH MUTUALLY RECURSIVE
+    foo (a text, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
+    bar (a int) as (SELECT a FROM foo)
+SELECT * FROM bar;
+
+## Test with fewer columns than declared
+statement error did not match inferred type
+WITH MUTUALLY RECURSIVE
+    foo (a int, b int) AS (SELECT 1 UNION SELECT a FROM bar),
+    bar (a int) as (SELECT a FROM foo)
+SELECT a FROM foo, bar;
+
+## Test with more columns than declared
+statement error did not match inferred type
+WITH MUTUALLY RECURSIVE
+    foo (a int, b int) AS (SELECT 1, 2, 3 UNION SELECT a, 5, 6 FROM bar),
+    bar (a int) as (SELECT a FROM foo)
+SELECT a FROM foo, bar;
+
+## Test ambiguity of resulting columns.
+statement error not supported in HIR
+WITH MUTUALLY RECURSIVE
+    foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 5 FROM bar),
+    bar (a int) as (SELECT a FROM foo)
+SELECT a FROM foo, bar;
+
+## Test column resolution in planning.
+statement error column "a" does not exist
+WITH MUTUALLY RECURSIVE
+    foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 5 FROM bar),
+    bar (c int) as (SELECT c FROM foo)
+SELECT * FROM foo, bar;
+
+## Test column resolution in planning.
+statement error column "c" does not exist
+WITH MUTUALLY RECURSIVE
+    foo (a int, b int) AS (SELECT 1, 2 UNION SELECT 5, 5 FROM bar),
+    bar (c int) as (SELECT c FROM foo)
+SELECT * FROM foo, bar;
+
+## Test nested mutual recursion.
+statement error not supported in HIR
+WITH MUTUALLY RECURSIVE
+    foo (a int, b int) AS (
+        WITH MUTUALLY RECURSIVE
+            foo (a int, b int) AS (SELECT 1, 2 UNION SELECT c, 5 FROM bar),
+            bar (c int) as (SELECT a FROM foo)
+        SELECT a, c FROM foo, bar
+    ),
+    bar (a int) as (SELECT a FROM foo)
+SELECT a FROM foo, bar;
+
+## Test recursive name resolution in SELECT subquery
+statement error not supported in HIR
+WITH MUTUALLY RECURSIVE
+    foo (a int, b int) AS (SELECT (
+        SELECT MIN(c) FROM bar
+    ), 2 UNION SELECT 5, 5 FROM bar),
+    bar (c int) as (SELECT a FROM foo)
+SELECT * FROM foo, bar;
+
+## Test recursive name resolution in FROM clause
+statement error not supported in HIR
+WITH MUTUALLY RECURSIVE
+    foo (a int, b int) AS (
+        SELECT 1, 2 UNION
+        SELECT * FROM (
+            SELECT MIN(c), 2 FROM bar
+        )
+    ),
+    bar (c int) as (SELECT a FROM foo)
+SELECT * FROM foo, bar;
+
+## Test recursive name resolution in FROM clause
+statement error not supported in HIR
+WITH MUTUALLY RECURSIVE
+    foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
+    bar (a int) as (SELECT a FROM foo)
+SELECT (SELECT COUNT(*) FROM foo) FROM bar;

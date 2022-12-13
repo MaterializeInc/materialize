@@ -95,7 +95,7 @@ impl Healthchecker {
         let (write_handle, read_handle) = persist_client
             .open(
                 storage_metadata.status_shard.unwrap(),
-                &format!("healthchecker {}", source_id),
+                &format!("healthcheck {}", source_id),
             )
             .await
             .context("error opening Healthchecker persist shard")?;
@@ -103,7 +103,7 @@ impl Healthchecker {
         let (since, upper) = (read_handle.since().clone(), write_handle.upper().clone());
 
         let bootstrap_read_handle = read_handle
-            .clone(&format!("healthchecker::bootstrap {}", source_id))
+            .clone(&format!("healthcheck::bootstrap {}", source_id))
             .await;
 
         // More details on why the listener starts at `since` instead of `upper` in the docstring for [`bootstrap_state`]
@@ -153,13 +153,13 @@ impl Healthchecker {
                     .compare_and_append(updates.iter(), self.upper.clone(), new_upper.clone())
                     .await
                 {
-                    Ok(Ok(Ok(()))) => {
+                    Ok(Ok(())) => {
                         self.upper = new_upper;
                         // Update internal status only after a successful append
                         self.current_status = status_update.status;
                         break;
                     }
-                    Ok(Ok(Err(actual_upper))) => {
+                    Ok(Err(actual_upper)) => {
                         trace!(
                             "Had to retry updating status, old upper {:?}, new upper {:?}",
                             &self.upper,
@@ -172,18 +172,7 @@ impl Healthchecker {
                             break;
                         }
                     }
-                    Ok(Err(invalid_use)) => panic!("compare_and_append failed: {invalid_use}"),
-                    // An external error means that the operation might have succeeded or failed but we
-                    // don't know. In either case it is safe to retry because:
-                    // * If it succeeded, then on retry we'll get an `Upper(_)` error as if some other
-                    //   process raced us. This is safe and will just cause the healthchecker to sync
-                    //   again, and on retry it will notice that the new state was already processed and
-                    //   finish successfully.
-                    // * If it failed, then we'll succeed on retry and proceed normally.
-                    Err(external_err) => {
-                        trace!("compare_and_append in update_status failed: {external_err}");
-                        continue;
-                    }
+                    Err(invalid_use) => panic!("compare_and_append failed: {invalid_use}"),
                 };
             }
         }
@@ -675,6 +664,8 @@ mod tests {
         persist_clients: &Arc<Mutex<PersistClientCache>>,
     ) -> Healthchecker {
         let start = tokio::time::Instant::now();
+        // TODO(benesch): rewrite to avoid dangerous use of `as`.
+        #[allow(clippy::as_conversions)]
         let now_fn = NowFn::from(move || start.elapsed().as_millis() as u64);
 
         let storage_metadata = CollectionMetadata {

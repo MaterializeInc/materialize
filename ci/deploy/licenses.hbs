@@ -1,0 +1,73 @@
+<!--
+Copyright Materialize, Inc. and contributors. All rights reserved.
+
+Use of this software is governed by the Business Source License
+included in the LICENSE file at the root of this repository.
+
+As of the Change Date specified in that file, in accordance with
+the Business Source License, use of this software will be governed
+by the Apache License, Version 2.0.
+-->
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>
+        Third-party licenses | Materialize
+    </title>
+    <style>
+        .licenses-list {
+            list-style-type: none;
+            margin: 0;
+            padding: 0;
+        }
+        .license-used-by {
+            margin-top: -10px;
+        }
+        .license-text {
+            max-height: 200px;
+            max-width: 650px;
+            overflow-y: scroll;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <em><a href="index.html">« Back to Materialize developer hub</a></em>
+    <hr>
+    <h1>Third-party licenses</h1>
+    <p>
+        This page lists the licenses of the third-party Rust crates used in Materialize.
+    </p>
+    <p>
+        Materialize itself is licensed under the Business Source
+        License. See the
+        <a href="https://github.com/MaterializeInc/materialize/blob/main/LICENSE">LICENSE</a>
+        file in the Materialize Git repository for details.
+    </p>
+
+    <h2>Overview of licenses</h2>
+    <ul class="licenses-overview">
+        {{#each overview}}
+        <li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+        {{/each}}
+    </ul>
+
+    <h2>Crates by license</h2>
+    <ul class="licenses-list">
+        {{#each licenses}}
+        <li class="license">
+            <h3 id="{{id}}">{{name}}</h3>
+            <h4>Used by:</h4>
+            <ul class="license-used-by">
+                {{#each used_by}}
+                <li><a href="{{#if crate.repository}} {{crate.repository}} {{else}} https://crates.io/crates/{{crate.name}} {{/if}}">{{crate.name}} {{crate.version}}</a></li>
+                {{/each}}
+            </ul>
+            <pre class="license-text">{{text}}</pre>
+        </li>
+        {{/each}}
+    </ul>
+</body>
+</html>

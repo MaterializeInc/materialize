@@ -26,6 +26,7 @@ use std::fmt;
 use itertools::Itertools;
 use tracing::warn;
 
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
@@ -550,7 +551,7 @@ impl<'a> Parser<'a> {
                         if matches!(kw, UNION | INTERSECT | EXCEPT) =>
                     {
                         let query = SetExpr::Query(Box::new(query));
-                        let ctes = vec![];
+                        let ctes = CteBlock::empty();
                         let body = parser.parse_query_body_seeded(SetPrecedence::Zero, query)?;
                         Ok(Either::Query(parser.parse_query_tail(ctes, body)?))
                     }
@@ -1697,7 +1698,7 @@ impl<'a> Parser<'a> {
                     names: self.parse_parenthesized_column_list(Mandatory)?,
                 }
             } else {
-                let n_cols = self.parse_literal_uint()? as usize;
+                let n_cols = usize::cast_from(self.parse_literal_uint()?);
                 self.expect_keyword(COLUMNS)?;
                 CsvColumns::Count(n_cols)
             };
@@ -4378,22 +4379,29 @@ impl<'a> Parser<'a> {
     /// expect the initial keyword to be already consumed
     fn parse_query(&mut self) -> Result<Query<Raw>, ParserError> {
         self.checked_recur_mut(|parser| {
-            let ctes = if parser.parse_keyword(WITH) {
-                // TODO: optional RECURSIVE
-                parser.parse_comma_separated(Parser::parse_cte)?
+            let cte_block = if parser.parse_keyword(WITH) {
+                if parser.parse_keyword(MUTUALLY) {
+                    parser.expect_keyword(RECURSIVE)?;
+                    CteBlock::MutuallyRecursive(
+                        parser.parse_comma_separated(Parser::parse_cte_mut_rec)?,
+                    )
+                } else {
+                    // TODO: optional RECURSIVE
+                    CteBlock::Simple(parser.parse_comma_separated(Parser::parse_cte)?)
+                }
             } else {
-                vec![]
+                CteBlock::empty()
             };
 
             let body = parser.parse_query_body(SetPrecedence::Zero)?;
 
-            parser.parse_query_tail(ctes, body)
+            parser.parse_query_tail(cte_block, body)
         })
     }
 
     fn parse_query_tail(
         &mut self,
-        ctes: Vec<Cte<Raw>>,
+        ctes: CteBlock<Raw>,
         body: SetExpr<Raw>,
     ) -> Result<Query<Raw>, ParserError> {
         let (inner_ctes, inner_order_by, inner_limit, inner_offset, body) = match body {
@@ -4407,7 +4415,7 @@ impl<'a> Parser<'a> {
                 } = *query;
                 (ctes, order_by, limit, offset, body)
             }
-            _ => (vec![], vec![], None, None, body),
+            _ => (CteBlock::empty(), vec![], None, None, body),
         };
 
         let ctes = if ctes.is_empty() {
@@ -4514,6 +4522,33 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::RParen)?;
         Ok(Cte {
             alias,
+            query,
+            id: (),
+        })
+    }
+
+    /// Parse a mutually recursive CTE (`alias ( col1: typ1, col2: typ2, ... ) AS (subquery)`).
+    ///
+    /// The main distinction from `parse_cte` is that the column names and types are mandatory.
+    /// This is not how SQL works for `WITH RECURSIVE`, but we are doing it for now to make the
+    /// query interpretation that much easier.
+    fn parse_cte_mut_rec(&mut self) -> Result<CteMutRec<Raw>, ParserError> {
+        let name = self.parse_identifier()?;
+        self.expect_token(&Token::LParen)?;
+        let columns = self.parse_comma_separated(|parser| {
+            Ok(CteMutRecColumnDef {
+                name: parser.parse_identifier()?,
+                data_type: parser.parse_data_type()?,
+            })
+        })?;
+        self.expect_token(&Token::RParen)?;
+        self.expect_keyword(AS)?;
+        self.expect_token(&Token::LParen)?;
+        let query = self.parse_query()?;
+        self.expect_token(&Token::RParen)?;
+        Ok(CteMutRec {
+            name,
+            columns,
             query,
             id: (),
         })

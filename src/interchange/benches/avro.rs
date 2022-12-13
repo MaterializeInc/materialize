@@ -11,6 +11,7 @@ use criterion::{black_box, Criterion, Throughput};
 
 use mz_avro::types::Value as AvroValue;
 use mz_interchange::avro::{parse_schema, Decoder};
+use mz_ore::cast::CastFrom;
 use mz_repr::adt::date::Date;
 use tokio::runtime::Runtime;
 
@@ -390,7 +391,7 @@ pub fn bench_avro(c: &mut Criterion) {
     buf.write_u8(0).unwrap();
     buf.write_i32::<NetworkEndian>(0).unwrap();
     buf.extend(mz_avro::to_avro_datum(&schema, record).unwrap());
-    let len = buf.len() as u64;
+    let len = u64::cast_from(buf.len());
 
     let mut decoder = Decoder::new(schema_str, None, "avro_bench".to_string(), false).unwrap();
 

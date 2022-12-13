@@ -16,11 +16,13 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
+use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use once_cell::sync::Lazy;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -214,7 +216,7 @@ pub struct CatalogConfig {
     /// topics. Perhaps we can remove this when #2915 is complete.
     pub nonce: u64,
     /// A persistent ID associated with the environment.
-    pub environment_id: String,
+    pub environment_id: EnvironmentId,
     /// A transient UUID associated with this process.
     pub session_id: Uuid,
     /// Whether the server is running in unsafe mode.
@@ -551,6 +553,117 @@ impl fmt::Display for TypeCategory {
     }
 }
 
+/// Identifies an environment.
+///
+/// Outside of tests, an environment ID can be constructed only from a string of
+/// the following form:
+///
+/// ```text
+/// <CLOUD PROVIDER>-<CLOUD PROVIDER REGION>-<ORGANIZATION ID>-<ORDINAL>
+/// ```
+///
+/// The fields have the following formats:
+///
+/// * The cloud provider consists of one or more alphanumeric characters.
+/// * The cloud provider region consists of one or more alphanumeric or hyphen
+///   characters.
+/// * The organization ID is a UUID in its canonical text format.
+/// * The ordinal is a decimal number with between one and eight digits.
+///
+/// There is no way to construct an environment ID from parts, to ensure that
+/// the `Display` representation is parseable according to the above rules.
+// NOTE(benesch): ideally we'd have accepted the components of the environment
+// ID using separate command-line arguments, or at least a string format that
+// used a field separator that did not appear in the fields. Alas. We can't
+// easily change it now, as it's used as the e.g. default sink progress topic.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnvironmentId {
+    cloud_provider: String,
+    cloud_provider_region: String,
+    organization_id: Uuid,
+    ordinal: u64,
+}
+
+impl EnvironmentId {
+    /// Creates a dummy `EnvironmentId` for use in tests.
+    pub fn for_tests() -> EnvironmentId {
+        EnvironmentId {
+            cloud_provider: "local".into(),
+            cloud_provider_region: "az1".into(),
+            organization_id: Uuid::new_v4(),
+            ordinal: 0,
+        }
+    }
+
+    /// Returns the cloud provider associated with this environment ID.
+    pub fn cloud_provider(&self) -> &str {
+        &self.cloud_provider
+    }
+
+    /// Returns the cloud provider region associated with this environment ID.
+    pub fn cloud_provider_region(&self) -> &str {
+        &self.cloud_provider_region
+    }
+
+    /// Returns the organization ID associated with this environment ID.
+    pub fn organization_id(&self) -> Uuid {
+        self.organization_id
+    }
+
+    /// Returns the ordinal associated with this environment ID.
+    pub fn ordinal(&self) -> u64 {
+        self.ordinal
+    }
+}
+
+impl FromStr for EnvironmentId {
+    type Err = InvalidEnvironmentIdError;
+
+    fn from_str(s: &str) -> Result<EnvironmentId, InvalidEnvironmentIdError> {
+        static MATCHER: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(
+                "^(?P<cloud_provider>[[:alnum:]]+)-\
+                  (?P<cloud_provider_region>[[:alnum:]\\-]+)-\
+                  (?P<organization_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-\
+                  (?P<ordinal>\\d{1,8})$"
+            ).unwrap()
+        });
+        let captures = MATCHER.captures(s).ok_or(InvalidEnvironmentIdError)?;
+        Ok(EnvironmentId {
+            cloud_provider: captures["cloud_provider"].into(),
+            cloud_provider_region: captures["cloud_provider_region"].into(),
+            organization_id: captures["organization_id"]
+                .parse()
+                .map_err(|_| InvalidEnvironmentIdError)?,
+            ordinal: captures["ordinal"]
+                .parse()
+                .map_err(|_| InvalidEnvironmentIdError)?,
+        })
+    }
+}
+
+impl fmt::Display for EnvironmentId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}-{}-{}-{}",
+            self.cloud_provider, self.cloud_provider_region, self.organization_id, self.ordinal
+        )
+    }
+}
+
+/// The error type for [`EnvironmentId::from_str]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InvalidEnvironmentIdError;
+
+impl fmt::Display for InvalidEnvironmentIdError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("invalid environment ID")
+    }
+}
+
+impl Error for InvalidEnvironmentIdError {}
+
 /// An error returned by the catalog.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CatalogError {
@@ -636,7 +749,7 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     start_time: DateTime::<Utc>::MIN_UTC,
     start_instant: Instant::now(),
     nonce: 0,
-    environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
+    environment_id: EnvironmentId::for_tests(),
     session_id: Uuid::from_u128(0),
     unsafe_mode: true,
     persisted_introspection: true,
@@ -840,5 +953,53 @@ impl<'a, T> ErsatzCatalog<'a, T> {
             UnresolvedObjectName::qualified(&[database, schema, &name.item]),
             desc,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::catalog::{EnvironmentId, InvalidEnvironmentIdError};
+
+    #[test]
+    fn test_environment_id() {
+        for (input, expected) in [
+            (
+                "local-az1-1497a3b7-a455-4fc4-8752-b44a94b5f90a-452",
+                Ok(EnvironmentId {
+                    cloud_provider: "local".into(),
+                    cloud_provider_region: "az1".into(),
+                    organization_id: "1497a3b7-a455-4fc4-8752-b44a94b5f90a".parse().unwrap(),
+                    ordinal: 452,
+                }),
+            ),
+            (
+                "aws-us-east-1-1497a3b7-a455-4fc4-8752-b44a94b5f90a-0",
+                Ok(EnvironmentId {
+                    cloud_provider: "aws".into(),
+                    cloud_provider_region: "us-east-1".into(),
+                    organization_id: "1497a3b7-a455-4fc4-8752-b44a94b5f90a".parse().unwrap(),
+                    ordinal: 0,
+                }),
+            ),
+            ("", Err(InvalidEnvironmentIdError)),
+            (
+                "local-az1-1497a3b7-a455-4fc4-8752-b44a94b5f90a-123456789",
+                Err(InvalidEnvironmentIdError),
+            ),
+            (
+                "local-1497a3b7-a455-4fc4-8752-b44a94b5f90a-452",
+                Err(InvalidEnvironmentIdError),
+            ),
+            (
+                "local-az1-1497a3b7-a455-4fc48752-b44a94b5f90a-452",
+                Err(InvalidEnvironmentIdError),
+            ),
+        ] {
+            let actual = input.parse();
+            assert_eq!(expected, actual, "input = {}", input);
+            if let Ok(actual) = actual {
+                assert_eq!(input, actual.to_string(), "input = {}", input);
+            }
+        }
     }
 }

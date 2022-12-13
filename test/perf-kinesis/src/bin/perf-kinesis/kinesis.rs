@@ -17,6 +17,7 @@ use aws_sdk_kinesis::model::{PutRecordsRequestEntry, StreamStatus};
 use aws_sdk_kinesis::types::{Blob, SdkError};
 use tracing::info;
 
+use mz_ore::cast::CastFrom;
 use mz_ore::retry::Retry;
 use mz_test_util::generator;
 
@@ -163,7 +164,7 @@ pub async fn put_records_one_second(
                     .ok_or_else(|| anyhow!("records unexpectedly missing"))?;
                 let put_records = records.len();
                 index += put_records;
-                put_record_count += records.len() as u64;
+                put_record_count += u64::cast_from(records.len());
             }
             Err(SdkError::ServiceError { err, .. })
                 if err.is_kms_throttling_exception()

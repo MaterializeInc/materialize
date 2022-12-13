@@ -12,8 +12,6 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt;
-#[cfg(feature = "tokio-console")]
-use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 #[cfg(feature = "tokio-console")]
@@ -34,6 +32,8 @@ use mz_orchestrator::{
     ServiceProcessMetrics,
 };
 use mz_ore::cli::{DefaultTrue, KeyValueArg};
+#[cfg(feature = "tokio-console")]
+use mz_ore::netio::SocketAddr;
 #[cfg(feature = "tokio-console")]
 use mz_ore::tracing::TokioConsoleConfig;
 use mz_ore::tracing::{
@@ -227,13 +227,13 @@ impl From<&TracingCliArgs> for TracingConfig {
                 }
             }),
             #[cfg(feature = "tokio-console")]
-            tokio_console: args
-                .tokio_console_listen_addr
-                .map(|listen_addr| TokioConsoleConfig {
+            tokio_console: args.tokio_console_listen_addr.clone().map(|listen_addr| {
+                TokioConsoleConfig {
                     listen_addr,
                     publish_interval: args.tokio_console_publish_interval,
                     retention: args.tokio_console_retention,
-                }),
+                }
+            }),
             sentry: args.sentry_dsn.clone().map(|dsn| SentryConfig {
                 dsn,
                 tags: args

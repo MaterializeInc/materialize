@@ -168,8 +168,8 @@ impl RequiredAttributes {
 /// [^1]: <https://en.wikipedia.org/wiki/Topological_sorting#Kahn's_algorithm>
 fn dependency_order(attributes: HashSet<Box<dyn Attribute>>) -> Vec<Box<dyn Attribute>> {
     let mut rest = attributes.into_iter().collect::<Vec<_>>();
-    let mut seen = HashSet::new() as HashSet<&'static str>;
-    let mut sort = vec![] as Vec<Box<dyn Attribute>>;
+    let mut seen: HashSet<&'static str> = HashSet::new();
+    let mut sort: Vec<Box<dyn Attribute>> = vec![];
 
     while !rest.is_empty() {
         let (tail, head) = rest.into_iter().partition::<Vec<_>, _>(|attr| {
@@ -255,9 +255,10 @@ mod tests {
     /// Shorthand macro for referencing test attributes.
     macro_rules! attr_ref {
         // attribute without dependencies
-        ($id:ident) => {
-            Box::new($id) as Box<dyn Attribute>
-        };
+        ($id:ident) => {{
+            let out: Box<dyn Attribute> = Box::new($id);
+            out
+        }};
     }
 
     // Define trivial attributes for testing purposes. The dependencies

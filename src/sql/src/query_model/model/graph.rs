@@ -17,17 +17,21 @@
 //!
 //! All other types are crate-private.
 
-use super::super::attribute::core::Attributes;
-use super::scalar::*;
-use itertools::Itertools;
-use mz_expr::TableFunc;
-use mz_ore::id_gen::Gen;
-use mz_sql_parser::ast::Ident;
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::BTreeSet;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::ops::{Deref, DerefMut};
+
+use bitflags::bitflags;
+use itertools::Itertools;
+
+use mz_expr::TableFunc;
+use mz_ore::id_gen::Gen;
+use mz_sql_parser::ast::Ident;
+
+use super::super::attribute::core::Attributes;
+use super::scalar::*;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct QuantifierId(pub u64);
@@ -177,35 +181,22 @@ pub(crate) struct Quantifier {
     pub alias: Option<Ident>,
 }
 
-#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
-pub(crate) enum QuantifierType {
-    /// An ALL subquery.
-    All = 0b00000001,
-    /// An existential subquery (IN SELECT/EXISTS/ANY).
-    Existential = 0b00000010,
-    /// A regular join operand where each row from its input
-    /// box must be consumed by the parent box operator.
-    Foreach = 0b00000100,
-    /// The preserving side of an outer join. Only valid in
-    /// OuterJoin boxes.
-    PreservedForeach = 0b00001000,
-    /// A scalar subquery that produces one row at most.
-    Scalar = 0b00010000,
+bitflags! {
+    pub struct QuantifierType: u64 {
+        /// An ALL subquery.
+        const ALL = 0b00000001;
+        /// An existential subquery (IN SELECT/EXISTS/ANY).
+        const EXISTENTIAL = 0b00000010;
+        /// A regular join operand where each row from its input
+        /// box must be consumed by the parent box operator.
+        const FOREACH = 0b00000100;
+        /// The preserving side of an outer join. Only valid in
+        /// OuterJoin boxes.
+        const PRESERVED_FOREACH = 0b00001000;
+        /// A scalar subquery that produces one row at most.
+        const SCALAR = 0b00010000;
+    }
 }
-
-/// A bitmask that matches the discriminant of every possible [`QuantifierType`].
-pub(crate) const ARBITRARY_QUANTIFIER: usize = 0b00000000
-    | (QuantifierType::All as usize)
-    | (QuantifierType::Existential as usize)
-    | (QuantifierType::Foreach as usize)
-    | (QuantifierType::PreservedForeach as usize)
-    | (QuantifierType::Scalar as usize);
-
-/// A bitmask that matches the discriminant of a subquery [`QuantifierType`].
-pub(crate) const SUBQUERY_QUANTIFIER: usize = 0b00000000
-    | (QuantifierType::All as usize)
-    | (QuantifierType::Existential as usize)
-    | (QuantifierType::Scalar as usize);
 
 #[derive(Debug, Clone)]
 pub(crate) enum BoxType {
@@ -377,7 +368,7 @@ impl Model {
 
     /// Get a mutable reference to the box identified by `box_id` bound to this [`Model`].
     pub(crate) fn get_mut_box(&mut self, box_id: BoxId) -> BoundRefMut<'_, QueryBox> {
-        let model_ptr = self as *mut Self;
+        let model_ptr: *mut Self = self;
         unsafe {
             let reference = (*model_ptr)
                 .boxes
@@ -433,7 +424,7 @@ impl Model {
         &'a mut self,
         quantifier_id: QuantifierId,
     ) -> BoundRefMut<'a, Quantifier> {
-        let model_ptr = self as *mut Self;
+        let model_ptr: *mut Self = self;
         unsafe {
             let reference = (*model_ptr)
                 .quantifiers
@@ -968,22 +959,23 @@ impl BoxType {
 }
 
 impl QuantifierType {
+    /// A bitmask that matches the discriminant of a subquery [`QuantifierType`].
+    pub const SUBQUERY: QuantifierType = Self::ALL.union(Self::EXISTENTIAL).union(Self::SCALAR);
+
     pub fn is_subquery(&self) -> bool {
-        match self {
-            QuantifierType::All | QuantifierType::Existential | QuantifierType::Scalar => true,
-            _ => false,
-        }
+        Self::SUBQUERY.intersects(*self)
     }
 }
 
 impl fmt::Display for QuantifierType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self {
-            QuantifierType::Foreach => write!(f, "F"),
-            QuantifierType::PreservedForeach => write!(f, "P"),
-            QuantifierType::Existential => write!(f, "E"),
-            QuantifierType::All => write!(f, "A"),
-            QuantifierType::Scalar => write!(f, "S"),
+        match *self {
+            QuantifierType::FOREACH => write!(f, "F"),
+            QuantifierType::PRESERVED_FOREACH => write!(f, "P"),
+            QuantifierType::EXISTENTIAL => write!(f, "E"),
+            QuantifierType::ALL => write!(f, "A"),
+            QuantifierType::SCALAR => write!(f, "S"),
+            _ => write!(f, "U"),
         }
     }
 }

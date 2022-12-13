@@ -9,6 +9,9 @@
 
 mode cockroach
 
+# Start from a pristine server
+reset-server
+
 statement ok
 CREATE DATABASE other
 
@@ -276,6 +279,10 @@ materialize
 mz_internal
 mz_cluster_replica_statuses
 BASE TABLE
+materialize
+mz_internal
+mz_cluster_replica_utilization
+VIEW
 materialize
 mz_internal
 mz_compute_exports

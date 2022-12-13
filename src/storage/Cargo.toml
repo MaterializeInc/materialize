@@ -1,7 +1,7 @@
 [package]
 name = "mz-storage"
 description = "Materialize's storage layer."
-version = "0.35.0-dev"
+version = "0.37.0-dev"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -53,14 +53,14 @@ mz-timely-util = { path = "../timely-util" }
 once_cell = { version = "1.16.0" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prometheus = { version = "0.13.3", default-features = false }
-prost = { version = "0.11.2", features = ["no-recursion-limit"] }
+prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.7.0" }
 serde = { version = "1.0.147", features = ["derive"] }
 serde_json = { version = "1.0.89" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.22.0", features = ["fs", "rt", "sync", "test-util"] }
+tokio = { version = "1.23.0", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
 tokio-stream = "0.1.11"
 tokio-util = { version = "0.7.4", features = ["io"] }
@@ -69,6 +69,7 @@ tracing-subscriber = "0.3.16"
 thiserror = { version = "1.0.37" }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.2.2", features = ["serde", "v4"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
 protobuf-src = "1.1.0"
@@ -77,7 +78,7 @@ tonic-build = "0.8.2"
 [dev-dependencies]
 datadriven = { version = "0.6.0", features = ["async"] }
 itertools = "0.10.5"
-tokio = { version = "1.22.0", features = ["test-util"] }
+tokio = { version = "1.23.0", features = ["test-util"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 # According to jemalloc developers, `background_threads` should always be

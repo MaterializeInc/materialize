@@ -87,9 +87,10 @@ impl Generator for Tpch {
             }
             rows.next()
                 .map(|(output, key)| {
+                    let key_usize = usize::try_from(key).expect("key known to be non-negative");
                     let row = match output {
                         SUPPLIER_OUTPUT => {
-                            let nation = rng.gen_range(0..(NATIONS.len() as i64));
+                            let nation = rng.gen_range(0..count_nation);
                             Row::pack_slice(&[
                                 Datum::Int64(key),
                                 Datum::String(&pad_nine("Supplier", key)),
@@ -170,7 +171,7 @@ impl Generator for Tpch {
                             ])
                         }
                         CUSTOMER_OUTPUT => {
-                            let nation = rng.gen_range(0..(NATIONS.len() as i64));
+                            let nation = rng.gen_range(0..count_nation);
                             Row::pack_slice(&[
                                 Datum::Int64(key),
                                 Datum::String(&pad_nine("Customer", key)),
@@ -210,7 +211,7 @@ impl Generator for Tpch {
                             order
                         }
                         NATION_OUTPUT => {
-                            let (name, region) = NATIONS[key as usize];
+                            let (name, region) = NATIONS[key_usize];
                             Row::pack_slice(&[
                                 Datum::Int64(key),
                                 Datum::String(name),
@@ -225,7 +226,7 @@ impl Generator for Tpch {
                         }
                         REGION_OUTPUT => Row::pack_slice(&[
                             Datum::Int64(key),
-                            Datum::String(REGIONS[key as usize]),
+                            Datum::String(REGIONS[key_usize]),
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 31, 115)),
                         ]),
                         _ => unreachable!("{output}"),

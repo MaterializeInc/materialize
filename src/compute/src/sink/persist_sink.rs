@@ -28,7 +28,8 @@ use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tracing::trace;
 
-use mz_compute_client::sinks::{ComputeSinkDesc, PersistSinkConnection};
+use mz_compute_client::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
+use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::Batch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
@@ -254,7 +255,7 @@ where
     // workers must write batches with the same description, to ensure that they
     // can be combined into one batch that gets appended to Consensus state.
     let hashed_id = sink_id.hashed();
-    let active_worker = (hashed_id as usize) % scope.peers() == scope.index();
+    let active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
 
     // Only the "active" operator will mint batches. All other workers have an
     // empty frontier. It's necessary to insert all of these into
@@ -298,7 +299,7 @@ where
         let mut write = persist_client
             .open_writer::<SourceData, (), Timestamp, Diff>(
                 shard_id,
-                &format!("persist_sink::mint_batch_descriptions {}", sink_id),
+                &format!("compute::persist_sink::mint_batch_descriptions {}", sink_id),
             )
             .await
             .expect("could not open persist shard");
@@ -565,7 +566,7 @@ where
         let mut write = persist_client
             .open_writer::<SourceData, (), Timestamp, Diff>(
                 shard_id,
-                &format!("persist_sink::write_batches {}", sink_id),
+                &format!("compute::persist_sink::write_batches {}", sink_id),
             )
             .await
             .expect("could not open persist shard");
@@ -829,7 +830,7 @@ where
     let (mut _output, output_stream) = append_op.new_output();
 
     let hashed_id = sink_id.hashed();
-    let active_worker = (hashed_id as usize) % scope.peers() == scope.index();
+    let active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
 
     // This operator wants to completely control the frontier on it's output
     // because it's used to track the latest persist frontier. We update this
@@ -1023,7 +1024,6 @@ where
                         batch_upper.clone(),
                     )
                     .await
-                    .expect("Indeterminate")
                     .expect("Invalid usage");
 
                 if sink_id.is_user() {

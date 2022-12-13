@@ -9,6 +9,9 @@
 
 mode cockroach
 
+# Start from a pristine server
+reset-server
+
 query T
 SHOW extra_float_digits
 ----

@@ -18,6 +18,7 @@ use once_cell::sync::Lazy;
 use serde::{Serialize, Serializer};
 use thiserror::Error;
 
+use mz_ore::cast::CastFrom;
 use mz_proto::{RustType, TryFromProtoError};
 
 use crate::chrono::ProtoNaiveDateTime;
@@ -129,16 +130,16 @@ pub trait TimestampLike:
     /// Returns the weekday as a `usize` between 0 and 6, where 0 represents
     /// Sunday and 6 represents Saturday.
     fn weekday0(&self) -> usize {
-        self.weekday().num_days_from_sunday() as usize
+        usize::cast_from(self.weekday().num_days_from_sunday())
     }
 
     /// Like [`chrono::Datelike::year_ce`], but works on the ISO week system.
     fn iso_year_ce(&self) -> u32 {
         let year = self.iso_week().year();
         if year < 1 {
-            (1 - year) as u32
+            u32::try_from(1 - year).expect("known to be positive")
         } else {
-            year as u32
+            u32::try_from(year).expect("known to be positive")
         }
     }
 
@@ -202,7 +203,7 @@ pub trait TimestampLike:
     }
 
     fn truncate_week(&self) -> Result<Self, TimestampError> {
-        let num_days_from_monday = self.date().weekday().num_days_from_monday() as i64;
+        let num_days_from_monday = i64::from(self.date().weekday().num_days_from_monday());
         let new_date = NaiveDate::from_ymd_opt(self.year(), self.month(), self.day())
             .unwrap()
             .checked_sub_signed(Duration::days(num_days_from_monday))

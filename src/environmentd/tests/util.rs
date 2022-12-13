@@ -27,12 +27,10 @@ use tokio::sync::Mutex;
 use tokio_postgres::config::Host;
 use tokio_postgres::Client;
 use tower_http::cors::AllowOrigin;
-use uuid::Uuid;
 
 use mz_controller::ControllerConfig;
 use mz_environmentd::TlsMode;
 use mz_frontegg_auth::FronteggAuthentication;
-use mz_orchestrator::Orchestrator;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
@@ -41,6 +39,7 @@ use mz_ore::task;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
+use mz_sql::catalog::EnvironmentId;
 use mz_stash::PostgresFactory;
 use mz_storage_client::types::connections::ConnectionContext;
 
@@ -152,7 +151,7 @@ impl Config {
 
 pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     let runtime = Arc::new(Runtime::new()?);
-    let environment_id = format!("environment-{}-0", Uuid::new_v4());
+    let environment_id = EnvironmentId::for_tests();
     let (data_directory, temp_dir) = match config.data_directory {
         None => {
             // If no data directory is provided, we create a temporary
@@ -190,7 +189,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
                 .unwrap()
                 .to_path_buf(),
             suppress_output: false,
-            environment_id: environment_id.clone(),
+            environment_id: environment_id.to_string(),
             secrets_dir: data_directory.join("secrets"),
             command_wrapper: vec![],
             propagate_crashes: config.propagate_crashes,
@@ -206,11 +205,13 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     let persist_clients = PersistClientCache::new(persist_cfg, &metrics_registry);
     let persist_clients = Arc::new(Mutex::new(persist_clients));
     let postgres_factory = PostgresFactory::new(&metrics_registry);
+    let secrets_controller = Arc::clone(&orchestrator);
+    let connection_context = ConnectionContext::for_tests(orchestrator.reader());
     let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         adapter_stash_url,
         controller: ControllerConfig {
             build_info: &mz_environmentd::BUILD_INFO,
-            orchestrator: Arc::clone(&orchestrator) as Arc<dyn Orchestrator>,
+            orchestrator,
             storaged_image: "storaged".into(),
             computed_image: "computed".into(),
             init_container_image: None,
@@ -223,7 +224,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             now: SYSTEM_TIME.clone(),
             postgres_factory,
         },
-        secrets_controller: Arc::clone(&orchestrator) as Arc<dyn SecretsController>,
+        secrets_controller,
         cloud_resource_controller: None,
         sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -244,14 +245,15 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         storage_host_sizes: Default::default(),
         default_storage_host_size: None,
         availability_zones: Default::default(),
-        connection_context: ConnectionContext::for_tests(
-            (Arc::clone(&orchestrator) as Arc<dyn SecretsController>).reader(),
-        ),
+        connection_context,
         tracing_target_callbacks: mz_ore::tracing::TracingTargetCallbacks::default(),
         storage_usage_collection_interval: config.storage_usage_collection_interval,
         segment_api_key: None,
         egress_ips: vec![],
         aws_account_id: None,
+        launchdarkly_sdk_key: None,
+        launchdarkly_key_map: Default::default(),
+        config_sync_loop_interval: None,
     }))?;
     let server = Server {
         inner,

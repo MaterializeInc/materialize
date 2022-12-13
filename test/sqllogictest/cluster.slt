@@ -11,6 +11,9 @@
 
 mode cockroach
 
+# Start from a pristine state
+reset-server
+
 statement error Expected REPLICAS, found EOF
 CREATE CLUSTER foo
 
@@ -46,11 +49,11 @@ CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1235'], COMPUTE ['localhost:
 query TT rowsort
 SELECT * FROM mz_clusters
 ----
-s1 mz_system
-s2 mz_introspection
-u1 default
-u3 foo
-u4 bar
+s1  mz_system
+s2  mz_introspection
+u1  default
+u3  foo
+u4  bar
 
 query T rowsort
 SHOW CLUSTERS
@@ -536,15 +539,29 @@ CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', REMOTE ['host1']
 statement ok
 CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_32 (SIZE '32'), size_2_2 (SIZE '2-2'))
 
-query TT
-SELECT name, size FROM mz_cluster_replicas ORDER BY name
+query TTTTTT
+SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers FROM mz_cluster_replicas r JOIN mz_internal.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
 ----
-r1               1
-r1               1
-r1               1
-size_1           1
-size_2_2         2-2
-size_32          32
+r1  1  1  18446744073709000000  18446744073709551615  1
+r1  1  1  18446744073709000000  18446744073709551615  1
+r1  1  1  18446744073709000000  18446744073709551615  1
+size_1  1  1  18446744073709000000  18446744073709551615  1
+size_2_2  2-2  2  18446744073709000000  18446744073709551615  2
+size_32  32  1  18446744073709000000  18446744073709551615  32
+
+query TTTT
+SELECT replica_id, process_id, cpu_percent, memory_percent FROM mz_internal.mz_cluster_replica_utilization
+----
+1  0  0  0
+2  0  0  0
+3  0  0  0
+23  0  0  0
+24  0  0  0
+25  0  0  0
+25  1  0  0
 
 statement ok
 DROP CLUSTER foo CASCADE
+
+# Restore pristine server state
+reset-server

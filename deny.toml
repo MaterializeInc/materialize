@@ -62,6 +62,7 @@ wrappers = [
     "ureq",
     "want",
     "wasm-bindgen-backend",
+    "workspace-hack",
 ]
 
 # We prefer the system's native TLS or OpenSSL to Rustls, since they are more
@@ -117,6 +118,8 @@ wrappers = [
     "pulldown-cmark",
 ]
 
+# Must be manually kept in sync with about.toml.
+# See: https://github.com/EmbarkStudios/cargo-about/issues/201
 [licenses]
 allow = [
     "Apache-2.0",
@@ -131,7 +134,6 @@ allow = [
 ]
 copyleft = "deny"
 private = { ignore = true }
-
 [[licenses.clarify]]
 name = "ring"
 expression = "ISC"
@@ -172,10 +174,6 @@ allow-git = [
 
     # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
     "https://github.com/MaterializeInc/serde-value.git",
-
-    # Waiting on https://github.com/blackbeam/rust_mysql_common/pull/71 to make
-    # it into a release.
-    "https://github.com/blackbeam/rust_mysql_common.git",
 
     # Waiting on https://github.com/snapview/tungstenite-rs/pull/299 to make
     # it into a release.

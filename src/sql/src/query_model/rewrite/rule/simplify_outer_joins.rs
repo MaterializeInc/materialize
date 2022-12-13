@@ -30,8 +30,8 @@ pub(crate) struct SimplifyOuterJoins;
 
 impl Rule for SimplifyOuterJoins {
     /// A (non-empty) sequence of ids corresponding to quantifiers whose type
-    /// should be changed from [QuantifierType::PreservedForeach] to
-    /// [QuantifierType::Foreach], and the box that the quantifiers belong to.
+    /// should be changed from [`QuantifierType::PRESERVED_FOREACH`] to
+    /// [`QuantifierType::FOREACH`], and the box that the quantifiers belong to.
     type Match = (BoxId, Vec<QuantifierId>);
 
     fn name(&self) -> &'static str {
@@ -43,10 +43,9 @@ impl Rule for SimplifyOuterJoins {
     }
 
     fn required_attributes(&self) -> std::collections::HashSet<Box<dyn Attribute>> {
-        HashSet::from([
-            Box::new(PropagatedNulls) as Box<dyn Attribute>,
-            Box::new(RejectedNulls) as Box<dyn Attribute>,
-        ])
+        let attributes: [Box<dyn Attribute>; 2] =
+            [Box::new(PropagatedNulls), Box::new(RejectedNulls)];
+        HashSet::from(attributes)
     }
 
     fn check(
@@ -103,11 +102,11 @@ impl Rule for SimplifyOuterJoins {
                 // If null rows are rejected from LHS, and RHS is a
                 // PreservedForeach quantifier, change the RHS to a Foreach
                 // quantifier.
-                if rej_lhs && rhs.quantifier_type == QuantifierType::PreservedForeach {
+                if rej_lhs && rhs.quantifier_type == QuantifierType::PRESERVED_FOREACH {
                     quantifiers_to_change.push(rhs.id);
                 }
                 // And vice versa.
-                if rej_rhs && lhs.quantifier_type == QuantifierType::PreservedForeach {
+                if rej_rhs && lhs.quantifier_type == QuantifierType::PRESERVED_FOREACH {
                     quantifiers_to_change.push(lhs.id);
                 }
             }
@@ -127,7 +126,7 @@ impl Rule for SimplifyOuterJoins {
         // Change the specified quantifiers to type Foreach.
         for q_id in q_ids {
             let mut q = model.get_mut_quantifier(q_id);
-            q.quantifier_type = QuantifierType::Foreach;
+            q.quantifier_type = QuantifierType::FOREACH;
         }
 
         // If all the quantifiers in the box are type Foreach,
@@ -135,7 +134,7 @@ impl Rule for SimplifyOuterJoins {
         let mut r#box = model.get_mut_box(box_id);
         if r#box
             .input_quantifiers()
-            .all(|q| q.quantifier_type == QuantifierType::Foreach)
+            .all(|q| q.quantifier_type == QuantifierType::FOREACH)
         {
             r#box.box_type = match &mut r#box.box_type {
                 BoxType::OuterJoin(outer_join) => {

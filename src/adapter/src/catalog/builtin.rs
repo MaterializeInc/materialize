@@ -1393,8 +1393,9 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
     name: "mz_cluster_replica_sizes",
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::UInt64.nullable(false))
+        .with_column("size", ScalarType::String.nullable(false))
         .with_column("processes", ScalarType::UInt64.nullable(false))
+        .with_column("workers", ScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(false))
         .with_column("memory_bytes", ScalarType::UInt64.nullable(false)),
 });
@@ -2209,6 +2210,21 @@ FROM mz_internal.mz_arrangement_sharing_internal
 GROUP BY operator_id, worker_id",
 };
 
+pub const MZ_CLUSTER_REPLICA_UTILIZATION: BuiltinView = BuiltinView {
+    name: "mz_cluster_replica_utilization",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_cluster_replica_utilization AS
+SELECT
+    r.id AS replica_id,
+    m.process_id,
+    m.cpu_nano_cores / s.cpu_nano_cores * 100 AS cpu_percent,
+    m.memory_bytes / s.memory_bytes * 100 AS memory_percent
+FROM
+    mz_cluster_replicas AS r
+        JOIN mz_internal.mz_cluster_replica_sizes AS s ON r.size = s.size
+        JOIN mz_internal.mz_cluster_replica_metrics AS m ON m.replica_id = r.id",
+};
+
 // NOTE: If you add real data to this implementation, then please update
 // the related `pg_` function implementations (like `pg_get_constraintdef`)
 pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
@@ -2805,6 +2821,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
+        Builtin::View(&MZ_CLUSTER_REPLICA_UTILIZATION),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
         Builtin::View(&MZ_COMPUTE_IMPORT_FRONTIERS),
         Builtin::View(&MZ_MESSAGE_COUNTS),

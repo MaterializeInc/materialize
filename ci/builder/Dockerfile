@@ -10,7 +10,7 @@
 # Build a cross-compiling toolchain that targets the oldest version of Linux
 # that we support.
 
-FROM ubuntu:jammy-20221101 AS crosstool
+FROM ubuntu:jammy-20221130 AS crosstool
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -68,7 +68,7 @@ RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
 # Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
-FROM ubuntu:jammy-20221101
+FROM ubuntu:jammy-20221130
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -151,8 +151,10 @@ RUN mkdir rust \
         ;; \
     esac \
     && rm -rf rust \
+    && cargo install --root /usr/local --version "=0.5.2" cargo-about \
     && cargo install --root /usr/local --version "=1.40.5" cargo-deb \
     && cargo install --root /usr/local --version "=0.12.2" cargo-deny \
+    && cargo install --root /usr/local --version ="0.9.17" cargo-hakari \
     && cargo install --root /usr/local --version "=0.9.44" cargo-nextest \
     && cargo install --root /usr/local --version "=0.1.34" cargo-udeps  --features=vendored-openssl \
     && cargo install --root /usr/local --version "=0.2.15" --no-default-features --features=s3,openssl/vendored sccache

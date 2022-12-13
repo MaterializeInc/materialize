@@ -59,6 +59,7 @@ members = [
     "src/transform",
     "src/cloud-resources",
     "src/walkabout",
+    "src/workspace-hack",
     "test/metabase/smoketest",
     "test/perf-kinesis",
     "test/test-util",
@@ -110,7 +111,6 @@ csv = { git = "https://github.com/BurntSushi/rust-csv.git" }
 csv-core = { git = "https://github.com/BurntSushi/rust-csv.git" }
 hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-mysql_common = { git = "https://github.com/blackbeam/rust_mysql_common.git" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tungstenite = { git = "https://github.com/snapview/tungstenite-rs.git" }
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }

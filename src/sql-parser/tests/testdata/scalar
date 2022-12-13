@@ -444,12 +444,12 @@ Case { operand: Some(Identifier([Ident("foo")])), conditions: [Value(Number("1")
 parse-scalar
 (SELECT 1) + (SELECT 2)
 ----
-Op { op: Op { namespace: [], op: "+" }, expr1: Subquery(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), expr2: Some(Subquery(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })) }
+Op { op: Op { namespace: [], op: "+" }, expr1: Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), expr2: Some(Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })) }
 
 parse-scalar
 1 < ANY (SELECT 2)
 ----
-AnySubquery { left: Value(Number("1")), op: Op { namespace: [], op: "<" }, right: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }
+AnySubquery { left: Value(Number("1")), op: Op { namespace: [], op: "<" }, right: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }
 
 parse-scalar
 1 < ANY (fn())

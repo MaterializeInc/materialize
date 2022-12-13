@@ -13,12 +13,12 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
-use mz_compute_client::command::{ProcessId, ReplicaId};
 use mz_compute_client::controller::{
     ComputeInstanceId, ComputeInstanceStatus, ComputeReplicaAllocation, ComputeReplicaLocation,
+    ProcessId, ReplicaId,
 };
 use mz_expr::MirScalarExpr;
-use mz_orchestrator::{MemoryLimit, ServiceProcessMetrics};
+use mz_orchestrator::{CpuLimit, MemoryLimit, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -126,41 +126,27 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_compute_replica_updates(
+    pub(super) fn pack_compute_replica_update(
         &self,
         compute_instance_id: ComputeInstanceId,
         name: &str,
         diff: Diff,
-    ) -> Vec<BuiltinTableUpdate> {
+    ) -> BuiltinTableUpdate {
         let instance = &self.compute_instances_by_id[&compute_instance_id];
         let id = instance.replica_id_by_name[name];
         let replica = &instance.replicas_by_id[&id];
 
-        let (size, az, allocation) = match &replica.config.location {
+        let (size, az) = match &replica.config.location {
             ComputeReplicaLocation::Managed {
                 size,
                 availability_zone,
                 az_user_specified: _,
-                allocation,
-            } => (
-                Some(&**size),
-                Some(availability_zone.as_str()),
-                Some(*allocation),
-            ),
-            ComputeReplicaLocation::Remote { .. } => (None, None, None),
+                allocation: _,
+            } => (Some(&**size), Some(availability_zone.as_str())),
+            ComputeReplicaLocation::Remote { .. } => (None, None),
         };
 
-        let (processes, cpu, memory) = match allocation {
-            Some(ComputeReplicaAllocation {
-                memory_limit,
-                cpu_limit,
-                scale,
-                ..
-            }) => (Some(scale), cpu_limit, memory_limit),
-            None => (None, None, None),
-        };
-
-        let mut updates = vec![BuiltinTableUpdate {
+        BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
             row: Row::pack_slice(&[
                 Datum::UInt64(id),
@@ -170,23 +156,7 @@ impl CatalogState {
                 Datum::from(az),
             ]),
             diff,
-        }];
-
-        if let (Some(processes), Some(cpu), Some(MemoryLimit(ByteSize(memory)))) =
-            (processes, cpu, memory)
-        {
-            updates.push(BuiltinTableUpdate {
-                id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_SIZES),
-                row: Row::pack_slice(&[
-                    Datum::UInt64(id),
-                    Datum::UInt64(u64::cast_from(processes.get())),
-                    Datum::UInt64(u64::cast_from(cpu.as_millicpus()) * 1_000_000),
-                    Datum::UInt64(memory),
-                ]),
-                diff,
-            })
         }
-        updates
     }
 
     pub(super) fn pack_compute_replica_status_update(
@@ -905,6 +875,41 @@ impl CatalogState {
         );
         let updates = rows
             .map(|row| BuiltinTableUpdate { id, row, diff })
+            .collect();
+        updates
+    }
+
+    pub fn pack_all_replica_size_updates(&self) -> Vec<BuiltinTableUpdate> {
+        let id = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_SIZES);
+        let updates = self
+            .cluster_replica_sizes
+            .0
+            .iter()
+            .map(
+                |(
+                    size,
+                    ComputeReplicaAllocation {
+                        memory_limit,
+                        cpu_limit,
+                        scale,
+                        workers,
+                    },
+                )| {
+                    // Just invent something when the limits are `None`,
+                    // which only happens in non-prod environments (tests, process orchestrator, etc.)
+                    let cpu_limit = cpu_limit.unwrap_or(CpuLimit::MAX);
+                    let MemoryLimit(ByteSize(memory_bytes)) =
+                        (*memory_limit).unwrap_or(MemoryLimit::MAX);
+                    let row = Row::pack_slice(&[
+                        size.as_str().into(),
+                        u64::cast_from(scale.get()).into(),
+                        u64::cast_from(workers.get()).into(),
+                        cpu_limit.as_nanocpus().into(),
+                        memory_bytes.into(),
+                    ]);
+                    BuiltinTableUpdate { id, row, diff: 1 }
+                },
+            )
             .collect();
         updates
     }

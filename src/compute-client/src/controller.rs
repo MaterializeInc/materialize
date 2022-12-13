@@ -55,10 +55,10 @@ use mz_ore::{halt, soft_assert};
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
-use crate::command::{DataflowDescription, ProcessId, ReplicaId};
 use crate::logging::{LogVariant, LogView, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
+use crate::types::dataflows::DataflowDescription;
 
 use self::error::{
     CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
@@ -76,7 +76,7 @@ pub mod error;
 
 pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
 
-/// An abstraction allowing us to name different compute instances.
+/// Identifier of a compute instance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum ComputeInstanceId {
     System(u64),
@@ -123,6 +123,12 @@ impl fmt::Display for ComputeInstanceId {
         }
     }
 }
+
+/// Identifier of a replicas.
+pub type ReplicaId = u64;
+
+/// Identifier of a process within a replica.
+pub type ProcessId = u64;
 
 /// An event describing a change in status of a compute process.
 #[derive(Debug, Clone, Serialize)]

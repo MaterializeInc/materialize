@@ -22,6 +22,7 @@ use serde::de::Unexpected;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use mz_ore::cast;
+use mz_ore::cast::CastFrom;
 use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_orchestrator.rs"));
@@ -214,6 +215,10 @@ pub struct ServicePort {
 #[derive(Copy, Clone, Debug, PartialOrd, Eq, Ord, PartialEq)]
 pub struct MemoryLimit(pub ByteSize);
 
+impl MemoryLimit {
+    pub const MAX: Self = Self(ByteSize(u64::MAX));
+}
+
 impl<'de> Deserialize<'de> for MemoryLimit {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -258,8 +263,10 @@ pub struct CpuLimit {
 }
 
 impl CpuLimit {
+    pub const MAX: Self = Self::from_millicpus(usize::MAX / 1_000_000);
+
     /// Constructs a new CPU limit from a number of millicpus.
-    pub fn from_millicpus(millicpus: usize) -> CpuLimit {
+    pub const fn from_millicpus(millicpus: usize) -> CpuLimit {
         CpuLimit { millicpus }
     }
 
@@ -267,9 +274,29 @@ impl CpuLimit {
     pub fn as_millicpus(&self) -> usize {
         self.millicpus
     }
+
+    /// Returns the CPU limit in nanocpus.
+    pub fn as_nanocpus(&self) -> u64 {
+        // The largest possible value of a u64 is
+        // 18_446_744_073_709_551_615,
+        // so we won't overflow this
+        // unless we have an instance with
+        // ~18.45 billion cores.
+        //
+        // Such an instance seems unrealistic,
+        // at least until we raise another few rounds
+        // of funding ...
+
+        u64::cast_from(self.millicpus)
+            .checked_mul(1_000_000)
+            .expect("Nano-CPUs must be representable")
+    }
 }
 
 impl<'de> Deserialize<'de> for CpuLimit {
+    // TODO(benesch): remove this once this function no longer makes use of
+    // potentially dangerous `as` conversions.
+    #[allow(clippy::as_conversions)]
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -292,6 +319,9 @@ impl<'de> Deserialize<'de> for CpuLimit {
 }
 
 impl Serialize for CpuLimit {
+    // TODO(benesch): remove this once this function no longer makes use of
+    // potentially dangerous `as` conversions.
+    #[allow(clippy::as_conversions)]
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,

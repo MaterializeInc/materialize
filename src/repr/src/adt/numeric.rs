@@ -568,8 +568,8 @@ fn test_twos_comp_numeric_primitive() {
     inner_i128(2);
     inner_i128(-1);
     inner_i128(-2);
-    inner_i128(i64::MAX as i128);
-    inner_i128(i64::MIN as i128);
+    inner_i128(i128::from(i64::MAX));
+    inner_i128(i128::from(i64::MIN));
     inner_i128(i128::MAX);
     inner_i128(i128::MIN);
     inner_i128(i128::MAX / 7 + 7);
@@ -599,7 +599,7 @@ fn test_wide_twos_complement_roundtrip() {
         let mut cx = cx_datum();
         let d = cx.parse(s).unwrap();
         let mut b = numeric_to_twos_complement_wide(d.clone());
-        let x = twos_complement_be_to_numeric(&mut b, NUMERIC_DATUM_MAX_PRECISION as u8).unwrap();
+        let x = twos_complement_be_to_numeric(&mut b, NUMERIC_DATUM_MAX_PRECISION).unwrap();
         assert_eq!(d, x);
     }
     inner("0");
@@ -728,6 +728,8 @@ pub trait DecimalLike:
 }
 
 impl DecimalLike for f64 {
+    // No other known way to convert `i64` to `f64`.
+    #[allow(clippy::as_conversions)]
     fn lossy_from(i: i64) -> Self {
         i as f64
     }

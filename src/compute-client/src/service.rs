@@ -161,6 +161,8 @@ where
 
     fn start_frontier_tracking(&mut self, id: GlobalId) {
         let mut frontier = MutableAntichain::new();
+        // TODO(benesch): fix this dangerous use of `as`.
+        #[allow(clippy::as_conversions)]
         frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
         let part_frontiers = vec![Antichain::from_elem(T::minimum()); self.parts];
         let previous = self.uppers.insert(id, (frontier, part_frontiers));
@@ -280,6 +282,8 @@ where
             ComputeResponse::SubscribeResponse(id, response) => {
                 let maybe_entry = self.pending_subscribes.entry(id).or_insert_with(|| {
                     let mut frontier = MutableAntichain::new();
+                    // TODO(benesch): fix this dangerous use of `as`.
+                    #[allow(clippy::as_conversions)]
                     frontier.update_iter(std::iter::once((T::minimum(), self.parts as i64)));
                     Some((frontier, Ok(Vec::new())))
                 });

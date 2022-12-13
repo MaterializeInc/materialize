@@ -42,12 +42,11 @@ pub async fn force_compaction(
         metrics.postgres_consensus.clone(),
     )?;
     let consensus = consensus.clone().open().await?;
-    let consensus = Arc::new(MetricsConsensus::new(consensus, Arc::clone(&metrics)))
-        as Arc<dyn Consensus + Send + Sync>;
+    let consensus: Arc<dyn Consensus + Send + Sync> =
+        Arc::new(MetricsConsensus::new(consensus, Arc::clone(&metrics)));
     let blob = BlobConfig::try_from(blob_uri).await?;
     let blob = blob.clone().open().await?;
-    let blob =
-        Arc::new(MetricsBlob::new(blob, Arc::clone(&metrics))) as Arc<dyn Blob + Send + Sync>;
+    let blob: Arc<dyn Blob + Send + Sync> = Arc::new(MetricsBlob::new(blob, Arc::clone(&metrics)));
 
     let state_versions = Arc::new(StateVersions::new(
         cfg.clone(),
@@ -57,12 +56,14 @@ pub async fn force_compaction(
     ));
 
     // Prime the K V codec magic
-    let versions = state_versions.fetch_live_diffs(&shard_id).await;
+    let versions = state_versions
+        .fetch_recent_live_diffs::<u64>(&shard_id)
+        .await;
     loop {
         let state_res = state_versions
             .fetch_current_state::<crate::inspect::K, crate::inspect::V, u64, i64>(
                 &shard_id,
-                versions.clone(),
+                versions.0.clone(),
             )
             .await;
         let state = match state_res {

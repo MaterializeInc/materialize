@@ -896,9 +896,9 @@ checksum = "14c189c53d098945499cdfa7ecc63567cf3886b3332b312a5b4585d8d3a6a610"
 
 [[package]]
 name = "bytes"
-version = "1.2.1"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec8a7b6a70fde80372154c65702f00a0f56f3e1c36abbc6c440484be248856db"
+checksum = "dfb24e866b15a1af2a1b663f10c6b6b8f397a84aadb828f12e5b289ec23a3a3c"
 
 [[package]]
 name = "bytes-utils"
@@ -1175,8 +1175,7 @@ dependencies = [
 [[package]]
 name = "console-api"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e57ff02e8ad8e06ab9731d5dc72dc23bef9200778eae1a89d555d8c42e5d4a86"
+source = "git+https://github.com/MaterializeInc/console.git#bac69ecb570b7e466b2a254a9f9bf28ac0f3d95b"
 dependencies = [
  "prost",
  "prost-types",
@@ -1187,8 +1186,7 @@ dependencies = [
 [[package]]
 name = "console-subscriber"
 version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22a3a81dfaf6b66bce5d159eddae701e3a002f194d378cbf7be5f053c281d9be"
+source = "git+https://github.com/MaterializeInc/console.git#bac69ecb570b7e466b2a254a9f9bf28ac0f3d95b"
 dependencies = [
  "console-api",
  "crossbeam-channel",
@@ -3233,8 +3231,9 @@ dependencies = [
 
 [[package]]
 name = "mysql_common"
-version = "0.29.1"
-source = "git+https://github.com/blackbeam/rust_mysql_common.git#e9c8deef5bfd4a8b1ea049d92ce8ae8ca53c9ab8"
+version = "0.29.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9006c95034ccf7b903d955f210469119f6c3477fc9c9e7a7845ce38a3e665c2a"
 dependencies = [
  "base64",
  "bigdecimal",
@@ -3286,6 +3285,7 @@ dependencies = [
  "toml",
  "url",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3351,6 +3351,7 @@ dependencies = [
  "tracing-subscriber",
  "uncased",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3362,6 +3363,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_plain",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3385,6 +3387,7 @@ dependencies = [
  "snap",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3393,6 +3396,7 @@ version = "0.0.0"
 dependencies = [
  "quote",
  "syn",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3416,6 +3420,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3425,6 +3430,7 @@ dependencies = [
  "anyhow",
  "libc",
  "mz-ore",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3433,6 +3439,7 @@ version = "0.0.0"
 dependencies = [
  "compile-time-run",
  "semver",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3453,6 +3460,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3468,11 +3476,12 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
 name = "mz-compute"
-version = "0.35.0-dev"
+version = "0.37.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3506,6 +3515,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3547,6 +3557,7 @@ dependencies = [
  "tonic-build",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3570,11 +3581,12 @@ dependencies = [
  "timely",
  "tokio",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
 name = "mz-environmentd"
-version = "0.35.0-dev"
+version = "0.37.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3660,6 +3672,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3710,6 +3723,7 @@ dependencies = [
  "sha2",
  "uncased",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3725,6 +3739,7 @@ dependencies = [
  "proc-macro2",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3742,6 +3757,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3755,7 +3771,10 @@ dependencies = [
  "mz-ore",
  "prometheus",
  "serde",
+ "serde_json",
+ "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3785,6 +3804,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3810,6 +3830,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3817,6 +3838,7 @@ name = "mz-kinesis-util"
 version = "0.0.0"
 dependencies = [
  "aws-sdk-kinesis",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3830,6 +3852,7 @@ dependencies = [
  "proc-macro2",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3839,6 +3862,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3847,6 +3871,7 @@ version = "0.0.0"
 dependencies = [
  "reqwest",
  "serde",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3860,6 +3885,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3874,6 +3900,7 @@ dependencies = [
  "sha2",
  "tar",
  "walkdir",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3892,6 +3919,7 @@ dependencies = [
  "protobuf-src",
  "serde",
  "tonic-build",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3915,6 +3943,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3940,6 +3969,7 @@ dependencies = [
  "sysinfo",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3957,6 +3987,7 @@ dependencies = [
  "mz-repr",
  "opentelemetry",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3998,6 +4029,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4019,6 +4051,7 @@ dependencies = [
  "tokio-postgres",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4060,11 +4093,12 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
 name = "mz-persist-client"
-version = "0.35.0-dev"
+version = "0.37.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4103,6 +4137,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4110,6 +4145,7 @@ name = "mz-persist-types"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4120,6 +4156,7 @@ dependencies = [
  "csv",
  "mz-pgrepr",
  "mz-repr",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4130,10 +4167,12 @@ dependencies = [
  "bytes",
  "chrono",
  "dec",
+ "mz-ore",
  "mz-repr",
  "once_cell",
  "postgres-types",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4149,6 +4188,7 @@ dependencies = [
  "postgres-protocol",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4175,6 +4215,7 @@ dependencies = [
  "tokio-openssl",
  "tokio-util",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4185,6 +4226,7 @@ dependencies = [
  "libc",
  "mz-ore",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4209,6 +4251,7 @@ dependencies = [
  "tokio-postgres",
  "tonic-build",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4236,6 +4279,7 @@ dependencies = [
  "tikv-jemalloc-ctl",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4255,6 +4299,7 @@ dependencies = [
  "tokio-postgres",
  "url",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4300,6 +4345,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4312,6 +4358,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "proc-macro2",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4329,6 +4376,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4338,6 +4386,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "mz-repr",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4350,6 +4399,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4378,6 +4428,7 @@ dependencies = [
  "tonic",
  "tower",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4387,6 +4438,7 @@ dependencies = [
  "anyhow",
  "aws-arn",
  "aws-sdk-sts",
+ "bitflags",
  "chrono",
  "datadriven",
  "enum-kinds",
@@ -4428,6 +4480,7 @@ dependencies = [
  "typemap_rev",
  "uncased",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4446,6 +4499,7 @@ dependencies = [
  "tracing",
  "uncased",
  "unicode-width",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4487,6 +4541,7 @@ dependencies = [
  "tower-http",
  "uuid",
  "walkdir",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4502,6 +4557,7 @@ dependencies = [
  "ssh-key",
  "tempfile",
  "tracing",
+ "workspace-hack",
  "zeroize",
 ]
 
@@ -4526,6 +4582,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4539,17 +4596,19 @@ dependencies = [
  "mz-ore",
  "mz-postgres-util",
  "mz-secrets",
+ "mz-sql",
  "mz-stash",
  "mz-storage-client",
  "once_cell",
  "serde_json",
  "tokio",
  "tokio-postgres",
+ "workspace-hack",
 ]
 
 [[package]]
 name = "mz-storage"
-version = "0.35.0-dev"
+version = "0.37.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -4617,6 +4676,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4673,6 +4733,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4688,6 +4749,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4759,6 +4821,7 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4774,6 +4837,7 @@ dependencies = [
  "timely",
  "timely_communication",
  "tokio",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4796,6 +4860,7 @@ dependencies = [
  "serde_json",
  "tracing",
  "typemap_rev",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -4809,6 +4874,7 @@ dependencies = [
  "quote",
  "syn",
  "tempfile",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -5094,9 +5160,9 @@ dependencies = [
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.78"
+version = "0.9.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07d5c8cb6e57b3a3612064d7b18b117912b4ce70955c2504d4b741c9e244b132"
+checksum = "5454462c0eced1e97f2ec09036abc8da362e66802f66fd20f86854d9d8cbcbc4"
 dependencies = [
  "autocfg",
  "cc",
@@ -5712,9 +5778,9 @@ dependencies = [
 
 [[package]]
 name = "prost"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0841812012b2d4a6145fae9a6af1534873c32aa67fff26bd09f8fa42c83f95a"
+checksum = "c0b18e655c21ff5ac2084a5ad0611e827b3f92badf79f4910b5a5c58f4d87ff0"
 dependencies = [
  "bytes",
  "prost-derive",
@@ -6290,9 +6356,9 @@ dependencies = [
 
 [[package]]
 name = "sentry"
-version = "0.29.0"
+version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6425e2a14006415449fb0a3e9a119df5032f59e7a2d9350cf8738eca290dfc5"
+checksum = "17ad137b9df78294b98cab1a650bef237cc6c950e82e5ce164655e674d07c5cc"
 dependencies = [
  "httpdate",
  "native-tls",
@@ -6307,9 +6373,9 @@ dependencies = [
 
 [[package]]
 name = "sentry-backtrace"
-version = "0.29.0"
+version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04d79c194e5c20fe602e81faf39f3cff0f275ec61283f437a892cfd6544da592"
+checksum = "afe4800806552aab314129761d5d3b3d422284eca3de2ab59e9fd133636cbd3d"
 dependencies = [
  "backtrace",
  "once_cell",
@@ -6319,9 +6385,9 @@ dependencies = [
 
 [[package]]
 name = "sentry-contexts"
-version = "0.29.0"
+version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1c2a57601eeb870521cc241caee27e57a012f297ece3c1b7eee87f2a531edb5"
+checksum = "a42938426670f6e7974989cd1417837a96dd8bbb01567094f567d6acb360bf88"
 dependencies = [
  "hostname",
  "libc",
@@ -6333,9 +6399,9 @@ dependencies = [
 
 [[package]]
 name = "sentry-core"
-version = "0.29.0"
+version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8be90ea119c6d0664c8ab534013bc9e90355e7004d782d5d1492ca513393b929"
+checksum = "4df9b9d8de2658a1ecd4e45f7b06c80c5dd97b891bfbc7c501186189b7e9bbdf"
 dependencies = [
  "once_cell",
  "rand",
@@ -6346,9 +6412,9 @@ dependencies = [
 
 [[package]]
 name = "sentry-panic"
-version = "0.29.0"
+version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ec217c3290e3f0d128154da731c28efa8f62cf8e3c3a006fd4bc3407c959176"
+checksum = "0af37b8500f273e511ebd6eb0d342ff7937d64ce3f134764b2b4653112d48cb4"
 dependencies = [
  "sentry-backtrace",
  "sentry-core",
@@ -6367,9 +6433,9 @@ dependencies = [
 
 [[package]]
 name = "sentry-types"
-version = "0.29.0"
+version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67ad85f0addf16310a1fbcf3facc7acb17ef5dbf6ae059d2f3c38442a471404d"
+checksum = "ccc95faa4078768a6bf8df45e2b894bbf372b3dbbfb364e9429c1c58ab7545c6"
 dependencies = [
  "debugid",
  "getrandom",
@@ -6793,9 +6859,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.26.8"
+version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29ddf41e393a9133c81d5f0974195366bd57082deac6e0eb02ed39b8341c2bb6"
+checksum = "0d08ba83d6dde63d053e42d7230f0dc7f8d8efeb8d30d3681580d158156461ba"
 dependencies = [
  "cfg-if",
  "core-foundation-sys",
@@ -7083,9 +7149,9 @@ checksum = "cda74da7e1a664f795bb1f8a87ec406fb89a02522cf6e50620d016add6dbbf5c"
 
 [[package]]
 name = "tokio"
-version = "1.22.0"
+version = "1.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d76ce4a75fb488c605c54bf610f221cea8b0dafb53333c1a67e8ee199dcd2ae3"
+checksum = "eab6d665857cc6ca78d6e80303a02cea7a7851e85dfbd77cbdc09bd129f1ef46"
 dependencies = [
  "autocfg",
  "bytes",
@@ -7099,7 +7165,7 @@ dependencies = [
  "socket2",
  "tokio-macros",
  "tracing",
- "winapi",
+ "windows-sys",
 ]
 
 [[package]]
@@ -7870,6 +7936,113 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "80d0f4e272c85def139476380b12f9ac60926689dd2e01d4923222f40580869d"
 dependencies = [
  "winapi",
+]
+
+[[package]]
+name = "workspace-hack"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "aws-sdk-sts",
+ "aws-sig-auth",
+ "aws-sigv4",
+ "aws-smithy-http",
+ "aws-types",
+ "axum",
+ "base64",
+ "bstr",
+ "byteorder",
+ "bytes",
+ "cc",
+ "chrono",
+ "clap",
+ "criterion",
+ "crossbeam-channel",
+ "crossbeam-deque",
+ "crossbeam-epoch",
+ "crossbeam-utils",
+ "crypto-common",
+ "dec",
+ "digest",
+ "either",
+ "flate2",
+ "frunk_core",
+ "futures",
+ "futures-channel",
+ "futures-core",
+ "futures-executor",
+ "futures-io",
+ "futures-sink",
+ "futures-task",
+ "futures-util",
+ "globset",
+ "hashbrown",
+ "hyper",
+ "indexmap",
+ "k8s-openapi",
+ "kube",
+ "kube-client",
+ "kube-core",
+ "libc",
+ "log",
+ "lru",
+ "memchr",
+ "native-tls",
+ "nix",
+ "nom",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "once_cell",
+ "openssl",
+ "openssl-sys",
+ "ordered-float",
+ "parking_lot",
+ "phf",
+ "phf_shared",
+ "postgres",
+ "postgres-types",
+ "proc-macro2",
+ "prometheus",
+ "prost",
+ "prost-reflect",
+ "prost-types",
+ "quote",
+ "rand",
+ "rdkafka-sys",
+ "regex",
+ "regex-syntax",
+ "reqwest",
+ "ring",
+ "schemars",
+ "scopeguard",
+ "security-framework",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "smallvec",
+ "socket2",
+ "syn",
+ "textwrap",
+ "tikv-jemalloc-sys",
+ "time",
+ "time-macros",
+ "timely",
+ "timely_communication",
+ "tokio",
+ "tokio-postgres",
+ "tokio-stream",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+ "uncased",
+ "url",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]

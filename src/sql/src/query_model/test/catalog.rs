@@ -20,6 +20,7 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_lowertest::*;
+use mz_ore::cast::CastFrom;
 use mz_ore::now::{EpochMillis, NOW_ZERO};
 use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
@@ -29,7 +30,8 @@ use mz_storage_client::types::sources::SourceDesc;
 use crate::ast::Expr;
 use crate::catalog::{
     CatalogComputeInstance, CatalogConfig, CatalogDatabase, CatalogError, CatalogItem,
-    CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails, IdReference, SessionCatalog,
+    CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails, EnvironmentId, IdReference,
+    SessionCatalog,
 };
 use crate::func::{Func, MZ_CATALOG_BUILTINS, MZ_INTERNAL_BUILTINS, PG_CATALOG_BUILTINS};
 use crate::names::{
@@ -43,7 +45,7 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     start_time: DateTime::<Utc>::MIN_UTC,
     start_instant: Instant::now(),
     nonce: 0,
-    environment_id: format!("environment-{}-0", Uuid::from_u128(0)),
+    environment_id: EnvironmentId::for_tests(),
     session_id: Uuid::from_u128(0),
     unsafe_mode: false,
     persisted_introspection: false,
@@ -351,7 +353,7 @@ impl TestCatalog {
                         "Ensure that there are the right number of column names for source {}",
                         source_name
                     );
-                    let id = GlobalId::User(self.tables.len() as u64);
+                    let id = GlobalId::User(u64::cast_from(self.tables.len()));
                     self.id_to_name.insert(id, source_name.clone());
                     self.tables.insert(
                         source_name.clone(),

@@ -22,8 +22,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io;
-#[cfg(feature = "tokio-console")]
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -49,6 +47,9 @@ use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{reload, Registry};
+
+#[cfg(feature = "tokio-console")]
+use crate::netio::SocketAddr;
 
 /// Application tracing configuration.
 ///
@@ -222,7 +223,8 @@ pub async fn configure<C, F>(
     config: C,
     // _Effectively_ unused if `sentry_config` is not set in the `config`,
     // as its not dynamically configured and is likely a closure with
-    // an opaque type.
+    // an opaque type. Note that the sentry layer is statically configured
+    // to never receive events more verbose than `INFO`.
     sentry_event_filter: F,
     (build_version, build_sha, build_time): (&str, &str, &str),
 ) -> Result<(TracingTargetCallbacks, Option<sentry::ClientInitGuard>), anyhow::Error>
@@ -250,11 +252,11 @@ where
         }
         StderrLogFormat::Json => Box::new(fmt::layer().with_writer(io::stderr).json()),
     };
-    let (stderr_log_layer, stderr_reloader) =
-        reload::Layer::new(stderr_log_layer.with_filter(config.stderr_log.filter));
+    let (stderr_filter, stderr_filter_reloader) = reload::Layer::new(config.stderr_log.filter);
+    let stderr_log_layer = stderr_log_layer.with_filter(stderr_filter);
     let stderr_callback = DynamicTargetsCallback {
         callback: Arc::new(move |targets| {
-            stderr_reloader.modify(|layer| *layer.filter_mut() = targets)?;
+            stderr_filter_reloader.reload(targets)?;
             Ok(())
         }),
     };
@@ -314,7 +316,7 @@ where
             .with_filter(filter);
         let reloader = DynamicTargetsCallback {
             callback: Arc::new(move |targets| {
-                filter_handle.modify(|filter| *filter = targets)?;
+                filter_handle.reload(targets)?;
                 Ok(())
             }),
         };
@@ -330,12 +332,17 @@ where
 
     #[cfg(feature = "tokio-console")]
     let tokio_console_layer = if let Some(console_config) = config.tokio_console.clone() {
-        let layer = ConsoleLayer::builder()
-            .server_addr(console_config.listen_addr)
+        let builder = ConsoleLayer::builder()
             .publish_interval(console_config.publish_interval)
-            .retention(console_config.retention)
-            .spawn();
-        Some(layer)
+            .retention(console_config.retention);
+        let builder = match console_config.listen_addr {
+            SocketAddr::Inet(addr) => builder.server_addr(addr),
+            SocketAddr::Unix(addr) => {
+                let path = addr.as_pathname().unwrap().as_ref();
+                builder.server_addr(path)
+            }
+        };
+        Some(builder.spawn())
     } else {
         None
     };
@@ -368,15 +375,44 @@ where
     let stack = stack.with(otel_layer);
     #[cfg(feature = "tokio-console")]
     let stack = stack.with(tokio_console_layer);
-    let stack = stack.with(sentry_tracing::layer().event_filter(sentry_event_filter));
+    let stack = stack.with(
+        sentry_tracing::layer()
+            .event_filter(sentry_event_filter)
+            // WARNING, ENTERING THE SPOOKY ZONE
+            //
+            // While sentry provides an event filter above that maps events to types of sentry events, its `Layer`
+            // implementation does not participate in `tracing`'s level-fast-path implementation, which depends on
+            // a hidden api (<https://github.com/tokio-rs/tracing/blob/b28c9351dd4f34ed3c7d5df88bb5c2e694d9c951/tracing-subscriber/src/layer/mod.rs#L861-L867>)
+            // which is primarily manged by filters (like below). The fast path skips verbose log
+            // (and span) levels that no layer is interested by reading a single atomic. Usually, not implementing this
+            // api means "give me everything, including `trace`, unless you attach a filter to me.
+            //
+            // The curious thing here (and a bug in tracing) is that _some configurations of our layer stack above_,
+            // if you don't have this filter can cause the fast-path to trigger, despite the fact
+            // that the sentry layer would specifically communicating that it wants to see
+            // everything. This bug appears to be related to the presence of a `reload::Layer`
+            // _around a filter, not a layer_, and guswynn is tracking investigating it here:
+            // <https://github.com/MaterializeInc/materialize/issues/16556>. Because we don't
+            // enable a reload-able filter in CI/locally, but DO in production (the otel layer), it
+            // was once possible to trigger and rely on the fast path in CI, but not notice that it
+            // was disabled in production.
+            //
+            // The behavior of this optimization is now tested in various scenarios (in
+            // `test/tracing`). Regardless, when the upstream bug is fixed/resolved,
+            // we will continue to place this here, as the sentry layer only cares about
+            // events <= INFO, so we want to use the fast-path if no other layer
+            // is interested in high-fidelity events.
+            .with_filter(tracing::level_filters::LevelFilter::INFO),
+    );
     stack.init();
 
     #[cfg(feature = "tokio-console")]
     if let Some(console_config) = config.tokio_console {
-        tracing::info!(
-            "starting tokio console on http://{}",
-            console_config.listen_addr
-        );
+        let endpoint = match console_config.listen_addr {
+            SocketAddr::Inet(addr) => format!("http://{addr}"),
+            SocketAddr::Unix(addr) => format!("file://localhost{addr}"),
+        };
+        tracing::info!("starting tokio console on {endpoint}");
     }
 
     Ok((

@@ -2108,7 +2108,6 @@ mod persist_write_handles {
 
                                             futs.push(async move {
                                                 let persist_upper = persist_upper.clone();
-                                                let mut result =
                                                 write
                                                     .compare_and_append(
                                                         updates.clone(),
@@ -2116,54 +2115,7 @@ mod persist_write_handles {
                                                         new_upper.clone(),
                                                     )
                                                     .instrument(span.clone())
-                                                    .await;
-
-                                                // Indeterminate results can occur when persist is not certain
-                                                // whether the transaction has applied or not. We will attempt
-                                                // to suss this out by looking at the recent `upper`, and retrying
-                                                // if it is still appropriate, not retrying if it has advanced
-                                                // to `new_upper`, and panicking if it is anything else.
-                                                while let Err(indeterminate) = result {
-                                                    tracing::warn!("Retrying indeterminate persist worker write: {:#}", indeterminate);
-                                                    write.fetch_recent_upper().await;
-                                                    if write.upper() == &persist_upper {
-                                                        // If the upper frontier is the prior frontier, the commit
-                                                        // did not happen and we should retry it.
-                                                        result =
-                                                        write
-                                                            .compare_and_append(
-                                                                updates.clone(),
-                                                                persist_upper.clone(),
-                                                                new_upper.clone(),
-                                                            )
-                                                            .instrument(span.clone())
-                                                            .await;
-
-                                                    } else if write.upper() == &new_upper {
-                                                        // If the upper frontier is the new frontier, then because
-                                                        // of mutual exclusion of writes, no other writer should be
-                                                        // advancing the frontier to `new_upper`.
-                                                        //
-                                                        // TODO: This may succeed if `new_upper` is where we cut over
-                                                        // to a new leader, who advanced tables to `new_upper` when it
-                                                        // started. In that case, a success here will soon be followed
-                                                        // by a failure on our next interaction with the catalog stash,
-                                                        // but we would incorrectly think this committed and may serve
-                                                        // results in the meantime.
-                                                        result = Ok(Ok(Ok(())))
-                                                    } else {
-                                                        tracing::info!(
-                                                            "Persist writer failed: `write.upper` for {:?} advanced by
-                                                            other writer. Actual upper {:?}; Expected new upper: {:?};
-                                                            Persist upper: {:?}",
-                                                            id, write.upper(), new_upper, persist_upper,
-                                                        );
-                                                        return Err(*id);
-                                                    }
-                                                }
-
-                                                result
-                                                    .expect("Indeterminate response not resolved")
+                                                    .await
                                                     .expect("cannot append updates")
                                                     .or(Err(*id))?;
 
