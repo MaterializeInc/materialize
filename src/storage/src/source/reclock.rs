@@ -181,7 +181,9 @@ where
         //
         // In the example above the correct answer is {t2, t4}, because this is the smallest
         // antichain of IntoTime times such that the remap collection accumulates at each one of
-        // them to a FromTime frontier `f` such that D is not beyond `f`.
+        // them to a FromTime frontier `f` such that D is not beyond `f`. Note that D can be
+        // reclocked only if it is not beyond the source_upper, which we check above. Otherwise, we
+        // cannot make conclusions about what time it maps to.
         //
         // We need to compute the answer by iterating over the consolidated remap trace which will
         // present to us one diff at a time. We know that by construction at any given IntoTime
@@ -194,9 +196,11 @@ where
         // therefore all the positive diffs of the witness times must be retracted at subsequent
         // IntoTime times.
         //
-        // This cycle may be repeated an arbitrary amount of times until the final retraction. The
-        // IntoTime times at which the final retraction happens are the times that `src_ts` should
-        // be reclocked to.
+        // These pairs of insertions/retractions may be repeated an arbitrary amount of times if
+        // the frontier advances multiple times while still being not beyond `src_rs`. The pattern
+        // is broken when we reach the last retraction which isn't matched up by an equivalent
+        // insertion. The IntoTime times at which the last retraction happens are the times that
+        // `src_ts` should be reclocked to.
         //
         // Therefore, if we filter the remap trace for witness timestamps and construct a
         // MutableAntichain of the IntoTime times the witnesses occur at with a negated diff we'll
@@ -1043,6 +1047,13 @@ mod tests {
         let source_upper =
             partitioned_frontier([(PART0, MzOffset::from(50)), (PART1, MzOffset::from(50))]);
         follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
+
+        let batch = vec![(49, Partitioned::with_partition(PART0, MzOffset::from(49)))];
+        let reclocked_msgs = follower
+            .reclock(batch)
+            .map(|(m, ts)| (m, ts.unwrap()))
+            .collect_vec();
+        assert_eq!(reclocked_msgs, &[(49, 1000.into())]);
 
         // Then again only for PART0 at timestamp 3000
         let source_upper =
