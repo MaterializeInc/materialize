@@ -11,27 +11,23 @@ aliases:
 To use a Kafka broker (and optionally a schema registry) as a sink, make sure that a connection that specifies access and authentication parameters to that broker already exists; otherwise, you first need to [create a connection](#creating-a-connection). Once created, a connection is **reusable** across multiple `CREATE SINK` and `CREATE SOURCE` statements.
 {{% /create-sink/intro %}}
 
+{{< note >}}
+The same syntax, supported formats and features can be used to connect to a [Redpanda](/integrations/redpanda/) broker.
+{{</ note >}}
+
 Sink source type      | Description
 ----------------------|------------
 **Source**            | Simply pass all data received from the source to the sink without modifying it.
 **Table**             | Stream all changes to the specified table out to the sink.
 **Materialized view** | Stream all changes to the view to the sink. This lets you use Materialize to process a stream, and then stream the processed values. Note that this feature only works with [materialized views](/sql/create-materialized-view), and _does not_ work with [non-materialized views](/sql/create-view).
 
-{{< note >}}
-The same syntax, supported formats and features can be used to connect to a [Redpanda](/integrations/redpanda/) broker.
-{{</ note >}}
-
 ## Syntax
 
-{{< diagram "create-source-kafka.svg" >}}
+{{< diagram "create-sink-kafka.svg" >}}
 
 #### `sink_format_spec`
 
 {{< diagram "sink-format-spec.svg" >}}
-
-## Syntax
-
-{{< diagram "create-sink-kafka.svg" >}}
 
 #### `kafka_sink_connection`
 
@@ -102,7 +98,19 @@ CREATE SINK avro_sink
 
 ### Exactly-once processing
 
-To achieve its exactly-once processing guarantees, Materialize stores internal metadata in an additional *progress topic*. This topic is shared across all sinks that use a particular Kafka connection. The name of the progress topic can be specified when [creating a connection](/sql/create-connection); otherwise, a default is chosen based on the Materialize environment `id` and the connection `id`. In either case, Materialize will attempt to create the topic if it does not exist. The contents of this topic are not user-specified.
+By default, Kafka sinks provide [exactly-once processing guarantees](https://kafka.apache.org/documentation/#semantics), which ensures that messages are not duplicated or dropped in failure scenarios.
+
+To achieve this, Materialize stores some internal metadata in an additional *progress topic*. This topic is shared among all sinks that use a particular [Kafka connection](/sql/create-connection/#kafka). The name of the progress topic can be specified when [creating a connection](/sql/create-connection#general-options); otherwise, a default is chosen based on the Materialize environment `id` and the connection `id`. In either case, Materialize will attempt to create the topic if it does not exist. The contents of this topic are not user-specified.
+
+#### End-to-end exactly-once processing
+
+Exactly-once semantics are an end-to-end property of a system, but Materialize only controls the initial produce step. To ensure _end-to-end_ exactly-once message delivery, you should ensure that:
+
+- The broker is configured with replication factor greater than 3, with unclean leader election disabled (`unclean.leader.election.enable=false`).
+- All downstream consumers are configured to only read committed data (`isolation.level=read_committed`).
+- The consumers' processing is idempotent, and offsets are only committed when processing is complete.
+
+For more details, see [the Kafka documentation](https://kafka.apache.org/documentation/).
 
 ## Examples
 

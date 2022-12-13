@@ -47,6 +47,8 @@ table or materialized view you want to send to the sink.
 
 ### JSON
 
+<p style="font-size:14px"><b>Syntax:</b> <code>FORMAT JSON</code></p>
+
 Materialize can encode output data as JSON messages. Publishing schemas to a
 schema registry is not supported yet for JSON-formatted sinks {{% gh 7186 %}}.
 
