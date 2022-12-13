@@ -13,12 +13,9 @@ use std::fmt::Debug;
 
 use mz_compute_client::{plan::Plan, types::dataflows::DataflowDescription};
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
-use mz_repr::{
-    explain_new::{
-        text_string, DisplayText, Explain, ExplainConfig, ExplainError, ExplainFormat, PlanTrace,
-        TraceEntry,
-    },
-    Timestamp,
+use mz_repr::explain_new::{
+    text_string, DisplayText, Explain, ExplainConfig, ExplainError, ExplainFormat, PlanTrace,
+    TraceEntry,
 };
 use mz_sql::plan::{HirRelationExpr, HirScalarExpr};
 use tracing::dispatcher::{self, with_default};
@@ -90,7 +87,7 @@ impl OptimizerTrace {
         catalog: ConnCatalog,
         row_set_finishing: Option<RowSetFinishing>,
         used_indexes: Vec<mz_repr::GlobalId>,
-        fast_path_plan: Option<FastPathPlan<Timestamp>>,
+        fast_path_plan: Option<FastPathPlan>,
     ) -> Result<Vec<TraceEntry<String>>, ExplainError> {
         let mut results = vec![];
 

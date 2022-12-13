@@ -49,7 +49,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaSourcesLarge, --actions=50000]
+          args: [--scenario=KafkaSourcesLarge, --actions=100000]
 
   - id: zippy-dataflows-large
     label: "Long running Zippy with complex dataflows"
@@ -60,7 +60,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=DataflowsLarge, --actions=50000]
+          args: [--scenario=DataflowsLarge, --actions=100000]
 
   - id: zippy-pg-cdc-large
     label: "Longer Zippy PogresCdc test"
@@ -70,4 +70,4 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=PostgresCdc, --actions=50000]
+          args: [--scenario=PostgresCdc, --actions=100000]
