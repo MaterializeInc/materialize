@@ -115,7 +115,3 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tungstenite = { git = "https://github.com/snapview/tungstenite-rs.git" }
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 vte = { git = "https://github.com/alacritty/vte" }
-
-[patch."https://github.com/TimelyDataflow/differential-dataflow.git"]
-differential-dataflow = { git = "https://github.com/frankmcsherry/differential-dataflow.git", branch = "columnation" }
-dogsdogsdogs = { git = "https://github.com/frankmcsherry/differential-dataflow.git", branch = "columnation" }
