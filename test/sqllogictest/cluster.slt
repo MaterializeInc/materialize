@@ -11,6 +11,9 @@
 
 mode cockroach
 
+# Start from a pristine state
+reset-server
+
 statement error Expected REPLICAS, found EOF
 CREATE CLUSTER foo
 
@@ -49,8 +52,8 @@ SELECT * FROM mz_clusters
 s1  mz_system
 s2  mz_introspection
 u1  default
-u4  foo
-u5  bar
+u3  foo
+u4  bar
 
 query T rowsort
 SHOW CLUSTERS
@@ -148,57 +151,57 @@ FROM
 WHERE clusters.name = 'bar'
 ORDER BY on_name, seq_in_index ASC;
 ----
-bar  mz_active_peeks  mz_active_peeks_u5_primary_idx  1  id  NULL  false
-bar  mz_active_peeks  mz_active_peeks_u5_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_u5_primary_idx  1  operator_id  NULL  false
-bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_u5_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_records_internal  mz_arrangement_records_internal_u5_primary_idx  1  operator_id  NULL  false
-bar  mz_arrangement_records_internal  mz_arrangement_records_internal_u5_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_u5_primary_idx  1  operator_id  NULL  false
-bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_u5_primary_idx  2  worker_id  NULL  false
-bar  mz_compute_exports  mz_compute_exports_u5_primary_idx  1  export_id  NULL  false
-bar  mz_compute_exports  mz_compute_exports_u5_primary_idx  2  worker_id  NULL  false
-bar  mz_dataflow_addresses  mz_dataflow_addresses_u5_primary_idx  1  id  NULL  false
-bar  mz_dataflow_addresses  mz_dataflow_addresses_u5_primary_idx  2  worker_id  NULL  false
-bar  mz_dataflow_channels  mz_dataflow_channels_u5_primary_idx  1  id  NULL  false
-bar  mz_dataflow_channels  mz_dataflow_channels_u5_primary_idx  2  worker_id  NULL  false
-bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_u5_primary_idx  1  address  NULL  false
-bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_u5_primary_idx  2  port  NULL  false
-bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_u5_primary_idx  3  worker_id  NULL  false
-bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_u5_primary_idx  4  update_type  NULL  false
-bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_u5_primary_idx  5  time  NULL  true
-bar  mz_dataflow_operators  mz_dataflow_operators_u5_primary_idx  1  id  NULL  false
-bar  mz_dataflow_operators  mz_dataflow_operators_u5_primary_idx  2  worker_id  NULL  false
-bar  mz_message_counts_received_internal  mz_message_counts_received_internal_u5_primary_idx  1  channel_id  NULL  false
-bar  mz_message_counts_received_internal  mz_message_counts_received_internal_u5_primary_idx  2  from_worker_id  NULL  false
-bar  mz_message_counts_received_internal  mz_message_counts_received_internal_u5_primary_idx  3  to_worker_id  NULL  false
-bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_u5_primary_idx  1  channel_id  NULL  false
-bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_u5_primary_idx  2  from_worker_id  NULL  false
-bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_u5_primary_idx  3  to_worker_id  NULL  false
-bar  mz_raw_compute_operator_durations_internal  mz_raw_compute_operator_durations_internal_u5_primary_idx  1  id  NULL  false
-bar  mz_raw_compute_operator_durations_internal  mz_raw_compute_operator_durations_internal_u5_primary_idx  2  worker_id  NULL  false
-bar  mz_raw_compute_operator_durations_internal  mz_raw_compute_operator_durations_internal_u5_primary_idx  3  duration_ns  NULL  false
-bar  mz_raw_peek_durations  mz_raw_peek_durations_u5_primary_idx  1  worker_id  NULL  false
-bar  mz_raw_peek_durations  mz_raw_peek_durations_u5_primary_idx  2  duration_ns  NULL  false
-bar  mz_raw_worker_compute_delays  mz_raw_worker_compute_delays_u5_primary_idx  1  export_id  NULL  false
-bar  mz_raw_worker_compute_delays  mz_raw_worker_compute_delays_u5_primary_idx  2  import_id  NULL  false
-bar  mz_raw_worker_compute_delays  mz_raw_worker_compute_delays_u5_primary_idx  3  worker_id  NULL  false
-bar  mz_raw_worker_compute_delays  mz_raw_worker_compute_delays_u5_primary_idx  4  delay_ns  NULL  false
-bar  mz_scheduling_elapsed_internal  mz_scheduling_elapsed_internal_u5_primary_idx  1  id  NULL  false
-bar  mz_scheduling_elapsed_internal  mz_scheduling_elapsed_internal_u5_primary_idx  2  worker_id  NULL  false
-bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_u5_primary_idx  1  worker_id  NULL  false
-bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_u5_primary_idx  2  slept_for  NULL  false
-bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_u5_primary_idx  3  requested  NULL  false
-bar  mz_worker_compute_dependencies  mz_worker_compute_dependencies_u5_primary_idx  1  export_id  NULL  false
-bar  mz_worker_compute_dependencies  mz_worker_compute_dependencies_u5_primary_idx  2  import_id  NULL  false
-bar  mz_worker_compute_dependencies  mz_worker_compute_dependencies_u5_primary_idx  3  worker_id  NULL  false
-bar  mz_worker_compute_frontiers  mz_worker_compute_frontiers_u5_primary_idx  1  export_id  NULL  false
-bar  mz_worker_compute_frontiers  mz_worker_compute_frontiers_u5_primary_idx  2  worker_id  NULL  false
-bar  mz_worker_compute_frontiers  mz_worker_compute_frontiers_u5_primary_idx  3  time  NULL  false
-bar  mz_worker_compute_import_frontiers  mz_worker_compute_import_frontiers_u5_primary_idx  1  export_id  NULL  false
-bar  mz_worker_compute_import_frontiers  mz_worker_compute_import_frontiers_u5_primary_idx  2  import_id  NULL  false
-bar  mz_worker_compute_import_frontiers  mz_worker_compute_import_frontiers_u5_primary_idx  3  worker_id  NULL  false
-bar  mz_worker_compute_import_frontiers  mz_worker_compute_import_frontiers_u5_primary_idx  4  time  NULL  false
+bar  mz_active_peeks  mz_active_peeks_u4_primary_idx  1  id  NULL  false
+bar  mz_active_peeks  mz_active_peeks_u4_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_u4_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_u4_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_records_internal  mz_arrangement_records_internal_u4_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_records_internal  mz_arrangement_records_internal_u4_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_u4_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_u4_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_exports  mz_compute_exports_u4_primary_idx  1  export_id  NULL  false
+bar  mz_compute_exports  mz_compute_exports_u4_primary_idx  2  worker_id  NULL  false
+bar  mz_dataflow_addresses  mz_dataflow_addresses_u4_primary_idx  1  id  NULL  false
+bar  mz_dataflow_addresses  mz_dataflow_addresses_u4_primary_idx  2  worker_id  NULL  false
+bar  mz_dataflow_channels  mz_dataflow_channels_u4_primary_idx  1  id  NULL  false
+bar  mz_dataflow_channels  mz_dataflow_channels_u4_primary_idx  2  worker_id  NULL  false
+bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_u4_primary_idx  1  address  NULL  false
+bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_u4_primary_idx  2  port  NULL  false
+bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_u4_primary_idx  3  worker_id  NULL  false
+bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_u4_primary_idx  4  update_type  NULL  false
+bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_u4_primary_idx  5  time  NULL  true
+bar  mz_dataflow_operators  mz_dataflow_operators_u4_primary_idx  1  id  NULL  false
+bar  mz_dataflow_operators  mz_dataflow_operators_u4_primary_idx  2  worker_id  NULL  false
+bar  mz_message_counts_received_internal  mz_message_counts_received_internal_u4_primary_idx  1  channel_id  NULL  false
+bar  mz_message_counts_received_internal  mz_message_counts_received_internal_u4_primary_idx  2  from_worker_id  NULL  false
+bar  mz_message_counts_received_internal  mz_message_counts_received_internal_u4_primary_idx  3  to_worker_id  NULL  false
+bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_u4_primary_idx  1  channel_id  NULL  false
+bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_u4_primary_idx  2  from_worker_id  NULL  false
+bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_u4_primary_idx  3  to_worker_id  NULL  false
+bar  mz_raw_compute_operator_durations_internal  mz_raw_compute_operator_durations_internal_u4_primary_idx  1  id  NULL  false
+bar  mz_raw_compute_operator_durations_internal  mz_raw_compute_operator_durations_internal_u4_primary_idx  2  worker_id  NULL  false
+bar  mz_raw_compute_operator_durations_internal  mz_raw_compute_operator_durations_internal_u4_primary_idx  3  duration_ns  NULL  false
+bar  mz_raw_peek_durations  mz_raw_peek_durations_u4_primary_idx  1  worker_id  NULL  false
+bar  mz_raw_peek_durations  mz_raw_peek_durations_u4_primary_idx  2  duration_ns  NULL  false
+bar  mz_raw_worker_compute_delays  mz_raw_worker_compute_delays_u4_primary_idx  1  export_id  NULL  false
+bar  mz_raw_worker_compute_delays  mz_raw_worker_compute_delays_u4_primary_idx  2  import_id  NULL  false
+bar  mz_raw_worker_compute_delays  mz_raw_worker_compute_delays_u4_primary_idx  3  worker_id  NULL  false
+bar  mz_raw_worker_compute_delays  mz_raw_worker_compute_delays_u4_primary_idx  4  delay_ns  NULL  false
+bar  mz_scheduling_elapsed_internal  mz_scheduling_elapsed_internal_u4_primary_idx  1  id  NULL  false
+bar  mz_scheduling_elapsed_internal  mz_scheduling_elapsed_internal_u4_primary_idx  2  worker_id  NULL  false
+bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_u4_primary_idx  1  worker_id  NULL  false
+bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_u4_primary_idx  2  slept_for  NULL  false
+bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_u4_primary_idx  3  requested  NULL  false
+bar  mz_worker_compute_dependencies  mz_worker_compute_dependencies_u4_primary_idx  1  export_id  NULL  false
+bar  mz_worker_compute_dependencies  mz_worker_compute_dependencies_u4_primary_idx  2  import_id  NULL  false
+bar  mz_worker_compute_dependencies  mz_worker_compute_dependencies_u4_primary_idx  3  worker_id  NULL  false
+bar  mz_worker_compute_frontiers  mz_worker_compute_frontiers_u4_primary_idx  1  export_id  NULL  false
+bar  mz_worker_compute_frontiers  mz_worker_compute_frontiers_u4_primary_idx  2  worker_id  NULL  false
+bar  mz_worker_compute_frontiers  mz_worker_compute_frontiers_u4_primary_idx  3  time  NULL  false
+bar  mz_worker_compute_import_frontiers  mz_worker_compute_import_frontiers_u4_primary_idx  1  export_id  NULL  false
+bar  mz_worker_compute_import_frontiers  mz_worker_compute_import_frontiers_u4_primary_idx  2  import_id  NULL  false
+bar  mz_worker_compute_import_frontiers  mz_worker_compute_import_frontiers_u4_primary_idx  3  worker_id  NULL  false
+bar  mz_worker_compute_import_frontiers  mz_worker_compute_import_frontiers_u4_primary_idx  4  time  NULL  false
 bar  v  v_primary_idx  1  ?column?  NULL  false
 
 query TTTT
@@ -552,10 +555,10 @@ SELECT replica_id, process_id, cpu_percent, memory_percent FROM mz_internal.mz_c
 1  0  0  0
 2  0  0  0
 3  0  0  0
+23  0  0  0
 24  0  0  0
 25  0  0  0
-26  0  0  0
-26  1  0  0
+25  1  0  0
 
 statement ok
 DROP CLUSTER foo CASCADE
