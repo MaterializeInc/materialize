@@ -440,14 +440,20 @@ sqlfunc!(
         if !f.is_finite() {
             None
         } else {
-            let secs = f.trunc() as i64;
+            let mut secs = f.trunc() as i64;
             // NOTE(benesch): PostgreSQL has microsecond precision in its timestamps,
             // while chrono has nanosecond precision. While we normally accept
             // nanosecond precision, here we round to the nearest microsecond because
             // f64s lose quite a bit of accuracy in the nanosecond digits when dealing
             // with common Unix timestamp values (> 1 billion).
-            let nanosecs = ((f.fract() * 1_000_000.0).round() as u32) * 1_000;
-            match NaiveDateTime::from_timestamp_opt(secs as i64, nanosecs as u32) {
+            let mut nanosecs = (((f.fract() * 1_000_000.0).round()) * 1_000.0) as i32;
+            if nanosecs < 0 {
+                secs -= 1;
+                nanosecs = 1_000_000_000 + nanosecs;
+            }
+            assert!(nanosecs >= 0);
+            let nanosecs = nanosecs as u32;
+            match NaiveDateTime::from_timestamp_opt(secs, nanosecs) {
                 Some(ts) => {
                     let dt = DateTime::<Utc>::from_utc(ts, Utc);
                     CheckedTimestamp::from_timestamplike(dt).ok()

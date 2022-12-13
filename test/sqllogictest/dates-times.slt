@@ -1350,3 +1350,10 @@ query II
 select ('0001-01-01'::date - '1721389days'::interval)::date - ('0001-01-01'::date + '262142years 11months 30days'::interval)::date, ('0001-01-01'::date + '262142years 11months 30days'::interval)::date - ('0001-01-01'::date - '1721389days'::interval)::date
 ----
 -97467152 97467152
+
+# Negative fractional timestamp
+
+query T
+SELECT to_timestamp(-0.1::float8);
+----
+1969-12-31 23:59:59.9+00
