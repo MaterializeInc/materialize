@@ -115,6 +115,8 @@ steps:
     label: Cargo test
     timeout_in_minutes: 30
     artifact_paths: target/nextest/ci/junit_cargo-test.xml
+    inputs:
+      - "*"
     env:
       AWS_DEFAULT_REGION: "us-east-2"
     plugins:
