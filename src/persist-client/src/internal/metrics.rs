@@ -1483,7 +1483,7 @@ impl Consensus for MetricsConsensus {
                     .consensus
                     .cas_mismatch_versions_count
                     .inc_by(u64::cast_from(xs.len()));
-                let total_size = u64::cast_from(xs.iter().map(|x| x.data.len()).sum());
+                let total_size = u64::cast_from(xs.iter().map(|x| x.data.len()).sum::<usize>());
                 self.metrics
                     .consensus
                     .cas_mismatch_versions_bytes
@@ -1507,7 +1507,7 @@ impl Consensus for MetricsConsensus {
             .run_op(|| self.consensus.scan(key, from, limit), Self::on_err)
             .await;
         if let Ok(dataz) = res.as_ref() {
-            let bytes = dataz.iter().map(|x| x.data.len()).sum();
+            let bytes: usize = dataz.iter().map(|x| x.data.len()).sum();
             self.metrics
                 .consensus
                 .scan

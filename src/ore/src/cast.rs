@@ -15,8 +15,6 @@
 
 //! Cast utilities.
 
-use paste::paste;
-
 /// A trait for safe, simple, and infallible casts.
 ///
 /// `CastFrom` is like [`std::convert::From`], but it is implemented for some
@@ -38,8 +36,8 @@ pub trait CastFrom<T> {
 
 macro_rules! cast_from {
     ($from:ty, $to:ty) => {
-        paste! {
-            impl CastFrom<$from> for $to {
+        paste::paste! {
+            impl crate::cast::CastFrom<$from> for $to {
                 #[allow(clippy::as_conversions)]
                 fn cast_from(from: $from) -> $to {
                     from as $to
@@ -48,7 +46,7 @@ macro_rules! cast_from {
 
             /// Casts [`$from`] to [`$to`].
             ///
-            /// This is equivalent to the [`CastFrom`] implementation but is
+            /// This is equivalent to the [`crate::cast::CastFrom`] implementation but is
             /// available as a `const fn`.
             #[allow(clippy::as_conversions)]
             pub const fn [< $from _to_ $to >](from: $from) -> $to {
@@ -58,29 +56,91 @@ macro_rules! cast_from {
     };
 }
 
-#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
-cast_from!(u8, usize);
+#[cfg(target_pointer_width = "32")]
+/// Safe casts for 32bit platforms
+mod target32 {
+    // size_of<from> < size_of<target>
+    cast_from!(u8, usize);
+    cast_from!(u16, usize);
+    cast_from!(u8, isize);
+    cast_from!(i8, isize);
+    cast_from!(u16, isize);
+    cast_from!(i16, isize);
 
-#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
-cast_from!(u32, usize);
+    cast_from!(usize, u64);
+    cast_from!(usize, i64);
+    cast_from!(usize, u128);
+    cast_from!(usize, i128);
+    cast_from!(isize, i64);
+    cast_from!(isize, i128);
+
+    // size_of<from> == size_of<target>
+    cast_from!(usize, u32);
+    cast_from!(isize, i32);
+    cast_from!(u32, usize);
+    cast_from!(i32, isize);
+}
+#[cfg(target_pointer_width = "32")]
+pub use target32::*;
 
 #[cfg(target_pointer_width = "64")]
-cast_from!(u64, usize);
+/// Safe casts for 64bit platforms
+pub mod target64 {
+    // size_of<from> < size_of<target>
+    cast_from!(u8, usize);
+    cast_from!(u16, usize);
+    cast_from!(u32, usize);
+    cast_from!(u8, isize);
+    cast_from!(i8, isize);
+    cast_from!(u16, isize);
+    cast_from!(i16, isize);
+    cast_from!(u32, isize);
+    cast_from!(i32, isize);
 
-cast_from!(usize, u64);
+    cast_from!(usize, u128);
+    cast_from!(usize, i128);
+    cast_from!(isize, i128);
 
+    // size_of<from> == size_of<target>
+    cast_from!(usize, u64);
+    cast_from!(isize, i64);
+    cast_from!(u64, usize);
+    cast_from!(i64, isize);
+}
+#[cfg(target_pointer_width = "64")]
+pub use target64::*;
+
+// TODO(petrosagg): remove these once the std From impls become const
+cast_from!(u8, u16);
+cast_from!(u8, i16);
+cast_from!(u8, u32);
 cast_from!(u8, i32);
-
-#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
-cast_from!(i32, isize);
-
-#[cfg(target_pointer_width = "64")]
-cast_from!(i64, isize);
-
-cast_from!(isize, i64);
-
-#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
-cast_from!(isize, i128);
+cast_from!(u8, u64);
+cast_from!(u8, i64);
+cast_from!(u8, u128);
+cast_from!(u8, i128);
+cast_from!(u16, u32);
+cast_from!(u16, i32);
+cast_from!(u16, u64);
+cast_from!(u16, i64);
+cast_from!(u16, u128);
+cast_from!(u16, i128);
+cast_from!(u32, u64);
+cast_from!(u32, i64);
+cast_from!(u32, u128);
+cast_from!(u32, i128);
+cast_from!(u64, u128);
+cast_from!(u64, i128);
+cast_from!(i8, i16);
+cast_from!(i8, i32);
+cast_from!(i8, i64);
+cast_from!(i8, i128);
+cast_from!(i16, i32);
+cast_from!(i16, i64);
+cast_from!(i16, i128);
+cast_from!(i32, i64);
+cast_from!(i32, i128);
+cast_from!(i64, i128);
 
 /// Returns `Some` if `f` can losslessly be converted to an i64.
 #[allow(clippy::as_conversions)]
