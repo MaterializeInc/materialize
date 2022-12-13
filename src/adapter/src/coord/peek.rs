@@ -18,6 +18,7 @@ use std::{collections::HashMap, num::NonZeroUsize};
 
 use futures::TryFutureExt;
 use serde::{Deserialize, Serialize};
+use timely::progress::Timestamp;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -67,17 +68,17 @@ pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
 }
 
 #[derive(Debug)]
-pub enum FastPathPlan<T = mz_repr::Timestamp> {
+pub enum FastPathPlan {
     /// The view evaluates to a constant result that can be returned.
     ///
     /// The [RelationType] is unnecessary for evaluating the constant result but
     /// may be helpful when printing out an explanation.
-    Constant(Result<Vec<(Row, T, Diff)>, EvalError>, RelationType),
+    Constant(Result<Vec<(Row, Diff)>, EvalError>, RelationType),
     /// The view can be read out of an existing arrangement.
     PeekExisting(GlobalId, Option<Vec<Row>>, mz_expr::SafeMfpPlan),
 }
 
-impl<'a, C, T> DisplayText<C> for FastPathPlan<T>
+impl<'a, C> DisplayText<C> for FastPathPlan
 where
     C: AsMut<Indent> + AsRef<&'a dyn ExprHumanizer>,
 {
@@ -89,7 +90,7 @@ where
                     *ctx.as_mut() += 1;
                     fmt_text_constant_rows(
                         f,
-                        rows.iter().map(|(row, _, diff)| (row, diff)),
+                        rows.iter().map(|(row, diff)| (row, diff)),
                         ctx.as_mut(),
                     )?;
                     *ctx.as_mut() -= 1;
@@ -143,7 +144,7 @@ pub struct PlannedPeek {
 /// Possible ways in which the coordinator could produce the result for a goal view.
 #[derive(Debug)]
 pub enum PeekPlan<T = mz_repr::Timestamp> {
-    FastPath(FastPathPlan<T>),
+    FastPath(FastPathPlan),
     /// The view must be installed as a dataflow and then read.
     SlowPath(PeekDataflowPlan<T>),
 }
@@ -176,7 +177,7 @@ fn permute_oneshot_mfp_around_index(
 pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
     dataflow_plan: &mut DataflowDescription<mz_expr::OptimizedMirRelationExpr, (), T>,
     view_id: GlobalId,
-) -> Result<Option<FastPathPlan<T>>, AdapterError> {
+) -> Result<Option<FastPathPlan>, AdapterError> {
     // At this point, `dataflow_plan` contains our best optimized dataflow.
     // We will check the plan to see if there is a fast path to escape full dataflow construction.
 
@@ -188,11 +189,8 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
         if let Some((rows, ..)) = mir.as_const() {
             // In the case of a constant, we can return the result now.
             return Ok(Some(FastPathPlan::Constant(
-                rows.clone().map(|rows| {
-                    rows.into_iter()
-                        .map(|(row, diff)| (row, T::minimum(), diff))
-                        .collect()
-                }),
+                rows.clone()
+                    .map(|rows| rows.into_iter().map(|(row, diff)| (row, diff)).collect()),
                 // For best accuracy, we need to recalculate typ.
                 mir.typ(),
             )));
@@ -309,15 +307,15 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
 
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let PeekPlan::FastPath(FastPathPlan::Constant(rows, _)) = fast_path {
-            let mut rows = match rows {
+            let rows = match rows {
                 Ok(rows) => rows,
                 Err(e) => return Err(e.into()),
             };
             // Consolidate down the results to get correct totals.
-            differential_dataflow::consolidation::consolidate_updates(&mut rows);
+            let rows = consolidate_constant_updates(rows);
 
             let mut results = Vec::new();
-            for (row, _time, count) in rows {
+            for (row, count) in rows {
                 if count < 0 {
                     Err(EvalError::InvalidParameterValue(format!(
                         "Negative multiplicity in constant result: {}",
@@ -544,6 +542,19 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
     }
 }
 
+fn consolidate_constant_updates(rows: Vec<(Row, Diff)>) -> Vec<(Row, Diff)> {
+    // The consolidate API requires timestamps for all rows, so we assigned every row the
+    // same timestamp. The actual value of that timestamp doesn't matter.
+    let mut rows = rows
+        .into_iter()
+        .map(|(row, diff)| (row, mz_repr::Timestamp::minimum(), diff))
+        .collect();
+    differential_dataflow::consolidation::consolidate_updates(&mut rows);
+    rows.into_iter()
+        .map(|(row, _time, diff)| (row, diff))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use mz_expr::{func::IsNull, MapFilterProject, UnaryFunc};
@@ -561,11 +572,8 @@ mod tests {
             scalar_type: ScalarType::String,
             nullable: false,
         }]);
-        let constant_err = FastPathPlan::<mz_repr::Timestamp>::Constant(
-            Err(EvalError::DivisionByZero),
-            typ.clone(),
-        );
-        let no_lookup = FastPathPlan::<mz_repr::Timestamp>::PeekExisting(
+        let constant_err = FastPathPlan::Constant(Err(EvalError::DivisionByZero), typ.clone());
+        let no_lookup = FastPathPlan::PeekExisting(
             GlobalId::User(10),
             None,
             MapFilterProject::new(4)
@@ -576,7 +584,7 @@ mod tests {
                 .into_nontemporal()
                 .unwrap(),
         );
-        let lookup = FastPathPlan::<mz_repr::Timestamp>::PeekExisting(
+        let lookup = FastPathPlan::PeekExisting(
             GlobalId::User(11),
             Some(vec![Row::pack(Some(Datum::Int32(5)))]),
             MapFilterProject::new(3)
@@ -601,9 +609,9 @@ mod tests {
         assert_eq!(text_string_at(&lookup, ctx_gen), lookup_exp);
 
         let mut constant_rows = vec![
-            (Row::pack(Some(Datum::String("hello"))), 0, 1),
-            (Row::pack(Some(Datum::String("world"))), 0, 2),
-            (Row::pack(Some(Datum::String("star"))), 0, 500),
+            (Row::pack(Some(Datum::String("hello"))), 1),
+            (Row::pack(Some(Datum::String("world"))), 2),
+            (Row::pack(Some(Datum::String("star"))), 500),
         ];
         let constant_exp1 =
             "Constant\n  - (\"hello\")\n  - ((\"world\") x 2)\n  - ((\"star\") x 500)\n";
@@ -614,8 +622,7 @@ mod tests {
             ),
             constant_exp1
         );
-        constant_rows
-            .extend((0..20).map(|i| (Row::pack(Some(Datum::String(&i.to_string()))), 0, 1)));
+        constant_rows.extend((0..20).map(|i| (Row::pack(Some(Datum::String(&i.to_string()))), 1)));
         let constant_exp2 =
             "Constant\n  total_rows (diffs absed): 523\n  first_rows:\n    - (\"hello\")\
         \n    - ((\"world\") x 2)\n    - ((\"star\") x 500)\n    - (\"0\")\n    - (\"1\")\
