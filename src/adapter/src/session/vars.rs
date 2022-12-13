@@ -438,7 +438,7 @@ impl SessionVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values for this session.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 21] = [
+        let vars: [&dyn Var; 22] = [
             &self.application_name,
             &self.client_encoding,
             &self.client_min_messages,

@@ -2207,6 +2207,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    // TODO(jkosh44) Once RTR is pulled off the main coord loop, we can remove async from this method.
     async fn plan_peek(
         &self,
         source: MirRelationExpr,
@@ -2399,6 +2400,8 @@ impl<S: Append + 'static> Coordinator<S> {
         })
     }
 
+    /// Checks to see if the session needs a real time recency timestamp and if so acquires and
+    /// returns one. This may wait for an unbounded amount for the timestamp.
     async fn recent_timestamp(
         &self,
         session: &Session,
