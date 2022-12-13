@@ -46,19 +46,20 @@ fi
 
 echo "--- KinD: Make sure KinD is running ..."
 
-# Apply additional KinD configuration
 bin/ci-builder run stable kind create cluster --config misc/kind/cluster.yaml --wait 30s || true
+
+# Make sure a kubeconfig file is generated and placed in $KUBECONFIG
+# of the ci-builder container, as defined in its Dockerfile
+
+bin/ci-builder run stable kind export kubeconfig
+
+# Apply additional KinD configuration
 for yaml in "misc/kind/configmaps/"*; do
     bin/ci-builder run stable kubectl --context kind-kind apply -f "$yaml"
 done
 
 # Restart the K8s CoreDNS service
 bin/ci-builder run stable docker exec kind-control-plane kubectl rollout restart -n kube-system deployment/coredns
-
-# Make sure a kubeconfig file is generated and placed in $KUBECONFIG
-# of the ci-builder container, as defined in its Dockerfile
-
-bin/ci-builder run stable kind export kubeconfig
 
 # Sometimes build cancellations prevent us from properly cleaning up the last
 # cloudtest run, so force a cleanup just in case
