@@ -3527,6 +3527,7 @@ dependencies = [
  "async-trait",
  "bytesize",
  "chrono",
+ "columnation",
  "differential-dataflow",
  "futures",
  "mz-build-info",
