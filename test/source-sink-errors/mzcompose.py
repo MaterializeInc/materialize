@@ -204,13 +204,6 @@ class PgDisruption:
                 > CREATE SOURCE "source1"
                   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
                   FOR TABLES ("t1");
-
-                # Currently, we don't correctly capture or report errors that happen during the initial postgres
-                # snapshot. (The source will go directly from `running` to `starting`.) Wait for the initial
-                # snapshot to complete to get more interesting errors.
-                > SELECT f1 FROM t1;
-                1
-                2
                 """
             )
         )
@@ -219,9 +212,14 @@ class PgDisruption:
         c.testdrive(
             dedent(
                 f"""
+                # Postgres sources may halt after receiving an error, which means that they may alternate
+                # between `stalled` and `starting`. Instead of relying on the current status, we
+                # check that the latest stall has the error we expect.
                 > SELECT status, error ~* '{error}'
-                  FROM mz_internal.mz_source_status
-                  WHERE name = 'source1'
+                  FROM mz_internal.mz_source_status_history
+                  JOIN mz_sources ON mz_sources.id = source_id
+                  WHERE name = 'source1' and status = 'stalled'
+                  ORDER BY occurred_at DESC LIMIT 1
                 stalled true
                 """
             )
