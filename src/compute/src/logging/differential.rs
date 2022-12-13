@@ -52,17 +52,11 @@ pub fn construct<A: Allocate>(
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)>>,
     activator: RcActivator,
 ) -> HashMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
-    let interval_ms = std::cmp::max(1, config.interval_ns / 1_000_000);
+    let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
     let traces = worker.dataflow_named("Dataflow: differential logging", move |scope| {
-        // TODO(benesch): avoid dangerous `as` conversion.
-        #[allow(clippy::as_conversions)]
-        let (mut logs, token) = Some(linked).mz_replay(
-            scope,
-            "differential logs",
-            Duration::from_nanos(config.interval_ns as u64),
-            activator,
-        );
+        let (mut logs, token) =
+            Some(linked).mz_replay(scope, "differential logs", config.interval, activator);
 
         // If logging is disabled, we still need to install the indexes, but we can leave them
         // empty. We do so by immediately filtering all logs events.
