@@ -50,7 +50,7 @@ globset = { version = "0.4.9", features = ["log", "serde", "serde1"] }
 hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git", features = ["ahash", "inline-more", "raw"] }
 hyper = { version = "0.14.23", features = ["client", "full", "h2", "http1", "http2", "runtime", "server", "socket2", "stream", "tcp"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
-k8s-openapi = { version = "0.16.0", features = ["api", "http", "percent-encoding", "url", "v1_22"] }
+k8s-openapi = { version = "0.16.0", features = ["api", "http", "percent-encoding", "url", "v1_23"] }
 kube = { version = "0.76.0", features = ["client", "config", "derive", "kube-client", "kube-derive", "kube-runtime", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.76.0", default-features = false, features = ["__non_core", "base64", "bytes", "chrono", "client", "config", "dirs", "either", "futures", "http-body", "hyper", "hyper-openssl", "hyper-timeout", "jsonpatch", "jsonpath_lib", "openssl", "openssl-tls", "pem", "pin-project", "rand", "serde_yaml", "tokio", "tokio-tungstenite", "tokio-util", "tower", "tower-http", "tracing", "ws"] }
 kube-core = { version = "0.76.0", default-features = false, features = ["json-patch", "jsonpatch", "schema", "schemars", "ws"] }
@@ -149,7 +149,7 @@ globset = { version = "0.4.9", features = ["log", "serde", "serde1"] }
 hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git", features = ["ahash", "inline-more", "raw"] }
 hyper = { version = "0.14.23", features = ["client", "full", "h2", "http1", "http2", "runtime", "server", "socket2", "stream", "tcp"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
-k8s-openapi = { version = "0.16.0", features = ["api", "http", "percent-encoding", "url", "v1_22"] }
+k8s-openapi = { version = "0.16.0", features = ["api", "http", "percent-encoding", "url", "v1_23"] }
 kube = { version = "0.76.0", features = ["client", "config", "derive", "kube-client", "kube-derive", "kube-runtime", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.76.0", default-features = false, features = ["__non_core", "base64", "bytes", "chrono", "client", "config", "dirs", "either", "futures", "http-body", "hyper", "hyper-openssl", "hyper-timeout", "jsonpatch", "jsonpath_lib", "openssl", "openssl-tls", "pem", "pin-project", "rand", "serde_yaml", "tokio", "tokio-tungstenite", "tokio-util", "tower", "tower-http", "tracing", "ws"] }
 kube-core = { version = "0.76.0", default-features = false, features = ["json-patch", "jsonpatch", "schema", "schemars", "ws"] }
