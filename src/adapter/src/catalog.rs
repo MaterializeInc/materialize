@@ -10,7 +10,7 @@
 //! Persistent metadata storage for the coordinator.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -1990,6 +1990,7 @@ struct AllocatedBuiltinSystemIds<T> {
 /// As such, system objects are keyed in the catalog storage by the
 /// tuple (schema_name, object_type, object_name), which is guaranteed
 /// to be unique.
+#[derive(Debug)]
 pub struct SystemObjectMapping {
     schema_name: String,
     object_type: CatalogItemType,
@@ -1998,6 +1999,7 @@ pub struct SystemObjectMapping {
     fingerprint: String,
 }
 
+#[derive(Debug)]
 pub enum CatalogItemRebuilder {
     SystemSource(CatalogItem),
     Object(String),
@@ -2028,6 +2030,7 @@ impl CatalogItemRebuilder {
     }
 }
 
+#[derive(Debug)]
 pub struct BuiltinMigrationMetadata {
     // Used to drop objects on STORAGE nodes
     pub previous_sink_ids: Vec<GlobalId>,
@@ -2803,30 +2806,36 @@ impl<S: Append> Catalog<S> {
     /// The objects in the catalog form one or more DAGs (directed acyclic graph) via object
     /// dependencies. To migrate a builtin object we must drop that object along with all of its
     /// descendants, and then recreate that object along with all of its descendants using new
-    /// GlobalId`s. To achieve this we perform a BFS (breadth first search) on the catalog items
+    /// GlobalId`s. To achieve this we perform a DFS (depth first search) on the catalog items
     /// starting with the nodes that correspond to builtin objects that have changed schemas.
     ///
     /// Objects need to be dropped starting from the leafs of the DAG going up towards the roots,
-    /// and they need to be recreated starting at the root of the DAG and going towards the leafs.
+    /// and they need to be recreated starting at the roots of the DAG and going towards the leafs.
     pub async fn generate_builtin_migration_metadata(
         &mut self,
         migrated_ids: Vec<GlobalId>,
         id_fingerprint_map: HashMap<GlobalId, String>,
     ) -> Result<BuiltinMigrationMetadata, Error> {
-        let mut migration_metadata = BuiltinMigrationMetadata::new();
-
-        let mut object_queue: VecDeque<_> = migrated_ids.iter().collect();
-        let mut visited_set: HashSet<_> = migrated_ids.iter().collect();
+        // First obtain a topological sorting of all migrated objects and their children.
+        let mut visited_set = HashSet::new();
         let mut topological_sort = Vec::new();
+        for id in migrated_ids {
+            if !visited_set.contains(&id) {
+                let migrated_topological_sort = self.topological_sort(id, &mut visited_set);
+                topological_sort.extend(migrated_topological_sort);
+            }
+        }
+        topological_sort.reverse();
+
+        // Then process all objects in sorted order.
+        let mut migration_metadata = BuiltinMigrationMetadata::new();
         let mut ancestor_ids = HashMap::new();
         let mut migrated_log_ids = HashMap::new();
-
         let log_name_map: HashMap<_, _> = BUILTINS::logs()
             .map(|log| (log.variant.clone(), log.name))
             .collect();
-
-        while let Some(id) = object_queue.pop_front() {
-            let entry = self.get_entry(id);
+        for entry in topological_sort {
+            let id = entry.id();
 
             let new_id = match id {
                 GlobalId::System(_) => self
@@ -2844,7 +2853,7 @@ impl<S: Append> Catalog<S> {
 
             // Generate value to update fingerprint and global ID persisted mapping for system objects.
             // Not every system object has a fingerprint, like introspection source indexes.
-            if let Some(fingerprint) = id_fingerprint_map.get(id) {
+            if let Some(fingerprint) = id_fingerprint_map.get(&id) {
                 assert!(
                     id.is_system(),
                     "id_fingerprint_map should only contain builtin objects"
@@ -2859,7 +2868,7 @@ impl<S: Append> Catalog<S> {
                     .schema
                     .as_str();
                 migration_metadata.migrated_system_object_mappings.insert(
-                    *id,
+                    id,
                     SystemObjectMapping {
                         schema_name: schema_name.to_string(),
                         object_type: entry.item_type(),
@@ -2870,29 +2879,8 @@ impl<S: Append> Catalog<S> {
                 );
             }
 
-            // Defer adding the create/drop ops until we know more about the dependency graph.
-            topological_sort.push((entry, new_id));
+            ancestor_ids.insert(id, new_id);
 
-            ancestor_ids.insert(*id, new_id);
-
-            // Add children to queue.
-            for dependant in &entry.used_by {
-                if !visited_set.contains(dependant) {
-                    object_queue.push_back(dependant);
-                    visited_set.insert(dependant);
-                } else {
-                    // If dependant is a child of the current node, then we need to make sure that
-                    // it appears later in the topologically sorted list.
-                    if let Some(idx) = topological_sort.iter().position(|(_, id)| id == dependant) {
-                        let dependant = topological_sort.remove(idx);
-                        topological_sort.push(dependant);
-                    }
-                }
-            }
-        }
-
-        for (entry, new_id) in topological_sort {
-            let id = entry.id();
             // Push drop commands.
             match entry.item() {
                 CatalogItem::Table(_) | CatalogItem::Source(_) => {
@@ -2955,11 +2943,30 @@ impl<S: Append> Catalog<S> {
 
         // Reverse drop commands.
         migration_metadata.previous_sink_ids.reverse();
+        migration_metadata.previous_materialized_view_ids.reverse();
         migration_metadata.previous_source_ids.reverse();
         migration_metadata.all_drop_ops.reverse();
         migration_metadata.user_drop_ops.reverse();
 
         Ok(migration_metadata)
+    }
+
+    fn topological_sort(
+        &self,
+        id: GlobalId,
+        visited_set: &mut HashSet<GlobalId>,
+    ) -> Vec<&CatalogEntry> {
+        let mut topological_sort = Vec::new();
+        visited_set.insert(id);
+        let entry = self.get_entry(&id);
+        for dependant in &entry.used_by {
+            if !visited_set.contains(dependant) {
+                let child_topological_sort = self.topological_sort(*dependant, visited_set);
+                topological_sort.extend(child_topological_sort);
+            }
+        }
+        topological_sort.push(entry);
+        topological_sort
     }
 
     pub fn apply_in_memory_builtin_migration(
@@ -6474,6 +6481,16 @@ mod tests {
             name_vec.into_iter().map(|name| id_lookup[&name]).collect()
         }
 
+        fn convert_id_vec_to_name_vec(
+            id_vec: Vec<GlobalId>,
+            name_lookup: &HashMap<GlobalId, String>,
+        ) -> Vec<String> {
+            id_vec
+                .into_iter()
+                .map(|id| name_lookup[&id].clone())
+                .collect()
+        }
+
         let test_cases = vec![
             BuiltinMigrationTestCase {
                 test_name: "no_migrations",
@@ -6562,10 +6579,10 @@ mod tests {
                 expected_previous_sink_names: vec![],
                 expected_previous_materialized_view_names: vec!["u1".to_string(), "u2".to_string()],
                 expected_previous_source_names: vec!["s1".to_string()],
-                expected_all_drop_ops: vec!["u2".to_string(), "u1".to_string(), "s1".to_string()],
-                expected_user_drop_ops: vec!["u2".to_string(), "u1".to_string()],
-                expected_all_create_ops: vec!["s1".to_string(), "u1".to_string(), "u2".to_string()],
-                expected_user_create_ops: vec!["u1".to_string(), "u2".to_string()],
+                expected_all_drop_ops: vec!["u1".to_string(), "u2".to_string(), "s1".to_string()],
+                expected_user_drop_ops: vec!["u1".to_string(), "u2".to_string()],
+                expected_all_create_ops: vec!["s1".to_string(), "u2".to_string(), "u1".to_string()],
+                expected_user_create_ops: vec!["u2".to_string(), "u1".to_string()],
                 expected_migrated_system_object_mappings: vec!["s1".to_string()],
             },
             BuiltinMigrationTestCase {
@@ -6599,22 +6616,244 @@ mod tests {
                 migrated_names: vec!["s1".to_string(), "s2".to_string()],
                 expected_previous_sink_names: vec![],
                 expected_previous_materialized_view_names: vec!["u2".to_string(), "u1".to_string()],
-                expected_previous_source_names: vec!["s2".to_string(), "s1".to_string()],
+                expected_previous_source_names: vec!["s1".to_string(), "s2".to_string()],
                 expected_all_drop_ops: vec![
-                    "u1".to_string(),
                     "u2".to_string(),
-                    "s2".to_string(),
                     "s1".to_string(),
+                    "u1".to_string(),
+                    "s2".to_string(),
                 ],
-                expected_user_drop_ops: vec!["u1".to_string(), "u2".to_string()],
+                expected_user_drop_ops: vec!["u2".to_string(), "u1".to_string()],
                 expected_all_create_ops: vec![
-                    "s1".to_string(),
                     "s2".to_string(),
-                    "u2".to_string(),
                     "u1".to_string(),
+                    "s1".to_string(),
+                    "u2".to_string(),
                 ],
-                expected_user_create_ops: vec!["u2".to_string(), "u1".to_string()],
+                expected_user_create_ops: vec!["u1".to_string(), "u2".to_string()],
                 expected_migrated_system_object_mappings: vec!["s1".to_string(), "s2".to_string()],
+            },
+            BuiltinMigrationTestCase {
+                test_name: "topological_sort_complex",
+                initial_state: vec![
+                    SimplifiedCatalogEntry {
+                        name: "s273".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::Table,
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s322".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::Table,
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s317".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::Table,
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s349".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::MaterializedView {
+                            depends_on: vec!["s273".to_string()],
+                        },
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s421".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::MaterializedView {
+                            depends_on: vec!["s273".to_string()],
+                        },
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s295".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::MaterializedView {
+                            depends_on: vec!["s273".to_string()],
+                        },
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s296".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::MaterializedView {
+                            depends_on: vec!["s295".to_string()],
+                        },
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s320".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::MaterializedView {
+                            depends_on: vec!["s295".to_string()],
+                        },
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s340".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::MaterializedView {
+                            depends_on: vec!["s295".to_string()],
+                        },
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s318".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::MaterializedView {
+                            depends_on: vec!["s295".to_string()],
+                        },
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s323".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::MaterializedView {
+                            depends_on: vec!["s295".to_string(), "s322".to_string()],
+                        },
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s330".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::MaterializedView {
+                            depends_on: vec!["s318".to_string(), "s317".to_string()],
+                        },
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s321".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::MaterializedView {
+                            depends_on: vec!["s318".to_string()],
+                        },
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s315".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::MaterializedView {
+                            depends_on: vec!["s296".to_string()],
+                        },
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s354".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::MaterializedView {
+                            depends_on: vec!["s296".to_string()],
+                        },
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s327".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::MaterializedView {
+                            depends_on: vec!["s296".to_string()],
+                        },
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s339".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::MaterializedView {
+                            depends_on: vec!["s296".to_string()],
+                        },
+                    },
+                    SimplifiedCatalogEntry {
+                        name: "s355".to_string(),
+                        namespace: ItemNamespace::System,
+                        item: SimplifiedItem::MaterializedView {
+                            depends_on: vec!["s315".to_string()],
+                        },
+                    },
+                ],
+                migrated_names: vec![
+                    "s273".to_string(),
+                    "s317".to_string(),
+                    "s318".to_string(),
+                    "s320".to_string(),
+                    "s321".to_string(),
+                    "s322".to_string(),
+                    "s323".to_string(),
+                    "s330".to_string(),
+                    "s339".to_string(),
+                    "s340".to_string(),
+                ],
+                expected_previous_sink_names: vec![],
+                expected_previous_materialized_view_names: vec![
+                    "s349".to_string(),
+                    "s421".to_string(),
+                    "s355".to_string(),
+                    "s315".to_string(),
+                    "s354".to_string(),
+                    "s327".to_string(),
+                    "s339".to_string(),
+                    "s296".to_string(),
+                    "s320".to_string(),
+                    "s340".to_string(),
+                    "s330".to_string(),
+                    "s321".to_string(),
+                    "s318".to_string(),
+                    "s323".to_string(),
+                    "s295".to_string(),
+                ],
+                expected_previous_source_names: vec![
+                    "s273".to_string(),
+                    "s317".to_string(),
+                    "s322".to_string(),
+                ],
+                expected_all_drop_ops: vec![
+                    "s349".to_string(),
+                    "s421".to_string(),
+                    "s355".to_string(),
+                    "s315".to_string(),
+                    "s354".to_string(),
+                    "s327".to_string(),
+                    "s339".to_string(),
+                    "s296".to_string(),
+                    "s320".to_string(),
+                    "s340".to_string(),
+                    "s330".to_string(),
+                    "s321".to_string(),
+                    "s318".to_string(),
+                    "s323".to_string(),
+                    "s295".to_string(),
+                    "s273".to_string(),
+                    "s317".to_string(),
+                    "s322".to_string(),
+                ],
+                expected_user_drop_ops: vec![],
+                expected_all_create_ops: vec![
+                    "s322".to_string(),
+                    "s317".to_string(),
+                    "s273".to_string(),
+                    "s295".to_string(),
+                    "s323".to_string(),
+                    "s318".to_string(),
+                    "s321".to_string(),
+                    "s330".to_string(),
+                    "s340".to_string(),
+                    "s320".to_string(),
+                    "s296".to_string(),
+                    "s339".to_string(),
+                    "s327".to_string(),
+                    "s354".to_string(),
+                    "s315".to_string(),
+                    "s355".to_string(),
+                    "s421".to_string(),
+                    "s349".to_string(),
+                ],
+                expected_user_create_ops: vec![],
+                expected_migrated_system_object_mappings: vec![
+                    "s322".to_string(),
+                    "s317".to_string(),
+                    "s273".to_string(),
+                    "s295".to_string(),
+                    "s323".to_string(),
+                    "s318".to_string(),
+                    "s321".to_string(),
+                    "s330".to_string(),
+                    "s340".to_string(),
+                    "s320".to_string(),
+                    "s296".to_string(),
+                    "s339".to_string(),
+                    "s327".to_string(),
+                    "s354".to_string(),
+                    "s315".to_string(),
+                    "s355".to_string(),
+                    "s421".to_string(),
+                    "s349".to_string(),
+                ],
             },
             BuiltinMigrationTestCase {
                 test_name: "system_child_migrations",
@@ -6648,10 +6887,12 @@ mod tests {
             let mut catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
 
             let mut id_mapping = HashMap::new();
+            let mut name_mapping = HashMap::new();
             for entry in test_case.initial_state {
                 let (name, namespace, item) = entry.to_catalog_item(&id_mapping);
                 let id = add_item(&mut catalog, name.clone(), item, namespace).await;
-                id_mapping.insert(name, id);
+                id_mapping.insert(name.clone(), id);
+                name_mapping.insert(id, name);
             }
 
             let migrated_ids = test_case
@@ -6670,35 +6911,35 @@ mod tests {
                 .await?;
 
             assert_eq!(
-                migration_metadata.previous_sink_ids,
-                convert_name_vec_to_id_vec(test_case.expected_previous_sink_names, &id_mapping),
+                convert_id_vec_to_name_vec(migration_metadata.previous_sink_ids, &name_mapping),
+                test_case.expected_previous_sink_names,
                 "{} test failed with wrong previous sink ids",
                 test_case.test_name
             );
             assert_eq!(
-                migration_metadata.previous_materialized_view_ids,
-                convert_name_vec_to_id_vec(
-                    test_case.expected_previous_materialized_view_names,
-                    &id_mapping
+                convert_id_vec_to_name_vec(
+                    migration_metadata.previous_materialized_view_ids,
+                    &name_mapping
                 ),
+                test_case.expected_previous_materialized_view_names,
                 "{} test failed with wrong previous materialized view ids",
                 test_case.test_name
             );
             assert_eq!(
-                migration_metadata.previous_source_ids,
-                convert_name_vec_to_id_vec(test_case.expected_previous_source_names, &id_mapping),
+                convert_id_vec_to_name_vec(migration_metadata.previous_source_ids, &name_mapping),
+                test_case.expected_previous_source_names,
                 "{} test failed with wrong previous source ids",
                 test_case.test_name
             );
             assert_eq!(
-                migration_metadata.all_drop_ops,
-                convert_name_vec_to_id_vec(test_case.expected_all_drop_ops, &id_mapping),
+                convert_id_vec_to_name_vec(migration_metadata.all_drop_ops, &name_mapping),
+                test_case.expected_all_drop_ops,
                 "{} test failed with wrong all drop ops",
                 test_case.test_name
             );
             assert_eq!(
-                migration_metadata.user_drop_ops,
-                convert_name_vec_to_id_vec(test_case.expected_user_drop_ops, &id_mapping),
+                convert_id_vec_to_name_vec(migration_metadata.user_drop_ops, &name_mapping),
+                test_case.expected_user_drop_ops,
                 "{} test failed with wrong user drop ops",
                 test_case.test_name
             );
@@ -6725,15 +6966,13 @@ mod tests {
             assert_eq!(
                 migration_metadata
                     .migrated_system_object_mappings
-                    .keys()
-                    .cloned()
+                    .values()
+                    .map(|mapping| mapping.object_name.clone())
                     .collect::<HashSet<_>>(),
-                convert_name_vec_to_id_vec(
-                    test_case.expected_migrated_system_object_mappings,
-                    &id_mapping
-                )
-                .into_iter()
-                .collect::<HashSet<_>>(),
+                test_case
+                    .expected_migrated_system_object_mappings
+                    .into_iter()
+                    .collect::<HashSet<_>>(),
                 "{} test failed with wrong migrated system object mappings",
                 test_case.test_name
             );
