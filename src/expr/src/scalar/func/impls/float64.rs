@@ -446,13 +446,13 @@ sqlfunc!(
             // nanosecond precision, here we round to the nearest microsecond because
             // f64s lose quite a bit of accuracy in the nanosecond digits when dealing
             // with common Unix timestamp values (> 1 billion).
-            let mut nanosecs = (((f.fract() * 1_000_000.0).round()) * 1_000.0) as i32;
+            let mut nanosecs = (((f.fract() * 1_000_000.0).round()) * 1_000.0) as i64;
             if nanosecs < 0 {
-                secs -= 1;
-                nanosecs = 1_000_000_000 + nanosecs;
+                secs = secs.checked_sub(1)?;
+                nanosecs = 1_000_000_000_i64.checked_add(nanosecs)?;
             }
             assert!(nanosecs >= 0);
-            let nanosecs = nanosecs as u32;
+            let nanosecs = u32::try_from(nanosecs).ok()?;
             match NaiveDateTime::from_timestamp_opt(secs, nanosecs) {
                 Some(ts) => {
                     let dt = DateTime::<Utc>::from_utc(ts, Utc);
