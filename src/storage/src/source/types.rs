@@ -167,6 +167,12 @@ pub enum NextMessage<Key, Value, Diff> {
     Finished,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HealthStatusUpdate {
+    pub update: HealthStatus,
+    pub should_halt: bool,
+}
+
 /// A wrapper around [`SourceMessage`] that allows [`SourceReader`]'s to
 /// communicate additional "maintenance" messages.
 #[derive(Debug)]
@@ -186,7 +192,7 @@ pub enum SourceMessageType<Key, Value, Diff> {
         Diff,
     ),
     /// Information about the source status
-    SourceStatus(HealthStatus),
+    SourceStatus(HealthStatusUpdate),
     /// Signals that this [`SourceReader`] instance will never emit
     /// messages/updates for a given partition anymore. This is similar enough
     /// to a timely operator dropping a capability, hence the naming.
@@ -194,6 +200,15 @@ pub enum SourceMessageType<Key, Value, Diff> {
     /// We need these to compute a "global" source upper, when determining
     /// completeness of a timestamp.
     DropPartitionCapabilities(Vec<PartitionId>),
+}
+
+impl<Key, Value, Diff> SourceMessageType<Key, Value, Diff> {
+    pub fn status(update: HealthStatus) -> Self {
+        SourceMessageType::SourceStatus(HealthStatusUpdate {
+            update,
+            should_halt: false,
+        })
+    }
 }
 
 /// Source-agnostic wrapper for messages. Each source must implement a
