@@ -299,6 +299,9 @@ impl HirRelationExpr {
                     })
                 }
                 LetRec { bindings, body } => {
+                    // We use the outer type with the HIR types to form MIR CTE types.
+                    let outer_column_types = get_outer.typ().column_types;
+
                     // Rename and introduce all bindings.
                     let mut shadowed_bindings = Vec::with_capacity(bindings.len());
                     let mut mir_ids = Vec::with_capacity(bindings.len());
@@ -309,7 +312,13 @@ impl HirRelationExpr {
                             id.clone(),
                             CteDesc {
                                 new_id: mir_id,
-                                relation_type: typ.clone(),
+                                relation_type: RelationType::new(
+                                    outer_column_types
+                                        .iter()
+                                        .cloned()
+                                        .chain(typ.column_types.iter().cloned())
+                                        .collect::<Vec<_>>(),
+                                ),
                                 outer_relation: get_outer.clone(),
                             },
                         );
