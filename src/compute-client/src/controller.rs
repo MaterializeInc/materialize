@@ -40,7 +40,7 @@ use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
-use futures::{future, FutureExt, StreamExt};
+use futures::{future, FutureExt};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
@@ -50,8 +50,8 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_expr::RowSetFinishing;
 use mz_orchestrator::{CpuLimit, MemoryLimit, NamespacedOrchestrator, ServiceProcessMetrics};
+use mz_ore::halt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{halt, soft_assert};
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
@@ -67,6 +67,7 @@ use self::error::{
 };
 use self::instance::{ActiveInstance, Instance};
 use self::orchestrator::ComputeOrchestrator;
+use self::replica::ReplicaResponse;
 
 mod instance;
 mod orchestrator;
@@ -276,8 +277,6 @@ pub struct ComputeController<T> {
     replica_metrics: BTreeMap<ReplicaId, Vec<ServiceProcessMetrics>>,
     /// A number that increases on every `environmentd` restart.
     envd_epoch: NonZeroI64,
-    replica_metrics_streams:
-        BTreeMap<ReplicaId, BoxStream<'static, Result<Vec<ServiceProcessMetrics>, anyhow::Error>>>,
 }
 
 impl<T> ComputeController<T> {
@@ -300,7 +299,6 @@ impl<T> ComputeController<T> {
             initialized: false,
             stashed_response: None,
             replica_heartbeats: BTreeMap::new(),
-            replica_metrics_streams: BTreeMap::new(),
             replica_metrics: BTreeMap::new(),
             envd_epoch,
         }
@@ -480,26 +478,14 @@ where
             .instances
             .iter_mut()
             .map(|(id, instance)| Box::pin(instance.recv().map(|result| (*id, result))));
-        let metrics = self
-            .replica_metrics_streams
-            .iter_mut()
-            .map(|(id, s)| s.next().map(|result| (*id, result)));
-        tokio::select! {
-            ((instance_id, result), _index, _remaining) = future::select_all(receives) => {
-                if let Ok((replica_id, resp)) = result {
-                    self.replica_heartbeats.insert(replica_id, Utc::now());
-                    self.stashed_response = Some((instance_id, replica_id, resp));
-                } else {
-                    // There is nothing to do here. `recv` has already added the failed replica to
-                    // `instance.failed_replicas`, so it will be rehydrated in the next call to
-                    // `ActiveComputeController::process`.
-                }
+
+        let ((instance_id, result), _index, _remaining) = future::select_all(receives).await;
+        match result {
+            Ok((replica_id, ReplicaResponse::ComputeResponse(resp))) => {
+                self.replica_heartbeats.insert(replica_id, Utc::now());
+                self.stashed_response = Some((instance_id, replica_id, resp));
             }
-            ((replica_id, result), _index, _remaining) = future::select_all(metrics) => {
-                let Some(result) = result else {
-                    // Nothing to do here, the stream is closed
-                    return;
-                };
+            Ok((replica_id, ReplicaResponse::MetricsUpdate(result))) => {
                 let metrics = match result {
                     Ok(metrics) => metrics,
                     Err(e) => {
@@ -509,43 +495,17 @@ where
                 };
                 self.replica_metrics.insert(replica_id, metrics);
             }
+            Err(_) => {
+                // There is nothing to do here. `recv` has already added the failed replica to
+                // `instance.failed_replicas`, so it will be rehydrated in the next call to
+                // `ActiveComputeController::process`.
+            }
         }
     }
 
     /// Listen for changes to compute services reported by the orchestrator.
     pub fn watch_services(&self) -> BoxStream<'static, ComputeInstanceEvent> {
         self.orchestrator.watch_services()
-    }
-
-    pub fn start_metrics_collection(
-        &mut self,
-        instance_id: ComputeInstanceId,
-        replica_id: ReplicaId,
-    ) {
-        const METRICS_INTERVAL: Duration = Duration::from_secs(10);
-
-        let orchestrator = self.orchestrator.clone();
-        // TODO[btv] -- I tried implementing a `watch_metrics` function,
-        // similar to `watch_services`, but it crashed due to
-        // https://github.com/kube-rs/kube/issues/1092 .
-        //
-        // If `metrics-server` can be made to fill in `resourceVersion`,
-        // or if that bug is fixed, we can try that again rather than using this inelegant
-        // loop.
-        let s = async_stream::stream! {
-            let mut interval = tokio::time::interval(METRICS_INTERVAL);
-            loop {
-                interval.tick().await;
-                yield orchestrator.fetch_replica_metrics(instance_id, replica_id).await;
-            }
-        };
-
-        self.replica_metrics_streams.insert(replica_id, s.boxed());
-    }
-
-    pub fn stop_metrics_collection(&mut self, replica_id: ReplicaId) {
-        let old = self.replica_metrics_streams.remove(&replica_id);
-        soft_assert!(old.is_some());
     }
 }
 
@@ -613,9 +573,6 @@ where
             sink_logs,
         };
 
-        self.compute
-            .start_metrics_collection(instance_id, replica_id);
-
         self.instance(instance_id)?
             .add_replica(replica_id, config.location, logging_config)?;
         Ok(())
@@ -627,7 +584,6 @@ where
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
     ) -> Result<(), ReplicaDropError> {
-        self.compute.stop_metrics_collection(replica_id);
         self.instance(instance_id)?.remove_replica(replica_id)?;
         Ok(())
     }

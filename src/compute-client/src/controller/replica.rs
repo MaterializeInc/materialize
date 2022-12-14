@@ -13,7 +13,10 @@ use std::time::Duration;
 
 use anyhow::bail;
 use differential_dataflow::lattice::Lattice;
+use futures::stream::BoxStream;
+use futures::stream::StreamExt;
 use futures::TryFutureExt;
+use mz_orchestrator::ServiceProcessMetrics;
 use timely::progress::Timestamp;
 use tokio::select;
 use tokio::sync::mpsc::error::SendError;
@@ -32,6 +35,13 @@ use crate::service::{ComputeClient, ComputeGrpcClient};
 use super::orchestrator::ComputeOrchestrator;
 use super::{ComputeInstanceId, ComputeReplicaLocation, ReplicaId};
 
+/// A response from a replica to the controller
+#[derive(Debug)]
+pub(crate) enum ReplicaResponse<T> {
+    ComputeResponse(ComputeResponse<T>),
+    MetricsUpdate(Result<Vec<ServiceProcessMetrics>, anyhow::Error>),
+}
+
 /// State for a single replica.
 #[derive(Debug)]
 pub(super) struct Replica<T> {
@@ -44,7 +54,7 @@ pub(super) struct Replica<T> {
     ///
     /// If receiving from the channel returns `None`, the replica has failed
     /// and requires rehydration.
-    response_rx: UnboundedReceiver<ComputeResponse<T>>,
+    response_rx: UnboundedReceiver<ReplicaResponse<T>>,
     /// Location of the replica
     pub location: ComputeReplicaLocation,
     /// The logging config specific to this replica.
@@ -72,6 +82,7 @@ where
         // the replica.
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
+
         let replica_task = mz_ore::task::spawn(
             || format!("active-replication-replica-{id}"),
             ReplicaTask {
@@ -108,7 +119,7 @@ where
     /// Receives the next response from this replica.
     ///
     /// This method is cancellation safe.
-    pub(super) async fn recv(&mut self) -> Option<ComputeResponse<T>> {
+    pub(super) async fn recv(&mut self) -> Option<ReplicaResponse<T>> {
         self.response_rx.recv().await
     }
 }
@@ -128,12 +139,36 @@ struct ReplicaTask<T> {
     /// A channel upon which commands intended for the replica are delivered.
     command_rx: UnboundedReceiver<ComputeCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
-    response_tx: UnboundedSender<ComputeResponse<T>>,
+    response_tx: UnboundedSender<ReplicaResponse<T>>,
     /// Orchestrator responsible for setting up computeds
     orchestrator: ComputeOrchestrator,
     /// A number (technically, pair of numbers) identifying this incarnation of the replica.
     /// The semantics of this don't matter, except that it must strictly increase.
     epoch: ComputeStartupEpoch,
+}
+
+fn metrics_stream(
+    orchestrator: ComputeOrchestrator,
+    instance_id: ComputeInstanceId,
+    replica_id: ReplicaId,
+) -> BoxStream<'static, Result<Vec<ServiceProcessMetrics>, anyhow::Error>> {
+    const METRICS_INTERVAL: Duration = Duration::from_secs(10);
+
+    // TODO[btv] -- I tried implementing a `watch_metrics` function,
+    // similar to `watch_services`, but it crashed due to
+    // https://github.com/kube-rs/kube/issues/1092 .
+    //
+    // If `metrics-server` can be made to fill in `resourceVersion`,
+    // or if that bug is fixed, we can try that again rather than using this inelegant
+    // loop.
+    let s = async_stream::stream! {
+        let mut interval = tokio::time::interval(METRICS_INTERVAL);
+        loop {
+            interval.tick().await;
+            yield orchestrator.fetch_replica_metrics(instance_id, replica_id).await;
+        }
+    };
+    s.boxed()
 }
 
 impl<T> ReplicaTask<T>
@@ -165,6 +200,8 @@ where
                     comm_config,
                     epoch,
                 };
+                let metrics = metrics_stream(orchestrator.clone(), instance_id, replica_id);
+
                 run_message_loop(
                     replica_id,
                     command_rx,
@@ -172,6 +209,7 @@ where
                     build_info,
                     addrs,
                     cmd_spec,
+                    metrics,
                 )
             })
             .await;
@@ -194,10 +232,11 @@ where
 async fn run_message_loop<T>(
     replica_id: ReplicaId,
     mut command_rx: UnboundedReceiver<ComputeCommand<T>>,
-    response_tx: UnboundedSender<ComputeResponse<T>>,
+    response_tx: UnboundedSender<ReplicaResponse<T>>,
     build_info: &BuildInfo,
     addrs: Vec<String>,
     cmd_spec: CommandSpecialization,
+    mut metrics: BoxStream<'static, Result<Vec<ServiceProcessMetrics>, anyhow::Error>>,
 ) -> Result<(), anyhow::Error>
 where
     T: Timestamp + Lattice,
@@ -248,7 +287,14 @@ where
                     None => bail!("replica unexpectedly gracefully terminated connection"),
                     Some(response) => response,
                 };
-                response_tx.send(response)?;
+                response_tx.send(ReplicaResponse::ComputeResponse(response))?;
+            }
+            metrics_result = metrics.next() => {
+                let Some(metrics_result) = metrics_result else {
+                    tracing::error!("Metrics stream unexpectedly terminated");
+                    continue;
+                };
+                response_tx.send(ReplicaResponse::MetricsUpdate(metrics_result))?;
             }
         }
     }
