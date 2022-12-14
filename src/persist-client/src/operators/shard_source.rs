@@ -18,6 +18,7 @@ use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::ShutdownButton;
 use differential_dataflow::Hashable;
 use futures::StreamExt;
 use mz_ore::cast::CastFrom;
@@ -109,7 +110,7 @@ where
     ) = mpsc::unbounded_channel();
 
     let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
-    let (descs, token) = shard_source_descs::<K, V, D, G>(
+    let (descs, descs_shutdown) = shard_source_descs::<K, V, D, G>(
         scope,
         name,
         Arc::clone(&clients),
@@ -122,9 +123,14 @@ where
         consumed_part_rx,
         chosen_worker,
     );
-    let (parts, tokens) = shard_source_fetch(&descs, name, clients, location, shard_id);
+    let (parts, tokens, fetch_shutdown) =
+        shard_source_fetch(&descs, name, clients, location, shard_id);
     shard_source_tokens(&tokens, name, consumed_part_tx, chosen_worker);
 
+    let token = Rc::new((
+        descs_shutdown.press_on_drop(),
+        fetch_shutdown.press_on_drop(),
+    ));
     (parts, token)
 }
 
@@ -145,7 +151,7 @@ pub(crate) fn shard_source_descs<K, V, D, G>(
     flow_control_max_inflight_bytes: usize,
     mut consumed_part_rx: mpsc::UnboundedReceiver<SerdeLeasedBatchPart>,
     chosen_worker: usize,
-) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, Rc<dyn Any>)
+) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, ShutdownButton<()>)
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -156,18 +162,6 @@ where
 {
     let worker_index = scope.index();
     let num_workers = scope.peers();
-
-    // We want our async task to notice if we have dropped the token, as we may have reported
-    // the dataflow complete and advanced the read frontier of the persist collection, making
-    // it unsafe to attempt to open a subscription at `as_of`, leading to a crash. This token
-    // reveals whether we are still live to the async stream.
-    let handle_creation_token = Arc::new(());
-    let weak_handle_token = Arc::downgrade(&handle_creation_token);
-
-    // This channel functions as a token that can be awaited. We never send a message on this
-    // channel, but we rely on the drop behavior. If the transmitter is dropped the receiver will
-    // return an error. Before the drop occurs the receiver will never return from await.
-    let (drop_tx, drop_rx) = tokio::sync::oneshot::channel::<()>();
 
     // This is a generator that sets up an async `Stream` that can be continuously polled to get the
     // values that are `yield`-ed from it's body.
@@ -186,29 +180,14 @@ where
             let mut persist_clients = clients.lock().await;
             persist_clients.open(location).await
         };
-
-        // This is a moment where we may have dropped our source if our token
-        // has been dropped, but if we still hold it we should be good to go.
-        if weak_handle_token.upgrade().is_none() {
-            return;
-        }
-
         let read = read
             .expect("location should be valid")
             .open_leased_reader::<K, V, G::Timestamp, D>(
                 shard_id,
                 &format!("shard_source({})", name_owned),
             )
-            .await;
-
-        // This is a moment where we may have dropped our source if our token
-        // has been dropped, but if we still hold it we should be good to go.
-        if weak_handle_token.upgrade().is_none() {
-            return;
-        }
-
-        let read = read.expect("could not open persist shard");
-
+            .await
+            .expect("could not open persist shard");
         let as_of = as_of.unwrap_or_else(|| read.since().clone());
 
         // Eagerly yield the initial as_of. This makes sure that the output
@@ -225,24 +204,7 @@ where
         // `as_of`.
         yield (Vec::new(), as_of.clone(), 0);
 
-        // Always poll drop_rx first. drop_rx returns only if drop_tx has been dropped.
-        // In this case, we deliberately do not continue on the subscribe. but terminate this task
-        let subscription = tokio::select! {
-            biased;
-            _ = drop_rx => None,
-            x = read.subscribe(as_of.clone()) => Some(x),
-        };
-
-        // This is a moment where we may have let persist compact if our token
-        // has been dropped, but if we still hold it we should be good to go.
-        if weak_handle_token.upgrade().is_none() {
-            return;
-        }
-
-        // We get here only when the token is still present, hence the subscription select
-        // must have returned from the subscribe and hence we can be sure that subscription
-        // is Some.
-        let subscription = subscription.unwrap();
+        let subscription = read.subscribe(as_of.clone()).await;
 
         let mut subscription = subscription.unwrap_or_else(|e| {
             panic!(
@@ -395,11 +357,7 @@ where
         }
     });
 
-    let last_token = Rc::new(shutdown_button.press_on_drop());
-    let token = Rc::clone(&last_token);
-    let token = Rc::new((token, handle_creation_token, drop_tx));
-
-    (descs_stream, token)
+    (descs_stream, shutdown_button)
 }
 
 pub(crate) fn shard_source_fetch<K, V, T, D, G>(
@@ -411,6 +369,7 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
 ) -> (
     Stream<G, FetchedPart<K, V, T, D>>,
     Stream<G, SerdeLeasedBatchPart>,
+    ShutdownButton<()>,
 )
 where
     K: Debug + Codec,
@@ -428,7 +387,7 @@ where
     let (mut fetched_output, fetched_stream) = builder.new_output();
     let (mut tokens_output, tokens_stream) = builder.new_output();
 
-    builder.build(move |_capabilities| async move {
+    let shutdown_button = builder.build(move |_capabilities| async move {
         let fetcher = {
             let mut clients = clients.lock().await;
 
@@ -474,7 +433,7 @@ where
         }
     });
 
-    (fetched_stream, tokens_stream)
+    (fetched_stream, tokens_stream, shutdown_button)
 }
 
 pub(crate) fn shard_source_tokens<T, G>(
