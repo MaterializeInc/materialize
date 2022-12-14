@@ -1576,7 +1576,7 @@ struct SelectPlan {
 
 generate_extracted_config!(SelectOption, (ExpectedGroupSize, u64));
 
-/// Plans a SELECT query with an intrusive ORDER BY clause.
+/// Plans a SELECT query. The SELECT query may contain an intrusive ORDER BY clause.
 ///
 /// Normally, the ORDER BY clause occurs after the columns specified in the
 /// SELECT list have been projected. In a query like
@@ -1593,9 +1593,6 @@ generate_extracted_config!(SelectOption, (ExpectedGroupSize, u64));
 ///
 /// where expressions in the ORDER BY clause can refer to *both* input columns
 /// and output columns.
-///
-/// This function handles queries of the latter class. For queries of the
-/// former class, see `plan_view_select`.
 fn plan_view_select(
     qcx: &QueryContext,
     mut s: Select<Aug>,
