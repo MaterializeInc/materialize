@@ -882,6 +882,9 @@ class ServiceConfig(TypedDict, total=False):
     working_dir: str
     """Overrides the container's working directory."""
 
+    restart: str
+    """Defines the policy that the platform will apply on container termination.."""
+
 
 class Service:
     """A Docker Compose service in a `Composition`.
