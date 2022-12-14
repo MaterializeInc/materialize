@@ -40,7 +40,7 @@ use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::Mutex;
 use tokio_stream::{StreamExt, StreamMap};
-use tracing::debug;
+use tracing::{debug, info};
 
 use mz_build_info::BuildInfo;
 use mz_orchestrator::NamespacedOrchestrator;
@@ -1758,6 +1758,113 @@ where
         let updates = vec![(row_buf.clone(), 1)];
 
         self.append_to_managed_collection(id, updates).await;
+    }
+
+    /// Updates the `DurableCollectionMetadata` associated with `id` to
+    /// `new_metadata`.
+    ///
+    /// Any shards changed between the old and the new version will be
+    /// decommissioned/eventually deleted.
+    async fn rewrite_collection_metadata(
+        &mut self,
+        id: GlobalId,
+        new_metadata: DurableCollectionMetadata,
+    ) {
+        let current_metadata = METADATA_COLLECTION
+            .peek_key_one(&mut self.state.stash, &id)
+            .await
+            .expect("connect to stash");
+
+        let to_delete_shards = match current_metadata {
+            None => {
+                // If this ID has not yet been written, nothing to update.
+                return;
+            }
+            Some(metadata) => {
+                if metadata == new_metadata {
+                    return;
+                }
+
+                let mut to_delete_shards = vec![];
+                for (old, new, desc) in [
+                    (metadata.data_shard, new_metadata.data_shard, "data"),
+                    (metadata.remap_shard, new_metadata.remap_shard, "remap"),
+                ] {
+                    if old != new {
+                        info!(
+                            "replacing {:?}'s {} shard {:?} with {:?}",
+                            id, desc, old, new
+                        );
+                        to_delete_shards
+                            .push((old, format!("retired {} shard for {:?}", desc, id)));
+                    }
+                }
+
+                to_delete_shards
+            }
+        };
+
+        // Perform the update.
+        METADATA_COLLECTION
+            .upsert(&mut self.state.stash, vec![(id, new_metadata.clone())])
+            .await
+            .expect("connect to stash");
+
+        // ???: If we crash after this do we have any means of reaping the
+        // leaked shards?
+
+        self.truncate_shards(&to_delete_shards).await;
+
+        let DurableCollectionMetadata {
+            remap_shard,
+            data_shard,
+        } = new_metadata;
+
+        // Update in memory collection metadata.
+        let metadata = self
+            .state
+            .collections
+            .get_mut(&id)
+            .expect("id {:?} must exist");
+        metadata.collection_metadata.data_shard = data_shard;
+        metadata.collection_metadata.remap_shard = remap_shard;
+    }
+
+    async fn truncate_shards(&mut self, shards: &[(ShardId, String)]) {
+        // Open a persist client to delete unused shards.
+        let persist_client = self
+            .persist
+            .lock()
+            .await
+            .open(self.persist_location.clone())
+            .await
+            .unwrap();
+
+        for (shard_id, shard_purpose) in shards {
+            let (mut write, mut read) = persist_client
+                .open::<crate::types::sources::SourceData, (), T, Diff>(
+                    *shard_id,
+                    shard_purpose.as_str(),
+                )
+                .await
+                .expect("invalid persist usage");
+
+            read.downgrade_since(&Antichain::new()).await;
+            write
+                .append(
+                    Vec::<((crate::types::sources::SourceData, ()), T, Diff)>::new(),
+                    write.upper().clone(),
+                    Antichain::new(),
+                )
+                .await
+                .expect("failed to connect")
+                .expect("failed to truncate write handle");
+
+            info!(
+                "successfully truncated shard's write handle for {:?}",
+                shard_id
+            );
+        }
     }
 }
 
