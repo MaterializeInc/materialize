@@ -11,6 +11,7 @@ import argparse
 import os
 import sys
 import time
+import uuid
 from textwrap import dedent
 from typing import List, Type
 
@@ -117,7 +118,7 @@ def run_one_scenario(
             image=f"materialize/materialized:{tag}" if tag else None,
             default_size=size,
             # Avoid clashes with the Kafka sink progress topic across restarts
-            environment_id=str(time.time()),
+            environment_id=f"local-az1-{uuid.uuid4()}-0",
         )
 
         with c.override(mz):
