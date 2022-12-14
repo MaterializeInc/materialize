@@ -707,7 +707,7 @@ where
         let new_reader_id = LeasedReaderId::new();
         let mut machine = self.machine.clone();
         let heartbeat_ts = (self.cfg.now)();
-        let reader_state = machine
+        let (reader_state, _maintenance) = machine
             .register_leased_reader(
                 &new_reader_id,
                 purpose,

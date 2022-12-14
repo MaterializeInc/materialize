@@ -534,7 +534,7 @@ impl PersistClient {
 
         let reader_id = LeasedReaderId::new();
         let heartbeat_ts = (self.cfg.now)();
-        let reader_state = machine
+        let (reader_state, maintenance) = machine
             .register_leased_reader(
                 &reader_id,
                 purpose,
@@ -542,6 +542,7 @@ impl PersistClient {
                 heartbeat_ts,
             )
             .await;
+        maintenance.start_performing(&machine, &gc);
         let reader = ReadHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),

@@ -178,9 +178,9 @@ where
         purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
-    ) -> LeasedReaderState<T> {
+    ) -> (LeasedReaderState<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
-        let (_seqno, reader_state, _maintenance) = self
+        let (_seqno, reader_state, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, cfg, state| {
                 state.register_leased_reader(
                     &cfg.hostname,
@@ -206,7 +206,7 @@ where
             reader_state.seqno,
             self.state.seqno_since()
         );
-        reader_state
+        (reader_state, maintenance)
     }
 
     pub async fn register_critical_reader<O: Opaque + Codec64>(
@@ -1664,7 +1664,7 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let reader_id = args.expect("reader_id");
-        let reader_state = datadriven
+        let (reader_state, maintenance) = datadriven
             .machine
             .register_leased_reader(
                 &reader_id,
@@ -1673,6 +1673,7 @@ pub mod datadriven {
                 (datadriven.client.cfg.now)(),
             )
             .await;
+        datadriven.routine.push(maintenance);
         Ok(format!(
             "{} {:?}\n",
             datadriven.machine.seqno(),
