@@ -1495,7 +1495,7 @@ FROM mz_sources
 LEFT JOIN latest_events ON mz_sources.id = latest_events.source_id
 WHERE
     -- This is a convenient way to filter out system sources, like the status_history table itself.
-    mz_sources.size IS NOT NULL",
+    mz_sources.id NOT LIKE 's%' and mz_sources.type != 'subsource'",
 };
 
 pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -1549,7 +1549,7 @@ FROM mz_sinks
 LEFT JOIN latest_events ON mz_sinks.id = latest_events.sink_id
 WHERE
     -- This is a convenient way to filter out system sinks, like the status_history table itself.
-    mz_sinks.size IS NOT NULL",
+    mz_sinks.id NOT LIKE 's%'",
 };
 
 pub const MZ_SINK_STATUSES: BuiltinView = BuiltinView {
