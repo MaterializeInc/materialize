@@ -1472,6 +1472,8 @@ where
     // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
+
+    Self: StorageController<Timestamp = T>,
 {
     /// Create a new storage controller from a client it should wrap.
     pub async fn new(
@@ -1505,18 +1507,7 @@ where
             persist: persist_clients,
         }
     }
-}
 
-impl<T> Controller<T>
-where
-    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
-
-    // Required to setup grpc clients for new storaged instances.
-    StorageCommand<T>: RustType<ProtoStorageCommand>,
-    StorageResponse<T>: RustType<ProtoStorageResponse>,
-
-    Self: StorageController<Timestamp = T>,
-{
     /// Validate that a collection exists for all identifiers, and error if any do not.
     fn validate_collection_ids(
         &self,
@@ -1595,83 +1586,7 @@ where
 
         Ok(update)
     }
-}
 
-/// State maintained about individual collections.
-#[derive(Debug)]
-pub struct CollectionState<T> {
-    /// Description with which the collection was created
-    pub description: CollectionDescription<T>,
-
-    /// Accumulation of read capabilities for the collection.
-    ///
-    /// This accumulation will always contain `self.implied_capability`, but may also contain
-    /// capabilities held by others who have read dependencies on this collection.
-    pub read_capabilities: MutableAntichain<T>,
-    /// The implicit capability associated with collection creation.  This should never be less
-    /// than the since of the associated persist collection.
-    pub implied_capability: Antichain<T>,
-    /// The policy to use to downgrade `self.implied_capability`.
-    pub read_policy: ReadPolicy<T>,
-
-    /// Reported write frontier.
-    pub write_frontier: Antichain<T>,
-
-    pub collection_metadata: CollectionMetadata,
-}
-
-impl<T: Timestamp> CollectionState<T> {
-    /// Creates a new collection state, with an initial read policy valid from `since`.
-    pub fn new(
-        description: CollectionDescription<T>,
-        since: Antichain<T>,
-        write_frontier: Antichain<T>,
-        metadata: CollectionMetadata,
-    ) -> Self {
-        let mut read_capabilities = MutableAntichain::new();
-        read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
-        Self {
-            description,
-            read_capabilities,
-            implied_capability: since.clone(),
-            read_policy: ReadPolicy::ValidFrom(since),
-            write_frontier,
-            collection_metadata: metadata,
-        }
-    }
-}
-
-/// State maintained about individual exports.
-#[derive(Debug)]
-pub struct ExportState<T> {
-    /// Description with which the export was created
-    pub description: ExportDescription<T>,
-
-    /// Reported write frontier.
-    pub write_frontier: Antichain<T>,
-}
-impl<T: Timestamp> ExportState<T> {
-    fn new(description: ExportDescription<T>) -> Self {
-        Self {
-            description,
-            write_frontier: Antichain::from_elem(Timestamp::minimum()),
-        }
-    }
-    fn from(&self) -> GlobalId {
-        self.description.sink.from
-    }
-}
-
-impl<T> Controller<T>
-where
-    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
-
-    // Required to setup grpc clients for new storaged instances.
-    StorageCommand<T>: RustType<ProtoStorageCommand>,
-    StorageResponse<T>: RustType<ProtoStorageResponse>,
-
-    Self: StorageController<Timestamp = T>,
-{
     /// Effectively truncates the `data_shard` associated with `global_id`
     /// effective as of the system time.
     ///
@@ -1776,6 +1691,71 @@ where
         let updates = vec![(row_buf.clone(), 1)];
 
         self.append_to_managed_collection(id, updates).await;
+    }
+}
+
+/// State maintained about individual collections.
+#[derive(Debug)]
+pub struct CollectionState<T> {
+    /// Description with which the collection was created
+    pub description: CollectionDescription<T>,
+
+    /// Accumulation of read capabilities for the collection.
+    ///
+    /// This accumulation will always contain `self.implied_capability`, but may also contain
+    /// capabilities held by others who have read dependencies on this collection.
+    pub read_capabilities: MutableAntichain<T>,
+    /// The implicit capability associated with collection creation.  This should never be less
+    /// than the since of the associated persist collection.
+    pub implied_capability: Antichain<T>,
+    /// The policy to use to downgrade `self.implied_capability`.
+    pub read_policy: ReadPolicy<T>,
+
+    /// Reported write frontier.
+    pub write_frontier: Antichain<T>,
+
+    pub collection_metadata: CollectionMetadata,
+}
+
+impl<T: Timestamp> CollectionState<T> {
+    /// Creates a new collection state, with an initial read policy valid from `since`.
+    pub fn new(
+        description: CollectionDescription<T>,
+        since: Antichain<T>,
+        write_frontier: Antichain<T>,
+        metadata: CollectionMetadata,
+    ) -> Self {
+        let mut read_capabilities = MutableAntichain::new();
+        read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
+        Self {
+            description,
+            read_capabilities,
+            implied_capability: since.clone(),
+            read_policy: ReadPolicy::ValidFrom(since),
+            write_frontier,
+            collection_metadata: metadata,
+        }
+    }
+}
+
+/// State maintained about individual exports.
+#[derive(Debug)]
+pub struct ExportState<T> {
+    /// Description with which the export was created
+    pub description: ExportDescription<T>,
+
+    /// Reported write frontier.
+    pub write_frontier: Antichain<T>,
+}
+impl<T: Timestamp> ExportState<T> {
+    fn new(description: ExportDescription<T>) -> Self {
+        Self {
+            description,
+            write_frontier: Antichain::from_elem(Timestamp::minimum()),
+        }
+    }
+    fn from(&self) -> GlobalId {
+        self.description.sink.from
     }
 }
 
