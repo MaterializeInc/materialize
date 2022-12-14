@@ -103,7 +103,7 @@ class KafkaDisruption:
             dedent(
                 f"""
                 > SELECT status, error ~* '{error}'
-                  FROM mz_internal.mz_source_status
+                  FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 stalled true
 
@@ -131,12 +131,12 @@ class KafkaDisruption:
                 2
 
                 > SELECT status, error
-                  FROM mz_internal.mz_source_status
+                  FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 running <null>
 
                 > SELECT status, error
-                  FROM mz_internal.mz_sink_status
+                  FROM mz_internal.mz_sink_statuses
                   WHERE name = 'sink1'
                 running <null>
                 """
@@ -233,7 +233,7 @@ class PgDisruption:
                 INSERT INTO t1 VALUES (3);
 
                 > SELECT status, error
-                  FROM mz_internal.mz_source_status
+                  FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 running <null>
 
@@ -312,7 +312,7 @@ disruptions: List[Disruption] = [
 
 def workflow_default(c: Composition) -> None:
     """Test the detection and reporting of source/sink errors by
-    introducing a Disruption and then checking the mz_internal.mz_*_status tables
+    introducing a Disruption and then checking the mz_internal.mz_*_statuses tables
     """
 
     for id, disruption in enumerate(disruptions):
