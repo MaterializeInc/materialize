@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::any::Any;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
@@ -25,8 +24,6 @@ pub struct Client {
     inner: reqwest::Client,
     url: Url,
     auth: Option<Auth>,
-    /// Opaque tokens to cleanup resources associated with overrides.
-    _drop_tokens: Vec<Box<dyn Any + Send + Sync>>,
 }
 
 impl Client {
@@ -34,17 +31,11 @@ impl Client {
         inner: reqwest::Client,
         url: Url,
         auth: Option<Auth>,
-        tokens: Vec<Box<dyn Any + Send + Sync>>,
     ) -> Result<Self, anyhow::Error> {
         if url.cannot_be_a_base() {
             bail!("cannot construct a CCSR client with a cannot-be-a-base URL");
         }
-        Ok(Client {
-            inner,
-            url,
-            auth,
-            _drop_tokens: tokens,
-        })
+        Ok(Client { inner, url, auth })
     }
 
     fn make_request<P>(&self, method: Method, path: P) -> reqwest::RequestBuilder

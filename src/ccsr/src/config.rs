@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -87,16 +86,6 @@ impl ClientConfig {
 
     /// Builds the [`Client`].
     pub fn build(self) -> Result<Client, anyhow::Error> {
-        self.build_with_tokens(vec![])
-    }
-
-    /// Builds the [`Client`], attaching additonal drop tokens to manage the
-    /// state of resources used in `resolve_to_addrs` or `override_url`.
-    // Note: we don't add tokens in `resolve_to_addrs` because `ClientConfig` is `Clone`.
-    pub fn build_with_tokens(
-        self,
-        tokens: Vec<Box<dyn Any + Send + Sync>>,
-    ) -> Result<Client, anyhow::Error> {
         let mut builder = reqwest::ClientBuilder::new();
 
         for root_cert in self.root_certs {
@@ -117,6 +106,6 @@ impl ClientConfig {
             .build()
             .unwrap();
 
-        Client::new(inner, self.url, self.auth, tokens)
+        Client::new(inner, self.url, self.auth)
     }
 }

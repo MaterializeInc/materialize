@@ -11,19 +11,20 @@ use tokio::runtime::Handle as TokioHandle;
 
 use mz_interchange::avro::Decoder;
 use mz_repr::Row;
+use mz_storage_client::types::connections::CsrClient;
 use mz_storage_client::types::errors::DecodeErrorKind;
 
 #[derive(Debug)]
 pub struct AvroDecoderState {
     tokio_handle: TokioHandle,
-    decoder: Decoder,
+    decoder: Decoder<CsrClient>,
     events_success: i64,
 }
 
 impl AvroDecoderState {
     pub fn new(
         value_schema: &str,
-        ccsr_client: Option<mz_ccsr::Client>,
+        ccsr_client: Option<CsrClient>,
         debug_name: String,
         confluent_wire_format: bool,
     ) -> Result<Self, anyhow::Error> {

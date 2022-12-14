@@ -38,6 +38,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::ops::Deref;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -290,16 +291,16 @@ fn validate_schema_2(
     })
 }
 
-pub struct ConfluentAvroResolver {
+pub struct ConfluentAvroResolver<C> {
     reader_schema: Schema,
-    writer_schemas: Option<SchemaCache>,
+    writer_schemas: Option<SchemaCache<C>>,
     confluent_wire_format: bool,
 }
 
-impl ConfluentAvroResolver {
+impl<C: Deref<Target = mz_ccsr::Client>> ConfluentAvroResolver<C> {
     pub fn new(
         reader_schema: &str,
-        ccsr_client: Option<mz_ccsr::Client>,
+        ccsr_client: Option<C>,
         confluent_wire_format: bool,
     ) -> anyhow::Result<Self> {
         let reader_schema = parse_schema(reader_schema)?;
@@ -350,7 +351,7 @@ impl ConfluentAvroResolver {
     }
 }
 
-impl fmt::Debug for ConfluentAvroResolver {
+impl<C> fmt::Debug for ConfluentAvroResolver<C> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("ConfluentAvroResolver")
             .field("reader_schema", &self.reader_schema)
@@ -367,13 +368,13 @@ impl fmt::Debug for ConfluentAvroResolver {
 }
 
 #[derive(Debug)]
-struct SchemaCache {
+struct SchemaCache<C> {
     cache: HashMap<i32, Result<Schema, AvroError>>,
-    ccsr_client: mz_ccsr::Client,
+    ccsr_client: C,
 }
 
-impl SchemaCache {
-    fn new(ccsr_client: mz_ccsr::Client) -> Result<SchemaCache, anyhow::Error> {
+impl<C: Deref<Target = mz_ccsr::Client>> SchemaCache<C> {
+    fn new(ccsr_client: C) -> Result<SchemaCache<C>, anyhow::Error> {
         Ok(SchemaCache {
             cache: HashMap::new(),
             ccsr_client,

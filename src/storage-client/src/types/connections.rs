@@ -11,6 +11,7 @@
 
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
@@ -460,6 +461,20 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
     }
 }
 
+/// A `mz_ccsr::Client` optionally enriched with a keep-alive tokens.
+#[derive(Debug)]
+pub struct CsrClient {
+    inner: mz_ccsr::Client,
+    _drop_token: Option<Box<dyn Any + Send + Sync>>,
+}
+
+impl Deref for CsrClient {
+    type Target = mz_ccsr::Client;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
 /// A connection to a Confluent Schema Registry.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct CsrConnection {
@@ -481,7 +496,7 @@ impl CsrConnection {
     pub async fn connect(
         &self,
         secrets_reader: &dyn SecretsReader,
-    ) -> Result<mz_ccsr::Client, anyhow::Error> {
+    ) -> Result<CsrClient, anyhow::Error> {
         let mut client_config = mz_ccsr::ClientConfig::new(self.url.clone());
         if let Some(root_cert) = &self.tls_root_cert {
             let root_cert = root_cert.get_string(secrets_reader).await?;
@@ -511,7 +526,7 @@ impl CsrConnection {
             client_config = client_config.auth(username, password);
         }
 
-        let mut tokens = vec![];
+        let mut drop_token = None;
         match &self.tunnel {
             Tunnel::Direct => {}
             Tunnel::Ssh(ssh_tunnel) => {
@@ -534,7 +549,7 @@ impl CsrConnection {
 
                 client_config = client_config
                     .override_url(Url::parse(&format!("http://localhost:{}", local_port)).unwrap());
-                tokens.push(token);
+                drop_token = Some(token);
             }
             Tunnel::AwsPrivatelink(connection) => {
                 assert!(connection.port.is_none());
@@ -560,7 +575,10 @@ impl CsrConnection {
             }
         }
 
-        client_config.build_with_tokens(tokens)
+        Ok(CsrClient {
+            inner: client_config.build()?,
+            _drop_token: drop_token,
+        })
     }
 }
 
