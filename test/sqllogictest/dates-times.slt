@@ -1072,17 +1072,16 @@ SELECT to_timestamp(1262349296.7890123)
 ----
 2010-01-01 12:34:56.789012+00
 
-# TODO(benesch): this should return an error, not NULL.
 query T
-SELECT to_timestamp('inf'::double)
+SELECT to_timestamp(1.999999999)
 ----
-NULL
+1970-01-01 00:00:02+00
 
-# TODO(benesch): this should return an error, not NULL.
-query T
+query error timestamp out of range
+SELECT to_timestamp('inf'::double)
+
+query error timestamp cannot be NaN
 SELECT to_timestamp('nan'::double)
-----
-NULL
 
 # Negative timestamps are not allowed
 
@@ -1350,3 +1349,16 @@ query II
 select ('0001-01-01'::date - '1721389days'::interval)::date - ('0001-01-01'::date + '262142years 11months 30days'::interval)::date, ('0001-01-01'::date + '262142years 11months 30days'::interval)::date - ('0001-01-01'::date - '1721389days'::interval)::date
 ----
 -97467152 97467152
+
+query error timestamp out of range
+SELECT to_timestamp(9223372036854775808::float8);
+
+query error timestamp out of range
+SELECT to_timestamp(-9223372036854775809::float8);
+
+# Negative fractional timestamp
+
+query T
+SELECT to_timestamp(-0.1::float8);
+----
+1969-12-31 23:59:59.9+00

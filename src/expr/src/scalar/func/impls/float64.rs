@@ -14,6 +14,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
+use mz_ore::cast::f64_to_i64;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::{strconv, ColumnType, ScalarType};
 
@@ -434,25 +435,42 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "tots"]
-    fn to_timestamp(f: f64) -> Option<CheckedTimestamp<DateTime<Utc>>> {
-        // TODO(benesch): remove potentially dangerous usage of `as`.
-        #[allow(clippy::as_conversions)]
-        if !f.is_finite() {
-            None
+    fn to_timestamp(f: f64) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+        const NANO_SECONDS_PER_SECOND: i64 = 1_000_000_000;
+        if f.is_nan() {
+            Err(EvalError::TimestampCannotBeNan)
+        } else if f.is_infinite() {
+            // TODO(jkosh44) implement infinite timestamps
+            Err(EvalError::TimestampOutOfRange)
         } else {
-            let secs = f.trunc() as i64;
+            let mut secs = f64_to_i64(f.trunc()).ok_or(EvalError::TimestampOutOfRange)?;
             // NOTE(benesch): PostgreSQL has microsecond precision in its timestamps,
             // while chrono has nanosecond precision. While we normally accept
             // nanosecond precision, here we round to the nearest microsecond because
             // f64s lose quite a bit of accuracy in the nanosecond digits when dealing
             // with common Unix timestamp values (> 1 billion).
-            let nanosecs = ((f.fract() * 1_000_000.0).round() as u32) * 1_000;
-            match NaiveDateTime::from_timestamp_opt(secs as i64, nanosecs as u32) {
+            let microsecs = (f.fract() * 1_000_000.0).round();
+            let mut nanosecs =
+                f64_to_i64(microsecs * 1_000.0).ok_or(EvalError::TimestampOutOfRange)?;
+            if nanosecs < 0 {
+                secs = secs.checked_sub(1).ok_or(EvalError::TimestampOutOfRange)?;
+                nanosecs = NANO_SECONDS_PER_SECOND
+                    .checked_add(nanosecs)
+                    .ok_or(EvalError::TimestampOutOfRange)?;
+            }
+            // Ensure `nanosecs` is less than 1 second.
+            secs = secs
+                .checked_add(nanosecs / NANO_SECONDS_PER_SECOND)
+                .ok_or(EvalError::TimestampOutOfRange)?;
+            nanosecs %= NANO_SECONDS_PER_SECOND;
+            let nanosecs = u32::try_from(nanosecs).map_err(|_| EvalError::TimestampOutOfRange)?;
+            match NaiveDateTime::from_timestamp_opt(secs, nanosecs) {
                 Some(ts) => {
                     let dt = DateTime::<Utc>::from_utc(ts, Utc);
-                    CheckedTimestamp::from_timestamplike(dt).ok()
+                    CheckedTimestamp::from_timestamplike(dt)
+                        .map_err(|_| EvalError::TimestampOutOfRange)
                 }
-                None => None,
+                None => Err(EvalError::TimestampOutOfRange),
             }
         }
     }
