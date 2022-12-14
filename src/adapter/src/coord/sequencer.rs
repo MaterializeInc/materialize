@@ -2193,10 +2193,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 .add_transaction_ops(TransactionOps::Peeks(peek_plan.timestamp_context.clone()))?;
         }
 
+        let timestamp = peek_plan.timestamp_context.timestamp().cloned();
+
         // Implement the peek, and capture the response.
         let resp = self
             .implement_peek_plan(peek_plan, finishing, compute_instance, target_replica)
             .await?;
+
+        if session.vars().emit_timestamp_notice() {
+            if let Some(timestamp) = timestamp {
+                session.add_notice(AdapterNotice::QueryTimestamp { timestamp });
+            }
+        }
 
         match copy_to {
             None => Ok(resp),

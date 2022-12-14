@@ -58,6 +58,9 @@ pub enum AdapterNotice {
     DroppedActiveCluster {
         name: String,
     },
+    QueryTimestamp {
+        timestamp: mz_repr::Timestamp,
+    },
 }
 
 impl AdapterNotice {
@@ -132,6 +135,9 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::DroppedActiveCluster { name } => {
                 write!(f, "active cluster {} has been dropped", name.quoted())
+            }
+            AdapterNotice::QueryTimestamp { timestamp } => {
+                write!(f, "query timestamp: {}", timestamp)
             }
         }
     }

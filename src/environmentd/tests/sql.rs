@@ -1938,3 +1938,66 @@ fn test_cancel_on_dropped_cluster() {
     read_client_cancel.cancel_query(postgres::NoTls).unwrap();
     handle.join().unwrap();
 }
+
+#[test]
+fn test_emit_timestamp_notice() {
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    client.batch_execute("CREATE TABLE t (i INT)").unwrap();
+    client
+        .batch_execute("SET emit_timestamp_notice = true")
+        .unwrap();
+    client.batch_execute("SELECT * FROM t").unwrap();
+
+    let timestamp_re = Regex::new("query timestamp: (.*)").unwrap();
+
+    // Wait until there's a query timestamp notice.
+    let first_timestamp = Retry::default()
+        .retry(|_| loop {
+            match rx.try_next() {
+                Ok(Some(msg)) => {
+                    if let Some(caps) = timestamp_re.captures(msg.message()) {
+                        let ts: u64 = caps.get(1).unwrap().as_str().parse().unwrap();
+                        return Ok(mz_repr::Timestamp::from(ts));
+                    }
+                }
+                Ok(None) => panic!("unexpected channel close"),
+                Err(e) => return Err(e),
+            }
+        })
+        .unwrap();
+
+    // Wait until the query timestamp notice goes up.
+    Retry::default()
+        .retry(|_| {
+            client.batch_execute("SELECT * FROM t").unwrap();
+            loop {
+                match rx.try_next() {
+                    Ok(Some(msg)) => {
+                        if let Some(caps) = timestamp_re.captures(msg.message()) {
+                            let ts: u64 = caps.get(1).unwrap().as_str().parse().unwrap();
+                            let ts = mz_repr::Timestamp::from(ts);
+                            if ts > first_timestamp {
+                                return Ok(());
+                            }
+                            return Err("not yet advanced");
+                        }
+                    }
+                    Ok(None) => panic!("unexpected channel close"),
+                    Err(_) => return Err("no messages available"),
+                }
+            }
+        })
+        .unwrap();
+}
