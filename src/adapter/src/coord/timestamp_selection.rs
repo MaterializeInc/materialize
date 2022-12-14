@@ -158,22 +158,32 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.advance_by(since.borrow());
         }
 
-        if let Some(timeline) = &timeline {
-            if (isolation_level == &vars::IsolationLevel::StrictSerializable
-                && when.can_advance_to_global_ts())
-                || when.must_advance_to_global_ts()
-            {
-                let timestamp_oracle = self.get_timestamp_oracle(timeline);
-                oracle_read_ts = Some(timestamp_oracle.read_ts());
-                candidate.join_assign(&oracle_read_ts.unwrap());
-            } else if when.can_advance_to_upper() {
-                candidate.join_assign(&largest_not_in_advance_of_upper);
-            }
-        } else if when.can_advance_to_upper() {
-            candidate.join_assign(&largest_not_in_advance_of_upper);
+        // In order to use a timestamp oracle, we must be in the context of some timeline. In that
+        // context we would use the timestamp oracle in the following scenarios:
+        // - The isolation level is Strict Serializable and the `when` allows us to use the
+        //   the timestamp oracle (ex: queries with no AS OF).
+        // - The `when` requires us to use the timestamp oracle (ex: read-then-write queries).
+        let advance_to_timeline_ts = timeline.is_some()
+            && (when.must_advance_to_timeline_ts()
+                || (when.can_advance_to_timeline_ts()
+                    && isolation_level == &vars::IsolationLevel::StrictSerializable));
+        if advance_to_timeline_ts {
+            let timeline = timeline
+                .as_ref()
+                .expect("timeline is always present when using the timestamp oracle");
+            let timestamp_oracle = self.get_timestamp_oracle(timeline);
+            oracle_read_ts = Some(timestamp_oracle.read_ts());
+            candidate.join_assign(&oracle_read_ts.unwrap());
         }
 
-        if when.must_advance_to_upper() {
+        // We advance to the upper in the following scenarios:
+        // - We didn't use the timestamp oracle and the `when` allows us to advance to upper (ex:
+        //   queries with no AS OF). We avoid using the upper if we've already used the timestamp
+        //   oracle to prevent reading source data that is being written to in the future.
+        // - The `when` requires us to advance to the upper (ex: read-then-write queries).
+        let advance_to_upper = (!advance_to_timeline_ts && when.can_advance_to_upper())
+            || when.must_advance_to_upper();
+        if advance_to_upper {
             candidate.join_assign(&largest_not_in_advance_of_upper);
         }
 

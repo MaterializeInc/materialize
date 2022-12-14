@@ -752,15 +752,15 @@ impl QueryWhen {
             }
         }
     }
-    /// Returns whether the candidate can be advanced to the global timestamp.
-    pub fn can_advance_to_global_ts(&self) -> bool {
+    /// Returns whether the candidate can be advanced to the timeline's timestamp.
+    pub fn can_advance_to_timeline_ts(&self) -> bool {
         match self {
             QueryWhen::Immediately | QueryWhen::Freshest => true,
             QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => false,
         }
     }
-    /// Returns whether the candidate must be advanced to the global timestamp.
-    pub fn must_advance_to_global_ts(&self) -> bool {
+    /// Returns whether the candidate must be advanced to the timeline's timestamp.
+    pub fn must_advance_to_timeline_ts(&self) -> bool {
         match self {
             QueryWhen::Freshest => true,
             QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => {
