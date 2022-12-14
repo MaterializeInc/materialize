@@ -178,9 +178,22 @@ mod columnation {
     ///
     /// Content bytes are stored in stable contiguous memory locations,
     /// and then a `Row` referencing them is falsified.
-    #[derive(Default)]
     pub struct RowStack {
         region: StableRegion<u8>,
+    }
+
+    impl RowStack {
+        const LIMIT: usize = 2 << 20;
+    }
+
+    // Implement `Default` manually to specify a region allocation limit.
+    impl Default for RowStack {
+        fn default() -> Self {
+            Self {
+                // Limit the region size to 2MiB.
+                region: StableRegion::with_limit(Self::LIMIT),
+            }
+        }
     }
 
     impl Columnation for Row {
@@ -214,12 +227,12 @@ mod columnation {
             Self: 'a,
             I: Iterator<Item = &'a Self::Item> + Clone,
         {
-            self.region.reserve(
-                items
-                    .filter(|row| row.data.spilled())
-                    .map(|row| row.data.len())
-                    .sum(),
-            );
+            let size = items
+                .filter(|row| row.data.spilled())
+                .map(|row| row.data.len())
+                .sum();
+            let size = std::cmp::min(size, Self::LIMIT);
+            self.region.reserve(size);
         }
 
         fn reserve_regions<'a, I>(&mut self, regions: I)
@@ -227,7 +240,9 @@ mod columnation {
             Self: 'a,
             I: Iterator<Item = &'a Self> + Clone,
         {
-            self.region.reserve(regions.map(|r| r.region.len()).sum());
+            let size = regions.map(|r| r.region.len()).sum();
+            let size = std::cmp::min(size, Self::LIMIT);
+            self.region.reserve(size);
         }
 
         fn heap_size(&self, callback: impl FnMut(usize, usize)) {
