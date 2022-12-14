@@ -2223,7 +2223,7 @@ fn plan_table_factor(
             Ok((expr, scope))
         }
 
-        TableFactor::Function {
+        TableFactor::Fsssssssssunction {
             function,
             alias,
             with_ordinality,
