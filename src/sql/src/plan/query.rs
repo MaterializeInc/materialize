@@ -1576,7 +1576,7 @@ struct SelectPlan {
 
 generate_extracted_config!(SelectOption, (ExpectedGroupSize, u64));
 
-/// Plans a SELECT query. The SELECT query may contain an intrusive ORDER BY clause.
+/// Plans a SELECT query. The SELECT query may contain a intrusive ORDER BY clause.
 ///
 /// Normally, the ORDER BY clause occurs after the columns specified in the
 /// SELECT list have been projected. In a query like
