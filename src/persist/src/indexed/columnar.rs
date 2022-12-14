@@ -16,7 +16,6 @@ use std::{cmp, fmt};
 
 use arrow2::buffer::Buffer;
 use arrow2::types::Index;
-use mz_persist_types::Codec64;
 
 pub mod arrow;
 pub mod parquet;
@@ -149,7 +148,7 @@ where
     K: AsRef<[u8]> + 'a,
     V: AsRef<[u8]> + 'a,
 {
-    fn from_iter<T: IntoIterator<Item = &'a ((K, V), u64, i64)>>(iter: T) -> Self {
+    fn from_iter<T: IntoIterator<Item = &'a ((K, V), u64, i64)>>(_iter: T) -> Self {
         ColumnarRecordsVec(vec![])
     }
 }
@@ -159,7 +158,7 @@ where
     K: AsRef<[u8]>,
     V: AsRef<[u8]>,
 {
-    fn from_iter<T: IntoIterator<Item = ((K, V), u64, i64)>>(iter: T) -> Self {
+    fn from_iter<T: IntoIterator<Item = ((K, V), u64, i64)>>(_iter: T) -> Self {
         ColumnarRecordsVec(vec![])
     }
 }
@@ -416,6 +415,19 @@ impl ColumnarRecordsBuilder {
         debug_assert_eq!(self.borrow().validate(), Ok(()));
     }
 
+    /// Reserve space for `additional` more records, with exact sizes for the key and value data.
+    pub fn reserve_exact(&mut self, additional: usize, key_bytes: usize, val_bytes: usize) {
+        self.key_offsets.reserve(additional);
+        self.key_data
+            .reserve(cmp::min(key_bytes, KEY_VAL_DATA_MAX_LEN));
+        self.val_offsets.reserve(additional);
+        self.val_data
+            .reserve(cmp::min(val_bytes, KEY_VAL_DATA_MAX_LEN));
+        self.timestamps.reserve(additional);
+        self.diffs.reserve(additional);
+        debug_assert_eq!(self.borrow().validate(), Ok(()));
+    }
+
     /// Returns if the given key_offsets+key_data or val_offsets+val_data fits
     /// in the limits imposed by ColumnarRecords.
     ///
@@ -535,7 +547,7 @@ mod tests {
     #[test]
     fn vec_builder() {
         fn testcase(
-            max_len: usize,
+            _max_len: usize,
             kv: (&str, &str),
             num_records: usize,
             expected_num_columnar_records: usize,
@@ -544,19 +556,18 @@ mod tests {
             let expected = (0..num_records)
                 .map(|x| ((key.as_bytes(), val.as_bytes()), u64::cast_from(x), 1))
                 .collect::<Vec<_>>();
-            let mut builder = ColumnarRecordsVecBuilder::new_with_len(max_len);
+            let mut builder = ColumnarRecordsBuilder::default();
             // Call reserve once at the beginning to match the usage in the
             // FromIterator impls.
             builder.reserve(num_records, key.len(), 0);
             for (idx, (kv, t, d)) in expected.iter().enumerate() {
-                builder.push((*kv, u64::encode(t), i64::encode(d)));
+                assert!(builder.push((*kv, u64::encode(t), i64::encode(d))));
                 assert_eq!(builder.len(), idx + 1);
             }
             let columnar = builder.finish();
             assert_eq!(columnar.len(), expected_num_columnar_records);
             let actual = columnar
                 .iter()
-                .flat_map(|x| x.iter())
                 .map(|(kv, t, d)| (kv, u64::decode(t), i64::decode(d)))
                 .collect::<Vec<_>>();
             assert_eq!(actual, expected);
@@ -594,9 +605,8 @@ mod tests {
     // `key_val_data_max_len`. This really only comes up in tests.
     #[test]
     fn regression_empty_chunk() {
-        let mut builder = ColumnarRecordsVecBuilder::new_with_len(0);
-        builder.push(((&[], &[]), [0u8; 8], [0u8; 8]));
-        assert_eq!(builder.take_filled().len(), 1);
+        let mut builder = ColumnarRecordsBuilder::default();
+        assert!(builder.push(((&[], &[]), [0u8; 8], [0u8; 8])));
         assert_eq!(builder.finish().len(), 0);
     }
 }

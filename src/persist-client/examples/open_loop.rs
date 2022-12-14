@@ -551,7 +551,7 @@ mod raw_persist_benchmark {
                         let mut max_ts = 0;
                         let current_upper_chain = Antichain::from_elem(current_upper);
 
-                        let mut builder = write.builder(records.len(), current_upper_chain);
+                        let mut builder = write.builder(current_upper_chain);
 
                         for ((k, v), t, d) in records.iter() {
                             builder

@@ -12,6 +12,7 @@
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -143,6 +144,10 @@ where
         self.batch.parts.clear();
     }
 
+    /// Turns this [`Batch`] into a [`HollowBatch`].
+    ///
+    /// **NOTE**: If this batch is not eventually appended to a shard or
+    /// dropped, the data that it represents will have leaked.
     pub fn into_hollow_batch(mut self) -> HollowBatch<T> {
         let ret = self.batch.clone();
         self.mark_consumed();
@@ -180,11 +185,10 @@ pub enum Added {
 /// A builder for [Batches](Batch) that allows adding updates piece by piece and
 /// then finishing it.
 #[derive(Debug)]
-pub struct BatchBuilder<'a, K, V, T, D>
+pub struct BatchBuilder<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    size_hint: usize,
     lower: Antichain<T>,
     max_ts: T,
     blob_target_size: usize,
@@ -196,7 +200,7 @@ where
     key_buf: Vec<u8>,
     val_buf: Vec<u8>,
 
-    current_part: Vec<((&'a [u8], &'a [u8]), T, D)>,
+    current_part: Vec<((Range<usize>, Range<usize>), T, D)>,
     current_part_total_bytes: usize,
     current_part_key_bytes: usize,
     current_part_value_bytes: usize,
@@ -216,7 +220,7 @@ where
     _phantom: PhantomData<(K, V, T, D)>,
 }
 
-impl<'a, K, V, T, D> BatchBuilder<'a, K, V, T, D>
+impl<K, V, T, D> BatchBuilder<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -226,7 +230,6 @@ where
     pub(crate) fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
-        size_hint: usize,
         lower: Antichain<T>,
         blob: Arc<dyn Blob + Send + Sync>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
@@ -246,7 +249,6 @@ where
             &metrics.user,
         );
         Self {
-            size_hint,
             lower,
             max_ts: T::minimum(),
             blob_target_size: cfg.blob_target_size,
@@ -342,8 +344,8 @@ where
             });
         }
 
-        let idx_k_before = self.key_buf.len();
-        let idx_v_before = self.val_buf.len();
+        let initial_key_buf_len = self.key_buf.len();
+        let initial_val_buf_len = self.val_buf.len();
         self.metrics
             .codecs
             .key
@@ -353,8 +355,8 @@ where
             .val
             .encode(|| V::encode(val, &mut self.val_buf));
 
-        let k_range = idx_k_before..self.key_buf.len();
-        let v_range = idx_v_before..self.val_buf.len();
+        let k_range = initial_key_buf_len..self.key_buf.len();
+        let v_range = initial_val_buf_len..self.val_buf.len();
 
         self.max_ts.join_assign(ts);
 
@@ -366,8 +368,7 @@ where
         let (ts, diff) = (ts.clone(), diff.clone());
 
         let mut part_written = false;
-        // if we've filled up a chunk of ColumnarRecords, flush it
-        // out now to blob storage to keep our memory usage capped.
+        // if we've filled up a batch part, flush out to blob to keep our memory usage capped.
         if size + self.current_part_total_bytes > self.blob_target_size {
             // TODO: we currently consolidate a part when we've reached our target size of
             // _unconsolidated_ updates. This means the part we actually write to Blob may
@@ -381,12 +382,27 @@ where
         self.current_part_total_bytes += size;
         self.current_part_key_bytes += k_range.len();
         self.current_part_value_bytes += v_range.len();
-        self.current_part
-            .push(((&self.key_buf[k_range], &self.val_buf[v_range]), ts, diff));
 
         if part_written {
+            // NB: we flush our shared buf's contents to Blob storage when we've hit our
+            // target size, but we can only determine whether we've hit the target size
+            // after encoding into the buf. this means that after flushing to Blob, we have
+            // one dangling update in our shared buf that we need to copy back after the
+            // buf is reset.
+            let dangling_key = self.key_buf[k_range].to_owned();
+            let dangling_val = self.val_buf[v_range].to_owned();
+
+            self.key_buf.clear();
+            self.val_buf.clear();
+
+            self.key_buf.extend_from_slice(&dangling_key);
+            self.val_buf.extend_from_slice(&dangling_val);
+
+            self.current_part
+                .push(((0..dangling_key.len(), 0..dangling_val.len()), ts, diff));
             Ok(Added::RecordAndParts)
         } else {
+            self.current_part.push(((k_range, v_range), ts, diff));
             Ok(Added::Record)
         }
     }
@@ -396,14 +412,19 @@ where
     /// than [crate::PersistConfig::blob_target_size], and must absolutely be less than
     /// [mz_persist::indexed::columnar::KEY_VAL_DATA_MAX_LEN]
     async fn flush_current_part(&mut self) {
-        consolidate_updates(&mut self.current_part);
-        if self.current_part.is_empty() {
+        let mut updates = Vec::with_capacity(self.current_part.len());
+        for ((k_range, v_range), t, d) in self.current_part.drain(..) {
+            updates.push(((&self.key_buf[k_range], &self.val_buf[v_range]), t, d));
+        }
+
+        consolidate_updates(&mut updates);
+        if updates.is_empty() {
             return;
         }
 
-        self.num_updates += self.current_part.len();
+        self.num_updates += updates.len();
 
-        match (&self.greatest_kv_seen, self.current_part.last()) {
+        match (&self.greatest_kv_seen, updates.last()) {
             // our updates contain a key that exists within the range of a run we've
             // already created. we should start a new run, as this part is no longer
             // contiguous with the previous run/part
@@ -426,12 +447,11 @@ where
             self.current_part_key_bytes,
             self.current_part_value_bytes,
         );
-        for ((k, v), t, d) in self.current_part.drain(..) {
-            // if this fails, the individual record is too big to fit in
-            // a ColumnarRecords by itself. The limits are big, so this
-            // is a pretty extreme case that we intentionally don't handle
+        for ((k, v), t, d) in updates {
+            // if this fails, the individual record is too big to fit in a ColumnarRecords by itself.
+            // The limits are big, so this is a pretty extreme case that we intentionally don't handle
             // right now.
-            assert!(builder.push(((&k, &v), T::encode(&t), D::encode(&d))));
+            assert!(builder.push(((k, v), T::encode(&t), D::encode(&d))));
         }
         // timings.part_columnar_encoding += start.elapsed();
 
@@ -447,8 +467,6 @@ where
         self.current_part_total_bytes = 0;
         self.current_part_key_bytes = 0;
         self.current_part_value_bytes = 0;
-        self.key_buf.clear();
-        self.val_buf.clear();
         assert_eq!(self.current_part.len(), 0);
     }
 }
@@ -650,7 +668,7 @@ mod tests {
             .await;
 
         // A new builder has no writing or finished parts.
-        let mut builder = write.builder(0, Antichain::from_elem(0));
+        let mut builder = write.builder(Antichain::from_elem(0));
         assert_eq!(builder.parts.writing_parts.len(), 0);
         assert_eq!(builder.parts.finished_parts.len(), 0);
 

@@ -601,7 +601,6 @@ where
         let mut batch = BatchBuilder::new(
             cfg.clone(),
             Arc::clone(&metrics),
-            100,
             desc.lower().clone(),
             Arc::clone(&blob),
             cpu_heavy_runtime,

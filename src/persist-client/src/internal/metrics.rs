@@ -621,7 +621,8 @@ pub struct CompactionMetrics {
     pub(crate) applied_subset_match: IntCounter,
     pub(crate) not_applied_too_many_updates: IntCounter,
 
-    pub(crate) batch: BatchWriteMetrics,
+    // WIP: add these back
+    pub(crate) _batch: BatchWriteMetrics,
     pub(crate) steps: CompactionStepTimings,
 
     pub(crate) _steps_vec: CounterVec,
@@ -716,7 +717,7 @@ impl CompactionMetrics {
                 name: "mz_persist_compaction_not_applied_too_many_updates",
                 help: "count of merge results that did not apply due to too many updates",
             )),
-            batch: BatchWriteMetrics::new(registry, "compaction"),
+            _batch: BatchWriteMetrics::new(registry, "compaction"),
             steps: CompactionStepTimings::new(step_timings.clone()),
             _steps_vec: step_timings,
         }
