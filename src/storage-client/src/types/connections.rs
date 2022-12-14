@@ -333,7 +333,7 @@ impl KafkaConnection {
                         aws_privatelink.port,
                     );
                 }
-                ssh_tunnel @ Tunnel::Ssh { .. } => {
+                Tunnel::Ssh(ssh_tunnel) => {
                     // Extract the host address pieces...
                     let mut broker_iter = broker.address.splitn(2, ':');
 
@@ -514,7 +514,7 @@ impl CsrConnection {
         let mut tokens = vec![];
         match &self.tunnel {
             Tunnel::Direct => {}
-            ssh_tunnel @ Tunnel::Ssh { .. } => {
+            Tunnel::Ssh(ssh_tunnel) => {
                 // TODO: use types to enforce that the URL has a string hostname.
                 let host = self
                     .url
@@ -718,10 +718,10 @@ impl PostgresConnection {
 
         let tunnel = match &self.tunnel {
             Tunnel::Direct => mz_postgres_util::TunnelConfig::Direct,
-            Tunnel::Ssh {
+            Tunnel::Ssh(SshTunnel {
                 connection_id,
                 connection,
-            } => {
+            }) => {
                 let secret = secrets_reader.read(*connection_id).await?;
                 let key_set = SshKeyPairSet::from_bytes(&secret)?;
                 let key_pair = key_set.primary().clone();
@@ -831,10 +831,7 @@ pub enum Tunnel {
     /// No tunneling.
     Direct,
     /// Via the specified SSH tunnel connection.
-    Ssh {
-        connection_id: GlobalId,
-        connection: SshConnection,
-    },
+    Ssh(SshTunnel),
     /// Via the specified AWS PrivateLink connection.
     AwsPrivatelink(AwsPrivatelink),
 }
@@ -845,13 +842,7 @@ impl RustType<ProtoTunnel> for Tunnel {
         ProtoTunnel {
             tunnel: Some(match &self {
                 Tunnel::Direct => ProtoTunnelField::Direct(()),
-                Tunnel::Ssh {
-                    connection_id,
-                    connection,
-                } => ProtoTunnelField::Ssh(ProtoSshTunnel {
-                    connection_id: Some(connection_id.into_proto()),
-                    connection: Some(connection.into_proto()),
-                }),
+                Tunnel::Ssh(ssh) => ProtoTunnelField::Ssh(ssh.into_proto()),
                 Tunnel::AwsPrivatelink(aws) => ProtoTunnelField::AwsPrivatelink(aws.into_proto()),
             }),
         }
@@ -862,66 +853,9 @@ impl RustType<ProtoTunnel> for Tunnel {
         Ok(match proto.tunnel {
             None => return Err(TryFromProtoError::missing_field("ProtoTunnel::tunnel")),
             Some(ProtoTunnelField::Direct(())) => Tunnel::Direct,
-            Some(ProtoTunnelField::Ssh(ssh)) => Tunnel::Ssh {
-                connection_id: ssh
-                    .connection_id
-                    .into_rust_if_some("ProtoTunnel::ssh::connection_id")?,
-                connection: ssh
-                    .connection
-                    .into_rust_if_some("ProtoTunnel::ssh::connection")?,
-            },
-            Some(ProtoTunnelField::AwsPrivatelink(connection_id)) => {
-                Tunnel::AwsPrivatelink(connection_id.into_rust()?)
-            }
+            Some(ProtoTunnelField::Ssh(ssh)) => Tunnel::Ssh(ssh.into_rust()?),
+            Some(ProtoTunnelField::AwsPrivatelink(aws)) => Tunnel::AwsPrivatelink(aws.into_rust()?),
         })
-    }
-}
-
-impl Tunnel {
-    /// Setup and ssh tunnel to `remote_host:remote_port`, returning the local port
-    /// and a drop token for the session. This method is on `Tunnel` for convenience,
-    /// but panics if the `Tunnel` is not `Tunnel::Ssh`
-    async fn build_ssh_tunnel_for_url(
-        &self,
-        secrets_reader: &dyn SecretsReader,
-        remote_host: &str,
-        remote_port: u16,
-        debug_str: &str,
-    ) -> Result<(u16, Box<dyn Any + Send + Sync>), anyhow::Error> {
-        if let Tunnel::Ssh {
-            connection,
-            connection_id,
-        } = self
-        {
-            // Setup the config...
-            let secret = secrets_reader.read(*connection_id).await?;
-            let key_set = SshKeyPairSet::from_bytes(&secret)?;
-            let key_pair = key_set.primary().clone();
-            let ssh_tunnel_config = SshTunnelConfig {
-                host: connection.host.clone(),
-                port: connection.port,
-                user: connection.user.clone(),
-                key_pair,
-            };
-
-            // ...build the tunnel...
-            let (session, local_port) = ssh_tunnel_config.connect(remote_host, remote_port).await?;
-
-            // ...record it in the broker lookup, with a task that
-            // will shutdown the session on drop.
-            let (tx, rx) = channel();
-            mz_ore::task::spawn(|| format!("{}_ssh_session", debug_str), async move {
-                let _: Result<(), _> = rx.await;
-                session
-                    .close()
-                    .await
-                    .err()
-                    .map(|e| tracing::error!("failed to close ssh tunnel: {e}"));
-            });
-            Ok((local_port, Box::new(tx)))
-        } else {
-            panic!("can't call `build_ssh_tunnel_for_host` on non-ssh tunnel")
-        }
     }
 }
 
@@ -994,5 +928,73 @@ impl RustType<ProtoAwsPrivatelink> for AwsPrivatelink {
                 .into_rust_if_some("ProtoAwsPrivatelink::connection_id")?,
             port: proto.port.into_rust()?,
         })
+    }
+}
+
+/// Specifies an AWS PrivateLink service for a [`Tunnel`].
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct SshTunnel {
+    /// id of the ssh connection
+    pub connection_id: GlobalId,
+    /// ssh connection object
+    pub connection: SshConnection,
+}
+
+impl RustType<ProtoSshTunnel> for SshTunnel {
+    fn into_proto(&self) -> ProtoSshTunnel {
+        ProtoSshTunnel {
+            connection_id: Some(self.connection_id.into_proto()),
+            connection: Some(self.connection.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoSshTunnel) -> Result<Self, TryFromProtoError> {
+        Ok(SshTunnel {
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoSshTunnel::connection_id")?,
+            connection: proto
+                .connection
+                .into_rust_if_some("ProtoSshTunnel::connection")?,
+        })
+    }
+}
+
+impl SshTunnel {
+    /// Setup and ssh tunnel to `remote_host:remote_port`, returning the local port
+    /// and a drop token for the session.
+    async fn build_ssh_tunnel_for_url(
+        &self,
+        secrets_reader: &dyn SecretsReader,
+        remote_host: &str,
+        remote_port: u16,
+        debug_str: &str,
+    ) -> Result<(u16, Box<dyn Any + Send + Sync>), anyhow::Error> {
+        // Setup the config...
+        let secret = secrets_reader.read(self.connection_id).await?;
+        let key_set = SshKeyPairSet::from_bytes(&secret)?;
+        let key_pair = key_set.primary().clone();
+        let ssh_tunnel_config = SshTunnelConfig {
+            host: self.connection.host.clone(),
+            port: self.connection.port,
+            user: self.connection.user.clone(),
+            key_pair,
+        };
+
+        // ...build the tunnel...
+        let (session, local_port) = ssh_tunnel_config.connect(remote_host, remote_port).await?;
+
+        // ...record it in the broker lookup, with a task that
+        // will shutdown the session on drop.
+        let (tx, rx) = channel();
+        mz_ore::task::spawn(|| format!("{}_ssh_session", debug_str), async move {
+            let _: Result<(), _> = rx.await;
+            session
+                .close()
+                .await
+                .err()
+                .map(|e| tracing::error!("failed to close ssh tunnel: {e}"));
+        });
+        Ok((local_port, Box::new(tx)))
     }
 }

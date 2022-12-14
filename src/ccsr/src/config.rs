@@ -77,7 +77,7 @@ impl ClientConfig {
         self
     }
 
-    /// Override the url.
+    /// Overrides the url.
     ///
     /// Useful for certain kinds of tunneling.
     pub fn override_url(mut self, url: Url) -> ClientConfig {

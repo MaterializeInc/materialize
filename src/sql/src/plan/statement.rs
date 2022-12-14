@@ -18,7 +18,7 @@ use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     RawObjectName, ShowStatement, UnresolvedDatabaseName, UnresolvedSchemaName,
 };
-use mz_storage_client::types::connections::{AwsPrivatelink, Connection, Tunnel};
+use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
 
 use crate::ast::{Ident, ObjectType, Statement, UnresolvedObjectName};
 use crate::catalog::{
@@ -685,10 +685,10 @@ impl<'a> StatementContext<'a> {
                 let id = GlobalId::from(ssh_tunnel);
                 let ssh_tunnel = self.catalog.get_item(&id);
                 match ssh_tunnel.connection()? {
-                    Connection::Ssh(connection) => Ok(Tunnel::Ssh {
+                    Connection::Ssh(connection) => Ok(Tunnel::Ssh(SshTunnel {
                         connection_id: id,
                         connection: connection.clone(),
-                    }),
+                    })),
                     _ => sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item),
                 }
             }

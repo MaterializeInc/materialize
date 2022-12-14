@@ -46,7 +46,7 @@ use mz_storage_client::types::connections::aws::{
 };
 use mz_storage_client::types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, Connection, CsrConnectionHttpAuth, KafkaConnection,
-    KafkaSecurity, KafkaTlsConfig, SaslConfig, StringOrSecret, TlsIdentity, Tunnel,
+    KafkaSecurity, KafkaTlsConfig, SaslConfig, SshTunnel, StringOrSecret, TlsIdentity, Tunnel,
 };
 use mz_storage_client::types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
@@ -2697,10 +2697,10 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                     };
                     let ssh_tunnel = scx.catalog.get_item(id);
                     match ssh_tunnel.connection()? {
-                        Connection::Ssh(connection) => Tunnel::Ssh {
+                        Connection::Ssh(connection) => Tunnel::Ssh(SshTunnel {
                             connection_id: *id,
                             connection: connection.clone(),
-                        },
+                        }),
                         _ => {
                             sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item)
                         }
