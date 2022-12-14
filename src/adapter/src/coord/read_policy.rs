@@ -307,6 +307,21 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         policy.into()
     }
 
+    pub(crate) fn update_storage_base_read_policy(
+        &mut self,
+        id: GlobalId,
+        base_policy: ReadPolicy<mz_repr::Timestamp>,
+    ) {
+        let capability = self
+            .storage_read_capabilities
+            .get_mut(&id)
+            .expect("coord out of sync");
+        capability.base_policy = base_policy;
+        self.controller
+            .storage
+            .set_read_policy(vec![(id, capability.policy())])
+    }
+
     pub(crate) fn update_compute_base_read_policy(
         &mut self,
         compute_instance: ComputeInstanceId,

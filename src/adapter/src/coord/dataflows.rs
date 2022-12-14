@@ -110,7 +110,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.initialize_compute_read_policies(
             output_ids,
             instance,
-            DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+            Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_MS),
         )
         .await;
     }

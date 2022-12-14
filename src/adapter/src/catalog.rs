@@ -87,6 +87,7 @@ pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
 use crate::config::SynchronizedParameters;
+use crate::coord::DEFAULT_LOGICAL_COMPACTION_WINDOW;
 use crate::session::vars::{SystemVars, Var, CONFIG_HAS_SYNCED_ONCE};
 use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
@@ -1453,6 +1454,10 @@ pub struct Table {
     pub defaults: Vec<Expr<Aug>>,
     pub conn_id: Option<ConnectionId>,
     pub depends_on: Vec<GlobalId>,
+    pub custom_logical_compaction_window: Option<Duration>,
+    /// Whether the table's logical compaction window is controlled by
+    /// METRICS_RETENTION
+    pub is_retained_metrics_relation: bool,
 }
 
 impl Table {
@@ -1480,6 +1485,10 @@ pub struct Source {
     pub desc: RelationDesc,
     pub timeline: Timeline,
     pub depends_on: Vec<GlobalId>,
+    pub custom_logical_compaction_window: Option<Duration>,
+    /// Whether the source's logical compaction window is controlled by
+    /// METRICS_RETENTION
+    pub is_retained_metrics_relation: bool,
 }
 
 impl Source {
@@ -1884,6 +1893,42 @@ impl CatalogItem {
             | CatalogItem::Connection(_) => None,
         }
     }
+
+    pub fn initial_logical_compaction_window(&self) -> Option<Duration> {
+        let custom_logical_compaction_window = match self {
+            CatalogItem::Table(table) => table.custom_logical_compaction_window,
+            CatalogItem::Source(source) => source.custom_logical_compaction_window,
+            CatalogItem::Index(_) => None,
+            CatalogItem::MaterializedView(_) => None,
+            CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => return None,
+        };
+        Some(custom_logical_compaction_window.unwrap_or(DEFAULT_LOGICAL_COMPACTION_WINDOW))
+    }
+
+    /// Whether the item's logical compaction window
+    /// is controlled by the METRICS_RETENTION
+    /// system var.
+    pub fn is_retained_metrics_relation(&self) -> bool {
+        match self {
+            CatalogItem::Table(table) => table.is_retained_metrics_relation,
+            CatalogItem::Source(source) => source.is_retained_metrics_relation,
+            CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => false,
+        }
+    }
 }
 
 impl CatalogEntry {
@@ -2257,6 +2302,16 @@ impl<S: Append> Catalog<S> {
             );
         }
 
+        let system_config = catalog.storage().await.load_system_configuration().await?;
+        for (name, value) in &config.bootstrap_system_parameters {
+            if !system_config.contains_key(name) {
+                catalog.state.insert_system_configuration(name, value)?;
+            }
+        }
+        for (name, value) in system_config {
+            catalog.state.insert_system_configuration(&name, &value)?;
+        }
+
         catalog.load_builtin_types().await?;
 
         let persisted_builtin_ids = catalog.storage().await.load_system_gids().await?;
@@ -2324,6 +2379,10 @@ impl<S: Append> Catalog<S> {
                             defaults: vec![Expr::null(); table.desc.arity()],
                             conn_id: None,
                             depends_on: vec![],
+                            custom_logical_compaction_window: table
+                                .is_retained_metrics_relation
+                                .then(|| catalog.state.system_config().metrics_retention()),
+                            is_retained_metrics_relation: table.is_retained_metrics_relation,
                         }),
                     );
                 }
@@ -2379,6 +2438,10 @@ impl<S: Append> Catalog<S> {
                             desc: coll.desc.clone(),
                             timeline: Timeline::EpochMilliseconds,
                             depends_on: vec![],
+                            custom_logical_compaction_window: coll
+                                .is_retained_metrics_relation
+                                .then(|| catalog.state.system_config().metrics_retention()),
+                            is_retained_metrics_relation: coll.is_retained_metrics_relation,
                         }),
                     );
                 }
@@ -2511,15 +2574,6 @@ impl<S: Append> Catalog<S> {
             .set_system_object_mapping(new_system_id_mappings)
             .await?;
 
-        let system_config = catalog.storage().await.load_system_configuration().await?;
-        for (name, value) in &config.bootstrap_system_parameters {
-            if !system_config.contains_key(name) {
-                catalog.state.insert_system_configuration(name, value)?;
-            }
-        }
-        for (name, value) in system_config {
-            catalog.state.insert_system_configuration(&name, &value)?;
-        }
         if let Some(system_parameter_frontend) = config.system_parameter_frontend {
             if !catalog.state.system_config().config_has_synced_once() {
                 tracing::info!("parameter sync on boot: start sync");
@@ -5225,6 +5279,8 @@ impl<S: Append> Catalog<S> {
                 defaults: table.defaults,
                 conn_id: None,
                 depends_on,
+                custom_logical_compaction_window: None,
+                is_retained_metrics_relation: false,
             }),
             Plan::CreateSource(CreateSourcePlan {
                 source,
@@ -5248,6 +5304,8 @@ impl<S: Append> Catalog<S> {
                     desc: source.desc,
                     timeline,
                     depends_on,
+                    custom_logical_compaction_window: None,
+                    is_retained_metrics_relation: false,
                 })
             }
             Plan::CreateView(CreateViewPlan { view, .. }) => {
@@ -6468,6 +6526,8 @@ mod tests {
                         defaults: vec![Expr::null(); 1],
                         conn_id: None,
                         depends_on: vec![],
+                        custom_logical_compaction_window: None,
+                        is_retained_metrics_relation: false,
                     }),
                     SimplifiedItem::MaterializedView { depends_on } => {
                         let table_list = depends_on.iter().join(",");
