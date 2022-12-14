@@ -522,7 +522,11 @@ where
     /// updates is very large. Individual records, however, should be small
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
-    pub fn builder(&mut self, size_hint: usize, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
+    pub fn builder<'a, 'b>(
+        &'a self,
+        size_hint: usize,
+        lower: Antichain<T>,
+    ) -> BatchBuilder<'b, K, V, T, D> {
         BatchBuilder::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),

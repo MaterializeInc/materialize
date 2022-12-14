@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::Bytes;
-use differential_dataflow::consolidation::{consolidate, consolidate_updates};
+use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -28,7 +28,7 @@ use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
-use tracing::{debug_span, info, instrument, trace_span, warn, Instrument};
+use tracing::{debug_span, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
@@ -180,7 +180,7 @@ pub enum Added {
 /// A builder for [Batches](Batch) that allows adding updates piece by piece and
 /// then finishing it.
 #[derive(Debug)]
-pub struct BatchBuilder<K, V, T, D>
+pub struct BatchBuilder<'a, K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
 {
@@ -193,7 +193,10 @@ where
     blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
 
-    current_part: Vec<((Vec<u8>, Vec<u8>), T, D)>,
+    key_buf: Vec<u8>,
+    val_buf: Vec<u8>,
+
+    current_part: Vec<((&'a [u8], &'a [u8]), T, D)>,
     current_part_total_bytes: usize,
     current_part_key_bytes: usize,
     current_part_value_bytes: usize,
@@ -213,7 +216,7 @@ where
     _phantom: PhantomData<(K, V, T, D)>,
 }
 
-impl<K, V, T, D> BatchBuilder<K, V, T, D>
+impl<'a, K, V, T, D> BatchBuilder<'a, K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -260,6 +263,8 @@ where
             parts,
             shard_id,
             since,
+            key_buf: Vec::new(),
+            val_buf: Vec::new(),
             // TODO: The default case would ideally be `[self.max_ts+1]` but
             // there's nothing that lets us increment a timestamp. An empty
             // antichain is guaranteed to correctly bound the data in this
@@ -337,20 +342,27 @@ where
             });
         }
 
-        let mut key_buf = Vec::new();
-        let mut val_buf = Vec::new();
+        let idx_k_before = self.key_buf.len();
+        let idx_v_before = self.val_buf.len();
         self.metrics
             .codecs
             .key
-            .encode(|| K::encode(key, &mut key_buf));
+            .encode(|| K::encode(key, &mut self.key_buf));
         self.metrics
             .codecs
             .val
-            .encode(|| V::encode(val, &mut val_buf));
+            .encode(|| V::encode(val, &mut self.val_buf));
+
+        let k_range = idx_k_before..self.key_buf.len();
+        let v_range = idx_v_before..self.val_buf.len();
 
         self.max_ts.join_assign(ts);
 
-        let size = ColumnarRecordsBuilder::columnar_record_size(&key_buf, &val_buf);
+        let size = {
+            let k = &self.key_buf[k_range.clone()];
+            let v = &self.val_buf[v_range.clone()];
+            ColumnarRecordsBuilder::columnar_record_size(k, v)
+        };
         let (ts, diff) = (ts.clone(), diff.clone());
 
         let mut part_written = false;
@@ -367,9 +379,10 @@ where
         }
 
         self.current_part_total_bytes += size;
-        self.current_part_key_bytes += key_buf.len();
-        self.current_part_value_bytes += val_buf.len();
-        self.current_part.push(((key_buf, val_buf), ts, diff));
+        self.current_part_key_bytes += k_range.len();
+        self.current_part_value_bytes += v_range.len();
+        self.current_part
+            .push(((&self.key_buf[k_range], &self.val_buf[v_range]), ts, diff));
 
         if part_written {
             Ok(Added::RecordAndParts)
@@ -394,13 +407,13 @@ where
             // our updates contain a key that exists within the range of a run we've
             // already created. we should start a new run, as this part is no longer
             // contiguous with the previous run/part
-            (Some(greatest_kv_seen), Some(greatest_kv_in_part))
-                if *greatest_kv_seen > greatest_kv_in_part.0 =>
+            (Some(_greatest_kv_seen @ (k, v)), Some(greatest_kv_in_part))
+                if (k.as_slice(), v.as_slice()) > greatest_kv_in_part.0 =>
             {
                 self.runs.push(self.parts_written);
             }
-            (_, Some(greatest_kv_in_batch)) => {
-                self.greatest_kv_seen = Some(greatest_kv_in_batch.0.clone())
+            (_, Some(_greatest_kv_in_batch @ ((k, v), _t, _d))) => {
+                self.greatest_kv_seen = Some((k.to_vec(), v.to_vec()));
             }
             (Some(_), None) | (None, None) => {}
         };
@@ -434,6 +447,8 @@ where
         self.current_part_total_bytes = 0;
         self.current_part_key_bytes = 0;
         self.current_part_value_bytes = 0;
+        self.key_buf.clear();
+        self.val_buf.clear();
         assert_eq!(self.current_part.len(), 0);
     }
 }
