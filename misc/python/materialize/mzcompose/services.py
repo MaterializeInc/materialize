@@ -287,6 +287,7 @@ class Storaged(Service):
                 "ports": ports,
                 "environment": environment,
                 "volumes": volumes,
+                "restart": "unless-stopped",
             }
         )
 

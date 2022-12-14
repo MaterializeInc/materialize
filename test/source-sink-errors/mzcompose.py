@@ -21,7 +21,14 @@ from materialize.mzcompose.services import (
     Testdrive,
 )
 
-SERVICES = [Redpanda(), Materialized(), Testdrive(), Storaged(), Postgres()]
+SERVICES = [
+    Redpanda(),
+    Materialized(),
+    Testdrive(),
+    Storaged(name="storaged-source"),
+    Storaged(name="storaged-sink"),
+    Postgres(),
+]
 
 
 class Disruption(Protocol):
@@ -42,7 +49,9 @@ class KafkaDisruption:
 
         c.down(destroy_volumes=True)
         c.up("testdrive", persistent=True)
-        c.start_and_wait_for_tcp(services=["redpanda", "materialized", "storaged"])
+        c.start_and_wait_for_tcp(
+            services=["redpanda", "materialized", "storaged-source", "storaged-sink"]
+        )
         c.wait_for_materialized()
 
         with c.override(
@@ -87,13 +96,13 @@ class KafkaDisruption:
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source-topic-${testdrive.seed}')
                   FORMAT BYTES
                   ENVELOPE NONE
-                # WITH ( REMOTE 'storaged:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+                  WITH ( REMOTE 'storaged-source:2100' )
 
                 > CREATE SINK sink1 FROM source1
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
-                # WITH ( REMOTE 'storaged:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+                  WITH ( REMOTE 'storaged-sink:2100' )
                 """
             )
         )
@@ -103,7 +112,7 @@ class KafkaDisruption:
             dedent(
                 f"""
                 > SELECT status, error ~* '{error}'
-                  FROM mz_internal.mz_source_status
+                  FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 stalled true
 
@@ -131,12 +140,12 @@ class KafkaDisruption:
                 2
 
                 > SELECT status, error
-                  FROM mz_internal.mz_source_status
+                  FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 running <null>
 
                 > SELECT status, error
-                  FROM mz_internal.mz_sink_status
+                  FROM mz_internal.mz_sink_statuses
                   WHERE name = 'sink1'
                 running <null>
                 """
@@ -157,7 +166,9 @@ class PgDisruption:
 
         c.down(destroy_volumes=True)
         c.up("testdrive", persistent=True)
-        c.start_and_wait_for_tcp(services=["postgres", "materialized", "storaged"])
+        c.start_and_wait_for_tcp(
+            services=["postgres", "materialized", "storaged-source"]
+        )
         c.wait_for_materialized()
 
         with c.override(
@@ -220,7 +231,7 @@ class PgDisruption:
             dedent(
                 f"""
                 > SELECT status, error ~* '{error}'
-                  FROM mz_internal.mz_source_status
+                  FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 stalled true
                 """
@@ -235,7 +246,7 @@ class PgDisruption:
                 INSERT INTO t1 VALUES (3);
 
                 > SELECT status, error
-                  FROM mz_internal.mz_source_status
+                  FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 running <null>
 
@@ -314,7 +325,7 @@ disruptions: List[Disruption] = [
 
 def workflow_default(c: Composition) -> None:
     """Test the detection and reporting of source/sink errors by
-    introducing a Disruption and then checking the mz_internal.mz_*_status tables
+    introducing a Disruption and then checking the mz_internal.mz_*_statuses tables
     """
 
     for id, disruption in enumerate(disruptions):
