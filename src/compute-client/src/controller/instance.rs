@@ -127,20 +127,6 @@ impl<T> Instance<T> {
         self.collections.get_mut(&id).ok_or(CollectionMissing(id))
     }
 
-    /// Return the IDs of pending peeks targeting the specified replica.
-    fn peeks_targeting(
-        &self,
-        replica_id: ReplicaId,
-    ) -> impl Iterator<Item = (Uuid, &PendingPeek<T>)> {
-        self.peeks.iter().filter_map(move |(uuid, peek)| {
-            if peek.target_replica == Some(replica_id) {
-                Some((*uuid, peek))
-            } else {
-                None
-            }
-        })
-    }
-
     /// Acquire an [`ActiveInstance`] by providing a storage controller.
     pub fn activate<'a>(
         &'a mut self,
@@ -360,7 +346,9 @@ where
 
         // Add replica to tracked state.
         self.compute.replicas.insert(id, replica);
-
+        for peek in self.compute.peeks.values_mut() {
+            peek.unfinished.insert(id);
+        }
         Ok(())
     }
 
@@ -401,21 +389,6 @@ where
             });
         }
 
-        // Peeks targeting this replica won't be served anymore now. We return an error for them to
-        // avoid leaving them pending forever.
-        let mut peek_responses = Vec::new();
-        let mut peek_ids = BTreeSet::new();
-        for (uuid, peek) in self.compute.peeks_targeting(id) {
-            peek_responses.push(ComputeControllerResponse::PeekResponse(
-                uuid,
-                PeekResponse::Error("target replica was dropped".into()),
-                peek.otel_ctx.clone(),
-            ));
-            peek_ids.insert(uuid);
-        }
-        self.compute.ready_responses.extend(peek_responses);
-        self.remove_peeks(&peek_ids);
-
         self.remove_replica_state(id);
         Ok(())
     }
@@ -431,6 +404,16 @@ where
     fn remove_replica_state(&mut self, id: ReplicaId) {
         // Remove frontier tracking for this replica.
         self.remove_write_frontiers(id);
+
+        // Removing a replica might implicitly finish peeks.
+        let mut peeks_to_remove = BTreeSet::new();
+        for (uuid, peek) in &mut self.compute.peeks {
+            peek.unfinished.remove(&id);
+            if peek.is_finished() {
+                peeks_to_remove.insert(*uuid);
+            }
+        }
+        self.remove_peeks(&peeks_to_remove);
 
         self.compute
             .replicas
@@ -665,15 +648,17 @@ where
         updates.insert(id, ChangeBatch::new_from(timestamp.clone(), 1));
         self.update_read_capabilities(&mut updates);
 
+        let unfinished = self.compute.replicas.keys().copied().collect();
         let otel_ctx = OpenTelemetryContext::obtain();
         self.compute.peeks.insert(
             uuid,
             PendingPeek {
                 target: id,
                 time: timestamp.clone(),
+                unfinished,
                 target_replica,
                 // TODO(guswynn): can we just hold the `tracing::Span` here instead?
-                otel_ctx: otel_ctx.clone(),
+                otel_ctx: Some(otel_ctx.clone()),
             },
         );
 
@@ -700,22 +685,22 @@ where
                 .compute
                 .peeks
                 .get_mut(uuid)
-                .map(|pending| pending.otel_ctx.clone())
+                // Canceled peeks should not be further responded to.
+                .map(|pending| pending.otel_ctx.take())
                 .unwrap_or_else(|| {
                     tracing::warn!("did not find pending peek for {}", uuid);
-                    OpenTelemetryContext::empty()
+                    None
                 });
-            self.compute
-                .ready_responses
-                .push_back(ComputeControllerResponse::PeekResponse(
-                    *uuid,
-                    PeekResponse::Canceled,
-                    otel_ctx,
-                ));
+            if let Some(ctx) = otel_ctx {
+                self.compute
+                    .ready_responses
+                    .push_back(ComputeControllerResponse::PeekResponse(
+                        *uuid,
+                        PeekResponse::Canceled,
+                        ctx,
+                    ));
+            }
         }
-
-        // Canceled peeks should not be further responded to.
-        self.remove_peeks(&uuids);
 
         self.compute.send(ComputeCommand::CancelPeeks { uuids });
     }
@@ -1042,28 +1027,44 @@ where
         otel_ctx: OpenTelemetryContext,
         replica_id: ReplicaId,
     ) -> Option<ComputeControllerResponse<T>> {
+        let peek = match self.compute.peeks.get_mut(&uuid) {
+            Some(peek) => peek,
+            None => {
+                tracing::warn!("did not find pending peek for {}", uuid);
+                return None;
+            }
+        };
+
         // Forward the peek response, if we didn't already forward a response
         // to this peek previously. If the peek is targeting a replica, only
         // forward the response from that replica.
-
-        let peek = self.compute.peeks.get(&uuid)?;
-
-        let target_replica = peek.target_replica.unwrap_or(replica_id);
-        if target_replica != replica_id {
-            return None;
-        }
-
-        self.remove_peeks(&[uuid].into());
-
+        // TODO: we could collect the other responses to assert equivalence?
+        // Trades resources (memory) for reassurances; idk which is best.
+        //
         // NOTE: we use the `otel_ctx` from the response, not the
         // pending peek, because we currently want the parent
-        // to be whatever the compute worker did with this peek.
+        // to be whatever the compute worker did with this peek. We
+        // still `take` the pending peek's `otel_ctx` to mark it as
+        // served.
         //
         // Additionally, we just use the `otel_ctx` from the first worker to
         // respond.
-        Some(ComputeControllerResponse::PeekResponse(
-            uuid, response, otel_ctx,
-        ))
+        let replica_targeted = peek.target_replica.unwrap_or(replica_id) == replica_id;
+        let controller_response = if replica_targeted {
+            peek.otel_ctx
+                .take()
+                .map(|_| ComputeControllerResponse::PeekResponse(uuid, response, otel_ctx))
+        } else {
+            None
+        };
+
+        // Update the per-replica tracking and draw appropriate consequences.
+        peek.unfinished.remove(&replica_id);
+        if peek.is_finished() {
+            self.remove_peeks(&[uuid].into());
+        }
+
+        controller_response
     }
 
     fn handle_subscribe_response(
@@ -1138,14 +1139,30 @@ where
 
 #[derive(Debug)]
 struct PendingPeek<T> {
-    /// ID of the collection targeted by this peek.
+    /// ID of the collected targeted by this peek.
     target: GlobalId,
     /// The peek time.
     time: T,
+    /// Replicas that have yet to respond to this peek.
+    unfinished: BTreeSet<ReplicaId>,
     /// For replica-targeted peeks, this specifies the replica whose response we should pass on.
     ///
     /// If this value is `None`, we pass on the first response.
     target_replica: Option<ReplicaId>,
     /// The OpenTelemetry context for this peek.
-    otel_ctx: OpenTelemetryContext,
+    ///
+    /// This value is `Some` as long as we have not yet passed a response up the chain, and `None`
+    /// afterwards.
+    otel_ctx: Option<OpenTelemetryContext>,
+}
+
+impl<T> PendingPeek<T> {
+    /// Return whether this peek is finished and can be cleaned up.
+    fn is_finished(&self) -> bool {
+        // If we have not yet emitted a response for the peek, the peek is not finished, even if
+        // the set of replicas we are waiting for is currently empty. It might be that the cluster
+        // has no replicas or all replicas have been temporarily removed for re-hydration. In this
+        // case, we wait for new replicas to be added to eventually serve the peek.
+        self.otel_ctx.is_none() && self.unfinished.is_empty()
+    }
 }
