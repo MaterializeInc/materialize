@@ -69,6 +69,7 @@ use crate::types::sources::{IngestionDescription, SourceExport};
 mod collection_mgmt;
 mod hosts;
 mod persist_handles;
+mod reclock_migration;
 mod rehydration;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
@@ -948,6 +949,19 @@ where
             self.state.persist_read_handles.register(id, since_handle);
 
             self.state.collections.insert(id, collection_state);
+            // We only want to migrate Kafka sources' remap collections
+            if matches!(
+                description.data_source,
+                DataSource::Ingestion(IngestionDescription {
+                    desc: crate::types::sources::SourceDesc {
+                        connection: crate::types::sources::GenericSourceConnection::Kafka(_),
+                        ..
+                    },
+                    ..
+                })
+            ) {
+                self.migrate_remap_shard(id).await;
+            }
             self.register_shard_mapping(id).await;
 
             match description.data_source {
@@ -1800,6 +1814,46 @@ where
                 shard_id
             );
         }
+    }
+
+    /// Migrate the remap collection correlated to `id` to one compatible with
+    /// `Partitioned<PartitionId, MzOffset>`.
+    ///
+    /// # Panics
+    /// - If encounters any data in the remap collection that is not in the
+    ///   format of Kafka remap data.
+    pub async fn migrate_remap_shard(&mut self, id: GlobalId) {
+        let metadata = self
+            .state
+            .collections
+            .get(&id)
+            .expect("must have seen metadata inserted")
+            .collection_metadata
+            .clone();
+
+        let migrate_to_shard = ShardId::new();
+
+        if let None = reclock_migration::RemapHandleMigrator::<T>::migrate(
+            Arc::clone(&self.persist),
+            metadata.clone(),
+            migrate_to_shard,
+            id,
+        )
+        .await
+        {
+            return;
+        }
+
+        self.rewrite_collection_metadata(
+            id,
+            DurableCollectionMetadata {
+                data_shard: metadata.data_shard,
+                remap_shard: migrate_to_shard,
+            },
+        )
+        .await;
+
+        info!("migration of {id:?}'s remap shard complete");
     }
 }
 
