@@ -149,9 +149,6 @@ impl<S: Append + 'static> Coordinator<S> {
             TimelineContext::TimestampDependent => Some(Timeline::EpochMilliseconds),
             TimelineContext::TimestampIndependent => None,
         };
-        let use_timestamp_oracle = isolation_level == &vars::IsolationLevel::StrictSerializable
-            && timeline.is_some()
-            && when.advance_to_global_ts();
 
         let upper = self.least_valid_write(id_bundle);
         let largest_not_in_advance_of_upper = self.largest_not_in_advance_of_upper(&upper);
@@ -161,14 +158,22 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.advance_by(since.borrow());
         }
 
-        if use_timestamp_oracle {
-            let timeline = timeline
-                .as_ref()
-                .expect("timeline is always present when using the timestamp oracle");
-            let timestamp_oracle = self.get_timestamp_oracle(timeline);
-            oracle_read_ts = Some(timestamp_oracle.read_ts());
-            candidate.join_assign(&oracle_read_ts.unwrap());
-        } else if when.advance_to_upper() {
+        if let Some(timeline) = &timeline {
+            if (isolation_level == &vars::IsolationLevel::StrictSerializable
+                && when.can_advance_to_global_ts())
+                || when.must_advance_to_global_ts()
+            {
+                let timestamp_oracle = self.get_timestamp_oracle(timeline);
+                oracle_read_ts = Some(timestamp_oracle.read_ts());
+                candidate.join_assign(&oracle_read_ts.unwrap());
+            } else if when.can_advance_to_upper() {
+                candidate.join_assign(&largest_not_in_advance_of_upper);
+            }
+        } else if when.can_advance_to_upper() {
+            candidate.join_assign(&largest_not_in_advance_of_upper);
+        }
+
+        if when.must_advance_to_upper() {
             candidate.join_assign(&largest_not_in_advance_of_upper);
         }
 
