@@ -61,6 +61,7 @@ steps:
           - { value: persist-maelstrom-multi-node }
           - { value: unused-deps }
           - { value: launchdarkly }
+          - { value: bounded-memory }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -553,3 +554,13 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: launchdarkly
+
+  - id: bounded-memory
+    label: "Bounded Memory"
+    artifact_paths: junit_mzcompose_*.xml
+    timeout_in_minutes: 3600
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: bounded-memory
