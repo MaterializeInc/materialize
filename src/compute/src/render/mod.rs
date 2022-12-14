@@ -111,6 +111,7 @@ use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::InspectCore;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
+use timely::order::Product;
 use timely::progress::Timestamp;
 use timely::worker::Worker as TimelyWorker;
 use timely::PartialOrder;
@@ -149,21 +150,42 @@ pub fn build_compute_dataflow<A: Allocate>(
     compute_state: &mut ComputeState,
     dataflow: DataflowDescription<Plan, CollectionMetadata>,
 ) {
+    // Mutually recursive view definitions require special handling.
+    let recursive = dataflow.objects_to_build.iter().any(|object| {
+        use mz_expr::CollectionPlan;
+        let mut depends_on = BTreeSet::new();
+        object.plan.depends_on_into(&mut depends_on);
+        depends_on.into_iter().any(|id| id >= object.id)
+    });
+
+    // Determine indexes to export
+    let indexes = dataflow
+        .index_exports
+        .iter()
+        .map(|(idx_id, (idx, _typ))| (*idx_id, dataflow.depends_on(idx.on_id), idx.clone()))
+        .collect::<Vec<_>>();
+
+    // Determine sinks to export
+    let sinks = dataflow
+        .sink_exports
+        .iter()
+        .map(|(sink_id, sink)| (*sink_id, dataflow.depends_on(sink.from), sink.clone()))
+        .collect::<Vec<_>>();
+
     let worker_logging = timely_worker.log_register().get("timely");
+
     let name = format!("Dataflow: {}", &dataflow.debug_name);
+    let input_name = format!("InputRegion: {}", &dataflow.debug_name);
+    let build_name = format!("BuildRegion: {}", &dataflow.debug_name);
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
         // We build a region here to establish a pattern of a scope inside the dataflow,
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
-        scope.clone().region_named(&name, |region| {
-            let mut context = crate::render::context::Context::for_dataflow(
-                &dataflow,
-                scope.addr().into_element(),
-            );
-            let mut tokens = BTreeMap::new();
-
+        let mut imported_sources = Vec::new();
+        let mut tokens = BTreeMap::new();
+        scope.clone().region_named(&input_name, |region| {
             // Import declared sources into the rendering context.
             for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
                 let mut mfp = source.arguments.operators.clone().map(|ops| {
@@ -206,55 +228,134 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // type checker happy. We should decide what we want our tokens to look like
                 let token: Rc<dyn Any> = Rc::new(token);
 
-                let (oks, errs) = (ok_stream.as_collection(), err_stream.as_collection());
-
-                // Associate collection bundle with the source identifier.
-                context.insert_id(
-                    mz_expr::Id::Global(*source_id),
-                    crate::render::CollectionBundle::from_collections(oks, errs),
+                let (oks, errs) = (
+                    ok_stream.as_collection().leave_region(),
+                    err_stream.as_collection().leave_region(),
                 );
+
+                imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
+
                 // Associate returned tokens with the source identifier.
                 tokens.insert(*source_id, token);
             }
-
-            // Import declared indexes into the rendering context.
-            for (idx_id, idx) in &dataflow.index_imports {
-                context.import_index(compute_state, &mut tokens, scope, region, *idx_id, &idx.0);
-            }
-
-            // We first determine indexes and sinks to export, then build the declared object, and
-            // finally export indexes and sinks. The reason for this is that we want to avoid
-            // cloning the dataflow plan for `build_object`, which can be expensive.
-
-            // Determine indexes to export
-            let indexes = dataflow
-                .index_exports
-                .iter()
-                .map(|(idx_id, (idx, _typ))| (*idx_id, dataflow.depends_on(idx.on_id), idx.clone()))
-                .collect::<Vec<_>>();
-
-            // Determine sinks to export
-            let sinks = dataflow
-                .sink_exports
-                .iter()
-                .map(|(sink_id, sink)| (*sink_id, dataflow.depends_on(sink.from), sink.clone()))
-                .collect::<Vec<_>>();
-
-            // Build declared objects.
-            for object in dataflow.objects_to_build {
-                context.build_object(region, object);
-            }
-
-            // Export declared indexes.
-            for (idx_id, imports, idx) in indexes {
-                context.export_index(compute_state, &mut tokens, imports, idx_id, &idx);
-            }
-
-            // Export declared sinks.
-            for (sink_id, imports, sink) in sinks {
-                context.export_sink(region, compute_state, &mut tokens, imports, sink_id, &sink);
-            }
         });
+
+        if recursive {
+            scope.clone().iterative::<usize, _, _>(|region| {
+                let mut context = crate::render::context::Context::for_dataflow(
+                    &dataflow,
+                    scope.addr().into_element(),
+                );
+
+                for (id, (oks, errs)) in imported_sources.into_iter() {
+                    let bundle = crate::render::CollectionBundle::from_collections(
+                        oks.enter(region),
+                        errs.enter(region),
+                    );
+                    // Associate collection bundle with the source identifier.
+                    context.insert_id(id, bundle);
+                }
+
+                // Import declared indexes into the rendering context.
+                for (idx_id, idx) in &dataflow.index_imports {
+                    context.import_index(
+                        compute_state,
+                        &mut tokens,
+                        scope,
+                        region,
+                        *idx_id,
+                        &idx.0,
+                    );
+                }
+
+                // Build declared objects.
+                // It is important that we only use the `Variable` until the object is bound.
+                // At that point, all subsequent uses should have access to the object itself.
+                let mut variables = BTreeMap::new();
+                for object in dataflow.objects_to_build.iter() {
+                    use differential_dataflow::operators::iterate::Variable;
+
+                    let oks_v = Variable::new(region, Product::new(Default::default(), 1));
+                    let err_v = Variable::new(region, Product::new(Default::default(), 1));
+
+                    context.insert_id(
+                        Id::Global(object.id),
+                        CollectionBundle::from_collections(oks_v.clone(), err_v.clone()),
+                    );
+                    variables.insert(object.id, (oks_v, err_v));
+                }
+                for object in dataflow.objects_to_build {
+                    let id = object.id;
+                    let bundle = context.render_plan(object.plan, region, region.index());
+                    // We need to ensure that the raw collection exists, but do not have enough information
+                    // here to cause that to happen.
+                    let (oks, err) = bundle.collection.clone().unwrap();
+                    context.insert_id(Id::Global(object.id), bundle);
+                    let (oks_v, err_v) = variables.remove(&id).unwrap();
+                    oks_v.set(&oks);
+                    err_v.set(&err);
+                }
+
+                // Export declared indexes.
+                for (idx_id, imports, idx) in indexes {
+                    context.export_index_iterative(
+                        compute_state,
+                        &mut tokens,
+                        imports,
+                        idx_id,
+                        &idx,
+                    );
+                }
+
+                // Export declared sinks.
+                for (sink_id, imports, sink) in sinks {
+                    context.export_sink(compute_state, &mut tokens, imports, sink_id, &sink);
+                }
+            });
+        } else {
+            scope.clone().region_named(&build_name, |region| {
+                let mut context = crate::render::context::Context::for_dataflow(
+                    &dataflow,
+                    scope.addr().into_element(),
+                );
+
+                for (id, (oks, errs)) in imported_sources.into_iter() {
+                    let bundle = crate::render::CollectionBundle::from_collections(
+                        oks.enter_region(region),
+                        errs.enter_region(region),
+                    );
+                    // Associate collection bundle with the source identifier.
+                    context.insert_id(id, bundle);
+                }
+
+                // Import declared indexes into the rendering context.
+                for (idx_id, idx) in &dataflow.index_imports {
+                    context.import_index(
+                        compute_state,
+                        &mut tokens,
+                        scope,
+                        region,
+                        *idx_id,
+                        &idx.0,
+                    );
+                }
+
+                // Build declared objects.
+                for object in dataflow.objects_to_build {
+                    context.build_object(region, object);
+                }
+
+                // Export declared indexes.
+                for (idx_id, imports, idx) in indexes {
+                    context.export_index(compute_state, &mut tokens, imports, idx_id, &idx);
+                }
+
+                // Export declared sinks.
+                for (sink_id, imports, sink) in sinks {
+                    context.export_sink(compute_state, &mut tokens, imports, sink_id, &sink);
+                }
+            });
+        }
     })
 }
 
@@ -398,6 +499,72 @@ where
         });
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
+                compute_state.traces.set(
+                    idx_id,
+                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
+                );
+            }
+            Some(ArrangementFlavor::Trace(gid, _, _)) => {
+                // Duplicate of existing arrangement with id `gid`, so
+                // just create another handle to that arrangement.
+                let trace = compute_state.traces.get(&gid).unwrap().clone();
+                compute_state.traces.set(idx_id, trace);
+            }
+            None => {
+                println!("collection available: {:?}", bundle.collection.is_none());
+                println!(
+                    "keys available: {:?}",
+                    bundle.arranged.keys().collect::<Vec<_>>()
+                );
+                panic!(
+                    "Arrangement alarmingly absent! id: {:?}, keys: {:?}",
+                    Id::Global(idx_id),
+                    &idx.key
+                );
+            }
+        };
+    }
+}
+
+// This implementation block requires the scopes have the same timestamp as the trace manager.
+// That makes some sense, because we are hoping to deposit an arrangement in the trace manager.
+impl<'g, G, T> Context<Child<'g, G, T>, Row>
+where
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+    T: RenderTimestamp,
+{
+    pub(crate) fn export_index_iterative(
+        &mut self,
+        compute_state: &mut ComputeState,
+        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
+        import_ids: BTreeSet<GlobalId>,
+        idx_id: GlobalId,
+        idx: &IndexDesc,
+    ) {
+        // put together tokens that belong to the export
+        let mut needed_tokens = Vec::new();
+        for import_id in import_ids {
+            if let Some(token) = tokens.get(&import_id) {
+                needed_tokens.push(Rc::clone(token));
+            }
+        }
+        let bundle = self.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {
+            panic!(
+                "Arrangement alarmingly absent! id: {:?}",
+                Id::Global(idx_id)
+            )
+        });
+        match bundle.arrangement(&idx.key) {
+            Some(ArrangementFlavor::Local(oks, errs)) => {
+                use differential_dataflow::operators::arrange::Arrange;
+                let oks = oks
+                    .as_collection(|k, v| (k.clone(), v.clone()))
+                    .leave()
+                    .arrange();
+                let errs = errs
+                    .as_collection(|k, v| (k.clone(), v.clone()))
+                    .leave()
+                    .arrange();
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
@@ -657,5 +824,23 @@ impl RenderTimestamp for mz_repr::Timestamp {
     }
     fn step_back(&self) -> Self {
         self.saturating_sub(1)
+    }
+}
+
+impl<T: Timestamp + Lattice> RenderTimestamp for Product<mz_repr::Timestamp, T> {
+    fn system_time(&mut self) -> &mut mz_repr::Timestamp {
+        &mut self.outer
+    }
+    fn system_delay(delay: mz_repr::Timestamp) -> <Self as Timestamp>::Summary {
+        Product::new(delay, Default::default())
+    }
+    fn event_time(&mut self) -> &mut mz_repr::Timestamp {
+        &mut self.outer
+    }
+    fn event_delay(delay: mz_repr::Timestamp) -> <Self as Timestamp>::Summary {
+        Product::new(delay, Default::default())
+    }
+    fn step_back(&self) -> Self {
+        Product::new(self.outer.saturating_sub(1), self.inner.clone())
     }
 }

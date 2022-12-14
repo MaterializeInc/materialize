@@ -14,32 +14,32 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use differential_dataflow::Collection;
-use timely::dataflow::Scope;
+use timely::dataflow::{scopes::Child, Scope};
 
 use mz_compute_client::types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{permutation_for_arrangement, MapFilterProject};
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;
 
 use crate::compute_state::SinkToken;
-use crate::render::context::Context;
+use crate::render::{context::Context, RenderTimestamp};
 
-impl<G> Context<G, Row, Timestamp>
+impl<'g, G, T> Context<Child<'g, G, T>, Row>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     /// Export the sink described by `sink` from the rendering context.
     pub(crate) fn export_sink(
         &mut self,
-        scope: &G,
         compute_state: &mut crate::compute_state::ComputeState,
         tokens: &mut std::collections::BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         import_ids: BTreeSet<GlobalId>,
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,
     ) {
-        let sink_render = get_sink_render_for(&sink.connection);
+        let sink_render = get_sink_render_for::<G>(&sink.connection);
 
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -71,8 +71,10 @@ where
             bundle.as_collection_core(mfp, Some((key.clone(), None)), self.until.clone())
         };
 
+        let ok_collection = ok_collection.leave();
+        let err_collection = err_collection.leave();
+
         let sink_token = sink_render.render_continuous_sink(
-            scope,
             compute_state,
             sink,
             sink_id,
@@ -97,11 +99,10 @@ where
 /// A type that can be rendered as a dataflow sink.
 pub(crate) trait SinkRender<G>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     fn render_continuous_sink(
         &self,
-        scope: &G,
         compute_state: &mut crate::compute_state::ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
@@ -109,14 +110,14 @@ where
         err_collection: Collection<G, DataflowError, Diff>,
     ) -> Option<Rc<dyn Any>>
     where
-        G: Scope<Timestamp = Timestamp>;
+        G: Scope<Timestamp = mz_repr::Timestamp>;
 }
 
 fn get_sink_render_for<G>(
     connection: &ComputeSinkConnection<CollectionMetadata>,
 ) -> Box<dyn SinkRender<G>>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     match connection {
         ComputeSinkConnection::Subscribe(connection) => Box::new(connection.clone()),
