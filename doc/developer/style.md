@@ -122,15 +122,23 @@ Some key principles to highlight are:
 * Avoid contractions and spell out words in full.
 * Word choices to be mindful of: find vs. exists, may vs. can vs. might.
 
-### System catalog naming
-We adhere to naming standards for our system catalog relations (tables, views), which includes both the stable `mz_catalog` relations and the unstable `mz_internal` relations.
+### System catalog style
+We adhere to standards for our system catalog relations (tables, views), which includes both the stable `mz_catalog` relations and the unstable `mz_internal` relations.
 
-Catalog relation names should be consistent with the user-facing naming and messaging in our docs. The names should not reference internal-only concepts when possible.
+Modeling standards:
+* Normalize the schema. If you’re adding a table that adds detail to rows in an existing table, refer to those rows by ID, and don’t duplicate columns that already exist. E.g., the `mz_kafka_sources` table does not include the name of the source, since that information is available in the `mz_sources` table.
+  * Remember, Materialize is good at joins! We can always add syntax sugar via a `SHOW` command to spare users from typing out the joins for common queries.
 
-Singular vs Plural:
-* Relations representing objects in our system are plural. Tables and views that list "all items of type x in the system" are the typical case. Examples are `mz_sources`, `mz_connections`. This is consistent with the precedent set in the existing `mz_catalog` relations.
-* Relations representing properties of an objects, where each record has a mapping to a system objects, are singular. Examples are `mz_source_status` and `mz_source_status_history`.
-* When in doubt, use singular.
+Naming standards:
+* Catalog relation names should be consistent with the user-facing naming and messaging in our docs. The names should not reference internal-only concepts when possible.
+* Avoid all but the most common abbreviations. Say `position` instead of `pos`. Say `return` instead of `ret`. Say `definition` instead of `def`.
+  * We allow three abbreviations at present: `id`, `oid`, and `ip`.
+* Use `kebab-case` for enum values. E.g., the `type` of a Confluent Schema Registry connection is `confluent-schema-registry` and the `type` of a materialized view is `materialized-view`. Only use hyphens to separate multiple words. Don’t introduce hyphens for CamelCased proper nouns. For example, the “AWS PrivateLink” connection is represented as `aws-privatelink`.
+* Name timestamp fields with an `_at` suffix, e.g., `occurred_at`.
+* Do not name boolean fields with an `is_` prefix. E.g., say `indexed`, not `is_indexed`.
+* For relation names, pluralize the final noun, unless the final noun in the name is a collective noun. Most relations in the catalog will be plural, e.g. `mz_sources` and `mz_connections`.
+  * Examples of collective final nouns are `_usage` and `_history`.
+  * A good example of these standards in practice is the set of relations `mz_sources`, `mz_source_statuses`, and `mz_source_status_history`.
 
 ## Log message style
 
