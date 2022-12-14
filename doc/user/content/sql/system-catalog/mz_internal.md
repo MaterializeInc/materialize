@@ -399,6 +399,20 @@ Field       | Type       | Meaning
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`mz_timestamp`] | The next timestamp at which the dataflow may change.
 
+### `mz_storage_host_metrics`
+
+The `mz_storage_host_metrics` table gives the last known CPU and RAM utilization statistics
+for all processes of all extant storage replicas.
+
+At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+
+Field              | Type       | Meaning
+-------------------|------------|--------
+`id`               | [`text`]   | The ID of the storage object (source or sink).
+`process_id`       | [`bigint`] | An identifier of a process within a replica.
+`cpu_nano_cores`   | [`bigint`] | Approximate CPU usage, in billionths of a vCPU core.
+`memory_bytes`     | [`bigint`] | Approximate RAM usage, in bytes.
+
 ### `mz_source_status`
 
 The `mz_source_status` view provides the current state for each source in the

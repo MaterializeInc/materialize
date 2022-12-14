@@ -26,15 +26,15 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
-use mz_ore::halt;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_types::Codec64;
 use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 
 use mz_build_info::BuildInfo;
-use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort};
+use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort, ServiceProcessMetrics};
 use mz_ore::collections::CollectionExt;
+use mz_ore::halt;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::GlobalId;
 
@@ -74,7 +74,7 @@ pub struct StorageHosts<T> {
     /// The known storage hosts, identified by network address.
     hosts: HashMap<StorageHostAddr, StorageHost<T>>,
     /// The assignment of storage objects to storage hosts.
-    objects: HashMap<GlobalId, StorageHostAddr>,
+    objects: Arc<std::sync::Mutex<HashMap<GlobalId, StorageHostAddr>>>,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
     /// A handle to Persist
@@ -107,7 +107,7 @@ where
             orchestrator: config.orchestrator,
             storaged_image: config.storaged_image,
             init_container_image: config.init_container_image,
-            objects: HashMap::new(),
+            objects: Arc::new(std::sync::Mutex::new(HashMap::new())),
             hosts: HashMap::new(),
             initialized: false,
             persist,
@@ -125,6 +125,12 @@ where
         for client in self.clients() {
             client.send(StorageCommand::InitializationComplete);
         }
+    }
+
+    /// Creates a [`MetricsFetcher`] that can be used to repeatedly fetch
+    /// metrics for all known storage objects.
+    pub fn metrics_fetcher(&self) -> MetricsFetcher {
+        MetricsFetcher::new(Arc::clone(&self.orchestrator), Arc::clone(&self.objects))
     }
 
     /// Provisions a storage host for the storage object with the specified ID.
@@ -159,7 +165,10 @@ where
             }
         };
 
-        if let Some(previous_address) = self.objects.insert(id, host_addr.clone()) {
+        if let Some(previous_address) = {
+            let mut objects = self.objects.lock().expect("lock poisoned");
+            objects.insert(id, host_addr.clone())
+        } {
             if previous_address != host_addr {
                 self.remove_id_from_host(id, host_addr.clone());
             }
@@ -190,7 +199,10 @@ where
     /// up any internal state.
     pub async fn deprovision(&mut self, id: GlobalId) -> Result<(), anyhow::Error> {
         self.drop_storage_host(id).await?;
-        if let Some(host_addr) = self.objects.remove(&id) {
+
+        let host_addr = { self.objects.lock().expect("lock poisoned").remove(&id) };
+
+        if let Some(host_addr) = host_addr {
             self.remove_id_from_host(id, host_addr);
         }
 
@@ -212,7 +224,9 @@ where
     /// Retrives the client for the storage host for the given ID, if the
     /// ID is currently provisioned.
     pub fn client(&mut self, id: GlobalId) -> Option<&mut RehydratingStorageClient<T>> {
-        let host_addr = self.objects.get(&id)?;
+        let objects = self.objects.lock().expect("lock poisoned");
+        let host_addr = objects.get(&id)?;
+
         match self.hosts.get_mut(host_addr) {
             None => panic!(
                 "StorageHosts internally inconsistent: \
@@ -308,14 +322,18 @@ where
             .filter_map(user_id)
             .collect();
 
-        let catalog_ids: HashSet<_> = self
-            .objects
-            .keys()
-            .filter_map(|x| match x {
-                GlobalId::User(x) => Some(x),
-                _ => None,
-            })
-            .collect();
+        let catalog_ids: HashSet<_> = {
+            let objects = self.objects.lock().expect("lock poisoned");
+
+            objects
+                .keys()
+                .filter_map(|x| match x {
+                    GlobalId::User(x) => Some(x),
+                    _ => None,
+                })
+                .cloned()
+                .collect()
+        };
 
         for id in service_ids {
             if id >= next_id {
@@ -335,5 +353,62 @@ where
         }
 
         Ok(())
+    }
+}
+
+/// A helper that shares state with a [`StorageHosts`] and allows repeatedly
+/// fetching metrics for all known storage hosts.
+pub struct MetricsFetcher {
+    /// The orchestrator that we use to fetch metrics.
+    orchestrator: Arc<dyn NamespacedOrchestrator>,
+    /// The shared assignment of storage objects to storage hosts. This is
+    /// shared with a [`StorageHosts`].
+    objects: Arc<std::sync::Mutex<HashMap<GlobalId, StorageHostAddr>>>,
+}
+
+impl MetricsFetcher {
+    /// Creates a new [`MetricsFetcher`].
+    fn new(
+        orchestrator: Arc<dyn NamespacedOrchestrator>,
+        objects: Arc<std::sync::Mutex<HashMap<GlobalId, StorageHostAddr>>>,
+    ) -> Self {
+        Self {
+            orchestrator,
+            objects,
+        }
+    }
+
+    /// Fetches and returns metrics for all known storage hosts.
+    pub async fn fetch_metrics(
+        &mut self,
+    ) -> Vec<(
+        GlobalId,
+        String,
+        Result<Vec<ServiceProcessMetrics>, anyhow::Error>,
+    )> {
+        let service_ids = {
+            self.objects
+                .lock()
+                .expect("lock poisoned")
+                .iter()
+                .map(|(id, host_addr)| (id.clone(), host_addr.clone()))
+                .collect::<Vec<_>>()
+        };
+        tracing::trace!("fetch_metrics: service_ids: {:?}", service_ids);
+
+        let mut metrics = Vec::new();
+
+        // TODO(aljoscha): Fetching all this sequentially will be slow when we
+        // have many sources. We should allow fetching metrics for multiple
+        // services on the Orchestrator and then use it here.
+        for (service_id, host_addr) in service_ids {
+            let service_metrics = self
+                .orchestrator
+                .fetch_service_metrics(&service_id.to_string())
+                .await;
+            metrics.push((service_id, host_addr, service_metrics));
+        }
+
+        metrics
     }
 }
