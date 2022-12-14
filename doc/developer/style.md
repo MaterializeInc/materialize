@@ -137,7 +137,7 @@ Naming standards:
 * Name timestamp fields with an `_at` suffix, e.g., `occurred_at`.
 * Do not name boolean fields with an `is_` prefix. E.g., say `indexed`, not `is_indexed`.
 * For relation names, pluralize the final noun, unless the final noun in the name is a collective noun. Most relations in the catalog will be plural, e.g. `mz_sources` and `mz_connections`.
-  * Examples of collective final nouns are `_usage` and `_history`.
+  * Examples of collective final nouns are `_usage`, `_history`, and `_utilization`.
   * A good example of these standards in practice is the set of relations `mz_sources`, `mz_source_statuses`, and `mz_source_status_history`.
 
 ## Log message style
