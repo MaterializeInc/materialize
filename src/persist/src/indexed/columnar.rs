@@ -121,6 +121,11 @@ impl ColumnarRecords {
 
     /// Borrow Self as a [ColumnarRecordsRef].
     fn borrow<'a>(&'a self) -> ColumnarRecordsRef<'a> {
+        // The ColumnarRecords constructor already validates, so don't bother
+        // doing it again.
+        //
+        // TODO: Forcing everything through a `fn new` would make this more
+        // obvious.
         ColumnarRecordsRef {
             len: self.len,
             key_data: self.key_data.as_slice(),
@@ -325,7 +330,9 @@ impl<'a> ColumnarRecordsRef<'a> {
         if idx >= self.len {
             return None;
         }
-        debug_assert_eq!(self.validate(), Ok(()));
+        // There used to be `debug_assert_eq!(self.validate(), Ok(()))`, but it
+        // resulted in accidentally O(n^2) behavior in debug mode. Instead, we
+        // push that responsibility to the ColumnarRecordsRef constructor.
         let key_range = self.key_offsets[idx].to_usize()..self.key_offsets[idx + 1].to_usize();
         let val_range = self.val_offsets[idx].to_usize()..self.val_offsets[idx + 1].to_usize();
         let key = &self.key_data[key_range];
@@ -413,7 +420,7 @@ impl ColumnarRecordsBuilder {
 
     /// Borrow Self as a [ColumnarRecordsRef].
     fn borrow<'a>(&'a self) -> ColumnarRecordsRef<'a> {
-        ColumnarRecordsRef {
+        let ret = ColumnarRecordsRef {
             len: self.len,
             key_data: self.key_data.as_slice(),
             key_offsets: self.key_offsets.as_slice(),
@@ -421,7 +428,9 @@ impl ColumnarRecordsBuilder {
             val_offsets: self.val_offsets.as_slice(),
             timestamps: self.timestamps.as_slice(),
             diffs: self.diffs.as_slice(),
-        }
+        };
+        debug_assert_eq!(ret.validate(), Ok(()));
+        ret
     }
 
     /// Reserve space for `additional` more records, based on `key_size_guess` and
