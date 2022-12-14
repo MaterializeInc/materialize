@@ -339,6 +339,14 @@ static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("emit_timestamp_notice"),
+    value: &false,
+    description:
+        "Boolean flag indicating whether to send a NOTICE specifying query timestamps (Materialize).",
+    internal: false,
+};
+
 /// Session variables.
 ///
 /// Materialize roughly follows the PostgreSQL configuration model, which works
@@ -391,6 +399,7 @@ pub struct SessionVars {
     timezone: SessionVar<TimeZone>,
     transaction_isolation: SessionVar<IsolationLevel>,
     real_time_recency: SessionVar<bool>,
+    emit_timestamp_notice: SessionVar<bool>,
 }
 
 impl Default for SessionVars {
@@ -420,6 +429,7 @@ impl Default for SessionVars {
             timezone: SessionVar::new(&TIMEZONE),
             transaction_isolation: SessionVar::new(&TRANSACTION_ISOLATION),
             real_time_recency: SessionVar::new(&REAL_TIME_RECENCY),
+            emit_timestamp_notice: SessionVar::new(&EMIT_TIMESTAMP_NOTICE),
         }
     }
 }
@@ -438,7 +448,7 @@ impl SessionVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values for this session.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 22] = [
+        let vars: [&dyn Var; 23] = [
             &self.application_name,
             &self.client_encoding,
             &self.client_min_messages,
@@ -461,6 +471,7 @@ impl SessionVars {
             &self.timezone,
             &self.transaction_isolation,
             &self.real_time_recency,
+            &self.emit_timestamp_notice,
         ];
         vars.into_iter()
     }
@@ -537,6 +548,8 @@ impl SessionVars {
             Ok(&self.transaction_isolation)
         } else if name == REAL_TIME_RECENCY.name {
             Ok(&self.real_time_recency)
+        } else if name == EMIT_TIMESTAMP_NOTICE.name {
+            Ok(&self.emit_timestamp_notice)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -675,6 +688,8 @@ impl SessionVars {
             }
         } else if name == REAL_TIME_RECENCY.name {
             self.real_time_recency.set(value, local)
+        } else if name == EMIT_TIMESTAMP_NOTICE.name {
+            self.emit_timestamp_notice.set(value, local)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -719,6 +734,8 @@ impl SessionVars {
             self.transaction_isolation.reset(local);
         } else if name == REAL_TIME_RECENCY.name {
             self.real_time_recency.reset(local);
+        } else if name == EMIT_TIMESTAMP_NOTICE.name {
+            self.emit_timestamp_notice.reset(local);
         } else if name == CLIENT_ENCODING.name
             || name == DATE_STYLE.name
             || name == FAILPOINTS.name
@@ -763,6 +780,7 @@ impl SessionVars {
             timezone,
             transaction_isolation,
             real_time_recency,
+            emit_timestamp_notice,
         } = self;
         application_name.end_transaction(action);
         client_min_messages.end_transaction(action);
@@ -778,6 +796,7 @@ impl SessionVars {
         timezone.end_transaction(action);
         transaction_isolation.end_transaction(action);
         real_time_recency.end_transaction(action);
+        emit_timestamp_notice.end_transaction(action);
     }
 
     /// Returns the value of the `application_name` configuration parameter.
@@ -889,6 +908,11 @@ impl SessionVars {
     /// Returns the value of `real_time_recency` configuration parameter.
     pub fn real_time_recency(&self) -> bool {
         *self.real_time_recency.value()
+    }
+
+    /// Returns the value of `emit_timestamp_notice` configuration parameter.
+    pub fn emit_timestamp_notice(&self) -> bool {
+        *self.emit_timestamp_notice.value()
     }
 }
 

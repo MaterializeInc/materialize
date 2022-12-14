@@ -433,6 +433,7 @@ impl ErrorResponse {
             AdapterNotice::ClusterReplicaStatusChanged { .. } => SqlState::WARNING,
             AdapterNotice::DroppedActiveDatabase { .. } => SqlState::WARNING,
             AdapterNotice::DroppedActiveCluster { .. } => SqlState::WARNING,
+            AdapterNotice::QueryTimestamp { .. } => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -584,6 +585,7 @@ impl Severity {
             AdapterNotice::ClusterReplicaStatusChanged { .. } => Severity::Notice,
             AdapterNotice::DroppedActiveDatabase { .. } => Severity::Notice,
             AdapterNotice::DroppedActiveCluster { .. } => Severity::Notice,
+            AdapterNotice::QueryTimestamp { .. } => Severity::Notice,
         }
     }
 }
