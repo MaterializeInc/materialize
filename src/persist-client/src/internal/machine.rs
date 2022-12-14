@@ -762,11 +762,19 @@ where
             // Only sleep after the first fetch, because the first time through
             // maybe our state was just out of date.
             retry = Some(match retry.take() {
-                None => self
-                    .metrics
-                    .retries
-                    .snapshot
-                    .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream()),
+                None => {
+                    debug!(
+                        "snapshot {} as of {:?} produced for upper {:?}",
+                        self.shard_id(),
+                        as_of,
+                        upper,
+                    );
+
+                    self.metrics
+                        .retries
+                        .snapshot
+                        .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream())
+                }
                 Some(retry) => {
                     // Use a duration based threshold here instead of the usual
                     // INFO_MIN_ATTEMPTS because here we're waiting on an

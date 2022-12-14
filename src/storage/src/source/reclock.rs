@@ -28,13 +28,14 @@ use differential_dataflow::consolidation;
 use differential_dataflow::difference::Abelian;
 use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
+use mz_storage_client::util::remap_handle::RemapHandle;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp;
+use tracing::{info, warn};
 
 use mz_persist_client::Upper;
 use mz_repr::Diff;
-use mz_storage_client::util::remap_handle::RemapHandle;
 
 pub mod compat;
 
@@ -336,6 +337,14 @@ where
                 None
             }
         }));
+        if !frontier.is_empty() && source_upper.frontier().is_empty() {
+            warn!(
+                "returning empty source upper for non-empty frontier \
+                frontier {:?} \
+                remap trace {:?}",
+                frontier, inner.remap_trace
+            )
+        }
         Ok(source_upper.frontier().to_owned())
     }
 
@@ -359,6 +368,7 @@ where
         // And then consolidate
         consolidation::consolidate_updates(&mut inner.remap_trace);
         assert_eq!(new_since.len(), 1);
+        let prev_src_since = inner.source_since.clone();
         inner.source_since = Antichain::from_iter(
             new_since
                 .get(0)
@@ -374,7 +384,13 @@ where
                 .into_iter()
                 .flatten(),
         );
+        let prev_inner_since = inner.since.clone();
         inner.since = new_since;
+
+        info!(
+            "prev since {:?}\tnew_since {:?}\ncompacted {:?} to {:?} using {:?}",
+            prev_inner_since, inner.since, prev_src_since, inner.source_since, inner.remap_trace
+        );
     }
 
     pub fn share(&self) -> Self {
@@ -453,6 +469,7 @@ where
         let trace_batch = if upper.elements() == [IntoTime::minimum()] {
             let (_, upper) = operator.clock_stream.next().await.expect("end of time");
             let batch = vec![(FromTime::minimum(), IntoTime::minimum(), 1)];
+
             match operator.append_batch(batch, upper.clone()).await {
                 Ok(trace_batch) => trace_batch,
                 Err(Upper(actual_upper)) => operator.sync(actual_upper.borrow()).await,
@@ -498,6 +515,7 @@ where
                 .next()
                 .await
                 .expect("requested data after empty antichain");
+
             self.upper = upper;
             updates.append(&mut batch);
         }
@@ -545,12 +563,15 @@ where
                 .expect("clock stream ended without reaching the empty frontier");
 
             let mut updates = vec![];
+
             for src_ts in self.source_upper.frontier().iter().cloned() {
                 updates.push((src_ts, ts.clone(), -1));
             }
+
             for src_ts in new_source_upper.iter().cloned() {
                 updates.push((src_ts, ts.clone(), 1));
             }
+
             consolidation::consolidate_updates(&mut updates);
 
             let new_batch = match self.append_batch(updates, upper).await {
@@ -668,6 +689,7 @@ mod tests {
             "unittest",
             0,
             1,
+            false,
         )
         .await
         .unwrap();

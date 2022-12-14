@@ -109,6 +109,9 @@ pub struct RawSourceCreationConfig {
     pub resume_upper: Antichain<Timestamp>,
     /// A handle to the persist client cache
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    /// Until we generalize reclocking, we need to understand if this data
+    /// should express or synthesize partition data.
+    pub partitioned_source: bool,
 }
 
 /// A batch of messages from a source reader, along with the batch upper, the
@@ -293,6 +296,7 @@ where
         base_metrics: _,
         now: _,
         persist_clients: _,
+        partitioned_source: _,
     } = config;
     Box::pin(async_stream::stream!({
         // Most recent batch upper frontier, does not regress.
@@ -511,6 +515,7 @@ where
         base_metrics,
         now: now_fn,
         persist_clients: _,
+        partitioned_source: _,
     } = config;
 
     let (stream, capability) = async_source(
@@ -1023,6 +1028,7 @@ where
         base_metrics: _,
         now,
         persist_clients,
+        partitioned_source,
     } = config;
 
     let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
@@ -1075,6 +1081,7 @@ where
             "remap",
             worker_id,
             worker_count,
+            partitioned_source,
         )
         .await
         .unwrap_or_else(|e| panic!("Failed to create remap handle for source {}: {:#}", name, e));
@@ -1086,21 +1093,29 @@ where
 
         // The global view of the source_upper, which we track by combining
         // summaries from the raw reader operators.
-        let mut global_source_upper = OffsetAntichain::from(
-            follower
-                .source_upper_at_frontier(resume_upper.borrow())
-                .expect("source_upper_at_frontier to be used correctly"),
-        );
+        let source_upper = follower
+            .source_upper_at_frontier(resume_upper.borrow())
+            .expect("source_upper_at_frontier to be used correctly");
+        if source_upper.is_empty() {
+            warn!(
+                "remap({id}) {worker_id}/{worker_count}: \
+                    empty source upper.
+                    resume upper {:?} \
+                    follower source upper {:?}",
+                resume_upper.borrow(),
+                follower.source_upper(),
+            )
+        }
+        let mut global_source_upper = OffsetAntichain::from(source_upper);
 
         // Emit initial snapshot of the remap_shard, bootstrapping
         // downstream reclock operators.
-        trace!(
+        info!(
             "remap({id}) {worker_id}/{worker_count}: \
                 emitting initial remap_trace. \
                 source_upper: {:?} \
                 trace_updates: {:?}",
-            global_source_upper,
-            &initial_batch.updates
+            global_source_upper, &initial_batch.updates
         );
 
         // Out of an abundance of caution, do not hold the output handle
@@ -1126,7 +1141,7 @@ where
                 _ = ticker.tick() => {
                     let mut remap_trace_batch = timestamper.mint_compat(&global_source_upper).await;
 
-                    trace!(
+                    info!(
                         "remap({id}) {worker_id}/{worker_count}: minted new bindings. \
                         source_upper: {:?} \
                         trace_updates: {:?} \
@@ -1248,6 +1263,7 @@ where
         base_metrics,
         now: _,
         persist_clients: _,
+        partitioned_source: _,
     } = config;
 
     let bytes_read_counter = base_metrics.bytes_read.clone();
