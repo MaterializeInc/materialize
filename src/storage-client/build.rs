@@ -45,6 +45,7 @@ fn main() {
                 "storage-client/src/types/sinks.proto",
                 "storage-client/src/types/sources.proto",
                 "storage-client/src/types/sources/encoding.proto",
+                "storage-client/src/types/sources/data.proto",
             ],
             &[".."],
         )

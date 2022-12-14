@@ -43,7 +43,7 @@ use crate::client::{
     StorageResponse,
 };
 use crate::controller::ResumptionFrontierCalculator;
-use crate::types::sources::SourceData;
+use crate::types::sources::data::SourceData;
 
 /// A storage client that replays the command stream on failure.
 ///

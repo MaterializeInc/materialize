@@ -615,7 +615,8 @@ mod tests {
     use mz_persist_client::{PersistConfig, PersistLocation, ShardId};
     use mz_repr::{GlobalId, Timestamp};
     use mz_storage_client::controller::CollectionMetadata;
-    use mz_storage_client::types::sources::{MzOffset, SourceData};
+    use mz_storage_client::types::sources::data::SourceData;
+    use mz_storage_client::types::sources::MzOffset;
     use mz_timely_util::order::Partitioned;
 
     // 15 minutes

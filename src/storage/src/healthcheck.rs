@@ -16,7 +16,7 @@ use timely::progress::Antichain;
 
 use mz_persist_client::{PersistClient, ShardId, Upper};
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
-use mz_storage_client::types::sources::SourceData;
+use mz_storage_client::types::sources::data::SourceData;
 
 pub async fn write_to_persist(
     collection_id: GlobalId,

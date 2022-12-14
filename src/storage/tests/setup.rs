@@ -27,8 +27,9 @@ use mz_storage::source::metrics::SourceBaseMetrics;
 use mz_storage::source::testscript::ScriptCommand;
 use mz_storage::DecodeMetrics;
 use mz_storage_client::client::StorageCommand;
+use mz_storage_client::types::sources::data::SourceData;
 use mz_storage_client::types::sources::{
-    encoding::SourceDataEncoding, GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope,
+    encoding::SourceDataEncoding, GenericSourceConnection, SourceDesc, SourceEnvelope,
     TestScriptSourceConnection,
 };
 

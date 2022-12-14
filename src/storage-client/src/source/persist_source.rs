@@ -38,7 +38,7 @@ use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuild
 
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
-use crate::types::sources::SourceData;
+use crate::types::sources::data::SourceData;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.

@@ -179,13 +179,6 @@ message ProtoSourceConnection {
     }
 }
 
-message ProtoSourceData {
-    oneof kind {
-        mz_repr.row.ProtoRow ok = 1;
-        errors.ProtoDataflowError err = 2;
-    }
-}
-
 message ProtoKinesisSourceConnection {
     mz_repr.global_id.ProtoGlobalId connection_id = 3;
     string stream_name = 1;

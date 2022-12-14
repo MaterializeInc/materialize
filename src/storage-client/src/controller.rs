@@ -63,7 +63,8 @@ use crate::types::hosts::StorageHostConfig;
 use crate::types::sinks::{
     MetadataUnfilled, ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc,
 };
-use crate::types::sources::{IngestionDescription, SourceData, SourceExport};
+use crate::types::sources::data::SourceData;
+use crate::types::sources::{IngestionDescription, SourceExport};
 
 mod collection_mgmt;
 mod hosts;

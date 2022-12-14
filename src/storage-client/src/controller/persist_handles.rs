@@ -29,7 +29,7 @@ use crate::client::StorageResponse;
 use crate::client::{TimestamplessUpdate, Update};
 use crate::controller::PersistEpoch;
 use crate::controller::StorageError;
-use crate::types::sources::SourceData;
+use crate::types::sources::data::SourceData;
 
 /// A wrapper that holds on to backing persist shards/collections that the
 /// storage controller is aware of. The handles hold back the since frontier and

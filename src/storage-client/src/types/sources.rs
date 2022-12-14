@@ -10,48 +10,46 @@
 //! Types and traits related to the introduction of changing collections into `dataflow`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::ops::{Add, AddAssign, Deref, DerefMut};
+use std::ops::{Add, AddAssign};
 use std::rc::Rc;
 use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
-use bytes::BufMut;
-use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
 use globset::{Glob, GlobBuilder};
 use itertools::Itertools;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
-use prost::Message;
 use serde::{Deserialize, Serialize};
 use timely::order::PartialOrder;
 use timely::progress::{Antichain, PathSummary, Timestamp};
 use timely::scheduling::ActivateOnDrop;
 use uuid::Uuid;
 
-use mz_expr::{MirScalarExpr, PartitionId};
+use mz_expr::MirScalarExpr;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::Codec64;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
-use mz_repr::{ColumnType, Datum, Diff, GlobalId, RelationDesc, RelationType, Row, ScalarType};
-use mz_timely_util::order::{Interval, Partitioned, RangeBound};
+use mz_repr::adt::numeric::NumericMaxScale;
+use mz_repr::{ColumnType, Diff, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
 use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::types::connections::aws::AwsConfig;
 use crate::types::connections::{KafkaConnection, PostgresConnection};
-use crate::types::errors::DataflowError;
 use crate::types::hosts::StorageHostConfig;
 
 use self::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
 use proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
 use proto_load_generator_source_connection::Generator as ProtoGenerator;
 
+pub mod data;
 pub mod encoding;
+
+use data::SourceData;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -2263,152 +2261,6 @@ impl RustType<ProtoS3KeySource> for S3KeySource {
                     "ProtoS3KeySource::kind".into(),
                 ))
             }
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SourceData(pub Result<Row, DataflowError>);
-
-impl Deref for SourceData {
-    type Target = Result<Row, DataflowError>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for SourceData {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl RustType<ProtoSourceData> for SourceData {
-    fn into_proto(&self) -> ProtoSourceData {
-        use proto_source_data::Kind;
-        ProtoSourceData {
-            kind: Some(match &**self {
-                Ok(row) => Kind::Ok(row.into_proto()),
-                Err(err) => Kind::Err(err.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoSourceData) -> Result<Self, TryFromProtoError> {
-        use proto_source_data::Kind;
-        match proto.kind {
-            Some(kind) => match kind {
-                Kind::Ok(row) => Ok(SourceData(Ok(row.into_rust()?))),
-                Kind::Err(err) => Ok(SourceData(Err(err.into_rust()?))),
-            },
-            None => Result::Err(TryFromProtoError::missing_field("ProtoSourceData::kind")),
-        }
-    }
-}
-
-impl Codec for SourceData {
-    fn codec_name() -> String {
-        "protobuf[SourceData]".into()
-    }
-
-    fn encode<B: BufMut>(&self, buf: &mut B) {
-        self.into_proto()
-            .encode(buf)
-            .expect("no required fields means no initialization errors");
-    }
-
-    fn decode(buf: &[u8]) -> Result<Self, String> {
-        let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
-        proto.into_rust().map_err(|err| err.to_string())
-    }
-}
-
-impl From<Partitioned<PartitionId, MzOffset>> for SourceData {
-    fn from(partition: Partitioned<PartitionId, MzOffset>) -> SourceData {
-        let mut row = Row::with_capacity(2);
-        let mut packer = row.packer();
-
-        match partition.interval() {
-            Interval::Range(l, u) => match (l, u) {
-                (RangeBound::Bottom, RangeBound::Top) => {
-                    packer.push_list(&[Datum::JsonNull, Datum::JsonNull]);
-                }
-                (RangeBound::Bottom, RangeBound::Elem(PartitionId::Kafka(pid))) => {
-                    packer.push_list(&[
-                        Datum::JsonNull,
-                        Datum::Numeric(OrderedDecimal(Numeric::from(*pid))),
-                    ]);
-                }
-                (RangeBound::Elem(PartitionId::Kafka(pid)), RangeBound::Top) => {
-                    packer.push_list(&[
-                        Datum::Numeric(OrderedDecimal(Numeric::from(*pid))),
-                        Datum::JsonNull,
-                    ]);
-                }
-                (
-                    RangeBound::Elem(PartitionId::Kafka(l_pid)),
-                    RangeBound::Elem(PartitionId::Kafka(u_pid)),
-                ) => {
-                    packer.push_list(&[
-                        Datum::Numeric(OrderedDecimal(Numeric::from(*l_pid))),
-                        Datum::Numeric(OrderedDecimal(Numeric::from(*u_pid))),
-                    ]);
-                }
-                _ => unreachable!("don't know how to handle this partition"),
-            },
-            Interval::Point(PartitionId::Kafka(pid)) => {
-                packer.push(Datum::Numeric(OrderedDecimal(Numeric::from(*pid))))
-            }
-            Interval::Point(PartitionId::None) => {}
-        }
-
-        packer.push(Datum::UInt64(partition.timestamp().offset));
-        SourceData(Ok(row))
-    }
-}
-
-impl TryFrom<SourceData> for Partitioned<PartitionId, MzOffset> {
-    type Error = anyhow::Error;
-    fn try_from(data: SourceData) -> Result<Self, Self::Error> {
-        let row = data.0.map_err(|_| anyhow!("invalid binding"))?;
-        let mut datums = row.iter();
-        Ok(match (datums.next(), datums.next()) {
-            (Some(Datum::List(list)), Some(Datum::UInt64(offset))) => {
-                if offset != 0 {
-                    bail!("range type ({:?}) with non-0 offset {}", list, offset)
-                }
-
-                let mut list_iter = list.iter();
-                let (lower, upper) = match (list_iter.next(), list_iter.next()) {
-                    (Some(Datum::JsonNull), Some(Datum::JsonNull)) => (None, None),
-                    (Some(Datum::JsonNull), Some(Datum::Numeric(pid))) => {
-                        (None, Some(PartitionId::Kafka(pid.0.try_into().unwrap())))
-                    }
-                    (Some(Datum::Numeric(pid)), Some(Datum::JsonNull)) => {
-                        (Some(PartitionId::Kafka(pid.0.try_into().unwrap())), None)
-                    }
-                    (Some(Datum::Numeric(l_pid)), Some(Datum::Numeric(u_pid))) => (
-                        Some(PartitionId::Kafka(l_pid.0.try_into().unwrap())),
-                        Some(PartitionId::Kafka(u_pid.0.try_into().unwrap())),
-                    ),
-                    invalid_binding => {
-                        bail!("invalid binding inside Datum::List {:?}", invalid_binding)
-                    }
-                };
-
-                Partitioned::with_range(lower, upper, MzOffset::from(offset))
-            }
-            (Some(Datum::Numeric(pid)), Some(Datum::UInt64(offset))) => {
-                Partitioned::with_partition(
-                    PartitionId::Kafka(pid.0.try_into().unwrap()),
-                    MzOffset::from(offset),
-                )
-            }
-            (Some(Datum::UInt64(offset)), None) => {
-                Partitioned::with_partition(PartitionId::None, MzOffset::from(offset))
-            }
-            invalid_binding => bail!("invalid binding {:?}", invalid_binding),
         })
     }
 }

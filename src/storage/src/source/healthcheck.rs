@@ -24,7 +24,7 @@ use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::sources::SourceData;
+use mz_storage_client::types::sources::data::SourceData;
 
 pub fn pack_status_row(
     source_id: GlobalId,

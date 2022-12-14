@@ -37,7 +37,7 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source::NO_FLOW_CONTROL;
 use mz_storage_client::types::errors::DataflowError;
-use mz_storage_client::types::sources::SourceData;
+use mz_storage_client::types::sources::data::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 
 use crate::compute_state::ComputeState;

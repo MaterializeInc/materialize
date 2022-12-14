@@ -176,7 +176,7 @@ mod tests {
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::{PersistConfig, PersistLocation, ShardId};
-    use mz_storage_client::types::sources::SourceData;
+    use mz_storage_client::types::sources::data::SourceData;
 
     // Test suite
     #[tokio::test(start_paused = true)]

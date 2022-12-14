@@ -32,7 +32,8 @@ use mz_storage_client::client::{StorageCommand, StorageResponse};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
-use mz_storage_client::types::sources::{IngestionDescription, SourceData};
+use mz_storage_client::types::sources::data::SourceData;
+use mz_storage_client::types::sources::IngestionDescription;
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::sink::SinkBaseMetrics;
