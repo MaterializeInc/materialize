@@ -255,8 +255,19 @@ where
 
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
-    let mut flow_control_input = builder.new_input(flow_control_input, Pipeline);
     let (mut descs_output, descs_stream) = builder.new_output();
+    let mut flow_control_input = builder.new_input_connection(
+        flow_control_input,
+        Pipeline,
+        // Disconnect the flow_control_input from the output capabilities of the
+        // operator. We could leave it connected without risking deadlock so
+        // long as there is a non zero summary on the feedback edge. But it may
+        // be less efficient because the pipeline will be moving in increments
+        // of SUMMARY even though we have potentially dumped a lot more data in
+        // the pipeline because of batch boundaries. Leaving it unconnected
+        // means the pipeline will be able to retire bigger chunks of work.
+        vec![Antichain::new()],
+    );
 
     let shutdown_button = builder.build(move |caps| async move {
         let mut cap_set = CapabilitySet::from_elem(caps.into_element());
