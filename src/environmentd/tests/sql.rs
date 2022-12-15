@@ -25,6 +25,7 @@ use axum::response::Response;
 use axum::{routing, Json, Router};
 use chrono::{DateTime, Utc};
 use http::StatusCode;
+use mz_repr::Timestamp;
 use postgres::Row;
 use regex::Regex;
 use serde_json::json;
@@ -33,6 +34,7 @@ use tokio_postgres::error::SqlState;
 use tracing::info;
 
 use mz_adapter::catalog::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
+use mz_adapter::TimestampExplanation;
 use mz_ore::assert_contains;
 use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::retry::Retry;
@@ -1078,7 +1080,7 @@ fn test_explain_timestamp_table() {
     let mut client = server.connect(postgres::NoTls).unwrap();
     let timestamp_re = Regex::new(r"\s*(\d+) \(\d+-\d\d-\d\d \d\d:\d\d:\d\d.\d\d\d\)").unwrap();
 
-    client.batch_execute("CREATE TABLE t1 (i1 INT)").unwrap();
+    client.batch_execute("CREATE TABLE t1 (i1 int)").unwrap();
 
     let expect = "                query timestamp:<TIMESTAMP>
           oracle read timestamp:<TIMESTAMP>
@@ -1098,6 +1100,22 @@ source materialize.public.t1 (u1, storage):
     let explain: String = row.get(0);
     let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
     assert_eq!(explain, expect, "{explain}\n\n{expect}");
+}
+
+// Test `EXPLAIN TIMESTAMP AS JSON`
+#[test]
+fn test_explain_timestamp_json() {
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t1 (i1 int)").unwrap();
+
+    let row = client
+        .query_one("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t1;", &[])
+        .unwrap();
+    let explain: String = row.get(0);
+    // Just check that we can round-trip to the original type
+    let _explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
 }
 
 // Test that a query that causes a compute instance to panic will resolve

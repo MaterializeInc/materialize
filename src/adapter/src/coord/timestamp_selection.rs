@@ -13,6 +13,7 @@ use std::fmt;
 
 use chrono::NaiveDateTime;
 use differential_dataflow::lattice::Lattice;
+use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{event, Level};
 
@@ -32,7 +33,7 @@ use crate::session::{vars, Session};
 use crate::AdapterError;
 
 /// The timeline and timestamp context of a read.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TimestampContext<T> {
     /// Read is executed in a specific timeline with a specific timestamp.
     TimelineTimestamp(Timeline, T),
@@ -396,6 +397,7 @@ impl<S: Append + 'static> Coordinator<S> {
 }
 
 /// Information used when determining the timestamp for a query.
+#[derive(Serialize, Deserialize)]
 pub struct TimestampDetermination<T> {
     /// The chosen timestamp context from `determine_timestamp`.
     pub timestamp_context: TimestampContext<T>,
@@ -419,6 +421,7 @@ impl<T: TimestampManipulation> TimestampDetermination<T> {
 }
 
 /// Information used when determining the timestamp for a query.
+#[derive(Serialize, Deserialize)]
 pub struct TimestampExplanation<T> {
     /// The chosen timestamp from `determine_timestamp`.
     pub determination: TimestampDetermination<T>,
@@ -426,6 +429,7 @@ pub struct TimestampExplanation<T> {
     pub sources: Vec<TimestampSource<T>>,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct TimestampSource<T> {
     pub name: String,
     pub read_frontier: Vec<T>,

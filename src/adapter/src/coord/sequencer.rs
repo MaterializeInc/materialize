@@ -32,7 +32,7 @@ use mz_expr::{
     OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::task;
-use mz_repr::explain_new::Explainee;
+use mz_repr::explain_new::{ExplainFormat, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
 use mz_sql::catalog::{
@@ -2771,9 +2771,17 @@ impl<S: Append + 'static> Coordinator<S> {
         let ExplainPlan {
             raw_plan,
             explainee,
+            format,
             ..
         } = plan;
 
+        let is_json = match format {
+            ExplainFormat::Text => false,
+            ExplainFormat::Json => true,
+            ExplainFormat::Dot => {
+                return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
+            }
+        };
         let compute_instance = self.catalog.active_compute_instance(session)?.id;
         let window_functions = self.catalog.system_config().window_functions();
 
@@ -2850,7 +2858,12 @@ impl<S: Append + 'static> Coordinator<S> {
             determination,
             sources,
         };
-        let rows = vec![Row::pack_slice(&[Datum::from(&*explanation.to_string())])];
+        let s = if is_json {
+            serde_json::to_string_pretty(&explanation).unwrap()
+        } else {
+            explanation.to_string()
+        };
+        let rows = vec![Row::pack_slice(&[Datum::from(s.as_str())])];
         Ok(send_immediate_rows(rows))
     }
 
