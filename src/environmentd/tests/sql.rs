@@ -25,7 +25,6 @@ use axum::response::Response;
 use axum::{routing, Json, Router};
 use chrono::{DateTime, Utc};
 use http::StatusCode;
-use mz_repr::Timestamp;
 use postgres::Row;
 use regex::Regex;
 use serde_json::json;
@@ -39,6 +38,7 @@ use mz_ore::assert_contains;
 use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
+use mz_repr::Timestamp;
 
 use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 
