@@ -2224,31 +2224,39 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_csr_connection_option(&mut self) -> Result<CsrConnectionOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[AWS, PASSWORD, PORT, SSL, URL, USERNAME])? {
-            AWS => {
-                self.expect_keyword(PRIVATELINK)?;
-                return Ok(CsrConnectionOption {
-                    name: CsrConnectionOptionName::AwsPrivatelink,
-                    value: Some(self.parse_object_option_value()?),
-                });
-            }
-            PASSWORD => CsrConnectionOptionName::Password,
-            PORT => CsrConnectionOptionName::Port,
-            SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
-                KEY => CsrConnectionOptionName::SslKey,
-                CERTIFICATE => {
-                    if self.parse_keyword(AUTHORITY) {
-                        CsrConnectionOptionName::SslCertificateAuthority
-                    } else {
-                        CsrConnectionOptionName::SslCertificate
-                    }
+        let name =
+            match self.expect_one_of_keywords(&[AWS, PASSWORD, PORT, SSH, SSL, URL, USERNAME])? {
+                AWS => {
+                    self.expect_keyword(PRIVATELINK)?;
+                    return Ok(CsrConnectionOption {
+                        name: CsrConnectionOptionName::AwsPrivatelink,
+                        value: Some(self.parse_object_option_value()?),
+                    });
                 }
+                PASSWORD => CsrConnectionOptionName::Password,
+                PORT => CsrConnectionOptionName::Port,
+                SSH => {
+                    self.expect_keyword(TUNNEL)?;
+                    return Ok(CsrConnectionOption {
+                        name: CsrConnectionOptionName::SshTunnel,
+                        value: Some(self.parse_object_option_value()?),
+                    });
+                }
+                SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
+                    KEY => CsrConnectionOptionName::SslKey,
+                    CERTIFICATE => {
+                        if self.parse_keyword(AUTHORITY) {
+                            CsrConnectionOptionName::SslCertificateAuthority
+                        } else {
+                            CsrConnectionOptionName::SslCertificate
+                        }
+                    }
+                    _ => unreachable!(),
+                },
+                URL => CsrConnectionOptionName::Url,
+                USERNAME => CsrConnectionOptionName::Username,
                 _ => unreachable!(),
-            },
-            URL => CsrConnectionOptionName::Url,
-            USERNAME => CsrConnectionOptionName::Username,
-            _ => unreachable!(),
-        };
+            };
         Ok(CsrConnectionOption {
             name,
             value: self.parse_optional_option_value()?,

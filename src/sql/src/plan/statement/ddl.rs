@@ -46,7 +46,7 @@ use mz_storage_client::types::connections::aws::{
 };
 use mz_storage_client::types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, Connection, CsrConnectionHttpAuth, KafkaConnection,
-    KafkaSecurity, KafkaTlsConfig, SaslConfig, StringOrSecret, TlsIdentity, Tunnel,
+    KafkaSecurity, KafkaTlsConfig, SaslConfig, SshTunnel, StringOrSecret, TlsIdentity, Tunnel,
 };
 use mz_storage_client::types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
@@ -2697,10 +2697,10 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                     };
                     let ssh_tunnel = scx.catalog.get_item(id);
                     match ssh_tunnel.connection()? {
-                        Connection::Ssh(connection) => Tunnel::Ssh {
+                        Connection::Ssh(connection) => Tunnel::Ssh(SshTunnel {
                             connection_id: *id,
                             connection: connection.clone(),
-                        },
+                        }),
                         _ => {
                             sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item)
                         }
@@ -2824,7 +2824,8 @@ generate_extracted_config!(
     (SslCertificate, StringOrSecret),
     (SslCertificateAuthority, StringOrSecret),
     (Username, StringOrSecret),
-    (Password, with_options::Secret)
+    (Password, with_options::Secret),
+    (SshTunnel, with_options::Object)
 );
 
 impl CsrConnectionOptionExtracted {
@@ -2854,23 +2855,15 @@ impl CsrConnectionOptionExtracted {
             username,
             password: self.password.map(|secret| secret.into()),
         });
-        let aws_privatelink_id = match self.aws_privatelink {
-            None => None,
-            Some(aws_privatelink) => {
-                let id = GlobalId::from(aws_privatelink);
-                let entry = scx.catalog.get_item(&id);
-                match entry.connection()? {
-                    Connection::AwsPrivatelink(_) => Some(id),
-                    _ => sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item),
-                }
-            }
-        };
+
+        let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
+
         Ok(mz_storage_client::types::connections::CsrConnection {
             url,
             tls_root_cert: self.ssl_certificate_authority,
             tls_identity,
             http_auth,
-            aws_privatelink_id,
+            tunnel,
         })
     }
 }
@@ -2914,35 +2907,7 @@ impl PostgresConnectionOptionExtracted {
             Some(m) => sql_bail!("invalid CONNECTION: unknown SSL MODE {}", m.quoted()),
         };
 
-        let tunnel = match (self.ssh_tunnel, self.aws_privatelink) {
-            (None, None) => Tunnel::Direct,
-            (Some(ssh_tunnel), None) => {
-                let id = GlobalId::from(ssh_tunnel);
-                let ssh_tunnel = scx.catalog.get_item(&id);
-                match ssh_tunnel.connection()? {
-                    Connection::Ssh(connection) => Tunnel::Ssh {
-                        connection_id: id,
-                        connection: connection.clone(),
-                    },
-                    _ => sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item),
-                }
-            }
-            (None, Some(aws_privatelink)) => {
-                let id = GlobalId::from(aws_privatelink);
-                let entry = scx.catalog.get_item(&id);
-                match entry.connection()? {
-                    Connection::AwsPrivatelink(_) => Tunnel::AwsPrivatelink(AwsPrivatelink {
-                        connection_id: id,
-                        // We always use the port specified in the PostgreSQL connection.
-                        port: None,
-                    }),
-                    _ => sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item),
-                }
-            }
-            (Some(_), Some(_)) => {
-                sql_bail!("cannot specify both SSH TUNNEL and AWS PRIVATELINK");
-            }
-        };
+        let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
 
         Ok(mz_storage_client::types::connections::PostgresConnection {
             database: self

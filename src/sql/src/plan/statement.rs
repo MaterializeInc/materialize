@@ -18,6 +18,7 @@ use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     RawObjectName, ShowStatement, UnresolvedDatabaseName, UnresolvedSchemaName,
 };
+use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
 
 use crate::ast::{Ident, ObjectType, Statement, UnresolvedObjectName};
 use crate::catalog::{
@@ -30,7 +31,7 @@ use crate::names::{
     ResolvedObjectName, ResolvedSchemaName, SchemaSpecifier,
 };
 use crate::plan::error::PlanError;
-use crate::plan::query;
+use crate::plan::{query, with_options};
 use crate::plan::{Params, Plan, PlanContext, PlanKind};
 use crate::{normalize, DEFAULT_SCHEMA};
 
@@ -671,5 +672,41 @@ impl<'a> StatementContext<'a> {
 
     pub fn humanize_column_type(&self, typ: &ColumnType) -> String {
         self.catalog.humanize_column_type(typ)
+    }
+
+    pub(crate) fn build_tunnel_definition(
+        &self,
+        ssh_tunnel: Option<with_options::Object>,
+        aws_privatelink: Option<with_options::Object>,
+    ) -> Result<Tunnel, PlanError> {
+        match (ssh_tunnel, aws_privatelink) {
+            (None, None) => Ok(Tunnel::Direct),
+            (Some(ssh_tunnel), None) => {
+                let id = GlobalId::from(ssh_tunnel);
+                let ssh_tunnel = self.catalog.get_item(&id);
+                match ssh_tunnel.connection()? {
+                    Connection::Ssh(connection) => Ok(Tunnel::Ssh(SshTunnel {
+                        connection_id: id,
+                        connection: connection.clone(),
+                    })),
+                    _ => sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item),
+                }
+            }
+            (None, Some(aws_privatelink)) => {
+                let id = GlobalId::from(aws_privatelink);
+                let entry = self.catalog.get_item(&id);
+                match entry.connection()? {
+                    Connection::AwsPrivatelink(_) => Ok(Tunnel::AwsPrivatelink(AwsPrivatelink {
+                        connection_id: id,
+                        // We always use the port as specified by the top-level connection.
+                        port: None,
+                    })),
+                    _ => sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item),
+                }
+            }
+            (Some(_), Some(_)) => {
+                sql_bail!("cannot specify both SSH TUNNEL and AWS PRIVATELINK");
+            }
+        }
     }
 }
