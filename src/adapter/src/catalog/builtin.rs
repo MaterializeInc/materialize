@@ -1400,6 +1400,16 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
         .with_column("memory_bytes", ScalarType::UInt64.nullable(false)),
 });
 
+pub static MZ_STORAGE_HOST_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_storage_host_sizes",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("size", ScalarType::String.nullable(false))
+        .with_column("workers", ScalarType::UInt64.nullable(false))
+        .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(false))
+        .with_column("memory_bytes", ScalarType::UInt64.nullable(false)),
+});
+
 pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replica_heartbeats",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2924,6 +2934,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_STORAGE_SHARDS),
         Builtin::Source(&MZ_STORAGE_HOST_METRICS),
         Builtin::View(&MZ_STORAGE_USAGE),
+        Builtin::Table(&MZ_STORAGE_HOST_SIZES),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),
         Builtin::Index(&MZ_SHOW_CONNECTIONS_IND),

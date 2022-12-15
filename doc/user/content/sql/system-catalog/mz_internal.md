@@ -413,6 +413,23 @@ Field              | Type       | Meaning
 `cpu_nano_cores`   | [`bigint`] | Approximate CPU usage, in billionths of a vCPU core.
 `memory_bytes`     | [`bigint`] | Approximate RAM usage, in bytes.
 
+### `mz_storage_host_sizes`
+
+The `mz_storage_host_sizes` table contains a mapping of logical sizes
+(e.g. "xlarge") to physical sizes (number of workers, and CPU and memory allocations per process).
+
+{{< warning >}}
+The values in this table may change at any time, and users should not rely on
+them for any kind of capacity planning.
+{{< /warning >}}
+
+| Field            | Type      | Meaning                                                       |
+|------------------|-----------|---------------------------------------------------------------|
+| `size`           | [`text`]  | The human-readable size.                                      |
+| `workers`        | [`uint8`] | The number of Timely Dataflow workers per process.            |
+| `cpu_nano_cores` | [`uint8`] | The CPU allocation per process, in billionths of a vCPU core. |
+| `memory_bytes`   | [`uint8`] | The RAM allocation per process, in billionths of a vCPU core. |
+
 ### `mz_source_status`
 
 The `mz_source_status` view provides the current state for each source in the

@@ -741,6 +741,10 @@ mz_storage_host_metrics
 SOURCE
 materialize
 mz_internal
+mz_storage_host_sizes
+BASE TABLE
+materialize
+mz_internal
 mz_storage_shards
 SOURCE
 materialize
