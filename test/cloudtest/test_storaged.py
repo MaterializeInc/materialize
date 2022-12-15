@@ -17,8 +17,8 @@ from materialize.cloudtest.exists import exists, not_exists
 from materialize.cloudtest.wait import wait
 
 
-def test_storaged_creation(mz: MaterializeApplication) -> None:
-    """Test that creating multiple sources causes multiple storageds to be spawned."""
+def test_source_creation(mz: MaterializeApplication) -> None:
+    """Test that creating multiple sources causes multiple storage hosts to be spawned."""
     mz.testdrive.run(
         input=dedent(
             """
@@ -50,15 +50,15 @@ def test_storaged_creation(mz: MaterializeApplication) -> None:
         )[0][0]
         assert id is not None
 
-        storaged = f"pod/storage-{id}-0"
-        wait(condition="condition=Ready", resource=storaged)
+        storage_host = f"pod/storage-{id}-0"
+        wait(condition="condition=Ready", resource=storage_host)
 
         mz.environmentd.sql(f"DROP SOURCE {source}")
-        wait(condition="delete", resource=storaged)
+        wait(condition="delete", resource=storage_host)
 
 
-def test_storaged_resizing(mz: MaterializeApplication) -> None:
-    """Test that resizing a given source causes the storaged to be replaced."""
+def test_source_resizing(mz: MaterializeApplication) -> None:
+    """Test that resizing a given source causes the storage host to be replaced."""
     mz.testdrive.run(
         input=dedent(
             """
@@ -69,7 +69,7 @@ def test_storaged_resizing(mz: MaterializeApplication) -> None:
 
             > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
-            > CREATE SOURCE resize_storaged
+            > CREATE SOURCE resize_source
               FROM KAFKA CONNECTION kafka
               (TOPIC 'testdrive-test-${testdrive.seed}')
               FORMAT BYTES
@@ -78,40 +78,40 @@ def test_storaged_resizing(mz: MaterializeApplication) -> None:
         )
     )
     id = mz.environmentd.sql_query(
-        f"SELECT id FROM mz_sources WHERE name = 'resize_storaged'"
+        f"SELECT id FROM mz_sources WHERE name = 'resize_source'"
     )[0][0]
     assert id is not None
-    storaged = f"pod/storage-{id}-0"
+    storage_host = f"pod/storage-{id}-0"
 
-    wait(condition="condition=Ready", resource=storaged)
+    wait(condition="condition=Ready", resource=storage_host)
 
     mz.testdrive.run(
         input=dedent(
             """
-            > ALTER SOURCE resize_storaged
+            > ALTER SOURCE resize_source
               SET (SIZE '16');
             """
         ),
         no_reset=True,
     )
 
-    wait(condition="condition=Ready", resource=storaged)
+    wait(condition="condition=Ready", resource=storage_host)
 
     # NB: We'd like to do the following, but jsonpath gives us no way to express it!
     # TODO: revisit or handroll a retry loop
-    # wait(condition=f"jsonpath=metadata.labels.storage.environmentd.materialize.cloud/size=16", resource=storaged)
+    # wait(condition=f"jsonpath=metadata.labels.storage.environmentd.materialize.cloud/size=16", resource=storage_host)
 
-    mz.environmentd.sql("DROP SOURCE resize_storaged")
-    wait(condition="delete", resource=storaged)
+    mz.environmentd.sql("DROP SOURCE resize_source")
+    wait(condition="delete", resource=storage_host)
 
 
 @pytest.mark.parametrize("failpoint", [False, True])
-def test_storaged_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
-    print("Starting test_storaged_shutdown")
+def test_source_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
+    print("Starting test_source_shutdown")
     if failpoint:
         mz.set_environmentd_failpoints("kubernetes_drop_service=return(error)")
 
-    """Test that dropping a source causes its respective storaged to shut down."""
+    """Test that dropping a source causes its respective storage host to shut down."""
     mz.testdrive.run(
         input=dedent(
             """
@@ -128,7 +128,7 @@ def test_storaged_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
               FORMAT BYTES
               ENVELOPE NONE;
 
-            # Those two objects do not currently create storaged instances
+            # Those two objects do not currently create storage hosts
             # > CREATE MATERIALIZED VIEW view1 AS SELECT COUNT(*) FROM source1;
 
             # > CREATE SINK sink1
@@ -145,11 +145,11 @@ def test_storaged_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
     ][0]
     assert id is not None
 
-    storaged_pod = f"pod/storage-{id}-0"
-    storaged_svc = f"service/storage-{id}"
+    storage_host_pod = f"pod/storage-{id}-0"
+    storage_host_svc = f"service/storage-{id}"
 
-    wait(condition="condition=Ready", resource=storaged_pod)
-    exists(storaged_svc)
+    wait(condition="condition=Ready", resource=storage_host_pod)
+    exists(storage_host_svc)
 
     mz.wait_for_sql()
 
@@ -162,12 +162,12 @@ def test_storaged_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
         # Disable failpoint here, this should end the crash loop of environmentd
         mz.set_environmentd_failpoints("")
 
-    wait(condition="delete", resource=storaged_pod)
-    not_exists(storaged_svc)
+    wait(condition="delete", resource=storage_host_pod)
+    not_exists(storage_host_svc)
 
 
 def test_sink_resizing(mz: MaterializeApplication) -> None:
-    """Test that resizing a given sink causes the storaged to be replaced."""
+    """Test that resizing a given sink causes the storage host to be replaced."""
 
     def get_num_workers(mz: MaterializeApplication) -> str:
         return mz.kubectl(
@@ -206,11 +206,11 @@ def test_sink_resizing(mz: MaterializeApplication) -> None:
         f"SELECT id FROM mz_sinks WHERE name = 'resize_sink'"
     )[0][0]
     assert id is not None
-    storaged = f"pod/storage-{id}-0"
+    storage_host = f"pod/storage-{id}-0"
 
     assert get_num_workers(mz) == "'2'"
 
-    wait(condition="condition=Ready", resource=storaged)
+    wait(condition="condition=Ready", resource=storage_host)
 
     mz.testdrive.run(
         input=dedent(
@@ -231,4 +231,4 @@ def test_sink_resizing(mz: MaterializeApplication) -> None:
     assert get_num_workers(mz) == "'16'"
 
     mz.environmentd.sql("DROP SINK resize_sink")
-    wait(condition="delete", resource=storaged)
+    wait(condition="delete", resource=storage_host)

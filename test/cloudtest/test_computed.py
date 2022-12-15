@@ -15,8 +15,8 @@ from materialize.cloudtest.exists import exists, not_exists
 from materialize.cloudtest.wait import wait
 
 
-def test_computed_sizing(mz: MaterializeApplication) -> None:
-    """Test that a SIZE N cluster indeed creates N computed instances."""
+def test_cluster_sizing(mz: MaterializeApplication) -> None:
+    """Test that a SIZE N cluster indeed creates N clusterd instances."""
     SIZE = 2
 
     mz.environmentd.sql(
@@ -45,10 +45,10 @@ def test_computed_sizing(mz: MaterializeApplication) -> None:
     "failpoint",
     ["", "after_catalog_drop_replica=panic", "after_sequencer_drop_replica=panic"],
 )
-def test_computed_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
-    """Test that dropping a cluster or replica causes the associated computeds to shut down."""
+def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
+    """Test that dropping a cluster or replica causes the associated clusterds to shut down."""
 
-    print(f"Testing computed shutdown with failpoint={failpoint}")
+    print(f"Testing cluster shutdown with failpoint={failpoint}")
 
     mz.set_environmentd_failpoints(failpoint)
 

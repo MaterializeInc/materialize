@@ -55,25 +55,13 @@ class MzStop(Action):
         return {MzIsRunning}
 
 
-class KillStoraged(Action):
-    """Kills the storaged processes in the environmentd container. The process orchestrator will restart them."""
-
-    @classmethod
-    def requires(self) -> Set[Type[Capability]]:
-        return {MzIsRunning}
-
-    def run(self, c: Composition) -> None:
-        # Depending on the workload, storaged may not be running, hence the || true
-        c.exec("materialized", "bash", "-c", "kill -9 `pidof storaged` || true")
-
-
-class KillComputed(Action):
-    """Kills the computed processes in the environmentd container. The process orchestrator will restart them."""
+class KillClusterd(Action):
+    """Kills the clusterd processes in the environmentd container. The process orchestrator will restart them."""
 
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
         return {MzIsRunning, ViewExists}
 
     def run(self, c: Composition) -> None:
-        # Depending on the workload, computed may not be running, hence the || true
-        c.exec("materialized", "bash", "-c", "kill -9 `pidof computed` || true")
+        # Depending on the workload, clusterd may not be running, hence the || true
+        c.exec("materialized", "bash", "-c", "kill -9 `pidof clusterd` || true")

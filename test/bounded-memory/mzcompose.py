@@ -13,10 +13,10 @@ from textwrap import dedent
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
+    Clusterd,
     Materialized,
     Postgres,
     Redpanda,
-    Storaged,
     Testdrive,
 )
 
@@ -28,14 +28,14 @@ STRING_PAD = "x" * PAD_LEN
 REPEAT = 16 * 1024
 ITERATIONS = 128
 MATERIALIZED_MEMORY = "5Gb"
-STORAGED_MEMORY = "3Gb"
+CLUSTERD_MEMORY = "3Gb"
 
 SERVICES = [
     Materialized(memory=MATERIALIZED_MEMORY),
     Testdrive(no_reset=True, seed=1, default_timeout="3600s"),
     Redpanda(),
     Postgres(),
-    Storaged(memory=STORAGED_MEMORY),
+    Clusterd(memory=CLUSTERD_MEMORY),
 ]
 
 
@@ -71,7 +71,7 @@ class PgCdcScenario(Scenario):
         > CREATE SOURCE mz_source
           FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
           FOR ALL TABLES
-          WITH ( REMOTE 'storaged:2100' );
+          WITH ( REMOTE 'clusterd:2100' );
 
         > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
         """
@@ -117,7 +117,7 @@ class KafkaScenario(Scenario):
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
           ENVELOPE UPSERT
-          WITH ( REMOTE 'storaged:2100' )
+          WITH ( REMOTE 'clusterd:2100' )
 
         > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM s1;
         """
@@ -167,7 +167,7 @@ SCENARIOS = [
         ),
         post_restart=dedent(
             f"""
-            # We do not do DELETE post-restart, as it will cause OOM for both computed and storaged
+            # We do not do DELETE post-restart, as it will cause OOM for clusterd
             > SELECT * FROM v1; /* expect {ITERATIONS * REPEAT} */
             {ITERATIONS * REPEAT}
             """
@@ -364,7 +364,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.down(destroy_volumes=True)
 
         c.start_and_wait_for_tcp(
-            services=["redpanda", "materialized", "postgres", "storaged"]
+            services=["redpanda", "materialized", "postgres", "clusterd"]
         )
         c.wait_for_materialized()
 
@@ -372,8 +372,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.testdrive(scenario.pre_restart)
 
         # Restart Mz to confirm that re-hydration is also bounded memory
-        c.kill("materialized", "storaged")
-        c.start_and_wait_for_tcp(services=["materialized", "storaged"])
+        c.kill("materialized", "clusterd")
+        c.start_and_wait_for_tcp(services=["materialized", "clusterd"])
         c.wait_for_materialized()
 
         c.testdrive(scenario.post_restart)

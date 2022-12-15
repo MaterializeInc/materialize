@@ -26,7 +26,7 @@ RUN apt-get update \
 
 COPY --from=crdb /cockroach/cockroach /usr/local/bin/cockroach
 
-COPY storaged computed environmentd entrypoint.sh /usr/local/bin/
+COPY clusterd environmentd entrypoint.sh /usr/local/bin/
 
 USER materialize
 

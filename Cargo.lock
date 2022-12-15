@@ -671,7 +671,7 @@ dependencies = [
 [[package]]
 name = "axum"
 version = "0.6.1"
-source = "git+https://github.com/tokio-rs/axum.git#71e83291e18056556a242d9e504911c0bfb1a917"
+source = "git+https://github.com/tokio-rs/axum.git#978ae6335862b264b4368e01a52177d98c42b2d9"
 dependencies = [
  "async-trait",
  "axum-core",
@@ -707,7 +707,7 @@ dependencies = [
 [[package]]
 name = "axum-core"
 version = "0.3.0"
-source = "git+https://github.com/tokio-rs/axum.git#71e83291e18056556a242d9e504911c0bfb1a917"
+source = "git+https://github.com/tokio-rs/axum.git#978ae6335862b264b4368e01a52177d98c42b2d9"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3492,12 +3492,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-clusterd"
+version = "0.38.0-dev"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "fail",
+ "futures",
+ "mz-build-info",
+ "mz-cloud-resources",
+ "mz-compute",
+ "mz-compute-client",
+ "mz-http-util",
+ "mz-orchestrator-tracing",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-pid-file",
+ "mz-prof",
+ "mz-service",
+ "mz-storage",
+ "mz-storage-client",
+ "mz-timely-util",
+ "once_cell",
+ "tikv-jemallocator",
+ "timely",
+ "tokio",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-compute"
 version = "0.38.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
- "axum",
  "bytesize",
  "clap",
  "crossbeam-channel",
@@ -3513,7 +3543,6 @@ dependencies = [
  "mz-ore",
  "mz-persist-client",
  "mz-pid-file",
- "mz-prof",
  "mz-repr",
  "mz-service",
  "mz-storage-client",
@@ -3522,7 +3551,6 @@ dependencies = [
  "prometheus",
  "scopeguard",
  "serde",
- "tikv-jemallocator",
  "timely",
  "tokio",
  "tracing",
@@ -4642,7 +4670,6 @@ dependencies = [
  "aws-sdk-kinesis",
  "aws-sdk-s3",
  "aws-sdk-sqs",
- "axum",
  "bytesize",
  "chrono",
  "clap",
@@ -4690,7 +4717,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
- "tikv-jemallocator",
  "timely",
  "tokio",
  "tokio-postgres",

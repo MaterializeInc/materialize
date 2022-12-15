@@ -152,7 +152,7 @@ where
             self.reset();
         } else {
             // Note that we are not guaranteed to observe other compute commands than
-            // `CreateTimely`. The `Partitioned` compute client is used by `computed` processes,
+            // `CreateTimely`. The `Partitioned` compute client is used by `clusterd` processes,
             // and in a multi-process replica only the first process receives all compute commands.
             // We should therefore not add any logic here that relies on observing commands other
             // than `CreateTimely`.

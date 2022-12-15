@@ -571,7 +571,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
         let init_containers = init_container_image.map(|image| {
             vec![Container {
-                name: "k8s-init-container".to_string(),
+                name: "init".to_string(),
                 image: Some(image),
                 image_pull_policy: Some(self.config.image_pull_policy.to_string()),
                 env: Some(vec![

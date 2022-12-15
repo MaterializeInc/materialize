@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-name: storaged
+name: clusterd
 pre-image:
   - type: cargo-build
-    bin: storaged
+    bin: clusterd
     strip: false

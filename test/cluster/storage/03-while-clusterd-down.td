@@ -7,13 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Verify that the data ingested before `storaged` crashed is still present but
+# Verify that the data ingested before `clusterd` crashed is still present but
 # that newly ingested data does not appear.
 
 # Increased from the default because of CI flakiness.
 $ set-sql-timeout duration=180s
 
-# With storaged down, the upper of remote1 and remote2 will not advance. However, the global timestamp will advance.
+# With clusterd down, the upper of remote1 and remote2 will not advance. However, the global timestamp will advance.
 # In strict serializable mode we may select a timestamp that is ahead of on of the sources uppers and hang forever.
 > SET transaction_isolation = serializable
 

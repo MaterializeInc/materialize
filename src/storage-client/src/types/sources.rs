@@ -67,7 +67,7 @@ pub struct IngestionDescription<S = ()> {
     pub ingestion_metadata: S,
     /// Collections to be exported by this ingestion.
     pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
-    /// The address of a `storaged` process on which to install the source.
+    /// The address of a `clusterd` process on which to install the source.
     pub host_config: StorageHostConfig,
 }
 

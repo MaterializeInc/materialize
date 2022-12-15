@@ -81,7 +81,7 @@ pub static METADATA_EXPORT: TypedCollection<GlobalId, DurableExportMetadata<mz_r
 
 pub static ALL_COLLECTIONS: &[&str] = &[METADATA_COLLECTION.name(), METADATA_EXPORT.name()];
 
-// Do this dance so that we keep the storaged controller expressed in terms of a generic timestamp `T`.
+// Do this dance so that we keep the storage controller expressed in terms of a generic timestamp `T`.
 struct MetadataExportFetcher;
 trait MetadataExport<T>
 where
@@ -150,7 +150,7 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportDescription<T = mz_repr::Timestamp> {
     pub sink: StorageSinkDesc<MetadataUnfilled, T>,
-    /// The address of a `storaged` process on which to install the sink or the
+    /// The address of a `clusterd` process on which to install the sink or the
     /// settings for spinning up a controller-managed process.
     pub host_config: StorageHostConfig,
 }
@@ -296,7 +296,7 @@ pub trait StorageController: Debug + Send {
     /// the collection, and in turn advancing its `upper` (aka
     /// `write_frontier`). The most common such "writers" are:
     ///
-    /// * `storaged` instances, for source ingestions
+    /// * `clusterd` instances, for source ingestions
     ///
     /// * introspection collections (which this controller writes to)
     ///
@@ -791,11 +791,8 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
 impl<T> StorageController for Controller<T>
 where
     T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
-
-    // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-
     MetadataExportFetcher: MetadataExport<T>,
     DurableExportMetadata<T>: mz_stash::Data,
 {
@@ -1058,7 +1055,7 @@ where
                         }
                         IntrospectionType::SourceStatusHistory
                         | IntrospectionType::SinkStatusHistory => {
-                            // nothing to do: only storaged writes rows to these collections
+                            // nothing to do: only clusterd writes rows to these collections
                         }
                     }
                 }
@@ -1521,8 +1518,6 @@ impl From<NonZeroI64> for PersistEpoch {
 impl<T> Controller<T>
 where
     T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
-
-    // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
 {
@@ -1533,7 +1528,7 @@ where
         persist_location: PersistLocation,
         persist_clients: Arc<Mutex<PersistClientCache>>,
         orchestrator: Arc<dyn NamespacedOrchestrator>,
-        storaged_image: String,
+        clusterd_image: String,
         init_container_image: Option<String>,
         now: NowFn,
         postgres_factory: &PostgresFactory,
@@ -1545,7 +1540,7 @@ where
             StorageHostsConfig {
                 build_info,
                 orchestrator,
-                storaged_image,
+                clusterd_image,
                 init_container_image,
             },
             Arc::clone(&persist_clients),
@@ -1565,11 +1560,8 @@ where
 impl<T> Controller<T>
 where
     T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
-
-    // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-
     Self: StorageController<Timestamp = T>,
 {
     /// Validate that a collection exists for all identifiers, and error if any do not.
@@ -1720,11 +1712,8 @@ impl<T: Timestamp> ExportState<T> {
 impl<T> Controller<T>
 where
     T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
-
-    // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-
     Self: StorageController<Timestamp = T>,
 {
     /// Reconciles the current state of the collection identified by `id` with

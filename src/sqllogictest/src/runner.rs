@@ -839,8 +839,7 @@ impl RunnerInner {
             controller: ControllerConfig {
                 build_info: &mz_environmentd::BUILD_INFO,
                 orchestrator,
-                storaged_image: "storaged".into(),
-                computed_image: "computed".into(),
+                clusterd_image: "clusterd".into(),
                 init_container_image: None,
                 persist_location: PersistLocation {
                     blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),

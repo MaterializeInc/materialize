@@ -129,7 +129,7 @@ class MaterializeApplication(Application):
             self.testdrive,
         ]
 
-        self.images = ["environmentd", "computed", "storaged", "testdrive", "postgres"]
+        self.images = ["environmentd", "clusterd", "testdrive", "postgres"]
 
         # Label the minicube nodes in a way that mimics Materialize cloud
         for node in [

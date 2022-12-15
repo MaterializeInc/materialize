@@ -14,7 +14,7 @@ from typing import Callable, Optional
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
-    Computed,
+    Clusterd,
     Kafka,
     Localstack,
     Materialized,
@@ -35,7 +35,7 @@ SERVICES = [
 
 class AllowCompactionCheck:
     # replica: a string describing the SQL accessible name of the replica. Example: "cluster1.replica1"
-    # host: docker container name from which to check the log. Example: "computed_1_1"
+    # host: docker container name from which to check the log. Example: "clusterd_1_1"
     def __init__(self, replica: str, host: str):
         assert "." in replica
         self.replica = replica
@@ -103,7 +103,7 @@ class AllowCompactionCheck:
 
 class PersistedIntro(AllowCompactionCheck):
     """
-    Checks that computed receives AllowCompaction commands for persisted
+    Checks that clusterd receives AllowCompaction commands for persisted
     introspection data, such as mz_internal.mz_scheduling_elapsed_internal_1.
 
     This should not be influenced by other failing replicas.
@@ -133,7 +133,7 @@ class PersistedIntro(AllowCompactionCheck):
 
 class MaterializedView(AllowCompactionCheck):
     """
-    Checks that computed receives AllowCompaction commands for materialized views.
+    Checks that clusterd receives AllowCompaction commands for materialized views.
 
     For materialized views we hold back compaction until slow replicas have caught
     up. Hence we dont expect these messages if there is another failing replica in
@@ -156,7 +156,7 @@ class MaterializedView(AllowCompactionCheck):
 
 class ArrangedIntro(AllowCompactionCheck):
     """
-    Checks that computed receives AllowCompaction commands for arranged introspection.
+    Checks that clusterd receives AllowCompaction commands for arranged introspection.
 
     This is purely per replica property. Other failing replicas in the same cluster should
     not influence the result of this test.
@@ -237,8 +237,8 @@ def populate(c: Composition) -> None:
 
 
 def restart_replica(c: Composition) -> None:
-    c.kill("computed_1_1", "computed_1_2")
-    c.up("computed_1_1", "computed_1_2")
+    c.kill("clusterd_1_1", "clusterd_1_2")
+    c.up("clusterd_1_1", "clusterd_1_2")
 
 
 def restart_environmentd(c: Composition) -> None:
@@ -252,8 +252,8 @@ def drop_create_replica(c: Composition) -> None:
             """
             > DROP CLUSTER REPLICA cluster1.replica1
             > CREATE CLUSTER REPLICA cluster1.replica3
-              REMOTE ['computed_1_1:2100', 'computed_1_2:2100'],
-              COMPUTE ['computed_1_1:2102', 'computed_1_2:2102']
+              REMOTE ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
+              COMPUTE ['clusterd_1_1:2102', 'clusterd_1_2:2102']
             """
         )
     )
@@ -264,7 +264,7 @@ def create_invalid_replica(c: Composition) -> None:
         dedent(
             """
             > CREATE CLUSTER REPLICA cluster1.replica3
-              REMOTE ['no_such_host:2100'],
+              REMOTE ['no_such_host:2101'],
               COMPUTE ['no_such_host:2102']
             """
         )
@@ -351,17 +351,17 @@ disruptions = [
         name="none",
         disruption=lambda c: None,
         compaction_checks=AllowCompactionCheck.all_checks(
-            "cluster1.replica1", "computed_1_1"
+            "cluster1.replica1", "clusterd_1_1"
         )
-        + AllowCompactionCheck.all_checks("cluster1.replica2", "computed_2_1"),
+        + AllowCompactionCheck.all_checks("cluster1.replica2", "clusterd_2_1"),
     ),
     Disruption(
         name="drop-create-replica",
         disruption=lambda c: drop_create_replica(c),
         # With a disfunctional replica, we don't expect AllowCompactions for materialized views.
         compaction_checks=[
-            # PersistedIntro("cluster1.replica2", "computed_2_1"),
-            ArrangedIntro("cluster1.replica2", "computed_2_1"),
+            # PersistedIntro("cluster1.replica2", "clusterd_2_1"),
+            ArrangedIntro("cluster1.replica2", "clusterd_2_1"),
         ],
     ),
     Disruption(
@@ -369,50 +369,50 @@ disruptions = [
         disruption=lambda c: create_invalid_replica(c),
         # With a disfunctional replica, we don't expect AllowCompactions for materialized views.
         compaction_checks=[
-            # PersistedIntro("cluster1.replica2", "computed_2_1"),
-            ArrangedIntro("cluster1.replica2", "computed_2_1"),
+            # PersistedIntro("cluster1.replica2", "clusterd_2_1"),
+            ArrangedIntro("cluster1.replica2", "clusterd_2_1"),
         ],
     ),
     Disruption(
         name="restart-replica",
         disruption=lambda c: restart_replica(c),
         compaction_checks=AllowCompactionCheck.all_checks(
-            "cluster1.replica1", "computed_1_1"
+            "cluster1.replica1", "clusterd_1_1"
         )
-        + AllowCompactionCheck.all_checks("cluster1.replica2", "computed_2_1"),
+        + AllowCompactionCheck.all_checks("cluster1.replica2", "clusterd_2_1"),
     ),
     Disruption(
-        name="pause-one-computed",
-        disruption=lambda c: c.pause("computed_1_1"),
+        name="pause-one-clusterd",
+        disruption=lambda c: c.pause("clusterd_1_1"),
         # With a disfunctional replica, we don't expect AllowCompactions for materialized views.
         compaction_checks=[
-            # PersistedIntro("cluster1.replica2", "computed_2_1"),
-            ArrangedIntro("cluster1.replica2", "computed_2_1"),
+            # PersistedIntro("cluster1.replica2", "clusterd_2_1"),
+            ArrangedIntro("cluster1.replica2", "clusterd_2_1"),
         ],
     ),
     Disruption(
         name="kill-replica",
-        disruption=lambda c: c.kill("computed_1_1", "computed_1_2"),
+        disruption=lambda c: c.kill("clusterd_1_1", "clusterd_1_2"),
         # With a disfunctional replica, we don't expect AllowCompactions for materialized views.
         compaction_checks=[
-            # PersistedIntro("cluster1.replica2", "computed_2_1"),
-            ArrangedIntro("cluster1.replica2", "computed_2_1"),
+            # PersistedIntro("cluster1.replica2", "clusterd_2_1"),
+            ArrangedIntro("cluster1.replica2", "clusterd_2_1"),
         ],
     ),
     Disruption(
         name="drop-replica",
         disruption=lambda c: c.testdrive("> DROP CLUSTER REPLICA cluster1.replica1"),
         compaction_checks=AllowCompactionCheck.all_checks(
-            "cluster1.replica2", "computed_2_1"
+            "cluster1.replica2", "clusterd_2_1"
         ),
     ),
     Disruption(
         name="restart-environmentd",
         disruption=restart_environmentd,
         compaction_checks=AllowCompactionCheck.all_checks(
-            "cluster1.replica1", "computed_1_1"
+            "cluster1.replica1", "clusterd_1_1"
         )
-        + AllowCompactionCheck.all_checks("cluster1.replica2", "computed_2_1"),
+        + AllowCompactionCheck.all_checks("cluster1.replica2", "clusterd_2_1"),
     ),
 ]
 
@@ -434,12 +434,12 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
 
     c.up("testdrive", persistent=True)
 
-    logging_env = ["COMPUTED_LOG_FILTER=mz_compute::server=debug,info"]
+    logging_env = ["clusterd_LOG_FILTER=mz_compute::server=debug,info"]
     nodes = [
-        Computed(name="computed_1_1", environment=logging_env),
-        Computed(name="computed_1_2", environment=logging_env),
-        Computed(name="computed_2_1", environment=logging_env),
-        Computed(name="computed_2_2", environment=logging_env),
+        Clusterd(name="clusterd_1_1", environment=logging_env),
+        Clusterd(name="clusterd_1_2", environment=logging_env),
+        Clusterd(name="clusterd_2_1", environment=logging_env),
+        Clusterd(name="clusterd_2_2", environment=logging_env),
     ]
 
     with c.override(*nodes):
@@ -450,12 +450,12 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             """
             CREATE CLUSTER cluster1 REPLICAS (
                 replica1 (
-                    REMOTE ['computed_1_1:2100', 'computed_1_2:2100'],
-                    COMPUTE ['computed_1_1:2102', 'computed_1_2:2102']
+                    REMOTE ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
+                    COMPUTE ['clusterd_1_1:2102', 'clusterd_1_2:2102']
                     ),
                 replica2 (
-                    REMOTE ['computed_2_1:2100', 'computed_2_2:2100'],
-                    COMPUTE ['computed_2_1:2102', 'computed_2_2:2102']
+                    REMOTE ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
+                    COMPUTE ['clusterd_2_1:2102', 'clusterd_2_2:2102']
                     )
             )
             """

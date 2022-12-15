@@ -11,7 +11,7 @@
 //!
 //! The startup protocol is as follows:
 //! The compute controller in `environmentd`, after having connected to all the
-//! `computed` processes in a replica, sends each of them a `CreateTimely` command
+//! `clusterd` processes in a replica, sends each of them a `CreateTimely` command
 //! containing an epoch value (which is the same across all copies of the command).
 //! The meaning of this value is irrelevant,
 //! as long as it is totally ordered and

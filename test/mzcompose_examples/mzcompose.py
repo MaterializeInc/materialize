@@ -28,8 +28,8 @@ versioned_mz = [
 ]
 
 mz_with_options = [
-    Materialized(name="mz_2_workers", hostname="materialized", options="--workers 2"),
-    Materialized(name="mz_4_workers", hostname="materialized", options="--workers 4"),
+    Materialized(name="mz_2_workers", hostname="materialized"),
+    Materialized(name="mz_4_workers", hostname="materialized"),
 ]
 
 SERVICES = [

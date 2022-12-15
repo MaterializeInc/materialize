@@ -10,12 +10,12 @@
 MZFROM ubuntu-base
 
 RUN apt-get update \
-    && apt-get -qy install ca-certificates curl tini ssh \
+    && apt-get -qy install ca-certificates curl ssh tini \
     && groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize
 
-COPY storaged /usr/local/bin/
+COPY clusterd entrypoint.sh /usr/local/bin/
 
 USER materialize
 
-ENTRYPOINT ["tini", "--", "storaged", "--controller-listen-addr=0.0.0.0:2100", "--internal-http-listen-addr=0.0.0.0:6878"]
+ENTRYPOINT ["tini", "--", "entrypoint.sh"]

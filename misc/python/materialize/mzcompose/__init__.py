@@ -433,25 +433,6 @@ class Composition:
             cursor.execute(sql)
             return cursor.fetchall()
 
-    def create_cluster(
-        self,
-        cluster: List,
-        cluster_name: str = "cluster1",
-        replica_name: str = "replica1",
-    ) -> None:
-        """Construct and run a CREATE CLUSTER statement based a list of Computed instances
-
-        Args:
-            cluster: a List of Computed instances that will form the cluster
-            cluster_name: The cluster name to use
-            replica_name: The replica name to use
-        """
-        self.sql(
-            f"CREATE CLUSTER {cluster_name} REPLICAS ( {replica_name} ( REMOTE ["
-            + ", ".join(f'"{p.name}:2100"' for p in cluster)
-            + "]))"
-        )
-
     def start_and_wait_for_tcp(self, services: List[str]) -> None:
         """Sequentially start the named services, waiting for eaach to become
         available via TCP before moving on to the next."""

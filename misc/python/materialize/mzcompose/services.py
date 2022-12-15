@@ -48,7 +48,6 @@ class Materialized(Service):
         memory: Optional[str] = None,
         persist_blob_url: Optional[str] = None,
         data_directory: str = "/mzdata",
-        workers: Optional[int] = Size.DEFAULT_SIZE,
         default_size: int = Size.DEFAULT_SIZE,
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
@@ -83,8 +82,7 @@ class Materialized(Service):
                 # To dynamically change the environment during a workflow run,
                 # use Composition.override.
                 "MZ_LOG_FILTER",
-                "STORAGED_LOG_FILTER",
-                "COMPUTED_LOG_FILTER",
+                "CLUSTERD_LOG_FILTER",
                 "INTERNAL_SQL_LISTEN_ADDR=0.0.0.0:6877",
                 "INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878",
             ]
@@ -114,11 +112,6 @@ class Materialized(Service):
             f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE={self.default_replica_size}",
             f"MZ_DEFAULT_STORAGE_HOST_SIZE={self.default_storage_size}",
         ]
-
-        if workers:
-            environment += [
-                f"MZ_WORKERS={workers}",
-            ]
 
         if environment_extra:
             environment.extend(environment_extra)
@@ -174,32 +167,33 @@ class Materialized(Service):
         super().__init__(name=name, config=config)
 
 
-class Computed(Service):
+class Clusterd(Service):
     def __init__(
         self,
-        name: str = "computed",
+        name: str = "clusterd",
         hostname: Optional[str] = None,
         image: Optional[str] = None,
-        ports: List[int] = [2100, 2102],
+        ports: List[int] = [2100, 2101],
         memory: Optional[str] = None,
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
+        storage_workers: Optional[int] = Materialized.Size.DEFAULT_SIZE,
         secrets_reader: str = "process",
         secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:
         if environment is None:
             environment = [
-                "COMPUTED_LOG_FILTER",
+                "CLUSTERD_LOG_FILTER",
                 "MZ_SOFT_ASSERTIONS=1",
             ]
 
         if volumes is None:
-            # We currently give computed access to /tmp so that it can load CSV files
+            # We currently give clusterd access to /tmp so that it can load CSV files
             # but this requirement is expected to go away in the future.
             volumes = DEFAULT_MZ_VOLUMES
 
-        config: ServiceConfig = {"image": image} if image else {"mzbuild": "computed"}
+        config: ServiceConfig = {"image": image} if image else {"mzbuild": "clusterd"}
 
         if hostname:
             config["hostname"] = hostname
@@ -216,68 +210,8 @@ class Computed(Service):
             else:
                 command_list.extend(options)
 
-        command_list.append(f"--secrets-reader {secrets_reader}")
-        command_list.append(
-            f"--secrets-reader-process-dir {secrets_reader_process_dir}"
-        )
-
-        config.update(
-            {
-                "command": " ".join(command_list),
-                "ports": ports,
-                "environment": environment,
-                "volumes": volumes,
-            }
-        )
-
-        super().__init__(name=name, config=config)
-
-
-class Storaged(Service):
-    def __init__(
-        self,
-        name: str = "storaged",
-        hostname: Optional[str] = None,
-        image: Optional[str] = None,
-        ports: List[int] = [2100],
-        memory: Optional[str] = None,
-        options: Optional[Union[str, List[str]]] = "",
-        environment: Optional[List[str]] = None,
-        volumes: Optional[List[str]] = None,
-        workers: Optional[int] = Materialized.Size.DEFAULT_SIZE,
-        secrets_reader: str = "process",
-        secrets_reader_process_dir: str = "mzdata/secrets",
-    ) -> None:
-        if environment is None:
-            environment = [
-                "STORAGED_LOG_FILTER",
-                "MZ_SOFT_ASSERTIONS=1",
-            ]
-
-        if volumes is None:
-            # We currently give computed access to /tmp so that it can load CSV files
-            # but this requirement is expected to go away in the future.
-            volumes = DEFAULT_MZ_VOLUMES
-
-        config: ServiceConfig = {"image": image} if image else {"mzbuild": "storaged"}
-
-        if hostname:
-            config["hostname"] = hostname
-
-        # Depending on the docker-compose version, this may either work or be ignored with a warning
-        # Unfortunately no portable way of setting the memory limit is known
-        if memory:
-            config["deploy"] = {"resources": {"limits": {"memory": memory}}}
-
-        command_list = []
-        if options:
-            if isinstance(options, str):
-                command_list.append(options)
-            else:
-                command_list.extend(options)
-
-        if workers:
-            command_list.append(f"--workers {workers}")
+        if storage_workers:
+            command_list.append(f"--storage-workers {storage_workers}")
 
         command_list.append(f"--secrets-reader {secrets_reader}")
         command_list.append(

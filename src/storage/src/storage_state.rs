@@ -381,7 +381,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // Sinks maintain a read handle over their input data, in case environmentd is unable
             // to maintain the global read hold. It's tempting to use environmentd's AllowCompaction
             // messages to maintain an even more conservative hold... but environmentd only sends
-            // storaged AllowCompaction messages for its own id, not for its dependencies.
+            // clusterd AllowCompaction messages for its own id, not for its dependencies.
             for (id, upper) in &new_uppers {
                 if let Some(handle) = &self.storage_state.sink_handles.get(id) {
                     handle.downgrade_since(upper.clone());

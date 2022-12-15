@@ -14,7 +14,6 @@ async-trait = "0.1.59"
 aws-sdk-kinesis = { version = "0.21.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-sdk-s3 = { version = "0.21.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-sdk-sqs = { version = "0.21.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-axum = { version = "0.6.1" }
 bytesize = "1.1.0"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
 clap = { version = "3.2.20", features = ["derive", "env"] }
@@ -79,19 +78,6 @@ tonic-build = "0.8.2"
 datadriven = { version = "0.6.0", features = ["async"] }
 itertools = "0.10.5"
 tokio = { version = "1.23.0", features = ["test-util"] }
-
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-# According to jemalloc developers, `background_threads` should always be
-# enabled, except in "esoteric" situations that don't apply to Materialize
-# (Namely: if the application relies on new threads not being created for whatever reason)
-#
-# See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
-tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"], optional = true }
-
-[features]
-default = ["jemalloc"]
-jemalloc = ["tikv-jemallocator", "mz-prof/jemalloc"]
-tokio-console = ["mz-ore/tokio-console"]
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux

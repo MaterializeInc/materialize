@@ -8,6 +8,7 @@ members = [
     "src/build-id",
     "src/build-info",
     "src/ccsr",
+    "src/clusterd",
     "src/compute",
     "src/compute-client",
     "src/controller",

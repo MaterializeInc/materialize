@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -7,15 +9,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
+set -euo pipefail
 
-RUN apt-get update \
-    && apt-get -qy install ca-certificates curl tini \
-    && groupadd --system --gid=999 materialize \
-    && useradd --system --gid=999 --uid=999 --create-home materialize
+args=(--storage-controller-listen-addr=0.0.0.0:2100 --compute-controller-listen-addr=0.0.0.0:2101 --internal-http-listen-addr=0.0.0.0:6878)
 
-COPY computed entrypoint.sh /usr/local/bin/
-
-USER materialize
-
-ENTRYPOINT ["tini", "--", "entrypoint.sh"]
+exec clusterd "${args[@]}" "$@"

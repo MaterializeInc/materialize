@@ -28,6 +28,7 @@ use tokio_postgres::SimpleQueryMessage;
 use tracing::{error, info, warn};
 
 use mz_expr::{MirScalarExpr, PartitionId};
+use mz_ore::display::DisplayExt;
 use mz_ore::task;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
@@ -438,13 +439,13 @@ async fn postgres_replication_loop_inner(
                 let _ = task_info
                     .sender
                     .send(InternalMessage::Status(HealthStatusUpdate {
-                        update: HealthStatus::StalledWithError(e.to_string()),
+                        update: HealthStatus::StalledWithError(e.to_string_alt()),
                         // TODO: In the future we probably want to handle this more gracefully,
                         // but for now halting is the easiest way to dump the data in the pipe.
-                        // The restarted storaged instance will restart the snapshot fresh, which will
+                        // The restarted clusterd instance will restart the snapshot fresh, which will
                         // avoid any inconsistencies. Note that if the same lsn is chosen in the
                         // next snapshotting, the remapped timestamp chosen will be the same for
-                        // both instances of storaged.
+                        // both instances of clusterd.
                         should_halt: true,
                     }))
                     .await;

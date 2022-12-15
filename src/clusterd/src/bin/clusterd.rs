@@ -7,23 +7,29 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
 use std::path::PathBuf;
 use std::process;
+use std::sync::Arc;
 
 use anyhow::{bail, Context};
 use axum::routing;
+use fail::FailScenario;
+use futures::future;
 use once_cell::sync::Lazy;
+use tokio::sync::Mutex;
 use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::AwsExternalIdPrefix;
+use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::tracing::TracingHandle;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::PersistConfig;
 use mz_pid_file::PidFile;
 use mz_service::grpc::GrpcServer;
 use mz_service::secrets::SecretsReaderCliArgs;
@@ -49,19 +55,29 @@ const BUILD_INFO: BuildInfo = build_info!();
 
 pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
 
-/// Independent storage server for Materialize.
+/// Independent cluster server for Materialize.
 #[derive(clap::Parser)]
-#[clap(name = "storaged", version = VERSION.as_str())]
+#[clap(name = "clusterd", version = VERSION.as_str())]
 struct Args {
     // === Connection options. ===
-    /// The address on which to listen for a connection from the controller.
+    /// The address on which to listen for a connection from the storage
+    /// controller.
     #[clap(
         long,
-        env = "LISTEN_ADDR",
+        env = "STORAGE_CONTROLLER_LISTEN_ADDR",
         value_name = "HOST:PORT",
         default_value = "127.0.0.1:2100"
     )]
-    controller_listen_addr: SocketAddr,
+    storage_controller_listen_addr: SocketAddr,
+    /// The address on which to listen for a connection from the compute
+    /// controller.
+    #[clap(
+        long,
+        env = "COMPUTE_CONTROLLER_LISTEN_ADDR",
+        value_name = "HOST:PORT",
+        default_value = "127.0.0.1:2101"
+    )]
+    compute_controller_listen_addr: SocketAddr,
     /// The address of the internal HTTP server.
     #[clap(
         long,
@@ -71,10 +87,10 @@ struct Args {
     )]
     internal_http_listen_addr: SocketAddr,
 
-    // === Dataflow options. ===
+    // === Storage options. ===
     /// Number of dataflow worker threads.
-    #[clap(long, env = "WORKERS", value_name = "N", default_value = "1")]
-    workers: usize,
+    #[clap(long, env = "STORAGE_WORKERS", value_name = "N", default_value = "1")]
+    storage_workers: usize,
 
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -102,29 +118,13 @@ struct Args {
 #[tokio::main]
 async fn main() {
     let args = cli::parse_args(CliConfig {
-        env_prefix: Some("STORAGED_"),
+        env_prefix: Some("CLUSTERD_"),
         enable_version_flag: true,
     });
     if let Err(err) = run(args).await {
-        eprintln!("storaged: fatal: {:#}", err);
+        eprintln!("clusterd: fatal: {:#}", err);
         process::exit(1);
     }
-}
-
-fn create_communication_config(args: &Args) -> Result<timely::CommunicationConfig, anyhow::Error> {
-    let threads = args.workers;
-    if threads > 1 {
-        Ok(timely::CommunicationConfig::Process(threads))
-    } else {
-        Ok(timely::CommunicationConfig::Thread)
-    }
-}
-
-fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
-    Ok(timely::Config {
-        worker: timely::WorkerConfig::default(),
-        communication: create_communication_config(args)?,
-    })
 }
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
@@ -132,7 +132,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let (tracing_handle, _tracing_guard) = args
         .tracing
         .configure_tracing(StaticTracingConfig {
-            service_name: "storaged",
+            service_name: "clusterd",
             build_info: BUILD_INFO,
         })
         .await?;
@@ -141,19 +141,22 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     // hook runs _before_ the one that sends things to sentry.
     mz_timely_util::panic::halt_on_timely_communication_panic();
 
+    let _failpoint_scenario = FailScenario::setup();
+
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {
         _pid_file = Some(PidFile::open(pid_file_location).unwrap());
     }
 
-    if args.workers == 0 {
-        bail!("--workers must be greater than 0");
-    }
-    let timely_config = create_timely_config(&args)?;
+    let secrets_reader = args
+        .secrets
+        .load()
+        .await
+        .context("loading secrets reader")?;
 
     let metrics_registry = MetricsRegistry::new();
 
-    mz_ore::task::spawn(|| "storaged_internal_http_server", {
+    mz_ore::task::spawn(|| "clusterd_internal_http_server", {
         let metrics_registry = metrics_registry.clone();
         tracing::info!(
             "serving internal HTTP server on {}",
@@ -204,38 +207,67 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         )
     });
 
-    let secrets_reader = args
-        .secrets
-        .load()
-        .await
-        .context("loading secrets reader")?;
-    let config = mz_storage::Config {
-        build_info: &BUILD_INFO,
-        workers: args.workers,
-        timely_config,
-        metrics_registry,
+    let persist_clients = Arc::new(Mutex::new(PersistClientCache::new(
+        PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone()),
+        &metrics_registry,
+    )));
+
+    // Start storage server.
+    let (_storage_server, storage_client) = mz_storage::serve(mz_storage::Config {
+        persist_clients: Arc::clone(&persist_clients),
+        workers: args.storage_workers,
+        timely_config: timely::Config {
+            worker: timely::WorkerConfig::default(),
+            communication: match args.storage_workers {
+                0 => bail!("--storage-workers must be greater than 0"),
+                1 => timely::CommunicationConfig::Thread,
+                _ => timely::CommunicationConfig::Process(args.storage_workers),
+            },
+        },
+        metrics_registry: metrics_registry.clone(),
         now: SYSTEM_TIME.clone(),
         connection_context: ConnectionContext::from_cli_args(
             &args.tracing.log_filter.inner,
             args.aws_external_id,
             secrets_reader,
         ),
-    };
-
-    // Initialize fail crate for failpoint support
-    let _failpoint_scenario = fail::FailScenario::setup();
-
-    let (_server, client) = mz_storage::serve(config)?;
-
+    })?;
     info!(
-        "listening for controller connections on {}",
-        args.controller_listen_addr
+        "listening for storage controller connections on {}",
+        args.storage_controller_listen_addr
     );
-    GrpcServer::serve(
-        args.controller_listen_addr,
-        BUILD_INFO.semver_version(),
-        client,
-        ProtoStorageServer::new,
-    )
-    .await
+    mz_ore::task::spawn(
+        || "storage_server",
+        GrpcServer::serve(
+            args.storage_controller_listen_addr,
+            BUILD_INFO.semver_version(),
+            storage_client,
+            ProtoStorageServer::new,
+        ),
+    );
+
+    // Start compute server.
+    let (_compute_server, compute_client) =
+        mz_compute::server::serve(mz_compute::server::Config {
+            metrics_registry,
+            persist_clients,
+        })?;
+    info!(
+        "listening for compute controller connections on {}",
+        args.compute_controller_listen_addr
+    );
+    mz_ore::task::spawn(
+        || "compute_server",
+        GrpcServer::serve(
+            args.compute_controller_listen_addr,
+            BUILD_INFO.semver_version(),
+            compute_client,
+            ProtoComputeServer::new,
+        ),
+    );
+
+    // TODO: unify storage and compute servers to use one timely cluster.
+
+    // Block forever.
+    future::pending().await
 }

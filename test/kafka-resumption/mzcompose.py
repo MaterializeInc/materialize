@@ -12,10 +12,10 @@ from typing import Optional
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
+    Clusterd,
     Kafka,
     Materialized,
     SchemaRegistry,
-    Storaged,
     Testdrive,
     Toxiproxy,
     Zookeeper,
@@ -26,7 +26,7 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Materialized(),
-    Storaged(),
+    Clusterd(),
     Toxiproxy(),
     Testdrive(default_timeout="120s"),
 ]
@@ -74,13 +74,13 @@ def workflow_sink_networking(c: Composition) -> None:
 
 
 def workflow_source_resumption(c: Composition) -> None:
-    """Test creating sources in a remote storaged process."""
+    """Test creating sources in a remote clusterd process."""
 
     with c.override(
         Testdrive(no_reset=True, consistent_seed=True),
     ):
         c.start_and_wait_for_tcp(
-            services=["materialized", "zookeeper", "kafka", "storaged"]
+            services=["materialized", "zookeeper", "kafka", "clusterd"]
         )
 
         c.run("testdrive", "source-resumption/setup.td")
@@ -93,15 +93,15 @@ def workflow_source_resumption(c: Composition) -> None:
             == None
         )
 
-        c.kill("storaged")
-        c.up("storaged")
+        c.kill("clusterd")
+        c.up("clusterd")
         c.sleep(10)
 
         # Verify the same data is query-able, and that we can make forward progress
         c.run("testdrive", "source-resumption/verify.td")
         c.run("testdrive", "source-resumption/re-ingest-and-verify.td")
 
-        # the first storaged instance ingested 3 messages, so our
+        # the first clusterd instance ingested 3 messages, so our
         # upper is at the 4th offset (0-indexed)
         assert (
             find_source_resume_upper(
@@ -113,7 +113,7 @@ def workflow_source_resumption(c: Composition) -> None:
 
 
 def find_source_resume_upper(c: Composition, partition_id: str) -> Optional[int]:
-    metrics = c.exec("storaged", "curl", "localhost:6878/metrics", capture=True).stdout
+    metrics = c.exec("clusterd", "curl", "localhost:6878/metrics", capture=True).stdout
 
     if metrics is None:
         return None
