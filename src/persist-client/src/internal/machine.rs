@@ -1367,6 +1367,7 @@ pub mod datadriven {
         let mut builder = BatchBuilder::new(
             cfg,
             Arc::clone(&datadriven.client.metrics),
+            datadriven.client.metrics.user.clone(),
             lower,
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.cpu_heavy_runtime),

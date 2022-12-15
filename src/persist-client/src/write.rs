@@ -526,6 +526,7 @@ where
         BatchBuilder::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
+            self.metrics.user.clone(),
             lower,
             Arc::clone(&self.blob),
             Arc::clone(&self.cpu_heavy_runtime),

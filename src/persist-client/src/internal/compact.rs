@@ -601,6 +601,7 @@ where
         let mut batch = BatchBuilder::new(
             cfg.clone(),
             Arc::clone(&metrics),
+            metrics.compaction.batch.clone(),
             desc.lower().clone(),
             Arc::clone(&blob),
             cpu_heavy_runtime,
@@ -684,10 +685,8 @@ where
             batch.add(&k, &v, &t, &d).await?;
         }
 
-        let start = Instant::now();
         let batch = batch.finish(desc.upper().clone()).await?;
         let hollow_batch = batch.into_hollow_batch();
-        timings.part_writing += start.elapsed();
 
         timings.record(&metrics);
 
@@ -728,9 +727,6 @@ where
 struct Timings {
     part_fetching: Duration,
     heap_population: Duration,
-    consolidation: Duration,
-    part_columnar_encoding: Duration,
-    part_writing: Duration,
 }
 
 impl Timings {
@@ -739,9 +735,6 @@ impl Timings {
         let Timings {
             part_fetching,
             heap_population,
-            consolidation,
-            part_columnar_encoding,
-            part_writing,
         } = self;
 
         metrics
@@ -754,21 +747,6 @@ impl Timings {
             .steps
             .heap_population_seconds
             .inc_by(heap_population.as_secs_f64());
-        metrics
-            .compaction
-            .steps
-            .consolidation_seconds
-            .inc_by(consolidation.as_secs_f64());
-        metrics
-            .compaction
-            .steps
-            .part_columnar_encoding_seconds
-            .inc_by(part_columnar_encoding.as_secs_f64());
-        metrics
-            .compaction
-            .steps
-            .part_write_seconds
-            .inc_by(part_writing.as_secs_f64());
     }
 }
 

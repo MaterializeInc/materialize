@@ -196,6 +196,7 @@ where
     shard_id: ShardId,
     blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
+    batch_write_metrics: BatchWriteMetrics,
 
     key_buf: Vec<u8>,
     val_buf: Vec<u8>,
@@ -230,6 +231,7 @@ where
     pub(crate) fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
+        batch_write_metrics: BatchWriteMetrics,
         lower: Antichain<T>,
         blob: Arc<dyn Blob + Send + Sync>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
@@ -246,7 +248,7 @@ where
             lower.clone(),
             Arc::clone(&blob),
             cpu_heavy_runtime,
-            &metrics.user,
+            &batch_write_metrics,
         );
         Self {
             lower,
@@ -254,6 +256,7 @@ where
             blob_target_size: cfg.blob_target_size,
             blob,
             metrics,
+            batch_write_metrics,
             current_part: Vec::new(),
             current_part_total_bytes: 0,
             current_part_key_bytes: 0,
@@ -286,7 +289,6 @@ where
     pub async fn finish(
         mut self,
         registered_upper: Antichain<T>,
-        // WIP: return metrics with success case
     ) -> Result<Batch<K, V, T, D>, InvalidUsage<T>> {
         if PartialOrder::less_than(&registered_upper, &self.lower) {
             return Err(InvalidUsage::InvalidBounds {
@@ -344,6 +346,8 @@ where
             });
         }
 
+        self.max_ts.join_assign(ts);
+
         let initial_key_buf_len = self.key_buf.len();
         let initial_val_buf_len = self.val_buf.len();
         self.metrics
@@ -357,8 +361,6 @@ where
 
         let k_range = initial_key_buf_len..self.key_buf.len();
         let v_range = initial_val_buf_len..self.val_buf.len();
-
-        self.max_ts.join_assign(ts);
 
         let size = {
             let k = &self.key_buf[k_range.clone()];
@@ -387,8 +389,7 @@ where
             // NB: we flush our shared buf's contents to Blob storage when we've hit our
             // target size, but we can only determine whether we've hit the target size
             // after encoding into the buf. this means that after flushing to Blob, we have
-            // one dangling update in our shared buf that we need to copy back after the
-            // buf is reset.
+            // one dangling update that we need to copy back after the buf is reset.
             let dangling_key = self.key_buf[k_range].to_owned();
             let dangling_val = self.val_buf[v_range].to_owned();
 
@@ -417,7 +418,12 @@ where
             updates.push(((&self.key_buf[k_range], &self.val_buf[v_range]), t, d));
         }
 
+        let start = Instant::now();
         consolidate_updates(&mut updates);
+        self.batch_write_metrics
+            .step_consolidation
+            .inc_by(start.elapsed().as_secs_f64());
+
         if updates.is_empty() {
             return;
         }
@@ -439,8 +445,7 @@ where
             (Some(_), None) | (None, None) => {}
         };
 
-        // let start = Instant::now();
-
+        let start = Instant::now();
         let mut builder = ColumnarRecordsBuilder::default();
         builder.reserve_exact(
             self.current_part.len(),
@@ -453,15 +458,20 @@ where
             // right now.
             assert!(builder.push(((k, v), T::encode(&t), D::encode(&d))));
         }
-        // timings.part_columnar_encoding += start.elapsed();
-
         let columnar = builder.finish();
+        self.batch_write_metrics
+            .step_columnar_encoding
+            .inc_by(start.elapsed().as_secs_f64());
 
-        // let start = Instant::now();
+        let start = Instant::now();
         self.parts
             .write(columnar, self.inline_upper.clone(), self.since.clone())
             .await;
-        // timings.part_writing += start.elapsed();
+        self.metrics
+            .compaction
+            .batch
+            .step_part_writing
+            .inc_by(start.elapsed().as_secs_f64());
 
         self.parts_written += 1;
         self.current_part_total_bytes = 0;
