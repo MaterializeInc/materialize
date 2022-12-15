@@ -32,7 +32,6 @@ use bytes::BufMut;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
-use mz_persist_types::codec_impls::UnitSchema;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -47,9 +46,11 @@ use tracing::{debug, info};
 use mz_build_info::BuildInfo;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::soft_assert;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
@@ -71,6 +72,7 @@ use crate::types::sinks::{
 use crate::types::sources::{IngestionDescription, SourceData, SourceExport};
 
 mod collection_mgmt;
+mod command_wals;
 mod persist_handles;
 mod rehydration;
 mod statistics;
@@ -83,7 +85,11 @@ pub static METADATA_COLLECTION: TypedCollection<GlobalId, DurableCollectionMetad
 pub static METADATA_EXPORT: TypedCollection<GlobalId, DurableExportMetadata<mz_repr::Timestamp>> =
     TypedCollection::new("storage-export-metadata-u64");
 
-pub static ALL_COLLECTIONS: &[&str] = &[METADATA_COLLECTION.name(), METADATA_EXPORT.name()];
+pub static ALL_COLLECTIONS: &[&str] = &[
+    METADATA_COLLECTION.name(),
+    METADATA_EXPORT.name(),
+    command_wals::SHARD_FINALIZATION.name(),
+];
 
 // Do this dance so that we keep the storage controller expressed in terms of a generic timestamp `T`.
 struct MetadataExportFetcher;
@@ -383,6 +389,11 @@ pub trait StorageController: Debug + Send {
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
     async fn process(&mut self) -> Result<(), anyhow::Error>;
+
+    /// Signal to the controller that the adapter has populated all of its
+    /// initial state and the controller can reconcile (i.e. drop) any unclaimed
+    /// resources.
+    async fn reconcile_state(&mut self);
 }
 
 /// Compaction policies for collections maintained by `Controller`.
@@ -831,14 +842,16 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
                 Box::pin(async move {
                     // Query all collections in parallel. Makes for triplicated
                     // names, but runs quick.
-                    let (metadata_collection, metadata_export) = futures::join!(
+                    let (metadata_collection, metadata_export, shard_finalization) = futures::join!(
                         maybe_get_init_batch(&tx, &METADATA_COLLECTION),
                         maybe_get_init_batch(&tx, &METADATA_EXPORT),
+                        maybe_get_init_batch(&tx, &command_wals::SHARD_FINALIZATION),
                     );
-                    let batches: Vec<AppendBatch> = [metadata_collection, metadata_export]
-                        .into_iter()
-                        .filter_map(|b| b)
-                        .collect();
+                    let batches: Vec<AppendBatch> =
+                        [metadata_collection, metadata_export, shard_finalization]
+                            .into_iter()
+                            .filter_map(|b| b)
+                            .collect();
 
                     tx.append(batches).await
                 })
@@ -1724,6 +1737,10 @@ where
 
         Ok(())
     }
+
+    async fn reconcile_state(&mut self) {
+        self.reconcile_shards().await
+    }
 }
 
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
@@ -1769,6 +1786,9 @@ where
     Self: StorageController<Timestamp = T>,
 {
     /// Create a new storage controller from a client it should wrap.
+    ///
+    /// Note that when creating a new storage controller, you must also
+    /// reconcile it with the previous state.
     pub async fn new(
         build_info: &'static BuildInfo,
         postgres_url: String,
@@ -2004,6 +2024,12 @@ where
     ///
     /// Any shards changed between the old and the new version will be
     /// decommissioned/eventually deleted.
+    ///
+    /// Note that this function expects to be called:
+    /// - While no source is currently using the shards identified in the
+    ///   current metadata.
+    /// - Before any sources begins using the shards identified in
+    ///   `new_metadata`.
     async fn _rewrite_collection_metadata(
         &mut self,
         id: GlobalId,
@@ -2043,6 +2069,9 @@ where
             }
         };
 
+        self.register_shards_for_finalization(to_delete_shards.iter().map(|(shard, _)| *shard))
+            .await;
+
         // Perform the update.
         METADATA_COLLECTION
             .upsert(&mut self.state.stash, vec![(id, new_metadata.clone())])
@@ -2072,6 +2101,18 @@ where
     /// necessary to open read and write handles to the shard.
     #[allow(dead_code)]
     async fn finalize_shards(&mut self, shards: &[(ShardId, String)]) {
+        soft_assert!(
+            {
+                let mut all_registered = true;
+                for (shard, _) in shards {
+                    all_registered =
+                        self.is_shard_registered_for_finalization(*shard).await && all_registered
+                }
+                all_registered
+            },
+            "finalized shards must be registered before calling finalize_shards"
+        );
+
         // Open a persist client to delete unused shards.
         let persist_client = self
             .persist
@@ -2095,21 +2136,35 @@ where
                 .expect("invalid persist usage");
 
             read.downgrade_since(&Antichain::new()).await;
-            write
-                .append(
-                    Vec::<((crate::types::sources::SourceData, ()), T, Diff)>::new(),
-                    write.upper().clone(),
-                    Antichain::new(),
-                )
-                .await
-                .expect("failed to connect")
-                .expect("failed to truncate write handle");
 
             info!(
-                "successfully truncated shard's write handle for {:?}",
+                "successfully finalized read handle for shard {:?}",
                 shard_id
             );
+
+            if write.upper().is_empty() {
+                info!("write handle for shard {:?} already finalized", shard_id);
+            } else {
+                write
+                    .append(
+                        Vec::<((crate::types::sources::SourceData, ()), T, Diff)>::new(),
+                        write.upper().clone(),
+                        Antichain::new(),
+                    )
+                    .await
+                    .expect("failed to connect")
+                    .expect("failed to truncate write handle");
+
+                info!(
+                    "successfully finalized write handle for shard {:?}",
+                    shard_id
+                );
+            }
         }
+
+        let truncated_shards = shards.iter().map(|(shard, _)| *shard).collect();
+        self.clear_from_shard_finalization_register(truncated_shards)
+            .await;
     }
 }
 

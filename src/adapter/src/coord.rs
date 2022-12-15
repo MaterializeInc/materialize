@@ -1046,6 +1046,10 @@ impl Coordinator {
         self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
             .await;
 
+        // Signal to the storage controller that it is now free to reconcile its
+        // state with what it has learned from the adapter.
+        self.controller.storage.reconcile_state().await;
+
         info!("coordinator init: bootstrap complete");
         Ok(())
     }

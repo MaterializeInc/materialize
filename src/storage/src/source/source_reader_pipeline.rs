@@ -1189,7 +1189,6 @@ where
 
                     cap_set.downgrade(remap_trace_batch.upper);
 
-
                     let mut remap_trace_batch = timestamper.advance().await;
 
                     // Out of an abundance of caution, do not hold the output handle
