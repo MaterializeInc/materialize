@@ -320,7 +320,7 @@ pub struct CreateSourcePlan {
 pub enum StorageHostConfig {
     /// Remote unmanaged storage
     Remote {
-        /// The network addresses of the storaged process.
+        /// The network address of the clusterd process.
         addr: String,
     },
     /// A remote but managed storage host

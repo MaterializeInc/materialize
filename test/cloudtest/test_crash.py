@@ -82,7 +82,7 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
     )
 
 
-def test_crash_storaged(mz: MaterializeApplication) -> None:
+def test_crash_storage(mz: MaterializeApplication) -> None:
     populate(mz, 1)
 
     source_id = mz.environmentd.sql_query(
@@ -92,7 +92,7 @@ def test_crash_storaged(mz: MaterializeApplication) -> None:
     pod_name = f"pod/storage-{source_id}-0"
 
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
-    mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof storaged` || true")
+    mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd` || true")
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
 
     validate(mz, 1)
@@ -135,7 +135,7 @@ def test_crash_environmentd(mz: MaterializeApplication) -> None:
     assert restarts(before[0]) == restarts(after[0])
 
 
-def test_crash_computed(mz: MaterializeApplication) -> None:
+def test_crash_clusterd(mz: MaterializeApplication) -> None:
     populate(mz, 3)
     mz.environmentd.sql("CREATE TABLE crash_table (f1 TEXT)")
     mz.environmentd.sql(

@@ -87,7 +87,7 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
     )
 
 
-def kill_computed(
+def kill_clusterd(
     mz: MaterializeApplication, compute_id: int, signal: str = "SIGKILL"
 ) -> None:
     cluster_id, replica_id = mz.environmentd.sql_query(
@@ -100,80 +100,80 @@ def kill_computed(
 
     try:
         mz.kubectl(
-            "exec", pod_name, "--", "bash", "-c", f"kill -{signal} `pidof computed`"
+            "exec", pod_name, "--", "bash", "-c", f"kill -{signal} `pidof clusterd`"
         )
     except subprocess.CalledProcessError:
-        # The computed process or container most likely has stopped already or is on its way
+        # The clusterd process or container most likely has stopped already or is on its way
         pass
 
 
-def test_kill_all_computeds(mz: MaterializeApplication) -> None:
-    """Kill all computeds"""
+def test_kill_all_clusterds(mz: MaterializeApplication) -> None:
+    """Kill all clusterds"""
     populate(mz, 1)
 
     for compute_id in range(0, CLUSTER_SIZE):
-        kill_computed(mz, compute_id)
+        kill_clusterd(mz, compute_id)
 
     validate(mz, 1)
 
 
-def test_kill_one_computed(mz: MaterializeApplication) -> None:
-    """Kill one computed out of $CLUSTER_SIZE"""
+def test_kill_one_clusterd(mz: MaterializeApplication) -> None:
+    """Kill one clusterd out of $CLUSTER_SIZE"""
     populate(mz, 2)
-    kill_computed(mz, round(CLUSTER_SIZE / 2))
+    kill_clusterd(mz, round(CLUSTER_SIZE / 2))
     validate(mz, 2)
 
 
-def test_kill_first_computed(mz: MaterializeApplication) -> None:
-    """Kill the first computed out of $CLUSTER_SIZE"""
+def test_kill_first_clusterd(mz: MaterializeApplication) -> None:
+    """Kill the first clusterd out of $CLUSTER_SIZE"""
     populate(mz, 3)
-    kill_computed(mz, 0)
+    kill_clusterd(mz, 0)
     validate(mz, 3)
 
 
-def test_kill_all_but_one_computed(mz: MaterializeApplication) -> None:
-    """Kill all computeds except one"""
+def test_kill_all_but_one_clusterd(mz: MaterializeApplication) -> None:
+    """Kill all clusterds except one"""
     populate(mz, 4)
     for compute_id in list(range(0, 2)) + list(range(3, CLUSTER_SIZE)):
-        kill_computed(mz, compute_id)
+        kill_clusterd(mz, compute_id)
 
     validate(mz, 4)
 
 
 def test_kill_while_suspended(mz: MaterializeApplication) -> None:
-    """Suspend a computed and resume it after the rest of the cluster went down."""
+    """Suspend a clusterd and resume it after the rest of the cluster went down."""
     populate(mz, 5)
-    kill_computed(mz, 2, signal="SIGSTOP")
+    kill_clusterd(mz, 2, signal="SIGSTOP")
     time.sleep(1)
-    kill_computed(mz, 4)
+    kill_clusterd(mz, 4)
     time.sleep(10)
-    kill_computed(mz, 2, signal="SIGCONT")
+    kill_clusterd(mz, 2, signal="SIGCONT")
     validate(mz, 5)
 
 
 def test_suspend_while_killing(mz: MaterializeApplication) -> None:
-    """Suspend a computed while the cluster is going down and resume it after."""
+    """Suspend a clusterd while the cluster is going down and resume it after."""
     populate(mz, 6)
-    kill_computed(mz, 4)
-    kill_computed(mz, 2, signal="SIGSTOP")
+    kill_clusterd(mz, 4)
+    kill_clusterd(mz, 2, signal="SIGSTOP")
     time.sleep(10)
-    kill_computed(mz, 2, signal="SIGCONT")
+    kill_clusterd(mz, 2, signal="SIGCONT")
     validate(mz, 6)
 
 
 def test_suspend_all_but_one(mz: MaterializeApplication) -> None:
-    """Suspend all computeds while killing one."""
+    """Suspend all clusterds while killing one."""
     populate(mz, 7)
 
     for compute_id in range(0, CLUSTER_SIZE):
         if compute_id != 4:
-            kill_computed(mz, compute_id, signal="SIGSTOP")
+            kill_clusterd(mz, compute_id, signal="SIGSTOP")
 
-    kill_computed(mz, 4)
+    kill_clusterd(mz, 4)
     time.sleep(10)
 
     for compute_id in range(0, CLUSTER_SIZE):
         if compute_id != 4:
-            kill_computed(mz, compute_id, signal="SIGCONT")
+            kill_clusterd(mz, compute_id, signal="SIGCONT")
 
     validate(mz, 7)

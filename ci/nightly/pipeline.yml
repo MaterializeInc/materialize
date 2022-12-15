@@ -39,17 +39,17 @@ steps:
           - { value: zippy-cluster-replicas }
           - { value: secrets }
           - { value: checks-oneatatime-drop-create-default-replica }
-          - { value: checks-oneatatime-restart-computed }
+          - { value: checks-oneatatime-restart-clusterd-compute }
           - { value: checks-oneatatime-restart-entire-mz }
-          - { value: checks-oneatatime-restart-environmentd-storaged }
-          - { value: checks-oneatatime-kill-storaged }
+          - { value: checks-oneatatime-restart-environmentd-clusterd-storage }
+          - { value: checks-oneatatime-kill-clusterd-storage }
           - { value: checks-oneatatime-restart-postgres-backend }
           - { value: checks-oneatatime-restart-redpanda }
           - { value: checks-parallel-drop-create-default-replica }
-          - { value: checks-parallel-restart-computed }
+          - { value: checks-parallel-restart-clusterd-compute }
           - { value: checks-parallel-restart-entire-mz }
-          - { value: checks-parallel-restart-environmentd-storaged }
-          - { value: checks-parallel-kill-storaged }
+          - { value: checks-parallel-restart-environmentd-clusterd-storage }
+          - { value: checks-parallel-kill-clusterd-storage }
           - { value: checks-parallel-restart-postgres-backend }
           - { value: checks-parallel-restart-redpanda }
           - { value: checks-upgrade-entire-mz }
@@ -319,15 +319,15 @@ steps:
           composition: platform-checks
           args: [--scenario=DropCreateDefaultReplica, --execution-mode=oneatatime]
 
-  - id: checks-oneatatime-restart-computed
-    label: "Checks oneatatime + restart computed"
+  - id: checks-oneatatime-restart-clusterd-compute
+    label: "Checks oneatatime + restart compute clusterd"
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartComputed, --execution-mode=oneatatime]
+          args: [--scenario=RestartClusterdCompute, --execution-mode=oneatatime]
 
   - id: checks-oneatatime-restart-entire-mz
     label: "Checks oneatatime + restart of the entire Mz"
@@ -339,25 +339,25 @@ steps:
           composition: platform-checks
           args: [--scenario=RestartEntireMz, --execution-mode=oneatatime]
 
-  - id: checks-oneatatime-restart-environmentd-storaged
-    label: "Checks oneatatime + restart of environmentd & storaged"
+  - id: checks-oneatatime-restart-environmentd-clusterd-storage
+    label: "Checks oneatatime + restart of environmentd & storage clusterd"
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartEnvironmentdStoraged, --execution-mode=oneatatime]
+          args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=oneatatime]
 
-  - id: checks-oneatatime-kill-storaged
-    label: "Checks oneatatime + kill storaged"
+  - id: checks-oneatatime-kill-clusterd-storage
+    label: "Checks oneatatime + kill storage clusterd"
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=KillStoraged, --execution-mode=oneatatime]
+          args: [--scenario=KillClusterdStorage, --execution-mode=oneatatime]
 
   - id: checks-oneatatime-restart-postgres-backend
     label: "Checks oneatatime + restart Postgres backend"
@@ -389,15 +389,15 @@ steps:
           composition: platform-checks
           args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel]
 
-  - id: checks-parallel-restart-computed
-    label: "Checks parallel + restart computed"
+  - id: checks-parallel-restart-clusterd-compute
+    label: "Checks parallel + restart compute clusterd"
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartComputed, --execution-mode=parallel]
+          args: [--scenario=RestartClusterdCompute, --execution-mode=parallel]
 
   - id: checks-parallel-restart-entire-mz
     label: "Checks parallel + restart of the entire Mz"
@@ -409,25 +409,25 @@ steps:
           composition: platform-checks
           args: [--scenario=RestartEntireMz, --execution-mode=parallel]
 
-  - id: checks-parallel-restart-environmentd-storaged
-    label: "Checks parallel + restart of environmentd & storaged"
+  - id: checks-parallel-restart-environmentd-clusterd-storage
+    label: "Checks parallel + restart of environmentd & storage clusterd"
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartEnvironmentdStoraged, --execution-mode=parallel]
+          args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=parallel]
 
-  - id: checks-parallel-kill-storaged
-    label: "Checks parallel + kill storaged"
+  - id: checks-parallel-kill-clusterd-storage
+    label: "Checks parallel + kill storage clusterd"
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=KillStoraged, --execution-mode=parallel]
+          args: [--scenario=KillClusterdStorage, --execution-mode=parallel]
 
   - id: checks-parallel-restart-postgres-backend
     label: "Checks parallel + restart Postgres backend"
@@ -469,25 +469,25 @@ steps:
           composition: platform-checks
           args: [--scenario=UpgradeEntireMzPreviousVersion]
 
-  - id: checks-upgrade-computed-first
-    label: "Platform checks upgrade, restarting computed first"
+  - id: checks-upgrade-clusterd-compute-first
+    label: "Platform checks upgrade, restarting compute clusterd first"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=UpgradeComputedFirst]
+          args: [--scenario=UpgradeClusterdComputeFirst]
 
-  - id: checks-upgrade-computed-last
-    label: "Platform checks upgrade, restarting computed last"
+  - id: checks-upgrade-clusterd-compute-last
+    label: "Platform checks upgrade, restarting compute clusterd last"
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=UpgradeComputedLast]
+          args: [--scenario=UpgradeClusterdComputeLast]
 
   - id: cloudtest-upgrade
     label: "Platform checks upgrade in Cloudtest/K8s"

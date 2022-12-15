@@ -16,7 +16,7 @@ from textwrap import dedent
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
-    Computed,
+    Clusterd,
     Kafka,
     Materialized,
     SchemaRegistry,
@@ -1279,10 +1279,10 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.wait_for_materialized()
 
     nodes = [
-        Computed(name="computed_1_1"),
-        Computed(name="computed_1_2"),
-        Computed(name="computed_2_1"),
-        Computed(name="computed_2_2"),
+        Clusterd(name="compute_1_1"),
+        Clusterd(name="compute_1_2"),
+        Clusterd(name="compute_2_1"),
+        Clusterd(name="compute_2_2"),
     ]
     with c.override(*nodes):
         c.up(*[n.name for n in nodes])
@@ -1291,13 +1291,13 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"""
             CREATE CLUSTER cluster1 REPLICAS (
                 replica1 (
-                    REMOTE ['computed_1_1:2100', 'computed_1_2:2100'],
-                    COMPUTE ['computed_1_1:2102', 'computed_1_2:2102'],
+                    REMOTE ['compute_1_1:2101', 'compute_1_2:2101'],
+                    COMPUTE ['compute_1_1:2102', 'compute_1_2:2102'],
                     WORKERS {args.workers}
                 ),
                 replica2 (
-                    REMOTE ['computed_2_1:2100', 'computed_2_2:2100'],
-                    COMPUTE ['computed_2_1:2102', 'computed_2_2:2102'],
+                    REMOTE ['compute_2_1:2101', 'compute_2_2:2101'],
+                    COMPUTE ['compute_2_1:2102', 'compute_2_2:2102'],
                     WORKERS {args.workers}
                 )
             )
@@ -1346,22 +1346,22 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
     c.up("materialized")
     c.wait_for_materialized()
 
-    # Construct the requied Computed instances and peer them into clusters
-    computeds = []
+    # Construct the requied Clusterd instances and peer them into clusters
+    cluster_replicas = []
     for cluster_id in range(0, args.clusters):
         for replica_id in range(0, args.replicas):
             nodes = []
             for node_id in range(0, args.nodes):
-                node_name = f"computed_u{cluster_id}_{replica_id}_{node_id}"
+                node_name = f"compute_u{cluster_id}_{replica_id}_{node_id}"
                 nodes.append(node_name)
 
             for node_id in range(0, args.nodes):
-                computeds.append(Computed(name=nodes[node_id]))
+                cluster_replicas.append(Clusterd(name=nodes[node_id]))
 
-    with c.override(*computeds):
+    with c.override(*cluster_replicas):
         with c.override(Testdrive(seed=1, no_reset=True)):
 
-            for n in computeds:
+            for n in cluster_replicas:
                 c.up(n.name)
 
             # Increase resource limits
@@ -1407,14 +1407,14 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                 for replica_id in range(0, args.replicas):
                     nodes = []
                     for node_id in range(0, args.nodes):
-                        node_name = f"computed_u{cluster_id}_{replica_id}_{node_id}"
+                        node_name = f"compute_u{cluster_id}_{replica_id}_{node_id}"
                         nodes.append(node_name)
 
                     replica_name = f"replica_u{cluster_id}_{replica_id}"
 
                     replica_definitions.append(
                         f"{replica_name} (REMOTE ["
-                        + ", ".join(f"'{n}:2100'" for n in nodes)
+                        + ", ".join(f"'{n}:2101'" for n in nodes)
                         + "], COMPUTE ["
                         + ", ".join(f"'{n}:2102'" for n in nodes)
                         + f"], WORKERS {args.workers})"

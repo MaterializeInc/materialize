@@ -3,7 +3,7 @@
 `cloudtest` is a test framework that allows testing Materialize inside Kubernetes.
 
 Using a K8s environment for testing has the advantage that the same orchestrator that
-is used in the Cloud is used to spawn computeds and storageds. K8s will also be responsible
+is used in the Cloud is used to spawn clusterds. K8s will also be responsible
 for restarting any containers that have exited.
 
 The framework is pased on pytest and KinD and uses, for the most part, the official `kubernetes`

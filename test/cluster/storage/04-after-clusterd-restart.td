@@ -7,14 +7,33 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# With storaged down, the upper of t1 will not advance. However, the global timestamp will advance.
-# In strict serializable mode we may select a timestamp that is ahead of on of the table's upper and hang forever.
-> SET transaction_isolation = serializable
+# Verify that the data ingested while `clusterd` was down eventually appears,
+# then try ingesting new data.
 
 # Increased from the default because of CI flakiness.
 $ set-sql-timeout duration=180s
 
-> SELECT COUNT(*) FROM t1;
-0
+> SELECT * from remote1
+one
+two
+three
+> SELECT * from remote2
+one
+two
+three
 
-> SET transaction_isolation = 'strict serializable'
+$ kafka-ingest format=bytes topic=remote1
+four
+$ kafka-ingest format=bytes topic=remote2
+four
+
+> SELECT * from remote1
+one
+two
+three
+four
+> SELECT * from remote2
+one
+two
+three
+four

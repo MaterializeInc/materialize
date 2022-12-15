@@ -24,13 +24,13 @@ one
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-remote1-${testdrive.seed}')
   FORMAT TEXT
   WITH (
-    REMOTE 'storaged:2100'
+    REMOTE 'storage:2100'
   )
 > CREATE SOURCE remote2
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-remote2-${testdrive.seed}')
   FORMAT TEXT
   WITH (
-    REMOTE 'storaged:2100'
+    REMOTE 'storage:2100'
   )
 
 > SELECT * from remote1

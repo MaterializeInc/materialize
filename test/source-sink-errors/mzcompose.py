@@ -14,14 +14,20 @@ from typing import Callable, List, Optional, Protocol
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
+    Clusterd,
     Materialized,
     Postgres,
     Redpanda,
-    Storaged,
     Testdrive,
 )
 
-SERVICES = [Redpanda(), Materialized(), Testdrive(), Storaged(), Postgres()]
+SERVICES = [
+    Redpanda(),
+    Materialized(),
+    Testdrive(),
+    Clusterd(),
+    Postgres(),
+]
 
 
 class Disruption(Protocol):
@@ -42,7 +48,7 @@ class KafkaDisruption:
 
         c.down(destroy_volumes=True)
         c.up("testdrive", persistent=True)
-        c.start_and_wait_for_tcp(services=["redpanda", "materialized", "storaged"])
+        c.start_and_wait_for_tcp(services=["redpanda", "materialized", "clusterd"])
         c.wait_for_materialized()
 
         with c.override(
@@ -87,13 +93,13 @@ class KafkaDisruption:
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source-topic-${testdrive.seed}')
                   FORMAT BYTES
                   ENVELOPE NONE
-                # WITH ( REMOTE 'storaged:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
 
                 > CREATE SINK sink1 FROM source1
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
-                # WITH ( REMOTE 'storaged:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
                 """
             )
         )
@@ -157,7 +163,7 @@ class PgDisruption:
 
         c.down(destroy_volumes=True)
         c.up("testdrive", persistent=True)
-        c.start_and_wait_for_tcp(services=["postgres", "materialized", "storaged"])
+        c.start_and_wait_for_tcp(services=["postgres", "materialized", "clusterd"])
         c.wait_for_materialized()
 
         with c.override(
@@ -269,10 +275,10 @@ disruptions: List[Disruption] = [
     ),
     # https://github.com/MaterializeInc/materialize/issues/16582
     # KafkaDisruption(
-    #     name="kill-redpanda-storaged",
-    #     breakage=lambda c, _: c.kill("redpanda", "storaged"),
+    #     name="kill-redpanda-clusterd",
+    #     breakage=lambda c, _: c.kill("redpanda", "clusterd"),
     #     expected_error="???",
-    #     fixage=lambda c, _: c.up("redpanda", "storaged"),
+    #     fixage=lambda c, _: c.up("redpanda", "clusterd"),
     # ),
     PgDisruption(
         name="kill-postgres",

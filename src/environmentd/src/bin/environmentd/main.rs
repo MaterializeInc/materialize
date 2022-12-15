@@ -288,6 +288,9 @@ pub struct Args {
         arg_enum
     )]
     orchestrator_kubernetes_image_pull_policy: KubernetesImagePullPolicy,
+    /// The init container for services created by the Kubernetes orchestrator.
+    #[clap(long, env = "ORCHESTRATOR_KUBERNETES_INIT_CONTAINER_IMAGE")]
+    orchestrator_kubernetes_init_container_image: Option<String>,
     /// Prefix commands issued by the process orchestrator with the supplied
     /// value.
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
@@ -304,11 +307,14 @@ pub struct Args {
     /// processes by crashing the parent process.
     #[clap(long, env = "ORCHESTRATOR_PROCESS_PROPAGATE_CRASHES")]
     orchestrator_process_propagate_crashes: bool,
-
-    /// The init container to use for computed and storaged when using the
-    /// kubernetes orchestrator.
-    #[clap(long)]
-    k8s_init_container_image: Option<String>,
+    /// The clusterd image reference to use.
+    #[structopt(
+        long,
+        env = "CLUSTERD_IMAGE",
+        required_if_eq("orchestrator", "kubernetes"),
+        default_value_if("orchestrator", Some("process"), Some("clusterd"))
+    )]
+    clusterd_image: Option<String>,
 
     // === Storage options. ===
     /// Where the persist library should store its blob data.
@@ -320,22 +326,6 @@ pub struct Args {
     /// The PostgreSQL URL for the storage stash.
     #[clap(long, env = "STORAGE_STASH_URL", value_name = "POSTGRES_URL")]
     storage_stash_url: String,
-    /// The storaged image reference to use.
-    #[structopt(
-        long,
-        required_if_eq("orchestrator", "kubernetes"),
-        default_value_if("orchestrator", Some("process"), Some("storaged"))
-    )]
-    storaged_image: Option<String>,
-
-    // === Compute options. ===
-    /// The computed image reference to use.
-    #[structopt(
-        long,
-        required_if_eq("orchestrator", "kubernetes"),
-        default_value_if("orchestrator", Some("process"), Some("computed"))
-    )]
-    computed_image: Option<String>,
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the adapter stash.
@@ -668,9 +658,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         },
         persist_clients,
         storage_stash_url: args.storage_stash_url,
-        storaged_image: args.storaged_image.expect("clap enforced"),
-        computed_image: args.computed_image.expect("clap enforced"),
-        init_container_image: args.k8s_init_container_image,
+        clusterd_image: args.clusterd_image.expect("clap enforced"),
+        init_container_image: args.orchestrator_kubernetes_init_container_image,
         now: SYSTEM_TIME.clone(),
         postgres_factory: PostgresFactory::new(&metrics_registry),
     };

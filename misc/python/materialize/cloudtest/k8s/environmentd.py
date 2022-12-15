@@ -30,6 +30,7 @@ from kubernetes.client import (
     V1StatefulSetSpec,
     V1VolumeMount,
 )
+from semver import Version
 
 from materialize.cloudtest.k8s import K8sService, K8sStatefulSet
 
@@ -76,12 +77,6 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             V1EnvVar(name="AWS_REGION", value="minio"),
             V1EnvVar(name="AWS_ACCESS_KEY_ID", value="minio"),
             V1EnvVar(name="AWS_SECRET_ACCESS_KEY", value="minio123"),
-            V1EnvVar(name="MZ_ANNOUNCE_EGRESS_IP", value="1.2.3.4,88.77.66.55"),
-            V1EnvVar(name="MZ_AWS_ACCOUNT_ID", value="123456789000"),
-            V1EnvVar(
-                name="MZ_AWS_EXTERNAL_ID_PREFIX",
-                value="eb5cb59b-e2fe-41f3-87ca-d2176a495345",
-            ),
         ]
 
         for (k, v) in self.env.items():
@@ -95,33 +90,48 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
 
         s3_endpoint = urllib.parse.quote("http://minio-service.default:9000")
 
+        args = [
+            "--availability-zone=kind-worker",
+            "--availability-zone=kind-worker2",
+            "--availability-zone=kind-worker3",
+            "--aws-account-id=123456789000",
+            "--aws-external-id-prefix=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
+            "--announce-egress-ip=1.2.3.4",
+            "--announce-egress-ip=88.77.66.55",
+            "--environment-id=cloudtest-test-00000000-0000-0000-0000-000000000000-0",
+            f"--persist-blob-url=s3://minio:minio123@persist/persist?endpoint={s3_endpoint}&region=minio",
+            "--orchestrator=kubernetes",
+            "--orchestrator-kubernetes-image-pull-policy=if-not-present",
+            "--persist-consensus-url=postgres://root@cockroach.default:26257?options=--search_path=consensus",
+            "--adapter-stash-url=postgres://root@cockroach.default:26257?options=--search_path=catalog",
+            "--storage-stash-url=postgres://root@cockroach.default:26257?options=--search_path=storage",
+            "--internal-sql-listen-addr=0.0.0.0:6877",
+            "--unsafe-mode",
+            # cloudtest may be called upon to spin up older versions of
+            # Materializel too! If you are adding a command-line option that is
+            # only supported on newer releases, do not add it here. Add it as a
+            # version-gated argument below, using `self._meets_minimum_version`.
+        ]
+        if self.log_filter:
+            args += [f"--log-filter={self.log_filter}"]
+        if self._meets_minimum_version("0.38.0"):
+            args += [
+                "--clusterd-image",
+                self.image("clusterd", tag=self.tag, release_mode=self.release_mode),
+            ]
+        else:
+            args += [
+                "--storaged-image",
+                self.image("storaged", tag=self.tag, release_mode=self.release_mode),
+                "--computed-image",
+                self.image("computed", tag=self.tag, release_mode=self.release_mode),
+            ]
         container = V1Container(
             name="environmentd",
             image=self.image(
                 "environmentd", tag=self.tag, release_mode=self.release_mode
             ),
-            args=[
-                "--storaged-image="
-                + self.image("storaged", tag=self.tag, release_mode=self.release_mode),
-                "--computed-image="
-                + self.image("computed", tag=self.tag, release_mode=self.release_mode),
-                "--availability-zone=kind-worker",
-                "--availability-zone=kind-worker2",
-                "--availability-zone=kind-worker3",
-                "--environment-id=cloudtest-test-00000000-0000-0000-0000-000000000000-0",
-                f"--persist-blob-url=s3://minio:minio123@persist/persist?endpoint={s3_endpoint}&region=minio",
-                "--orchestrator=kubernetes",
-                "--orchestrator-kubernetes-image-pull-policy=if-not-present",
-                "--persist-consensus-url=postgres://root@cockroach.default:26257?options=--search_path=consensus",
-                "--adapter-stash-url=postgres://root@cockroach.default:26257?options=--search_path=catalog",
-                "--storage-stash-url=postgres://root@cockroach.default:26257?options=--search_path=storage",
-                "--internal-sql-listen-addr=0.0.0.0:6877",
-                "--unsafe-mode",
-                # cloudtest may be called upon to spin up older versions of Mz too!
-                # If you are adding a command-line option that is only supported on newer
-                # releases, do not add it here, add it as a V1EnvVar above instead.
-            ]
-            + ([f"--log-filter={self.log_filter}"] if self.log_filter else []),
+            args=args,
             env=env,
             ports=ports,
             volume_mounts=volume_mounts,
@@ -152,3 +162,24 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 volume_claim_templates=claim_templates,
             ),
         )
+
+    def _meets_minimum_version(self, minimum: str) -> bool:
+        """Determine whether environmentd is at least the `minimum` version.
+
+        This function matches the function of the same name in MaterializeInc/cloud.
+        """
+
+        # Assume that unstable and development versions, as indicated by a
+        # missing or unparseable tag, are always recent enough to support all
+        # features.
+        #
+        # TODO: learn how to do real feature detection on arbitrary versions.
+        if self.tag is None:
+            return True
+        try:
+            tag_version = Version.parse(self.tag.removeprefix("v"))
+        except ValueError:
+            return True
+
+        minimum_version = Version.parse(minimum)
+        return tag_version >= minimum_version

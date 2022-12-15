@@ -275,7 +275,7 @@ impl Healthchecker {
 pub enum SourceStatus {
     /// Initial state of a Source during initialization.
     Setup,
-    /// Intended to be the state while the `storaged` process is initializing itself
+    /// Intended to be the state while the `clusterd` process is initializing itself
     /// Pushed by the Healthchecker on creation.
     Starting,
     /// State indicating the source is running fine. Pushed automatically as long

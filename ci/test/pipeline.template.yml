@@ -472,8 +472,8 @@ steps:
           composition: platform-checks
           args: [--scenario=DropCreateDefaultReplica]
 
-  - id: checks-restart-computed
-    label: "Checks + restart computed"
+  - id: checks-restart-clusterd-compute
+    label: "Checks + restart clusterd compute"
     depends_on: build-x86_64
     inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
@@ -482,7 +482,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartComputed]
+          args: [--scenario=RestartClusterdCompute]
 
   - id: checks-restart-entire-mz
     label: "Checks + restart of the entire Mz"
@@ -496,8 +496,8 @@ steps:
           composition: platform-checks
           args: [--scenario=RestartEntireMz]
 
-  - id: checks-restart-environmentd-storaged
-    label: "Checks + restart of environmentd & storaged"
+  - id: checks-restart-environmentd-clusterd-storage
+    label: "Checks + restart of environmentd & storage clusterd"
     depends_on: build-x86_64
     inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
@@ -506,10 +506,10 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartEnvironmentdStoraged]
+          args: [--scenario=RestartEnvironmentdClusterdStorage]
 
-  - id: checks-kill-storaged
-    label: "Checks + kill storaged"
+  - id: checks-kill-clusterd-storage
+    label: "Checks + kill storage clusterd"
     depends_on: build-x86_64
     inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
@@ -518,7 +518,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=KillStoraged]
+          args: [--scenario=KillClusterdStorage]
 
   - id: checks-restart-postgres-backend
     label: "Checks + restart Postgres backend"

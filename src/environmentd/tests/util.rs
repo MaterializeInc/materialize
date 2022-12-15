@@ -213,8 +213,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         controller: ControllerConfig {
             build_info: &mz_environmentd::BUILD_INFO,
             orchestrator,
-            storaged_image: "storaged".into(),
-            computed_image: "computed".into(),
+            clusterd_image: "clusterd".into(),
             init_container_image: None,
             persist_location: PersistLocation {
                 blob_uri: format!("file://{}/persist/blob", data_directory.display()),

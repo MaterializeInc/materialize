@@ -17,7 +17,7 @@ from materialize.checks.scenarios import Scenario
 from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
-    Computed,
+    Clusterd,
     Debezium,
     Materialized,
     Postgres,
@@ -30,8 +30,8 @@ SERVICES = [
     Postgres(name="postgres-source"),
     Redpanda(auto_create_topics=True),
     Debezium(),
-    Computed(
-        name="computed_1"
+    Clusterd(
+        name="clusterd_compute_1"
     ),  # Started by some Scenarios, defined here only for the teardown
     Materialized(),
     TestdriveService(default_timeout="300s", no_reset=True, seed=1),

@@ -9,14 +9,9 @@
 
 //! Common code for services orchestrated by environmentd.
 //!
-//! This crate lacks focus. It is a hopefully short term home for code that is
-//! shared between storaged and computed. The code shared here is not obviously
-//! reusable by future services we may split out of environmentd. As storaged
-//! and computed begin to evolve independently, we expect many of the
-//! currently shared traits in this crate to evolve separate implementations in
-//! the `storage` and `compute` crates. The code that remains in this crate
-//! could then be moved to more focused crates, e.g., an `mz-grpc` crate for the
-//! gRPC utilities that are presently in the `grpc` module.
+//! This crate lacks focus. It is a hopefully short term home for code that was
+//! previously shared between storaged and computed. The code shared here is not
+//! obviously reusable by future services we may split out of environmentd.
 
 pub mod client;
 pub mod grpc;

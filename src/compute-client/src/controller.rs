@@ -291,7 +291,7 @@ impl<T> ComputeController<T> {
     pub fn new(
         build_info: &'static BuildInfo,
         orchestrator: Arc<dyn NamespacedOrchestrator>,
-        computed_image: String,
+        clusterd_image: String,
         init_container_image: Option<String>,
         envd_epoch: NonZeroI64,
     ) -> Self {
@@ -303,7 +303,7 @@ impl<T> ComputeController<T> {
             build_info,
             orchestrator: ComputeOrchestrator::new(
                 orchestrator,
-                computed_image,
+                clusterd_image,
                 init_container_image,
             ),
             initialized: false,

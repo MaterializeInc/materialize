@@ -19,7 +19,7 @@ from typing import List, Optional
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
-from materialize.mzcompose.services import Computed, Materialized
+from materialize.mzcompose.services import Clusterd, Materialized
 
 
 class MzcomposeAction(Action):
@@ -71,7 +71,7 @@ class KillMz(MzcomposeAction):
         c.kill("materialized")
 
 
-class UseComputed(MzcomposeAction):
+class UseClusterdCompute(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
@@ -79,37 +79,46 @@ class UseComputed(MzcomposeAction):
             """
             DROP CLUSTER REPLICA default.r1;
             CREATE CLUSTER REPLICA default.r1
-                REMOTE ['computed_1:2100'],
-                COMPUTE ['computed_1:2102'],
+                REMOTE ['clusterd_compute_1:2101'],
+                COMPUTE ['clusterd_compute_1:2102'],
                 WORKERS 1;
         """
         )
 
 
-class KillComputed(MzcomposeAction):
+class KillClusterdCompute(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
-        with c.override(Computed(name="computed_1")):
-            c.kill("computed_1")
+        with c.override(Clusterd(name="clusterd_compute_1")):
+            c.kill("clusterd_compute_1")
 
 
-class StartComputed(MzcomposeAction):
+class StartClusterdCompute(MzcomposeAction):
     def __init__(self, tag: Optional[str] = None) -> None:
         self.tag = tag
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        image = f"materialize/computed:{self.tag}" if self.tag is not None else None
-        print(f"Starting Computed using image {image}")
+        clusterd = Clusterd(name="clusterd_compute_1")
+        if self.tag:
+            # TODO(benesch): remove this conditional once v0.38 ships.
+            if self.tag.startswith("v0.37"):
+                clusterd = Clusterd(
+                    name="clusterd_compute_1",
+                    image=f"materialize/computed:{self.tag}",
+                    options=["--controller-listen-addr=0.0.0.0:2101"],
+                    storage_workers=None,
+                )
+            else:
+                clusterd = Clusterd(
+                    name="clusterd_compute_1",
+                    image=f"materialize/computed:{self.tag}",
+                )
+        print(f"Starting Compute using image {clusterd.config.get('image')}")
 
-        computed = Computed(
-            name="computed_1",
-            image=image,
-        )
-
-        with c.override(computed):
-            c.up("computed_1")
+        with c.override(clusterd):
+            c.up("clusterd_compute_1")
 
 
 class RestartRedpandaDebezium(MzcomposeAction):
@@ -141,12 +150,12 @@ class RestartSourcePostgres(MzcomposeAction):
         c.wait_for_postgres(service="postgres-source")
 
 
-class KillStoraged(MzcomposeAction):
+class KillClusterdStorage(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        # Depending on the workload, storaged may not be running, hence the || true
-        c.exec("materialized", "bash", "-c", "kill -9 `pidof storaged` || true")
+        # Depending on the workload, clusterd may not be running, hence the || true
+        c.exec("materialized", "bash", "-c", "kill -9 `pidof clusterd` || true")
 
 
 class DropCreateDefaultReplica(MzcomposeAction):

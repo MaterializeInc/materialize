@@ -20,11 +20,11 @@ from typing import List
 from materialize import util
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
 from materialize.checks.mzcompose_actions import (
-    KillComputed,
+    KillClusterdCompute,
     KillMz,
-    StartComputed,
+    StartClusterdCompute,
     StartMz,
-    UseComputed,
+    UseClusterdCompute,
 )
 from materialize.checks.scenarios import Scenario
 from materialize.mzcompose.services import Materialized
@@ -78,32 +78,32 @@ class UpgradeEntireMzPreviousVersion(UpgradeEntireMz):
 #
 # We are limited with respect to the different orders in which stuff can be upgraded:
 # - some sequences of events are invalid
-# - environmentd and storaged are located in the same container
+# - environmentd and storage clusterds are located in the same container
 #
 # Still, we would like to try as many scenarios as we can
 #
 
 
-class UpgradeComputedLast(Scenario):
-    """Upgrade computed separately after upgrading environmentd+storaged"""
+class UpgradeClusterdComputeLast(Scenario):
+    """Upgrade compute's clusterd separately after upgrading environmentd"""
 
     def actions(self) -> List[Action]:
         return [
             StartMz(tag=last_version, environment_extra=environment_extra),
-            StartComputed(tag=last_version),
-            UseComputed(),
+            StartClusterdCompute(tag=last_version),
+            UseClusterdCompute(),
             Initialize(self.checks),
             Manipulate(self.checks, phase=1),
             KillMz(),
             StartMz(tag=None),
-            # No useful work can be done while computed is old-verison
-            # and environmentd/storaged is new-version. So we proceed
-            # to upgrade computed as well.
+            # No useful work can be done while clusterd is old-version
+            # and environmentd is new-version. So we proceed
+            # to upgrade clusterd as well.
             # We sleep here to allow some period of coexistence, even
             # though we are not issuing queries during that time.
             Sleep(10),
-            KillComputed(),
-            StartComputed(tag=None),
+            KillClusterdCompute(),
+            StartClusterdCompute(tag=None),
             Manipulate(self.checks, phase=2),
             Validate(self.checks),
             # A second restart while already on the new version
@@ -113,20 +113,20 @@ class UpgradeComputedLast(Scenario):
         ]
 
 
-class UpgradeComputedFirst(Scenario):
-    """Upgrade computed separately before environmentd and storaged"""
+class UpgradeClusterdComputeFirst(Scenario):
+    """Upgrade compute's clusterd separately before environmentd"""
 
     def actions(self) -> List[Action]:
         return [
             StartMz(tag=last_version, environment_extra=environment_extra),
-            StartComputed(tag=last_version),
-            UseComputed(),
+            StartClusterdCompute(tag=last_version),
+            UseClusterdCompute(),
             Initialize(self.checks),
             Manipulate(self.checks, phase=1),
-            KillComputed(),
-            StartComputed(tag=None),
-            # No useful work can be done while computed is new-verison
-            # and environmentd/storaged is old-version. So we
+            KillClusterdCompute(),
+            StartClusterdCompute(tag=None),
+            # No useful work can be done while clusterd is new-version
+            # and environmentd is old-version. So we
             # proceed to upgrade them as well.
             # We sleep here to allow some period of coexistence, even
             # though we are not issuing queries during that time.

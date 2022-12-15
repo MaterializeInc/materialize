@@ -97,7 +97,7 @@ impl Healthchecker {
 pub enum SinkStatus {
     /// Initial state of a Sink during initialization.
     Setup,
-    /// Intended to be the state while the `storaged` process is initializing itself
+    /// Intended to be the state while the `clusterd` process is initializing itself
     /// Pushed by the Healthchecker on creation.
     Starting,
     /// State indicating the sink is running fine. Pushed automatically as long

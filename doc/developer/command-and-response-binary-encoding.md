@@ -1,7 +1,7 @@
 # Developer guide: Command and Response Binary Encoding
 
-This guide is intended for developers that want to extend or modify the set of command and response types that comprise the APIs used between `materialized`, `dataflowd`, and `storaged`.
-As part of this process, one also needs to:
+This guide is intended for developers that want to extend or modify the set of command and response types that comprise the APIs used between `materialized`
+and `clusterd`. As part of this process, one also needs to:
 
 1. add Protobuf-based serialization support for new types, and
 1. ensure that the deserialization is backwards-compatible.

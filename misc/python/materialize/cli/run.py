@@ -21,7 +21,7 @@ from materialize import ROOT, spawn, ui
 from materialize.ui import UIError
 
 KNOWN_PROGRAMS = ["environmentd", "sqllogictest"]
-REQUIRED_SERVICES = ["storaged", "computed"]
+REQUIRED_SERVICES = ["clusterd"]
 
 DEFAULT_POSTGRES = f"postgres://root@localhost:26257/materialize"
 

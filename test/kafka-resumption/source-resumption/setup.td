@@ -24,5 +24,5 @@ three
   INCLUDE OFFSET
   ENVELOPE NONE
   WITH (
-    REMOTE = 'storaged:2100'
+    REMOTE = 'clusterd:2100'
   )

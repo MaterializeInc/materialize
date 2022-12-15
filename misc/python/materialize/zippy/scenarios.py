@@ -18,7 +18,7 @@ from materialize.zippy.kafka_actions import (
     KafkaStart,
 )
 from materialize.zippy.kafka_capabilities import Envelope
-from materialize.zippy.mz_actions import KillComputed, KillStoraged, MzStart, MzStop
+from materialize.zippy.mz_actions import KillClusterd, MzStart, MzStop
 from materialize.zippy.peek_actions import PeekCancellation
 from materialize.zippy.pg_cdc_actions import CreatePostgresCdcTable
 from materialize.zippy.postgres_actions import (
@@ -48,8 +48,7 @@ class KafkaSources(Scenario):
         return {
             MzStart: 1,
             MzStop: 10,
-            KillStoraged: 15,
-            KillComputed: 15,
+            KillClusterd: 15,
             CreateTopicParameterized(): 5,
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
@@ -70,7 +69,7 @@ class UserTables(Scenario):
         return {
             MzStart: 1,
             MzStop: 15,
-            KillComputed: 15,
+            KillClusterd: 15,
             CreateTableParameterized(): 10,
             CreateViewParameterized(): 10,
             CreateSinkParameterized(): 10,
@@ -90,8 +89,7 @@ class DebeziumPostgres(Scenario):
         return {
             CreatePostgresTable: 10,
             CreateDebeziumSource: 10,
-            KillStoraged: 15,
-            KillComputed: 15,
+            KillClusterd: 15,
             CreateViewParameterized(): 10,
             ValidateView: 20,
             PostgresDML: 100,
@@ -108,8 +106,7 @@ class PostgresCdc(Scenario):
         return {
             CreatePostgresTable: 10,
             CreatePostgresCdcTable: 10,
-            KillStoraged: 15,
-            KillComputed: 15,
+            KillClusterd: 15,
             PostgresRestart: 10,
             CreateViewParameterized(): 10,
             ValidateView: 20,
@@ -126,8 +123,7 @@ class ClusterReplicas(Scenario):
     # Due to gh#13235 it is not possible to have MzStop/MzStart in this scenario
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
-            KillStoraged: 10,
-            KillComputed: 10,
+            KillClusterd: 10,
             CreateReplica: 30,
             DropReplica: 10,
             CreateTopicParameterized(): 10,
@@ -150,8 +146,7 @@ class KafkaParallelInsert(Scenario):
 
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
-            KillStoraged: 5,
-            KillComputed: 5,
+            KillClusterd: 5,
             CreateTopicParameterized(): 10,
             CreateSourceParameterized(): 10,
             CreateViewParameterized(expensive_aggregates=False, max_inputs=1): 5,
@@ -168,11 +163,9 @@ class KafkaSourcesLarge(Scenario):
 
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
-            # Killing computed causes a massive memory spike during re-hyration
-            # MzStart: 1,
-            # MzStop: 2,
-            # KillComputed: 2,
-            KillStoraged: 2,
+            MzStart: 1,
+            MzStop: 2,
+            KillClusterd: 2,
             CreateTopicParameterized(max_topics=5): 10,
             CreateSourceParameterized(max_sources=50): 10,
             CreateViewParameterized(
@@ -193,11 +186,9 @@ class DataflowsLarge(Scenario):
 
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
-            # Killing computed causes a massive memory spike during re-hyration
-            # MzStart: 1,
-            # MzStop: 2,
-            # KillComputed: 2,
-            KillStoraged: 2,
+            MzStart: 1,
+            MzStop: 2,
+            KillClusterd: 2,
             CreateReplica: 2,
             CreateTableParameterized(max_tables=2): 10,
             CreateTopicParameterized(max_topics=2, envelopes=[Envelope.UPSERT]): 10,

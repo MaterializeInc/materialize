@@ -54,9 +54,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "cargo",
             "build",
             "--bin",
-            "storaged",
-            "--bin",
-            "computed",
+            "clusterd",
         ]
     )
     spawn.runv(

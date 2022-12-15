@@ -69,11 +69,9 @@ pub struct ControllerConfig {
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
     /// The stash URL for the storage controller.
     pub storage_stash_url: String,
-    /// The storaged image to use when starting new storage processes.
-    pub storaged_image: String,
-    /// The computed image to use when starting new compute processes.
-    pub computed_image: String,
-    /// The init container image to use for storaged and computed.
+    /// The clusterd image to use when starting new cluster processes.
+    pub clusterd_image: String,
+    /// The init container image to use for clusterd.
     pub init_container_image: Option<String>,
     /// The now function to advance the controller's introspection collections.
     pub now: NowFn,
@@ -254,7 +252,7 @@ where
             config.persist_location,
             config.persist_clients,
             config.orchestrator.namespace("storage"),
-            config.storaged_image,
+            config.clusterd_image.clone(),
             config.init_container_image.clone(),
             config.now,
             &config.postgres_factory,
@@ -265,7 +263,7 @@ where
         let compute_controller = ComputeController::new(
             config.build_info,
             config.orchestrator.namespace("compute"),
-            config.computed_image,
+            config.clusterd_image,
             config.init_container_image,
             envd_epoch,
         );

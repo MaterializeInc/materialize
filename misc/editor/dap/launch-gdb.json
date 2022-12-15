@@ -13,21 +13,10 @@
             "miDebuggerPath": "rust-gdb"
         },
         {
-            "name": "computed attach",
+            "name": "clusterd attach",
             "type": "cppdbg",
             "request": "attach",
-            "program": "${workspaceFolder}/target/debug/computed",
-            "cwd": "${workspaceFolder}",
-            "processId": "${command:pickProcess}",
-            "environment": [],
-            "MIMode": "gdb",
-            "miDebuggerPath": "rust-gdb"
-        },
-        {
-            "name": "storaged attach",
-            "type": "cppdbg",
-            "request": "attach",
-            "program": "${workspaceFolder}/target/debug/storaged",
+            "program": "${workspaceFolder}/target/debug/clusterd",
             "cwd": "${workspaceFolder}",
             "processId": "${command:pickProcess}",
             "environment": [],
