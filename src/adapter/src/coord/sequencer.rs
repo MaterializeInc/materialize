@@ -2851,7 +2851,7 @@ impl<S: Append + 'static> Coordinator<S> {
             sources,
         };
         let s = if is_json {
-            serde_json::to_string(&explanation).unwrap()
+            serde_json::to_string_pretty(&explanation).unwrap()
         } else {
             explanation.to_string()
         };
