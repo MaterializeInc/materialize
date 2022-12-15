@@ -915,6 +915,60 @@ where
         stash.append(&[batch]).await?;
         Ok(())
     }
+
+    /// Deletes any kv pair from `self` which returns `true` for `predicate`.
+    ///
+    /// Note that this operation performs an entire table scan to perform the
+    /// deletions.'
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn delete<S, P>(&self, stash: &mut S, predicate: P) -> Result<(), StashError>
+    where
+        P: Fn(&K, &V) -> bool,
+        S: Append,
+        K: Hash + Clone,
+        V: Clone,
+    {
+        let initial = self.peek_one(stash).await?;
+        // Delete-only transaction cannot violate uniqueness.
+        let mut txn = TableTransaction::new(initial, |_, _| false);
+        txn.delete(predicate);
+        let collection = self.get(stash).await?;
+        let mut batch = collection.make_batch(stash).await?;
+        for (k, v, diff) in txn.pending() {
+            collection.append_to_batch(&mut batch, &k, &v, diff);
+        }
+        stash.append(&[batch]).await?;
+        Ok(())
+    }
+
+    /// Updates values in all KV pairs using `transform`.
+    ///
+    /// Note that this operation performs an entire table scan to perform the
+    /// deletions.'
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn update<S, T>(
+        &self,
+        stash: &mut S,
+        transform: T,
+        uniqueness_violation: fn(a: &V, b: &V) -> bool,
+    ) -> Result<(), StashError>
+    where
+        T: Fn(&K, &V) -> Option<V>,
+        S: Append,
+        K: Hash + Clone,
+        V: Clone,
+    {
+        let initial = self.peek_one(stash).await?;
+        let mut txn = TableTransaction::new(initial, uniqueness_violation);
+        txn.update(transform)?;
+        let collection = self.get(stash).await?;
+        let mut batch = collection.make_batch(stash).await?;
+        for (k, v, diff) in txn.pending() {
+            collection.append_to_batch(&mut batch, &k, &v, diff);
+        }
+        stash.append(&[batch]).await?;
+        Ok(())
+    }
 }
 
 /// TableTransaction emulates some features of a typical SQL transaction over

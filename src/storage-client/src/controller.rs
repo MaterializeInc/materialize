@@ -71,6 +71,7 @@ mod metrics_scraper;
 mod persist_handles;
 mod rehydration;
 mod remap_migration;
+mod shard_wal;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
 
@@ -655,6 +656,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     persist_location: PersistLocation,
     /// A persist client used to write to storage collections
     persist: Arc<Mutex<PersistClientCache>>,
+    /// Provides a rough timestamp for metadata
+    now: NowFn,
 }
 
 #[derive(Debug)]
@@ -878,6 +881,12 @@ where
             } else {
                 None
             };
+
+            self.register_shards([
+                (collection_shards.remap_shard, format!("{} remap shard", id)),
+                (collection_shards.data_shard, format!("{} data shard", id)),
+            ])
+            .await;
 
             let metadata = CollectionMetadata {
                 persist_location: self.persist_location.clone(),
@@ -1554,14 +1563,28 @@ where
             Arc::clone(&persist_clients),
         );
 
-        Self {
-            state: StorageControllerState::new(postgres_url, tx, now, postgres_factory, envd_epoch)
-                .await,
+        let mut c = Self {
+            state: StorageControllerState::new(
+                postgres_url,
+                tx,
+                now.clone(),
+                postgres_factory,
+                envd_epoch,
+            )
+            .await,
             hosts,
             internal_response_queue: rx,
             persist_location,
             persist: persist_clients,
-        }
+            now,
+        };
+
+        // We expect this collection to be empty so waiting here for a read from
+        // stash is OK. If this becomes onerous, could be moved into a
+        // background task.
+        c.reconcile_shards().await;
+
+        c
     }
 
     /// Validate that a collection exists for all identifiers, and error if any do not.
@@ -1814,9 +1837,6 @@ where
             .await
             .expect("connect to stash");
 
-        // ???: If we crash after this do we have any means of reaping the
-        // leaked shards?
-
         self.truncate_shards(&to_delete_shards).await;
 
         let DurableCollectionMetadata {
@@ -1869,6 +1889,9 @@ where
                 shard_id
             );
         }
+
+        let reapable_shards = shards.iter().map(|(shard, _)| *shard).collect();
+        self.mark_shards_reapable(&reapable_shards).await;
     }
 
     /// For appropriate data sources, migrate the remap collection correlated
