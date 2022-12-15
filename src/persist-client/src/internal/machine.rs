@@ -133,14 +133,14 @@ where
         self.state.seqno_since()
     }
 
-    pub async fn add_rollup_for_current_seqno(&mut self) {
+    pub async fn add_rollup_for_current_seqno(&mut self) -> RoutineMaintenance {
         let rollup_seqno = self.state.seqno;
         let rollup_key = PartialRollupKey::new(rollup_seqno, &RollupId::new());
         let () = self
             .state_versions
             .write_rollup_blob(&self.shard_metrics, &self.state, &rollup_key)
             .await;
-        let applied = self
+        let (applied, maintenance) = self
             .add_and_remove_rollups((rollup_seqno, &rollup_key), &[])
             .await;
         if !applied {
@@ -150,18 +150,19 @@ where
                 .delete_rollup(&self.state.shard_id, &rollup_key)
                 .await;
         }
+        maintenance
     }
 
     pub async fn add_and_remove_rollups(
         &mut self,
         add_rollup: (SeqNo, &PartialRollupKey),
         remove_rollups: &[(SeqNo, PartialRollupKey)],
-    ) -> bool {
+    ) -> (bool, RoutineMaintenance) {
         // See the big SUBTLE comment in [Self::merge_res] for what's going on
         // here.
         let mut applied_ever_true = false;
         let metrics = Arc::clone(&self.metrics);
-        let (_seqno, _applied, _maintenance) = self
+        let (_seqno, _applied, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.add_and_remove_rollups, |_, _, state| {
                 let ret = state.add_and_remove_rollups(add_rollup, remove_rollups);
                 if let Continue(applied) = ret {
@@ -170,7 +171,7 @@ where
                 ret
             })
             .await;
-        applied_ever_true
+        (applied_ever_true, maintenance)
     }
 
     pub async fn register_leased_reader(

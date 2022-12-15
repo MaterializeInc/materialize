@@ -304,7 +304,7 @@ where
             .state_versions
             .write_rollup_blob(&machine.shard_metrics, &state, &rollup_key)
             .await;
-        let applied = machine
+        let (applied, _maintenance) = machine
             .add_and_remove_rollups((rollup_seqno, &rollup_key), &deleteable_rollup_blobs)
             .await;
         // We raced with some other GC process to write this rollup out. Ours
