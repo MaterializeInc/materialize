@@ -300,21 +300,15 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
 
     // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
     let system_parameter_frontend = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
-        let ld_ctx_key = config
-            .frontegg
-            .as_ref()
-            .map(|frontegg| frontegg.tenant_id().to_string())
-            .unwrap_or_else(|| "anonymous-dev@materialize.com".to_string());
         let ld_key_map = config.launchdarkly_key_map;
+        let env_id = config.environment_id.clone();
         // The `SystemParameterFrontend::new` call needs to be wrapped in a
         // spawn_blocking call because the LaunchDarkly SDK initialization uses
         // `reqwest::blocking::client`. This should be revisited after the SDK
         // is updated to 1.0.0.
         let system_parameter_frontend = task::spawn_blocking(
             || "SystemParameterFrontend::new",
-            move || {
-                SystemParameterFrontend::new(ld_sdk_key.as_str(), ld_ctx_key.as_str(), ld_key_map)
-            },
+            move || SystemParameterFrontend::new(env_id, ld_sdk_key.as_str(), ld_key_map),
         )
         .await??;
         Some(Arc::new(system_parameter_frontend))
