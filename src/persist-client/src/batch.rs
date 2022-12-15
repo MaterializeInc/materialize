@@ -144,7 +144,7 @@ where
         self.batch.parts.clear();
     }
 
-    /// Turns this [`Batch`] into a [`HollowBatch`].
+    /// Turns this [`Batch`] into a `HollowBatch`.
     ///
     /// **NOTE**: If this batch is not eventually appended to a shard or
     /// dropped, the data that it represents will have leaked.
