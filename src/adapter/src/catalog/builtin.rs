@@ -2265,8 +2265,8 @@ pub const MZ_CLUSTER_REPLICA_UTILIZATION: BuiltinView = BuiltinView {
 SELECT
     r.id AS replica_id,
     m.process_id,
-    m.cpu_nano_cores / s.cpu_nano_cores * 100 AS cpu_percent,
-    m.memory_bytes / s.memory_bytes * 100 AS memory_percent
+    m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
+    m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent
 FROM
     mz_cluster_replicas AS r
         JOIN mz_internal.mz_cluster_replica_sizes AS s ON r.size = s.size
