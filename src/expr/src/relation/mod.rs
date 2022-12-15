@@ -1618,6 +1618,7 @@ impl MirRelationExpr {
             Constant { .. }
             | Get { .. }
             | Let { .. }
+            | LetRec { .. }
             | Project { .. }
             | TopK { .. }
             | Negate { .. }
