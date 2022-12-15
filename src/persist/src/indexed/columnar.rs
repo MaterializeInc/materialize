@@ -10,7 +10,6 @@
 //! A columnar representation of ((Key, Val), Time, i64) data suitable for in-memory
 //! reads and persistent storage.
 
-use std::iter::FromIterator;
 use std::mem::size_of;
 use std::{cmp, fmt};
 
@@ -139,27 +138,6 @@ impl ColumnarRecords {
     /// Iterate through the records in Self.
     pub fn iter<'a>(&'a self) -> ColumnarRecordsIter<'a> {
         self.borrow().iter()
-    }
-}
-
-// TODO: deduplicate this with the other FromIterator implementation.
-impl<'a, K, V> FromIterator<&'a ((K, V), u64, i64)> for ColumnarRecordsVec
-where
-    K: AsRef<[u8]> + 'a,
-    V: AsRef<[u8]> + 'a,
-{
-    fn from_iter<T: IntoIterator<Item = &'a ((K, V), u64, i64)>>(_iter: T) -> Self {
-        ColumnarRecordsVec(vec![])
-    }
-}
-
-impl<K, V> FromIterator<((K, V), u64, i64)> for ColumnarRecordsVec
-where
-    K: AsRef<[u8]>,
-    V: AsRef<[u8]>,
-{
-    fn from_iter<T: IntoIterator<Item = ((K, V), u64, i64)>>(_iter: T) -> Self {
-        ColumnarRecordsVec(vec![])
     }
 }
 
@@ -511,7 +489,6 @@ impl ColumnarRecordsVec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_ore::cast::CastFrom;
     use mz_persist_types::Codec64;
 
     /// Smoke test some edge cases around empty sets of records and empty keys/vals
@@ -542,71 +519,5 @@ mod tests {
             .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), u64::decode(t), i64::decode(d)))
             .collect();
         assert_eq!(reads, updates);
-    }
-
-    #[test]
-    fn vec_builder() {
-        fn testcase(
-            _max_len: usize,
-            kv: (&str, &str),
-            num_records: usize,
-            expected_num_columnar_records: usize,
-        ) {
-            let (key, val) = kv;
-            let expected = (0..num_records)
-                .map(|x| ((key.as_bytes(), val.as_bytes()), u64::cast_from(x), 1))
-                .collect::<Vec<_>>();
-            let mut builder = ColumnarRecordsBuilder::default();
-            // Call reserve once at the beginning to match the usage in the
-            // FromIterator impls.
-            builder.reserve(num_records, key.len(), 0);
-            for (idx, (kv, t, d)) in expected.iter().enumerate() {
-                assert!(builder.push((*kv, u64::encode(t), i64::encode(d))));
-                assert_eq!(builder.len(), idx + 1);
-            }
-            let columnar = builder.finish();
-            assert_eq!(columnar.len(), expected_num_columnar_records);
-            let actual = columnar
-                .iter()
-                .map(|(kv, t, d)| (kv, u64::decode(t), i64::decode(d)))
-                .collect::<Vec<_>>();
-            assert_eq!(actual, expected);
-        }
-
-        let ten_k = "kkkkkkkkkk";
-        let ten_v = "vvvvvvvvvv";
-
-        let k_record_size = ten_k.len() + BYTES_PER_KEY_VAL_OFFSET;
-        let v_record_size = ten_v.len() + BYTES_PER_KEY_VAL_OFFSET;
-        // We use `len + 1` offsets to store `len` records.
-        let extra_offset = BYTES_PER_KEY_VAL_OFFSET;
-
-        // Tests for the production value. We intentionally don't make a 2GB
-        // alloc in unit tests, the rollover edge cases are tested below.
-        testcase(KEY_VAL_DATA_MAX_LEN, ("", ""), 0, 0);
-        testcase(KEY_VAL_DATA_MAX_LEN, (ten_k, ""), 10, 1);
-        testcase(KEY_VAL_DATA_MAX_LEN, ("", ten_v), 10, 1);
-
-        // Tests for exactly filling ColumnarRecords
-        testcase(k_record_size + extra_offset, (ten_k, ""), 1, 1);
-        testcase(v_record_size + extra_offset, ("", ten_v), 1, 1);
-        testcase(k_record_size + extra_offset, (ten_k, ""), 10, 10);
-        testcase(v_record_size + extra_offset, ("", ten_v), 10, 10);
-        testcase(10 * k_record_size + extra_offset, (ten_k, ""), 10, 1);
-        testcase(10 * v_record_size + extra_offset, ("", ten_v), 10, 1);
-
-        // Tests for not exactly filling ColumnarRecords
-        testcase(40, (ten_k, ""), 23, 12);
-        testcase(40, ("", ten_v), 23, 12);
-    }
-
-    // Regression test for a bug where an empty ColumnarRecords would be
-    // produced if the first record added was larger than
-    // `key_val_data_max_len`. This really only comes up in tests.
-    #[test]
-    fn regression_empty_chunk() {
-        let mut builder = ColumnarRecordsBuilder::default();
-        assert!(builder.push(((&[], &[]), [0u8; 8], [0u8; 8])));
-        assert_eq!(builder.finish().len(), 0);
     }
 }
