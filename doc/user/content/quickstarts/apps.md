@@ -9,39 +9,33 @@ aliases:
   - /demos/data-applications
 ---
 
-<!--
-* What you teach the child to cook isn’t really important. What’s important is that the child finds it enjoyable, and gains confidence, and wants to do it again.
-* Through the things the child does, it will learn important things about cooking. It will learn what it is like to be in the kitchen, to use the utensils, to handle the food.
-* This is because using software, like cooking, is a matter of craft. It’s knowledge - but it is practical knowledge, not theoretical knowledge.
-* When we learn a new craft or skill, we always begin learning it by doing.
--->
+In this quickstart, you'll build the analytics for an eCommerce sales dashboard that queries Materialize.
+At the end of this guide, you'll have the chance to explore an eCommerce data application powered by your work.
 
-In this quickstart, you will learn how to use Materialize to build data applications.
-At the end of the guide, you will have the chance to use your code to power an existent data application.
-
-The key concepts present in this quickstart will also apply to many other real-time projects:
+The key concepts present in this quickstart will also apply to many other projects:
 
 * [Sources](https://materialize.com/docs/sql/create-source/load-generator/)
 * [Materialized views](https://materialize.com/docs/sql/create-materialized-view/)
 * [Subscriptions](https://materialize.com/docs/sql/subscribe/)
 
 ### Prepare the environment
-[This could be replaced]
 
 1. Set up a [Materialize account.](/register)
 
-1. Install [psql](https://materialize.com/docs/integrations/sql-clients/#installation-instructions-for-psql)
-
-1. Open a terminal window and connect to Materialize.
+1. [Install psql and connect](https://materialize.com/docs/get-started/#connect) to Materialize.
 
 ### Create the sources
 
-Sources are the first step in most Materialize projects. For this quickstart, you will use our public Kafka topics. They contain data from a fictional eCommerce and receives updates every second.
+Materialize provides public Kafka topics for its users to use as a source. The Kafka topics contain data from a fictional eCommerce and receive updates every second. You will use the data in them to build the analytics.
 
-1. In your `psql` terminal, create the sources:
+1. In your `psql` terminal, create a new schema:
 
     ```sql
     CREATE SCHEMA shop;
+    ```
+
+1. Create the sources:
+    ```sql
     CREATE TABLE IF NOT EXISTS shop.users (
         id INT,
         email TEXT,
@@ -101,13 +95,13 @@ Sources are the first step in most Materialize projects. For this quickstart, yo
 
 <!-- Calculating the same insights over and over again is **inefficient**. -->
 
-### Build the insights
+### Build the analytics
 
-Use materialized views to compute and maintain insights up-to-date at **lightning speeds**.
+Materialized views compute and maintain the results of a query incrementally. Use them to build up-to-date analytics results at **lightning speeds**.
 
-Reuse your `psql` session and build the eCommerce insights:
+Reuse your `psql` session and build the analytics:
 
-1. The total amount of income:
+1. The sum of purchases:
     ```sql
     CREATE MATERIALIZED VIEW shop.total_purchases AS
     SELECT SUM(purchase_price * quantity) AS total_purchases
@@ -121,6 +115,13 @@ Reuse your `psql` session and build the eCommerce insights:
     FROM shop.purchases;
     ```
 
+1. The count of users:
+    ```sql
+    CREATE MATERIALIZED VIEW shop.total_users AS
+    SELECT COUNT(1) as total_users
+    FROM shop.users;
+    ```
+
 1. The best sellers items:
     ```sql
     CREATE MATERIALIZED VIEW shop.best_sellers AS
@@ -132,36 +133,29 @@ Reuse your `psql` session and build the eCommerce insights:
     LIMIT 10;
     ```
 
-1. The count of users:
-    ```sql
-    CREATE MATERIALIZED VIEW shop.total_users AS
-    SELECT COUNT(1) as total_users
-    FROM shop.users;
-    ```
-
 ### Subscribe to updates
 
-Use `SUBSCRIBE` and check how the query's result changes over time:
+`SUBSCRIBE` can stream updates from materialized views as they occur. Use it to verify how the analytics change over time.
 
 1. Subscribe to the best sellers items:
     ```sql
-    COPY (SUBSCRIBE ( SELECT * FROM shop.best_sellers )) TO STDOUT;
+    COPY (SUBSCRIBE (SELECT * FROM shop.best_sellers)) TO STDOUT;
     ```
 
-1. Press `CTRL + C` to interrupt the subscription once you are done.
+1. Press `CTRL + C` to interrupt the subscription after a few changes.
 
 1. Subscribe to the best sellers items filtering by the `gadgets` category:
     ```sql
     COPY (SUBSCRIBE ( SELECT * FROM shop.best_sellers WHERE category = 'gadgets' )) TO STDOUT;
     ```
 
-1. End the `psql` session.
+1. Press `CTRL + C` **two times** to end the `psql` session.
 
 ### Consume from Materialize
 
-Materialize is wire-compatible with PostgreSQL and also supports HTTP requests. It is a flexible access point to consume from services, lambdas or edge functions.
+Materialize is wire-compatible with PostgreSQL and also supports HTTP requests.
 
-Use the following code snippets to query your insight:
+Use the following code snippets and your preferred technology to query the best-selling items:
 {{< tabs tabID="1" >}}
 
 {{< tab "Curl">}}
@@ -317,7 +311,11 @@ conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNA
 {{< /tab >}}
 {{< /tabs >}}
 
-Assert your skills by [inserting your credentials here](https://materialize-embedded-analytics.vercel.app/) and experience your work!
+### Explore an actual data application
+
+The materialized views you have running allow multiple services and applications to access the latest analytic results with little effort from Materialize.
+
+Insert your credentials [here](https://materialize-embedded-analytics.vercel.app/) to explore your work powering an eCommerce's analytic dashboard!
 
 ## Recap
 
@@ -325,8 +323,11 @@ In this quickstart, you saw:
 
 -   How to define sources and materialized views within Materialize
 -   How to subscribe to materialized views
--   Materialize's features to process and serve results for real-time applications
+-   Materialize's features to process and serve results for data applications
 
 ## Related pages
 
 -   [`CREATE SOURCE`](/sql/create-source)
+-   [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/)
+-   [`SUBSCRIBE`](/sql/subscribe/)
+-   [`HTTP API`](/integrations/http-api/)
