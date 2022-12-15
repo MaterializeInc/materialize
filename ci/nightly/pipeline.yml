@@ -544,6 +544,7 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
+    soft_fail: true
 
   - id: launchdarkly
     label: "LaunchDarkly"
