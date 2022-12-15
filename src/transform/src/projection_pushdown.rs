@@ -122,6 +122,10 @@ impl ProjectionPushdown {
                 )?;
                 desired_projection.clone()
             }
+            MirRelationExpr::LetRec { .. } => {
+                // TODO: Implement a more thoughtful projection pushdown.
+                (0..relation.arity()).collect()
+            }
             MirRelationExpr::Join {
                 inputs,
                 equivalences,

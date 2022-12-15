@@ -85,6 +85,12 @@ pub trait Transform: std::fmt::Debug {
     fn debug(&self) -> String {
         format!("{:?}", self)
     }
+
+    /// Indicates if the transform can be safely applied to expressions containing
+    /// `LetRec` AST nodes.
+    fn recursion_safe(&self) -> bool {
+        false
+    }
 }
 
 /// Errors that can occur during a transformation.
@@ -92,12 +98,15 @@ pub trait Transform: std::fmt::Debug {
 pub enum TransformError {
     /// An unstructured error.
     Internal(String),
+    /// An ideally temporary error indicating transforms that do not support the `MirRelationExpr::LetRec` variant.
+    LetRecUnsupported,
 }
 
 impl fmt::Display for TransformError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             TransformError::Internal(msg) => write!(f, "internal transform error: {}", msg),
+            TransformError::LetRecUnsupported => write!(f, "LetRec AST node not supported"),
         }
     }
 }
@@ -144,6 +153,10 @@ pub struct Fixpoint {
 }
 
 impl Transform for Fixpoint {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -155,6 +168,8 @@ impl Transform for Fixpoint {
         relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError> {
+        let recursive = relation.is_recursive();
+
         // The number of iterations for a relation to settle depends on the
         // number of nodes in the relation. Instead of picking an arbitrary
         // hard limit on the number of iterations, we use a soft limit and
@@ -176,12 +191,14 @@ impl Transform for Fixpoint {
                 );
                 span.in_scope(|| -> Result<(), TransformError> {
                     for transform in self.transforms.iter() {
-                        transform.transform(
-                            relation,
-                            TransformArgs {
-                                indexes: args.indexes,
-                            },
-                        )?;
+                        if transform.recursion_safe() || !recursive {
+                            transform.transform(
+                                relation,
+                                TransformArgs {
+                                    indexes: args.indexes,
+                                },
+                            )?;
+                        }
                     }
                     mz_repr::explain_new::trace_plan(relation);
                     Ok(())
@@ -199,12 +216,14 @@ impl Transform for Fixpoint {
             }
         }
         for transform in self.transforms.iter() {
-            transform.transform(
-                relation,
-                TransformArgs {
-                    indexes: args.indexes,
-                },
-            )?;
+            if transform.recursion_safe() || !recursive {
+                transform.transform(
+                    relation,
+                    TransformArgs {
+                        indexes: args.indexes,
+                    },
+                )?;
+            }
         }
         Err(TransformError::Internal(format!(
             "fixpoint looped too many times {:#?}; transformed relation: {}",
@@ -476,8 +495,11 @@ impl Optimizer {
         relation: &mut MirRelationExpr,
         indexes: &dyn IndexOracle,
     ) -> Result<(), TransformError> {
+        let recursive = relation.is_recursive();
         for transform in self.transforms.iter() {
-            transform.transform(relation, TransformArgs { indexes })?;
+            if transform.recursion_safe() || !recursive {
+                transform.transform(relation, TransformArgs { indexes })?;
+            }
         }
 
         Ok(())

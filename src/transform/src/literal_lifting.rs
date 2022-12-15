@@ -263,6 +263,7 @@ impl LiteralLifting {
                     gets.remove(&id);
                     result
                 }
+                MirRelationExpr::LetRec { .. } => Err(crate::TransformError::LetRecUnsupported)?,
                 MirRelationExpr::Project { input, outputs } => {
                     // We do not want to lift literals around projections.
                     // Projections are the highest lifted operator and lifting

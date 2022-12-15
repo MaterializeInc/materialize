@@ -125,6 +125,9 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                     })?;
                 }
             }
+            MirRelationExpr::LetRec { .. } => {
+                unimplemented!("unclear how to format");
+            }
             Get { id, .. } => {
                 match id {
                     Id::Local(id) => {

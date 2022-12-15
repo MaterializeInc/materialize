@@ -10,11 +10,13 @@
 mode cockroach
 
 ## Test a plausibly correct recursive query.
-statement error not supported in HIR
+query I
 WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
     bar (a int) as (SELECT a FROM foo)
 SELECT * FROM bar;
+----
+1
 
 ## Test a recursive query with mismatched types.
 statement error did not match inferred type
@@ -38,7 +40,7 @@ WITH MUTUALLY RECURSIVE
 SELECT a FROM foo, bar;
 
 ## Test ambiguity of resulting columns.
-statement error not supported in HIR
+statement error column reference "a" is ambiguous
 WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 5 FROM bar),
     bar (a int) as (SELECT a FROM foo)
@@ -59,7 +61,7 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM foo, bar;
 
 ## Test nested mutual recursion.
-statement error not supported in HIR
+statement error column reference "a" is ambiguous
 WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (
         WITH MUTUALLY RECURSIVE
@@ -71,16 +73,18 @@ WITH MUTUALLY RECURSIVE
 SELECT a FROM foo, bar;
 
 ## Test recursive name resolution in SELECT subquery
-statement error not supported in HIR
+query III
 WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT (
         SELECT MIN(c) FROM bar
     ), 2 UNION SELECT 5, 5 FROM bar),
     bar (c int) as (SELECT a FROM foo)
 SELECT * FROM foo, bar;
+----
+NULL  2  NULL
 
 ## Test recursive name resolution in FROM clause
-statement error not supported in HIR
+query III
 WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (
         SELECT 1, 2 UNION
@@ -90,10 +94,17 @@ WITH MUTUALLY RECURSIVE
     ),
     bar (c int) as (SELECT a FROM foo)
 SELECT * FROM foo, bar;
+----
+NULL  2  NULL
+NULL  2  1
+1  2  NULL
+1  2  1
 
 ## Test recursive name resolution in FROM clause
-statement error not supported in HIR
+query I
 WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
     bar (a int) as (SELECT a FROM foo)
 SELECT (SELECT COUNT(*) FROM foo) FROM bar;
+----
+1

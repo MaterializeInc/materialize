@@ -441,6 +441,9 @@ fn normalize_lets_at_root(expr: &mut MirRelationExpr) {
                 None
             }
         }
+        MirRelationExpr::LetRec { .. } => {
+            unimplemented!("unclear how to normalize LetRec");
+        }
         Project { input, outputs } => {
             let is_modified = at_inner_most_let_body(input, |body| {
                 *body = Project {

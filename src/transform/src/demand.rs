@@ -112,6 +112,7 @@ impl Demand {
 
                     self.action(value, needs, gets)
                 }
+                MirRelationExpr::LetRec { .. } => Err(crate::TransformError::LetRecUnsupported)?,
                 MirRelationExpr::Project { input, outputs } => self.action(
                     input,
                     columns.into_iter().map(|c| outputs[c]).collect(),

@@ -173,6 +173,13 @@ impl<'a> Explanation<'a> {
 
                     walk(body, explanation, id_gen);
                 }
+                LetRec {
+                    bindings: _,
+                    body: _,
+                } => {
+                    // TODO: determine if we have to insert ids before walking.
+                    unimplemented!()
+                }
             }
 
             // Then collect subqueries.
@@ -181,6 +188,7 @@ impl<'a> Explanation<'a> {
                 Constant { .. }
                 | Get { .. }
                 | Let { .. }
+                | LetRec { .. }
                 | Project { .. }
                 | Distinct { .. }
                 | Negate { .. }
@@ -294,6 +302,7 @@ impl<'a> Explanation<'a> {
         match node.expr {
             // Lets are annotated on the chain ID that they correspond to.
             Let { .. } => (),
+            LetRec { .. } => (),
             Constant { rows, .. } => {
                 write!(f, "| Constant")?;
                 for row in rows {

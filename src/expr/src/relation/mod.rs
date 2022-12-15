@@ -114,6 +114,30 @@ pub enum MirRelationExpr {
         /// The result of the `Let`, evaluated with `id` bound to `value`.
         body: Box<MirRelationExpr>,
     },
+    /// Introduce mutually recursive bindings.
+    ///
+    /// Each `LocalId` is immediately bound to an initially empty  collection
+    /// with the type of its corresponding `MirRelationExpr`. Repeatedly, each
+    /// binding is evaluated using the current contents of each other binding,
+    /// and is refreshed to contain the new evaluation. This process continues
+    /// through all bindings, and repeats as long as changes continue to occur.
+    ///
+    /// The resulting value of the expression is `body` evaluated once in the
+    /// context of the final iterates.
+    ///
+    /// A zero-binding instance can be replaced by `body`.
+    /// A single-binding instance is equivalent to `MirRelationExpr::Let`.
+    ///
+    /// The runtime memory footprint of this operator is zero.
+    LetRec {
+        /// The identifiers to be used in `Get` variants to retrieve each `value`.
+        #[mzreflect(ignore)]
+        ids: Vec<LocalId>,
+        /// The collections to be bound to each `id`.
+        values: Vec<MirRelationExpr>,
+        /// The result of the `Let`, evaluated with `id` bound to `value`.
+        body: Box<MirRelationExpr>,
+    },
     /// Project out some columns from a dataflow
     ///
     /// The runtime memory footprint of this operator is zero.
@@ -410,6 +434,12 @@ impl MirRelationExpr {
                 input_types.next();
                 input_types.next().unwrap().clone()
             }
+            LetRec { values, .. } => {
+                for _ in 0..values.len() {
+                    input_types.next();
+                }
+                input_types.next().unwrap().clone()
+            }
             Union { .. } => {
                 let mut result = input_types.next().unwrap().clone();
                 for input_col_types in input_types {
@@ -491,6 +521,12 @@ impl MirRelationExpr {
             Let { .. } => {
                 // skip over the unique keys for value
                 input_keys.next();
+                input_keys.next().unwrap().clone()
+            }
+            LetRec { values, .. } => {
+                for _ in 0..values.len() {
+                    input_keys.next();
+                }
                 input_keys.next().unwrap().clone()
             }
             Project { outputs, .. } => {
@@ -847,6 +883,12 @@ impl MirRelationExpr {
             Get { typ, .. } => typ.arity(),
             Let { .. } => {
                 input_arities.next();
+                *input_arities.next().unwrap()
+            }
+            LetRec { values, .. } => {
+                for _ in 0..values.len() {
+                    input_arities.next();
+                }
                 *input_arities.next().unwrap()
             }
             Project { outputs, .. } => outputs.len(),
@@ -1488,6 +1530,7 @@ impl MirRelationExpr {
             Constant { .. }
             | Get { .. }
             | Let { .. }
+            | LetRec { .. }
             | Project { .. }
             | TopK { .. }
             | Negate { .. }
@@ -1638,6 +1681,64 @@ impl MirRelationExpr {
     }
 }
 
+// Temporary implementation for working with `LetRec`.
+impl MirRelationExpr {
+    /// True when `expr` contains a `LetRec` AST node.
+    pub fn is_recursive(self: &MirRelationExpr) -> bool {
+        let mut worklist = vec![self];
+        while let Some(expr) = worklist.pop() {
+            if let MirRelationExpr::LetRec { .. } = expr {
+                return true;
+            }
+            worklist.extend(expr.children());
+        }
+        false
+    }
+
+    /// Replaces `LetRec` nodes with a stack of `Let` nodes.
+    ///
+    /// In each `Let` binding, uses of `Get` in `value` that are not at strictly greater
+    /// identifiers are rewritten to be the constant collection.
+    /// This makes the computation perform exactly "one" iteration.
+    pub fn make_nonrecursive(self: &mut MirRelationExpr) {
+        let mut deadlist = std::collections::HashSet::new();
+        let mut worklist = vec![self];
+        while let Some(expr) = worklist.pop() {
+            if let MirRelationExpr::LetRec { ids, values, body } = expr {
+                let ids_values = values
+                    .drain(..)
+                    .zip(ids)
+                    .map(|(value, id)| (*id, value))
+                    .collect::<Vec<_>>();
+                *expr = body.take_dangerous();
+                for (id, mut value) in ids_values.into_iter().rev() {
+                    // Remove references to potentially recursive identifiers.
+                    deadlist.insert(id);
+                    value.visit_pre_mut(|e| {
+                        if let MirRelationExpr::Get {
+                            id: crate::Id::Local(id),
+                            ..
+                        } = e
+                        {
+                            if deadlist.contains(id) {
+                                e.take_safely();
+                            }
+                        }
+                    });
+                    *expr = MirRelationExpr::Let {
+                        id,
+                        value: Box::new(value),
+                        body: Box::new(expr.take_dangerous()),
+                    };
+                }
+                worklist.push(expr);
+            } else {
+                worklist.extend(expr.children_mut().rev());
+            }
+        }
+    }
+}
+
 impl CollectionPlan for MirRelationExpr {
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         if let MirRelationExpr::Get {
@@ -1656,6 +1757,7 @@ impl MirRelationExpr {
         let mut first = None;
         let mut second = None;
         let mut rest = None;
+        let mut last = None;
 
         use MirRelationExpr::*;
         match self {
@@ -1663,6 +1765,10 @@ impl MirRelationExpr {
             Let { value, body, .. } => {
                 first = Some(&**value);
                 second = Some(&**body);
+            }
+            LetRec { values, body, .. } => {
+                rest = Some(values);
+                last = Some(&**body);
             }
             Project { input, .. }
             | Map { input, .. }
@@ -1688,6 +1794,7 @@ impl MirRelationExpr {
             .into_iter()
             .chain(second)
             .chain(rest.into_iter().flatten())
+            .chain(last)
     }
 
     /// Iterates through mutable references to child expressions.
@@ -1695,6 +1802,7 @@ impl MirRelationExpr {
         let mut first = None;
         let mut second = None;
         let mut rest = None;
+        let mut last = None;
 
         use MirRelationExpr::*;
         match self {
@@ -1702,6 +1810,10 @@ impl MirRelationExpr {
             Let { value, body, .. } => {
                 first = Some(&mut **value);
                 second = Some(&mut **body);
+            }
+            LetRec { values, body, .. } => {
+                rest = Some(values);
+                last = Some(&mut **body);
             }
             Project { input, .. }
             | Map { input, .. }
@@ -1727,6 +1839,7 @@ impl MirRelationExpr {
             .into_iter()
             .chain(second)
             .chain(rest.into_iter().flatten())
+            .chain(last)
     }
 
     /// Iterative pre-order visitor.
