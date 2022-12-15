@@ -856,40 +856,38 @@ Return // { arity: 2, types: "(integer, text)" }
     Map (case when (#0 = 1) then 0 else 2 end, "TEXT") // { arity: 3, types: "(integer?, integer, text)" }
       Project (#0) // { arity: 1, types: "(integer?)" }
         CrossJoin // { arity: 1, types: "(integer?)" }
-          Get l0 // { arity: 0, types: "()" }
+          Constant // { arity: 0, types: "()" }
+            - ()
           Union // { arity: 1, types: "(integer?)" }
-            Get l3 // { arity: 1, types: "(integer)" }
+            Get l1 // { arity: 1, types: "(integer)" }
             CrossJoin // { arity: 1, types: "(integer?)" }
               Project () // { arity: 0, types: "()" }
                 CrossJoin // { arity: 0, types: "()" }
                   Union // { arity: 0, types: "()" }
                     Negate // { arity: 0, types: "()" }
                       Distinct // { arity: 0, types: "()" }
-                        Get l3 // { arity: 1, types: "(integer)" }
+                        Get l1 // { arity: 1, types: "(integer)" }
                     Distinct // { arity: 0, types: "()" }
-                      Get l1 // { arity: 0, types: "()" }
-                  Get l1 // { arity: 0, types: "()" }
+                      Constant // { arity: 0, types: "()" }
+                        - ()
+                  Constant // { arity: 0, types: "()" }
+                    - ()
               Constant // { arity: 1, types: "(integer?)" }
                 - (null)
 With
-  cte l3 =
+  cte l1 =
     Union // { arity: 1, types: "(integer)" }
-      Get l2 // { arity: 1, types: "(integer)" }
+      Get l0 // { arity: 1, types: "(integer)" }
       Map (error("more than one record produced in subquery")) // { arity: 1, types: "(integer)" }
         Project () // { arity: 0, types: "()" }
           Filter (#0 > 1) // { arity: 1, types: "(bigint)" }
             Reduce aggregates=[count(*)] // { arity: 1, types: "(bigint)" }
-              Get l2 // { arity: 1, types: "(integer)" }
-  cte l2 =
+              Get l0 // { arity: 1, types: "(integer)" }
+  cte l0 =
     Project (#0) // { arity: 1, types: "(integer)" }
       Map (1) // { arity: 1, types: "(integer)" }
-        Get l1 // { arity: 0, types: "()" }
-  cte l1 =
-    Constant // { arity: 0, types: "()" }
-      - ()
-  cte l0 =
-    Constant // { arity: 0, types: "()" }
-      - ()
+        Constant // { arity: 0, types: "()" }
+          - ()
 
 EOF
 

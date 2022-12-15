@@ -82,15 +82,11 @@ NULL
 query T multiline
 EXPLAIN DECORRELATED PLAN WITH(arity) FOR SELECT * FROM t1 WHERE (f1 is null)::int - 1 = 0 and ((f1 is null) or ((f1 is null)::int - 1 = 0))
 ----
-Return // { arity: 2 }
-  Filter (((boolean_to_integer((#0) IS NULL) - 1) = 0) AND ((#0) IS NULL OR ((boolean_to_integer((#0) IS NULL) - 1) = 0))) // { arity: 2 }
-    CrossJoin // { arity: 2 }
-      Get l0 // { arity: 0 }
-      Get materialize.public.t1 // { arity: 2 }
-With
-  cte l0 =
+Filter (((boolean_to_integer((#0) IS NULL) - 1) = 0) AND ((#0) IS NULL OR ((boolean_to_integer((#0) IS NULL) - 1) = 0))) // { arity: 2 }
+  CrossJoin // { arity: 2 }
     Constant // { arity: 0 }
       - ()
+    Get materialize.public.t1 // { arity: 2 }
 
 EOF
 

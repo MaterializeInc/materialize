@@ -21,7 +21,7 @@ use std::ops::AddAssign;
 use std::sync::Mutex;
 
 /// Manages the allocation of unique IDs.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Gen<Id: From<u64> + Default> {
     id: u64,
     phantom: PhantomData<Id>,

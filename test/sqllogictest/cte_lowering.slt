@@ -65,22 +65,18 @@ WITH t AS (SELECT * FROM y WHERE a < 3)
 ----
 Return // { arity: 1 }
   Project (#0) // { arity: 1 }
-    Get l2 // { arity: 2 }
-With
-  cte l2 =
     Filter (true AND (#0 = #1)) // { arity: 2 }
       Project (#0, #1) // { arity: 2 }
         CrossJoin // { arity: 2 }
-          Get l1 // { arity: 1 }
-          Get l1 // { arity: 1 }
-  cte l1 =
+          Get l0 // { arity: 1 }
+          Get l0 // { arity: 1 }
+With
+  cte l0 =
     Filter (#0 < 3) // { arity: 1 }
       CrossJoin // { arity: 1 }
-        Get l0 // { arity: 0 }
+        Constant // { arity: 0 }
+          - ()
         Get materialize.public.y // { arity: 1 }
-  cte l0 =
-    Constant // { arity: 0 }
-      - ()
 
 EOF
 
@@ -96,40 +92,36 @@ Return // { arity: 2 }
   Filter true // { arity: 2 }
     Project (#0, #2) // { arity: 2 }
       Join on=(#0 = #1) // { arity: 3 }
-        Get l1 // { arity: 1 }
-        Get l4 // { arity: 2 }
+        Get l0 // { arity: 1 }
+        Union // { arity: 2 }
+          Get l2 // { arity: 2 }
+          CrossJoin // { arity: 2 }
+            Project (#0) // { arity: 1 }
+              Join on=(#0 = #1) // { arity: 2 }
+                Union // { arity: 1 }
+                  Negate // { arity: 1 }
+                    Distinct group_by=[#0] // { arity: 1 }
+                      Get l2 // { arity: 2 }
+                  Distinct group_by=[#0] // { arity: 1 }
+                    Get l1 // { arity: 1 }
+                Get l1 // { arity: 1 }
+            Constant // { arity: 1 }
+              - (null)
 With
-  cte l4 =
-    Union // { arity: 2 }
-      Get l3 // { arity: 2 }
-      CrossJoin // { arity: 2 }
-        Project (#0) // { arity: 1 }
-          Join on=(#0 = #1) // { arity: 2 }
-            Union // { arity: 1 }
-              Negate // { arity: 1 }
-                Distinct group_by=[#0] // { arity: 1 }
-                  Get l3 // { arity: 2 }
-              Distinct group_by=[#0] // { arity: 1 }
-                Get l2 // { arity: 1 }
-            Get l2 // { arity: 1 }
-        Constant // { arity: 1 }
-          - (null)
-  cte l3 =
+  cte l2 =
     Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
       Filter (#1 < #0) // { arity: 2 }
         CrossJoin // { arity: 2 }
-          Get l2 // { arity: 1 }
+          Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
-  cte l2 =
-    Distinct group_by=[#0] // { arity: 1 }
-      Get l1 // { arity: 1 }
   cte l1 =
-    CrossJoin // { arity: 1 }
-      Get l0 // { arity: 0 }
-      Get materialize.public.x // { arity: 1 }
+    Distinct group_by=[#0] // { arity: 1 }
+      Get l0 // { arity: 1 }
   cte l0 =
-    Constant // { arity: 0 }
-      - ()
+    CrossJoin // { arity: 1 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.public.x // { arity: 1 }
 
 EOF
 
@@ -158,84 +150,80 @@ Return // { arity: 2 }
   Filter true // { arity: 2 }
     Project (#0, #2) // { arity: 2 }
       Join on=(#0 = #1) // { arity: 3 }
-        Get l1 // { arity: 1 }
+        Get l0 // { arity: 1 }
         Project (#0, #2) // { arity: 2 }
           Project (#0, #1, #5) // { arity: 3 }
             Map (#4) // { arity: 6 }
               Join on=(#0 = #2 AND #1 = #3) // { arity: 5 }
-                Get l5 // { arity: 2 }
+                Get l3 // { arity: 2 }
                 Project (#0, #1, #3) // { arity: 3 }
                   Join on=(#0 = #2) // { arity: 4 }
-                    Get l6 // { arity: 2 }
+                    Get l4 // { arity: 2 }
                     Union // { arity: 2 }
-                      Get l9 // { arity: 2 }
+                      Get l7 // { arity: 2 }
                       CrossJoin // { arity: 2 }
                         Project (#0) // { arity: 1 }
                           Join on=(#0 = #1) // { arity: 2 }
                             Union // { arity: 1 }
                               Negate // { arity: 1 }
                                 Distinct group_by=[#0] // { arity: 1 }
-                                  Get l9 // { arity: 2 }
+                                  Get l7 // { arity: 2 }
                               Distinct group_by=[#0] // { arity: 1 }
-                                Get l7 // { arity: 1 }
-                            Get l7 // { arity: 1 }
+                                Get l5 // { arity: 1 }
+                            Get l5 // { arity: 1 }
                         Constant // { arity: 1 }
                           - (null)
 With
-  cte l9 =
+  cte l7 =
     Union // { arity: 2 }
-      Get l8 // { arity: 2 }
+      Get l6 // { arity: 2 }
       Map (error("more than one record produced in subquery")) // { arity: 2 }
         Project (#0) // { arity: 1 }
           Filter (#1 > 1) // { arity: 2 }
             Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-              Get l8 // { arity: 2 }
-  cte l8 =
+              Get l6 // { arity: 2 }
+  cte l6 =
     Project (#0, #2) // { arity: 2 }
       Join on=(#0 = #1) // { arity: 3 }
-        Get l7 // { arity: 1 }
-        Get l4 // { arity: 2 }
-  cte l7 =
-    Distinct group_by=[#0] // { arity: 1 }
-      Get l6 // { arity: 2 }
-  cte l6 =
-    Distinct group_by=[#0, #1] // { arity: 2 }
-      Get l5 // { arity: 2 }
+        Get l5 // { arity: 1 }
+        Union // { arity: 2 }
+          Get l2 // { arity: 2 }
+          CrossJoin // { arity: 2 }
+            Project (#0) // { arity: 1 }
+              Join on=(#0 = #1) // { arity: 2 }
+                Union // { arity: 1 }
+                  Negate // { arity: 1 }
+                    Distinct group_by=[#0] // { arity: 1 }
+                      Get l2 // { arity: 2 }
+                  Distinct group_by=[#0] // { arity: 1 }
+                    Get l1 // { arity: 1 }
+                Get l1 // { arity: 1 }
+            Constant // { arity: 1 }
+              - (null)
   cte l5 =
-    CrossJoin // { arity: 2 }
-      Get l2 // { arity: 1 }
-      Get materialize.public.y // { arity: 1 }
+    Distinct group_by=[#0] // { arity: 1 }
+      Get l4 // { arity: 2 }
   cte l4 =
-    Union // { arity: 2 }
+    Distinct group_by=[#0, #1] // { arity: 2 }
       Get l3 // { arity: 2 }
-      CrossJoin // { arity: 2 }
-        Project (#0) // { arity: 1 }
-          Join on=(#0 = #1) // { arity: 2 }
-            Union // { arity: 1 }
-              Negate // { arity: 1 }
-                Distinct group_by=[#0] // { arity: 1 }
-                  Get l3 // { arity: 2 }
-              Distinct group_by=[#0] // { arity: 1 }
-                Get l2 // { arity: 1 }
-            Get l2 // { arity: 1 }
-        Constant // { arity: 1 }
-          - (null)
   cte l3 =
+    CrossJoin // { arity: 2 }
+      Get l1 // { arity: 1 }
+      Get materialize.public.y // { arity: 1 }
+  cte l2 =
     Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
       Filter (#1 < #0) // { arity: 2 }
         CrossJoin // { arity: 2 }
-          Get l2 // { arity: 1 }
+          Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
-  cte l2 =
-    Distinct group_by=[#0] // { arity: 1 }
-      Get l1 // { arity: 1 }
   cte l1 =
-    CrossJoin // { arity: 1 }
-      Get l0 // { arity: 0 }
-      Get materialize.public.x // { arity: 1 }
+    Distinct group_by=[#0] // { arity: 1 }
+      Get l0 // { arity: 1 }
   cte l0 =
-    Constant // { arity: 0 }
-      - ()
+    CrossJoin // { arity: 1 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.public.x // { arity: 1 }
 
 EOF
 
@@ -252,46 +240,42 @@ Return // { arity: 3 }
   Filter true // { arity: 3 }
     Project (#0, #2, #3) // { arity: 3 }
       Join on=(#0 = #1) // { arity: 4 }
-        Get l1 // { arity: 1 }
-        Get l5 // { arity: 3 }
+        Get l0 // { arity: 1 }
+        Filter (#1 = #2) // { arity: 3 }
+          Project (#0, #1, #3) // { arity: 3 }
+            Join on=(#0 = #2) // { arity: 4 }
+              Get l3 // { arity: 2 }
+              Get l3 // { arity: 2 }
 With
-  cte l5 =
-    Filter (#1 = #2) // { arity: 3 }
-      Project (#0, #1, #3) // { arity: 3 }
-        Join on=(#0 = #2) // { arity: 4 }
-          Get l4 // { arity: 2 }
-          Get l4 // { arity: 2 }
-  cte l4 =
+  cte l3 =
     Union // { arity: 2 }
-      Get l3 // { arity: 2 }
+      Get l2 // { arity: 2 }
       CrossJoin // { arity: 2 }
         Project (#0) // { arity: 1 }
           Join on=(#0 = #1) // { arity: 2 }
             Union // { arity: 1 }
               Negate // { arity: 1 }
                 Distinct group_by=[#0] // { arity: 1 }
-                  Get l3 // { arity: 2 }
+                  Get l2 // { arity: 2 }
               Distinct group_by=[#0] // { arity: 1 }
-                Get l2 // { arity: 1 }
-            Get l2 // { arity: 1 }
+                Get l1 // { arity: 1 }
+            Get l1 // { arity: 1 }
         Constant // { arity: 1 }
           - (null)
-  cte l3 =
+  cte l2 =
     Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
       Filter (#1 < #0) // { arity: 2 }
         CrossJoin // { arity: 2 }
-          Get l2 // { arity: 1 }
+          Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
-  cte l2 =
-    Distinct group_by=[#0] // { arity: 1 }
-      Get l1 // { arity: 1 }
   cte l1 =
-    CrossJoin // { arity: 1 }
-      Get l0 // { arity: 0 }
-      Get materialize.public.x // { arity: 1 }
+    Distinct group_by=[#0] // { arity: 1 }
+      Get l0 // { arity: 1 }
   cte l0 =
-    Constant // { arity: 0 }
-      - ()
+    CrossJoin // { arity: 1 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.public.x // { arity: 1 }
 
 EOF
 
@@ -326,91 +310,85 @@ Return // { arity: 3 }
   Filter true // { arity: 3 }
     Project (#0, #2, #3) // { arity: 3 }
       Join on=(#0 = #1) // { arity: 4 }
-        Get l1 // { arity: 1 }
-        Get l11 // { arity: 3 }
-With
-  cte l11 =
-    Filter true // { arity: 3 }
-      Project (#0, #1, #3) // { arity: 3 }
-        Join on=(#0 = #2) // { arity: 4 }
-          Get l4 // { arity: 2 }
-          Get l10 // { arity: 2 }
-  cte l10 =
-    Project (#0, #5) // { arity: 2 }
-      Map (#4) // { arity: 6 }
-        Join on=(#0 = #2 AND #1 = #3) // { arity: 5 }
-          Get l5 // { arity: 2 }
+        Get l0 // { arity: 1 }
+        Filter true // { arity: 3 }
           Project (#0, #1, #3) // { arity: 3 }
             Join on=(#0 = #2) // { arity: 4 }
-              Get l6 // { arity: 2 }
-              Union // { arity: 2 }
-                Get l9 // { arity: 2 }
-                CrossJoin // { arity: 2 }
-                  Project (#0) // { arity: 1 }
-                    Join on=(#0 = #1) // { arity: 2 }
-                      Union // { arity: 1 }
-                        Negate // { arity: 1 }
-                          Distinct group_by=[#0] // { arity: 1 }
-                            Get l9 // { arity: 2 }
-                        Distinct group_by=[#0] // { arity: 1 }
-                          Get l7 // { arity: 1 }
-                      Get l7 // { arity: 1 }
-                  Constant // { arity: 1 }
-                    - (null)
-  cte l9 =
+              Get l3 // { arity: 2 }
+              Project (#0, #5) // { arity: 2 }
+                Map (#4) // { arity: 6 }
+                  Join on=(#0 = #2 AND #1 = #3) // { arity: 5 }
+                    Get l4 // { arity: 2 }
+                    Project (#0, #1, #3) // { arity: 3 }
+                      Join on=(#0 = #2) // { arity: 4 }
+                        Get l5 // { arity: 2 }
+                        Union // { arity: 2 }
+                          Get l8 // { arity: 2 }
+                          CrossJoin // { arity: 2 }
+                            Project (#0) // { arity: 1 }
+                              Join on=(#0 = #1) // { arity: 2 }
+                                Union // { arity: 1 }
+                                  Negate // { arity: 1 }
+                                    Distinct group_by=[#0] // { arity: 1 }
+                                      Get l8 // { arity: 2 }
+                                  Distinct group_by=[#0] // { arity: 1 }
+                                    Get l6 // { arity: 1 }
+                                Get l6 // { arity: 1 }
+                            Constant // { arity: 1 }
+                              - (null)
+With
+  cte l8 =
     Union // { arity: 2 }
-      Get l8 // { arity: 2 }
+      Get l7 // { arity: 2 }
       Map (error("more than one record produced in subquery")) // { arity: 2 }
         Project (#0) // { arity: 1 }
           Filter (#1 > 1) // { arity: 2 }
             Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-              Get l8 // { arity: 2 }
-  cte l8 =
+              Get l7 // { arity: 2 }
+  cte l7 =
     Project (#0, #2) // { arity: 2 }
       Join on=(#0 = #1) // { arity: 3 }
-        Get l7 // { arity: 1 }
-        Get l4 // { arity: 2 }
-  cte l7 =
-    Distinct group_by=[#0] // { arity: 1 }
-      Get l6 // { arity: 2 }
+        Get l6 // { arity: 1 }
+        Get l3 // { arity: 2 }
   cte l6 =
-    Distinct group_by=[#0, #1] // { arity: 2 }
+    Distinct group_by=[#0] // { arity: 1 }
       Get l5 // { arity: 2 }
   cte l5 =
-    CrossJoin // { arity: 2 }
-      Get l2 // { arity: 1 }
-      Get materialize.public.y // { arity: 1 }
+    Distinct group_by=[#0, #1] // { arity: 2 }
+      Get l4 // { arity: 2 }
   cte l4 =
+    CrossJoin // { arity: 2 }
+      Get l1 // { arity: 1 }
+      Get materialize.public.y // { arity: 1 }
+  cte l3 =
     Union // { arity: 2 }
-      Get l3 // { arity: 2 }
+      Get l2 // { arity: 2 }
       CrossJoin // { arity: 2 }
         Project (#0) // { arity: 1 }
           Join on=(#0 = #1) // { arity: 2 }
             Union // { arity: 1 }
               Negate // { arity: 1 }
                 Distinct group_by=[#0] // { arity: 1 }
-                  Get l3 // { arity: 2 }
+                  Get l2 // { arity: 2 }
               Distinct group_by=[#0] // { arity: 1 }
-                Get l2 // { arity: 1 }
-            Get l2 // { arity: 1 }
+                Get l1 // { arity: 1 }
+            Get l1 // { arity: 1 }
         Constant // { arity: 1 }
           - (null)
-  cte l3 =
+  cte l2 =
     Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
       Filter (#1 < #0) // { arity: 2 }
         CrossJoin // { arity: 2 }
-          Get l2 // { arity: 1 }
+          Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
-  cte l2 =
-    Distinct group_by=[#0] // { arity: 1 }
-      Get l1 // { arity: 1 }
   cte l1 =
-    CrossJoin // { arity: 1 }
-      Get l0 // { arity: 0 }
-      Get materialize.public.x // { arity: 1 }
+    Distinct group_by=[#0] // { arity: 1 }
+      Get l0 // { arity: 1 }
   cte l0 =
-    Constant // { arity: 0 }
-      - ()
+    CrossJoin // { arity: 1 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.public.x // { arity: 1 }
 
 EOF
 
@@ -443,94 +421,86 @@ Return // { arity: 3 }
   Filter true // { arity: 3 }
     Project (#0, #2, #3) // { arity: 3 }
       Join on=(#0 = #1) // { arity: 4 }
-        Get l1 // { arity: 1 }
+        Get l0 // { arity: 1 }
         Filter true // { arity: 3 }
           Project (#0, #1, #3) // { arity: 3 }
             Join on=(#1 = #2) // { arity: 4 }
-              Get l5 // { arity: 2 }
+              Get l3 // { arity: 2 }
               Project (#0, #2) // { arity: 2 }
                 Map (#0) // { arity: 3 }
-                  Get l11 // { arity: 2 }
+                  Project (#0, #1) // { arity: 2 }
+                    Filter (#2 > 0) // { arity: 3 }
+                      Project (#0, #1, #3) // { arity: 3 }
+                        Join on=(#0 = #2) // { arity: 4 }
+                          Get l4 // { arity: 2 }
+                          Union // { arity: 2 }
+                            Get l7 // { arity: 2 }
+                            CrossJoin // { arity: 2 }
+                              Project (#0) // { arity: 1 }
+                                Join on=(#0 = #1) // { arity: 2 }
+                                  Union // { arity: 1 }
+                                    Negate // { arity: 1 }
+                                      Distinct group_by=[#0] // { arity: 1 }
+                                        Get l7 // { arity: 2 }
+                                    Distinct group_by=[#0] // { arity: 1 }
+                                      Get l5 // { arity: 1 }
+                                  Get l5 // { arity: 1 }
+                              Constant // { arity: 1 }
+                                - (null)
 With
-  cte l11 =
-    Project (#0, #1) // { arity: 2 }
-      Filter (#2 > 0) // { arity: 3 }
-        Project (#0, #1, #3) // { arity: 3 }
-          Join on=(#0 = #2) // { arity: 4 }
-            Get l7 // { arity: 2 }
-            Union // { arity: 2 }
-              Get l10 // { arity: 2 }
-              CrossJoin // { arity: 2 }
-                Project (#0) // { arity: 1 }
-                  Join on=(#0 = #1) // { arity: 2 }
-                    Union // { arity: 1 }
-                      Negate // { arity: 1 }
-                        Distinct group_by=[#0] // { arity: 1 }
-                          Get l10 // { arity: 2 }
-                      Distinct group_by=[#0] // { arity: 1 }
-                        Get l8 // { arity: 1 }
-                    Get l8 // { arity: 1 }
-                Constant // { arity: 1 }
-                  - (null)
-  cte l10 =
+  cte l7 =
     Union // { arity: 2 }
-      Get l9 // { arity: 2 }
+      Get l6 // { arity: 2 }
       Map (error("more than one record produced in subquery")) // { arity: 2 }
         Project (#0) // { arity: 1 }
           Filter (#1 > 1) // { arity: 2 }
             Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-              Get l9 // { arity: 2 }
-  cte l9 =
+              Get l6 // { arity: 2 }
+  cte l6 =
     Project (#0, #2) // { arity: 2 }
       Join on=(#0 = #1) // { arity: 3 }
-        Get l8 // { arity: 1 }
-        Get l4 // { arity: 2 }
-  cte l8 =
+        Get l5 // { arity: 1 }
+        Union // { arity: 2 }
+          Get l2 // { arity: 2 }
+          CrossJoin // { arity: 2 }
+            Project (#0) // { arity: 1 }
+              Join on=(#0 = #1) // { arity: 2 }
+                Union // { arity: 1 }
+                  Negate // { arity: 1 }
+                    Distinct group_by=[#0] // { arity: 1 }
+                      Get l2 // { arity: 2 }
+                  Distinct group_by=[#0] // { arity: 1 }
+                    Get l1 // { arity: 1 }
+                Get l1 // { arity: 1 }
+            Constant // { arity: 1 }
+              - (null)
+  cte l5 =
     Distinct group_by=[#0] // { arity: 1 }
-      Get l7 // { arity: 2 }
-  cte l7 =
+      Get l4 // { arity: 2 }
+  cte l4 =
     Filter true // { arity: 2 }
       CrossJoin // { arity: 2 }
-        Get l6 // { arity: 1 }
+        Distinct group_by=[#1] // { arity: 1 }
+          Get l3 // { arity: 2 }
         Get materialize.public.x // { arity: 1 }
-  cte l6 =
-    Distinct group_by=[#1] // { arity: 1 }
-      Get l5 // { arity: 2 }
-  cte l5 =
-    CrossJoin // { arity: 2 }
-      Get l2 // { arity: 1 }
-      Get materialize.public.y // { arity: 1 }
-  cte l4 =
-    Union // { arity: 2 }
-      Get l3 // { arity: 2 }
-      CrossJoin // { arity: 2 }
-        Project (#0) // { arity: 1 }
-          Join on=(#0 = #1) // { arity: 2 }
-            Union // { arity: 1 }
-              Negate // { arity: 1 }
-                Distinct group_by=[#0] // { arity: 1 }
-                  Get l3 // { arity: 2 }
-              Distinct group_by=[#0] // { arity: 1 }
-                Get l2 // { arity: 1 }
-            Get l2 // { arity: 1 }
-        Constant // { arity: 1 }
-          - (null)
   cte l3 =
+    CrossJoin // { arity: 2 }
+      Get l1 // { arity: 1 }
+      Get materialize.public.y // { arity: 1 }
+  cte l2 =
     Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
       Filter (#1 < #0) // { arity: 2 }
         CrossJoin // { arity: 2 }
-          Get l2 // { arity: 1 }
+          Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
-  cte l2 =
-    Distinct group_by=[#0] // { arity: 1 }
-      Get l1 // { arity: 1 }
   cte l1 =
-    CrossJoin // { arity: 1 }
-      Get l0 // { arity: 0 }
-      Get materialize.public.x // { arity: 1 }
+    Distinct group_by=[#0] // { arity: 1 }
+      Get l0 // { arity: 1 }
   cte l0 =
-    Constant // { arity: 0 }
-      - ()
+    CrossJoin // { arity: 1 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.public.x // { arity: 1 }
 
 EOF
 
