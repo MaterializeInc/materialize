@@ -20,6 +20,7 @@ steps:
           - { value: zippy-kafka-sources-large }
           - { value: zippy-dataflows-large }
           - { value: zippy-pg-cdc-large }
+          - { value: zippy-cluster-replicas-large }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -71,3 +72,13 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=PostgresCdc, --actions=100000]
+
+  - id: zippy-cluster-replicas-large
+    label: "Longer Zippy ClusterReplicas test"
+    timeout_in_minutes: 2880
+    agents:
+      queue: linux-x86_64-large
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=ClusterReplicas, --actions=100000]
