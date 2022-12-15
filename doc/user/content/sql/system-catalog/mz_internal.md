@@ -429,6 +429,36 @@ Field         | Type                          | Meaning
 `error`       | [`text`]                      | If the source is in an error state, the error message.
 `details`     | [`jsonb`]                     | Additional metadata provided by the source.
 
+### `mz_sink_status`
+
+The `mz_sink_status` view provides the current state for each sink in the
+system, including potential error messages and additional metadata helpful for
+debugging.
+
+Field                   | Type                          | Meaning
+------------------------|-------------------------------|--------
+`id`                    | [`text`]                      | The ID of the sink. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).
+`name`                  | [`text`]                      | The name of the sink.
+`type`                  | [`text`]                      | The type of the sink.
+`last_status_change_at` | [`timestamp with time zone`]  | Wall-clock timestamp of the sink status change.
+`status`                | [`text`]                      | The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
+`error`                 | [`text`]                      | If the sink is in an error state, the error message.
+`details`               | [`jsonb`]                     | Additional metadata provided by the sink.
+
+### `mz_sink_status_history`
+
+The `mz_sink_status_history` table contains rows describing the
+history of changes to the status of each sink in the system, including potential error
+messages and additional metadata helpful for debugging.
+
+Field         | Type                          | Meaning
+--------------|-------------------------------|--------
+`occurred_at` | [`timestamp with time zone`]  | Wall-clock timestamp of the sink status change.
+`sink_id`     | [`text`]                      | The ID of the sink. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).
+`status`      | [`text`]                      | The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
+`error`       | [`text`]                      | If the sink is in an error state, the error message.
+`details`     | [`jsonb`]                     | Additional metadata provided by the sink.
+
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list
 [`mz_timestamp`]: /sql/types/mz_timestamp
