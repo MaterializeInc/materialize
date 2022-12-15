@@ -755,8 +755,8 @@ impl QueryWhen {
     /// Returns whether the candidate can be advanced to the timeline's timestamp.
     pub fn can_advance_to_timeline_ts(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::Freshest => true,
-            QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => false,
+            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::Freshest => true,
+            QueryWhen::AtTimestamp(_) => false,
         }
     }
     /// Returns whether the candidate must be advanced to the timeline's timestamp.
