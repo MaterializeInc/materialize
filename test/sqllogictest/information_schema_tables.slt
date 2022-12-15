@@ -725,6 +725,10 @@ mz_sink_statuses
 VIEW
 materialize
 mz_internal
+mz_sink_utilization
+VIEW
+materialize
+mz_internal
 mz_source_status
 VIEW
 materialize
@@ -734,6 +738,10 @@ SOURCE
 materialize
 mz_internal
 mz_source_statuses
+VIEW
+materialize
+mz_internal
+mz_source_utilization
 VIEW
 materialize
 mz_internal

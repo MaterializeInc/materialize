@@ -2289,6 +2289,34 @@ FROM
         JOIN mz_internal.mz_cluster_replica_metrics AS m ON m.replica_id = r.id",
 };
 
+pub const MZ_SOURCE_UTILIZATION: BuiltinView = BuiltinView {
+    name: "mz_source_utilization",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_source_utilization AS
+SELECT
+    sources.id AS source_id,
+    m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
+    m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent
+FROM
+    mz_sources AS sources
+        JOIN mz_internal.mz_storage_host_sizes AS s ON sources.size = s.size
+        JOIN mz_internal.mz_storage_host_metrics AS m ON m.id = sources.id",
+};
+
+pub const MZ_SINK_UTILIZATION: BuiltinView = BuiltinView {
+    name: "mz_sink_utilization",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_sink_utilization AS
+SELECT
+    sinks.id AS sink_id,
+    m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
+    m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent
+FROM
+    mz_sinks AS sinks
+        JOIN mz_internal.mz_storage_host_sizes AS s ON sinks.size = s.size
+        JOIN mz_internal.mz_storage_host_metrics AS m ON m.id = sinks.id",
+};
+
 // NOTE: If you add real data to this implementation, then please update
 // the related `pg_` function implementations (like `pg_get_constraintdef`)
 pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
@@ -2935,6 +2963,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_STORAGE_HOST_METRICS),
         Builtin::View(&MZ_STORAGE_USAGE),
         Builtin::Table(&MZ_STORAGE_HOST_SIZES),
+        Builtin::View(&MZ_SOURCE_UTILIZATION),
+        Builtin::View(&MZ_SINK_UTILIZATION),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),
         Builtin::Index(&MZ_SHOW_CONNECTIONS_IND),
