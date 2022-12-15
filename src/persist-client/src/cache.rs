@@ -12,10 +12,14 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
-use mz_persist::location::{Blob, Consensus, ExternalError};
+use mz_persist::location::{
+    Blob, Consensus, ExternalError, BLOB_GET_LIVENESS_KEY, CONSENSUS_HEAD_LIVENESS_KEY,
+};
+use tokio::task::JoinHandle;
 use tracing::instrument;
 
 use crate::async_runtime::CpuHeavyRuntime;
@@ -38,6 +42,7 @@ pub struct PersistClientCache {
     blob_by_uri: HashMap<String, Arc<dyn Blob + Send + Sync>>,
     consensus_by_uri: HashMap<String, Arc<dyn Consensus + Send + Sync>>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+    rtt_latency_tasks: Vec<Arc<JoinHandle<()>>>,
 }
 
 impl PersistClientCache {
@@ -50,6 +55,7 @@ impl PersistClientCache {
             blob_by_uri: HashMap::new(),
             consensus_by_uri: HashMap::new(),
             cpu_heavy_runtime: Arc::new(CpuHeavyRuntime::new()),
+            rtt_latency_tasks: Vec::new(),
         }
     }
 
@@ -70,7 +76,24 @@ impl PersistClientCache {
         location: PersistLocation,
     ) -> Result<PersistClient, ExternalError> {
         let blob = self.open_blob(location.blob_uri).await?;
-        let consensus = match self.consensus_by_uri.entry(location.consensus_uri) {
+        let consensus = self.open_consensus(location.consensus_uri).await?;
+        PersistClient::new(
+            self.cfg.clone(),
+            blob,
+            consensus,
+            Arc::clone(&self.metrics),
+            Arc::clone(&self.cpu_heavy_runtime),
+        )
+    }
+
+    // No sense in measuring rtt latencies more often than this.
+    const PROMETHEUS_SCRAPE_INTERVAL: Duration = Duration::from_secs(60);
+
+    async fn open_consensus(
+        &mut self,
+        consensus_uri: String,
+    ) -> Result<Arc<dyn Consensus + Send + Sync>, ExternalError> {
+        let consensus = match self.consensus_by_uri.entry(consensus_uri) {
             Entry::Occupied(x) => Arc::clone(x.get()),
             Entry::Vacant(x) => {
                 // Intentionally hold the lock, so we don't double connect under
@@ -88,15 +111,16 @@ impl PersistClientCache {
                 Arc::clone(x.insert(consensus))
             }
         };
-        let consensus: Arc<dyn Consensus + Send + Sync> =
-            Arc::new(MetricsConsensus::new(consensus, Arc::clone(&self.metrics)));
-        PersistClient::new(
-            self.cfg.clone(),
-            blob,
-            consensus,
-            Arc::clone(&self.metrics),
-            Arc::clone(&self.cpu_heavy_runtime),
-        )
+        let consensus = Arc::new(MetricsConsensus::new(consensus, Arc::clone(&self.metrics)));
+        self.rtt_latency_tasks.push(Arc::new(
+            consensus_rtt_latency_task(
+                Arc::clone(&consensus),
+                Arc::clone(&self.metrics),
+                Self::PROMETHEUS_SCRAPE_INTERVAL,
+            )
+            .await,
+        ));
+        Ok(consensus)
     }
 
     pub(crate) async fn open_blob(
@@ -116,8 +140,108 @@ impl PersistClientCache {
                 Arc::clone(x.insert(blob))
             }
         };
-        Ok(Arc::new(MetricsBlob::new(blob, Arc::clone(&self.metrics))))
+        let blob = Arc::new(MetricsBlob::new(blob, Arc::clone(&self.metrics)));
+        self.rtt_latency_tasks.push(Arc::new(
+            blob_rtt_latency_task(
+                Arc::clone(&blob),
+                Arc::clone(&self.metrics),
+                Self::PROMETHEUS_SCRAPE_INTERVAL,
+            )
+            .await,
+        ));
+        Ok(blob)
     }
+}
+
+impl Drop for PersistClientCache {
+    fn drop(&mut self) {
+        for task in self.rtt_latency_tasks.iter() {
+            task.abort();
+        }
+    }
+}
+
+/// Starts a task to periodically measure the persist-observed latency to
+/// consensus.
+///
+/// This is a task, rather than something like looking at the latencies of prod
+/// traffic, so that we minimize any issues around Futures not being polled
+/// promptly (as can and does happen with the Timely-polled Futures).
+///
+/// The caller is responsible for shutdown via [JoinHandle::abort].
+///
+/// No matter whether we wrap MetricsConsensus before or after we start up the
+/// rtt latency task, there's the possibility for it being confusing at some
+/// point. Err on the side of more data (including the latency measurements) to
+/// start.
+async fn blob_rtt_latency_task(
+    blob: Arc<MetricsBlob>,
+    metrics: Arc<Metrics>,
+    measurement_interval: Duration,
+) -> JoinHandle<()> {
+    mz_ore::task::spawn(|| "persist::blob_rtt_latency", async move {
+        // Use the tokio Instant for next_measurement because the reclock tests
+        // mess with the tokio sleep clock.
+        let mut next_measurement = tokio::time::Instant::now();
+        loop {
+            tokio::time::sleep_until(next_measurement).await;
+            let start = Instant::now();
+            // Don't spam retries if this returns an error. We're guaranteed by
+            // the method signature that we've already got metrics coverage of
+            // these, so we'll count the errors.
+            match blob.get(BLOB_GET_LIVENESS_KEY).await {
+                Ok(_) => {}
+                Err(_) => {
+                    continue;
+                }
+            }
+            metrics.blob.rtt_latency.set(start.elapsed().as_secs_f64());
+            next_measurement = tokio::time::Instant::now() + measurement_interval;
+        }
+    })
+}
+
+/// Starts a task to periodically measure the persist-observed latency to
+/// consensus.
+///
+/// This is a task, rather than something like looking at the latencies of prod
+/// traffic, so that we minimize any issues around Futures not being polled
+/// promptly (as can and does happen with the Timely-polled Futures).
+///
+/// The caller is responsible for shutdown via [JoinHandle::abort].
+///
+/// No matter whether we wrap MetricsConsensus before or after we start up the
+/// rtt latency task, there's the possibility for it being confusing at some
+/// point. Err on the side of more data (including the latency measurements) to
+/// start.
+async fn consensus_rtt_latency_task(
+    consensus: Arc<MetricsConsensus>,
+    metrics: Arc<Metrics>,
+    measurement_interval: Duration,
+) -> JoinHandle<()> {
+    mz_ore::task::spawn(|| "persist::blob_rtt_latency", async move {
+        // Use the tokio Instant for next_measurement because the reclock tests
+        // mess with the tokio sleep clock.
+        let mut next_measurement = tokio::time::Instant::now();
+        loop {
+            tokio::time::sleep_until(next_measurement).await;
+            let start = Instant::now();
+            // Don't spam retries if this returns an error. We're guaranteed by
+            // the method signature that we've already got metrics coverage of
+            // these, so we'll count the errors.
+            match consensus.head(CONSENSUS_HEAD_LIVENESS_KEY).await {
+                Ok(_) => {}
+                Err(_) => {
+                    continue;
+                }
+            }
+            metrics
+                .consensus
+                .rtt_latency
+                .set(start.elapsed().as_secs_f64());
+            next_measurement = tokio::time::Instant::now() + measurement_interval;
+        }
+    })
 }
 
 #[cfg(test)]

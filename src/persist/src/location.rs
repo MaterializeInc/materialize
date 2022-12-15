@@ -304,6 +304,9 @@ pub struct VersionedData {
 #[allow(clippy::as_conversions)]
 pub const SCAN_ALL: usize = u64_to_usize(i64::MAX as u64);
 
+/// A key usable for liveness checks via [Consensus::head].
+pub const CONSENSUS_HEAD_LIVENESS_KEY: &str = "LIVENESS";
+
 /// An abstraction for [VersionedData] held in a location in persistent storage
 /// where the data are conditionally updated by version.
 ///
@@ -366,6 +369,9 @@ pub struct BlobMetadata<'a> {
     /// Size of the blob
     pub size_in_bytes: u64,
 }
+
+/// A key usable for liveness checks via [Blob::get].
+pub const BLOB_GET_LIVENESS_KEY: &str = "LIVENESS";
 
 /// An abstraction over read-write access to a `bytes key`->`bytes value` store.
 ///

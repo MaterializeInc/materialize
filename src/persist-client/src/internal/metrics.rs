@@ -28,7 +28,7 @@ use mz_persist::metrics::PostgresConsensusMetrics;
 use mz_persist::retry::RetryStream;
 use mz_persist_types::Codec64;
 use prometheus::core::{AtomicI64, AtomicU64};
-use prometheus::{CounterVec, IntCounterVec};
+use prometheus::{CounterVec, Gauge, GaugeVec, IntCounterVec};
 use timely::progress::Antichain;
 
 use crate::{PersistConfig, ShardId};
@@ -143,6 +143,7 @@ struct MetricsVecs {
     external_consensus_cas_mismatch_versions_bytes: IntCounter,
     external_consensus_truncated_count: IntCounter,
     external_blob_delete_noop_count: IntCounter,
+    external_rtt_latency: GaugeVec,
 
     retry_started: IntCounterVec,
     retry_finished: IntCounterVec,
@@ -232,6 +233,11 @@ impl MetricsVecs {
             external_blob_delete_noop_count: registry.register(metric!(
                 name: "mz_persist_external_blob_delete_noop_count",
                 help: "count of blob delete calls that deleted a non-existent key",
+            )),
+            external_rtt_latency: registry.register(metric!(
+                name: "mz_persist_external_rtt_latency",
+                help: "roundtrip-time to external service as seen by this process",
+                var_labels: ["external"],
             )),
 
             retry_started: registry.register(metric!(
@@ -398,6 +404,7 @@ impl MetricsVecs {
             list_keys: self.external_op_metrics("blob_list_keys"),
             delete: self.external_op_metrics("blob_delete"),
             delete_noop: self.external_blob_delete_noop_count.clone(),
+            rtt_latency: self.external_rtt_latency.with_label_values(&["blob"]),
         }
     }
 
@@ -414,6 +421,7 @@ impl MetricsVecs {
             cas_mismatch_versions_bytes: self
                 .external_consensus_cas_mismatch_versions_bytes
                 .clone(),
+            rtt_latency: self.external_rtt_latency.with_label_values(&["consensus"]),
         }
     }
 
@@ -1352,6 +1360,7 @@ pub struct BlobMetrics {
     list_keys: ExternalOpMetrics,
     delete: ExternalOpMetrics,
     delete_noop: IntCounter,
+    pub rtt_latency: Gauge,
 }
 
 #[derive(Debug)]
@@ -1463,6 +1472,7 @@ pub struct ConsensusMetrics {
     truncated_count: IntCounter,
     cas_mismatch_versions_count: IntCounter,
     cas_mismatch_versions_bytes: IntCounter,
+    pub rtt_latency: Gauge,
 }
 
 #[derive(Debug)]
