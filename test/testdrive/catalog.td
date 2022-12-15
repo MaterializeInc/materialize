@@ -555,7 +555,9 @@ mz_records_per_dataflow_operator
 mz_scheduling_elapsed
 mz_scheduling_parks
 mz_sink_status
+mz_sink_statuses
 mz_source_status
+mz_source_statuses
 mz_worker_compute_delays
 mz_show_cluster_replicas
 mz_show_indexes
