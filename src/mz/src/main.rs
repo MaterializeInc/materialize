@@ -18,6 +18,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use reqwest::Client;
+use secrets::SecretCommand;
 use serde::Deserialize;
 
 use crate::configuration::{Configuration, Endpoint, WEB_DOCS_URL};
@@ -35,6 +36,7 @@ mod configuration;
 mod login;
 mod password;
 mod region;
+mod secrets;
 mod shell;
 mod utils;
 
@@ -75,6 +77,16 @@ enum Commands {
         #[clap(subcommand)]
         command: RegionCommand,
     },
+
+    /// Show commands to interact with secrets
+    Secret {
+        #[clap(possible_values = CloudProviderRegion::variants())]
+        cloud_provider_region: Option<String>,
+
+        #[clap(subcommand)]
+        command: SecretCommand,
+    },
+
     /// Connect to a region using a SQL shell
     Shell {
         #[clap(possible_values = CloudProviderRegion::variants())]
@@ -350,6 +362,29 @@ async fn main() -> Result<()> {
                     print_environment_status(environment, health);
                 }
             }
+        }
+
+        Commands::Secret {
+            cloud_provider_region,
+            command,
+        } => {
+            let profile = config.get_profile()?;
+
+            let cloud_provider_region = match cloud_provider_region {
+                Some(ref cloud_provider_region) => {
+                    CloudProviderRegion::from_str(cloud_provider_region)?
+                }
+                None => profile
+                    .get_default_region()
+                    .context("no region specified and no default region set")?,
+            };
+
+            let client = Client::new();
+            let valid_profile = profile.validate(&client).await?;
+
+            command
+                .execute(valid_profile, cloud_provider_region, client)
+                .await?
         }
 
         Commands::Shell {
