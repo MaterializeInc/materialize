@@ -111,7 +111,7 @@ impl RoutineMaintenance {
             if let Some(recv) = gc.gc_and_truncate_background(gc_req) {
                 // it's safe to ignore errors on the receiver. in the
                 // case of shutdown, the sender may have been dropped
-                futures.push(recv.map(|_| RoutineMaintenance::default()).boxed());
+                futures.push(recv.map(Result::unwrap_or_default).boxed());
             }
         }
 

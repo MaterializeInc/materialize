@@ -1572,7 +1572,8 @@ pub mod datadriven {
             shard_id: datadriven.shard_id,
             new_seqno_since,
         };
-        GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
+        let maintenance = GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
+        datadriven.routine.push(maintenance);
 
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
