@@ -15,7 +15,6 @@ use std::ops::Sub;
 use ::chrono::{DateTime, Duration, NaiveDateTime, NaiveTime, Utc};
 use ::chrono::{Datelike, NaiveDate};
 use once_cell::sync::Lazy;
-use serde::{Serialize, Serializer};
 use thiserror::Error;
 
 use mz_ore::cast::CastFrom;
@@ -448,15 +447,6 @@ pub enum TimestampError {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CheckedTimestamp<T> {
     t: T,
-}
-
-impl<T: Serialize> Serialize for CheckedTimestamp<T> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.t.serialize(serializer)
-    }
 }
 
 // We support intersection of the limits of Postgres, Avro, and chrono dates:
