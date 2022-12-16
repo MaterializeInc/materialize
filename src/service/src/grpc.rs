@@ -53,7 +53,7 @@ pub type ClientTransport = InterceptedService<Channel, VersionAttachInterceptor>
 /// protobuf RPC sets up two streams that persist after the RPC has returned: A
 /// Request (Command) stream (for us, backed by a unbounded mpsc queue) going
 /// from this instance to the server and a response stream coming back
-/// (represented directly as a Streaming<Response> instance). The recv and send
+/// (represented directly as a `Streaming<Response>` instance). The recv and send
 /// functions interact with the two mpsc channels or the streaming instance
 /// respectively.
 #[derive(Debug)]

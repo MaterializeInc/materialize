@@ -207,7 +207,7 @@ impl ExprHumanizer for TestCatalog {
 ///
 /// The following variants of `MirScalarExpr` have non-standard syntax:
 /// Literal -> the syntax is `(ok <literal> <scalar type>)`, `<literal>`
-/// or (err <eval error> <scalar type>). Note that `ok` token can be omitted.
+/// or `(err <eval error> <scalar type>)`. Note that `ok` token can be omitted.
 /// If `<scalar type>` is not specified, then literals will be assigned
 /// default types:
 /// * true/false become Bool

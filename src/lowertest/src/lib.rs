@@ -328,7 +328,7 @@ pub trait TestDeserializeContext {
         I: Iterator<Item = TokenTree>;
 
     /// Converts `json` back to the extended syntax specified by
-    /// [TestDeserializeContext::override_syntax<I>].
+    /// [TestDeserializeContext::override_syntax].
     ///
     /// Returns `Some(value)` if `json` has been resolved.
     /// Returns `None` is `json` should be resolved in the default manner.

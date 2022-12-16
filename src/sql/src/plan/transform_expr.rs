@@ -143,6 +143,7 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
 /// when the inputs to the comparison are non-nullable. This function is careful
 /// to only apply the transformation when it is valid to do so.
 ///
+/// ```ignore
 /// WHERE (SELECT any(<pred>) FROM <rel>)
 /// =>
 /// WHERE EXISTS(SELECT * FROM <rel> WHERE <pred>)
@@ -150,6 +151,7 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
 /// WHERE (SELECT all(<pred>) FROM <rel>)
 /// =>
 /// WHERE NOT EXISTS(SELECT * FROM <rel> WHERE (NOT <pred>) OR <pred> IS NULL)
+/// ```
 ///
 /// See Section 3.5 of "Execution Strategies for SQL Subqueries" by
 /// M. Elhemali, et al.

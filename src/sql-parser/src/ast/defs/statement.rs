@@ -1191,9 +1191,9 @@ pub enum ReplicaOptionName {
     Workers,
     /// The `COMPUTE [<host> [, <host> ...]]` option.
     Compute,
-    /// The `INTROSPECTION INTERVAL [[=] <interval>] option.
+    /// The `INTROSPECTION INTERVAL [[=] <interval>]` option.
     IntrospectionInterval,
-    /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
+    /// The `INTROSPECTION DEBUGGING [[=] <enabled>]` option.
     IntrospectionDebugging,
 }
 

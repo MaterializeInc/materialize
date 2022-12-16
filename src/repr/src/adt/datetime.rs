@@ -1802,7 +1802,7 @@ impl std::fmt::Display for TimeStrToken {
 }
 
 /// Convert a string from a time-like datatype (INTERVAL, TIMESTAMP/TZ, DATE, and TIME)
-/// into Vec<TimeStrToken>.
+/// into `Vec<TimeStrToken>`.
 ///
 /// # Warning
 /// - Any sequence of numeric characters following a decimal that exceeds 9 characters

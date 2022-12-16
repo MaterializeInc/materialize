@@ -2471,7 +2471,7 @@ pub enum JoinImplementation {
     /// This gets translated to a Differential join during MIR -> LIR lowering, but we still want
     /// to represent it in MIR, because the fast path detection wants to match on this.
     ///
-    /// Consists of (<view id>, <keys of index>, <constants>)
+    /// Consists of (`<view id>`, `<keys of index>`, `<constants>`)
     IndexedFilter(GlobalId, Vec<MirScalarExpr>, #[mzreflect(ignore)] Vec<Row>),
     /// No implementation yet selected.
     Unimplemented,
