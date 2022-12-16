@@ -35,28 +35,34 @@ Field                       | Value            | Required | Description
 ### Permissions
 
 After you create the connection, you must configure your AWS PrivateLink service
-to accept connections from the following AWS principal:
+to accept connections from the AWS principal that Materialize will connect as.
+This principal has an Amazon Resource Name of the following form:
 
 ```
-arn:aws:iam::664411391173:role/mz_<EXTERNAL-ID>_<CONNECTION-ID>
+arn:aws:iam::664411391173:role/mz_<REGION-ID>_<CONNECTION-ID>
 ```
 
-Fill in the values as follows:
+Query the
+[`mz_aws_privatelink_connections`](/sql/system-catalog/mz_catalog/#mz_aws_privatelink_connections)
+table to determine the principals for the AWS PrivateLink connections in your
+region. For example:
 
-  * **`EXTERNAL-ID`**: A unique ID associated with your Materialize region.
-    You must [contact support](/support/) to determine this ID.
-  * **`CONNECTION-ID`**: The ID of the AWS PrivateLink connection in your
-    Materialize region. You can determine this ID by querying
-    [`mz_connections`].
-
-For example:
-
+```sql
+SELECT * FROM mz_aws_privatelink_connections;
 ```
-arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u23
 ```
+   id   |                                 principal
+--------+---------------------------------------------------------------------------
+ u1     | arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
+ u7     | arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u7
+```
+
+Note that Materialize assigns a unique principal to each AWS PrivateLink
+connection in your region.
 
 See [Manage permissions](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#add-remove-permissions) in the AWS PrivateLink
-documentation for details.
+documentation for details about how to configure a trusted principal for your
+AWS PrivateLink service.
 
 {{< warning >}}
 Do **not** grant access to the root principal for the Materialize AWS account.
@@ -418,6 +424,7 @@ SELECT * FROM mz_ssh_tunnel_connections;
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE SINK`]: /sql/create-sink
 [`FORMAT`]: /sql/create-source/#formats
+[`mz_aws_privatelink_connections`]: /sql/system-catalog/mz_catalog/#mz_aws_privatelink_connections
 [`mz_connections`]: /sql/system-catalog/mz_catalog/#mz_connections
 [`mz_ssh_tunnel_connections`]: /sql/system-catalog/mz_catalog/#mz_ssh_tunnel_connections
 [Ed25519 algorithm]: https://ed25519.cr.yp.to
