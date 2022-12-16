@@ -504,7 +504,10 @@ where
         }
     }
 
-    pub async fn merge_res(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
+    pub async fn merge_res(
+        &mut self,
+        res: &FueledMergeRes<T>,
+    ) -> (ApplyMergeResult, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
 
         // SUBTLE! If Machine::merge_res returns false, the blobs referenced in
@@ -536,7 +539,7 @@ where
         // anyway need a mechanism to clean up leaked blobs because of process
         // crashes.
         let mut merge_result_ever_applied = ApplyMergeResult::NotAppliedNoMatch;
-        let (_seqno, _apply_merge_result, _maintenance) = self
+        let (_seqno, _apply_merge_result, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, _, state| {
                 let ret = state.apply_merge_res(res);
                 if let Continue(result) = ret {
@@ -554,7 +557,7 @@ where
                 ret
             })
             .await;
-        merge_result_ever_applied
+        (merge_result_ever_applied, maintenance)
     }
 
     pub async fn downgrade_since(
@@ -1827,10 +1830,11 @@ pub mod datadriven {
             .get(input)
             .expect("unknown batch")
             .clone();
-        let merge_res = datadriven
+        let (merge_res, maintenance) = datadriven
             .machine
             .merge_res(&FueledMergeRes { output: batch })
             .await;
+        datadriven.routine.push(maintenance);
         Ok(format!(
             "{} {}\n",
             datadriven.machine.seqno(),

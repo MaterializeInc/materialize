@@ -122,6 +122,7 @@ v16 ok
 v16 ok
 v16 ok
 v16 ok
+v16 ok
 
 # Now downgrade_since to empty antichain, closing the shard to reads as well.
 # Everything still works (for idempotence), but this replaces the shard with a

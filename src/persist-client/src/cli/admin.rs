@@ -248,9 +248,12 @@ pub async fn force_compaction(
                     .sum::<usize>(),
                 start.elapsed(),
             );
-            let apply_res = machine
+            let (apply_res, maintenance) = machine
                 .merge_res(&FueledMergeRes { output: res.output })
                 .await;
+            if !maintenance.is_empty() {
+                info!("ignoring non-empty requested maintenance: {maintenance:?}")
+            }
             match apply_res {
                 ApplyMergeResult::AppliedExact | ApplyMergeResult::AppliedSubset => {
                     info!("attempt {} req {}: {:?}", attempt, idx, apply_res);

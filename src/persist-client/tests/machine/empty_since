@@ -151,6 +151,7 @@ v22 ok
 v22 ok
 v22 ok
 v22 ok
+v22 ok
 
 # Now compare_and_append to the empty antichain, closing the shard to writes as
 # well. Everything still works (for idempotence), but this replaces the shard
