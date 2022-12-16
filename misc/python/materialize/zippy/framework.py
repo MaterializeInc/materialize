@@ -81,9 +81,13 @@ class Capabilities:
 class Action:
     """Base class for an action that a Zippy test can take."""
 
+    current_seqno: int = 0
+
     def __init__(self, capabilities: Capabilities) -> None:
         """Construct a new action, possibly conditioning on the available
         capabilities."""
+        Action.current_seqno = Action.current_seqno + 1
+        self.seqno = Action.current_seqno
         pass
 
     @classmethod
@@ -107,6 +111,9 @@ class Action:
     def require_explicit_mention(self) -> bool:
         """Only use if explicitly mentioned by name in a Scenario."""
         return False
+
+    def __str__(self) -> str:
+        return f"--- #{self.seqno}: {self.__class__.__name__}"
 
 
 class ActionFactory:

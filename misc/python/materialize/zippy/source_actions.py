@@ -36,10 +36,11 @@ class CreateSourceParameterized(ActionFactory):
         if new_source_name:
             return [
                 CreateSource(
+                    capabilities=capabilities,
                     source=SourceExists(
                         name=new_source_name,
                         topic=random.choice(capabilities.get(TopicExists)),
-                    )
+                    ),
                 )
             ]
         else:
@@ -47,8 +48,9 @@ class CreateSourceParameterized(ActionFactory):
 
 
 class CreateSource(Action):
-    def __init__(self, source: SourceExists) -> None:
+    def __init__(self, capabilities: Capabilities, source: SourceExists) -> None:
         self.source = source
+        super().__init__(capabilities)
 
     def run(self, c: Composition) -> None:
         envelope = str(self.source.topic.envelope).split(".")[1]

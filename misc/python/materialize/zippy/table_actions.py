@@ -58,6 +58,7 @@ class CreateTable(Action):
             table is not None
         ), "CreateTable Action can not be referenced directly, it is produced by CreateTableParameterized factory"
         self.table = table
+        super().__init__(capabilities)
 
     def run(self, c: Composition) -> None:
         index = (
@@ -88,6 +89,7 @@ class ValidateTable(Action):
 
     def __init__(self, capabilities: Capabilities) -> None:
         self.table = random.choice(capabilities.get(TableExists))
+        super().__init__(capabilities)
 
     def run(self, c: Composition) -> None:
         c.testdrive(
@@ -110,6 +112,10 @@ class DML(Action):
     def __init__(self, capabilities: Capabilities) -> None:
         self.table = random.choice(capabilities.get(TableExists))
         self.delta = random.randint(1, self.table.max_rows_per_action)
+        super().__init__(capabilities)
+
+    def __str__(self) -> str:
+        return f"{Action.__str__(self)} {self.table.name}"
 
 
 class Insert(DML):

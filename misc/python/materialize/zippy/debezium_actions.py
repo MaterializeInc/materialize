@@ -81,6 +81,8 @@ class CreateDebeziumSource(Action):
         else:
             assert False
 
+        super().__init__(capabilities)
+
     def run(self, c: Composition) -> None:
         if self.new_debezium_source:
             c.testdrive(

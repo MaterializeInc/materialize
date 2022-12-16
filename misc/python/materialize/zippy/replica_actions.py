@@ -71,6 +71,8 @@ class CreateReplica(Action):
         else:
             assert False
 
+        super().__init__(capabilities)
+
     def run(self, c: Composition) -> None:
         if self.new_replica:
             c.testdrive(
@@ -98,6 +100,8 @@ class DropReplica(Action):
             capabilities.remove_capability_instance(self.replica)
         else:
             self.replica = None
+
+        super().__init__(capabilities)
 
     def run(self, c: Composition) -> None:
         if self.replica is not None:

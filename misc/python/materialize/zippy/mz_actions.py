@@ -34,6 +34,7 @@ class MzStart(Action):
                 f"ALTER SYSTEM SET {config_param} TO 1000",
                 user="mz_system",
                 port=6877,
+                print_statement=False,
             )
 
     def provides(self) -> List[Capability]:

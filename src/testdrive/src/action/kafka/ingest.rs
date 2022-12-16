@@ -296,8 +296,8 @@ pub async fn run_ingest(
 
     let topic_name = &format!("{}-{}", topic_prefix, state.seed);
     println!(
-        "Ingesting data into Kafka topic {} with repeat {}",
-        topic_name, repeat
+        "Ingesting data into Kafka topic {} with start_iteration = {}, repeat = {}",
+        topic_name, start_iteration, repeat
     );
 
     let set_schema_id_var = |state: &mut State, schema_id_var, transcoder| match transcoder {

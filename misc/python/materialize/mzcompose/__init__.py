@@ -410,13 +410,15 @@ class Composition:
         user: str = "materialize",
         port: Optional[int] = None,
         password: Optional[str] = None,
+        print_statement: bool = True,
     ) -> None:
         """Run a batch of SQL statements against the materialized service."""
         with self.sql_cursor(
             service=service, user=user, port=port, password=password
         ) as cursor:
             for statement in sqlparse.split(sql):
-                print(f"> {statement}")
+                if print_statement:
+                    print(f"> {statement}")
                 cursor.execute(statement)
 
     def sql_query(
@@ -953,8 +955,8 @@ def _wait_for_pg(
     host: str,
     user: str,
     password: str,
-    print_result: bool,
     expected: Union[Iterable[Any], Literal["any"]],
+    print_result: bool = False,
 ) -> None:
     """Wait for a pg-compatible database (includes materialized)"""
     args = f"dbname={dbname} host={host} port={port} user={user} password={password}"
@@ -975,21 +977,21 @@ def _wait_for_pg(
             cur = conn.cursor()
             cur.execute(query)
             if expected == "any" and cur.rowcount == -1:
-                ui.progress("success!", finish=True)
+                ui.progress(" success!", finish=True)
                 return
             result = list(cur.fetchall())
             if expected == "any" or result == expected:
                 if print_result:
                     say(f"query result: {result}")
                 else:
-                    ui.progress("success!", finish=True)
+                    ui.progress(" success!", finish=True)
                 return
             else:
                 say(
                     f"host={host} port={port} did not return rows matching {expected} got: {result}"
                 )
         except Exception as e:
-            ui.progress(f"{e} " + str(int(remaining)))
+            ui.progress(f"{e if print_result else ''} {int(remaining)}")
             error = e
     ui.progress(finish=True)
     raise UIError(f"never got correct result for {args}: {error}")
