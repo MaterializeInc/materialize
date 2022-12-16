@@ -409,7 +409,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 Field              | Type       | Meaning
 -------------------|------------|--------
 `id`               | [`text`]   | The ID of the storage object (source or sink).
-`process_id`       | [`bigint`] | An identifier of a process within a replica.
+`process_id`       | [`bigint`] | An identifier of a process within a host.
 `cpu_nano_cores`   | [`bigint`] | Approximate CPU usage, in billionths of a vCPU core.
 `memory_bytes`     | [`bigint`] | Approximate RAM usage, in bytes.
 
