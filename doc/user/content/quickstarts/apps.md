@@ -10,7 +10,7 @@ aliases:
 ---
 
 In this quickstart, you'll build the analytics for an eCommerce sales dashboard that queries Materialize.
-At the end of this guide, you'll have the chance to explore an eCommerce data application powered by your work.
+At the end of this guide, you'll have the chance to explore an eCommerce data application querying against your code.
 
 The key concepts present in this quickstart will also apply to many other projects:
 
