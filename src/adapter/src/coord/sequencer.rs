@@ -3168,7 +3168,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 &mut session,
                 PeekPlan {
                     source: selection,
-                    when: QueryWhen::Immediately,
+                    when: QueryWhen::Freshest,
                     finishing,
                     copy_to: None,
                 },

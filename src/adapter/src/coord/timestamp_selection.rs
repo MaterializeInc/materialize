@@ -150,9 +150,6 @@ impl<S: Append + 'static> Coordinator<S> {
             TimelineContext::TimestampDependent => Some(Timeline::EpochMilliseconds),
             TimelineContext::TimestampIndependent => None,
         };
-        let use_timestamp_oracle = isolation_level == &vars::IsolationLevel::StrictSerializable
-            && timeline.is_some()
-            && when.advance_to_global_ts();
 
         let upper = self.least_valid_write(id_bundle);
         let largest_not_in_advance_of_upper = self.largest_not_in_advance_of_upper(&upper);
@@ -162,14 +159,33 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.advance_by(since.borrow());
         }
 
-        if use_timestamp_oracle {
-            let timeline = timeline
-                .as_ref()
-                .expect("timeline is always present when using the timestamp oracle");
-            let timestamp_oracle = self.get_timestamp_oracle(timeline);
-            oracle_read_ts = Some(timestamp_oracle.read_ts());
-            candidate.join_assign(&oracle_read_ts.unwrap());
-        } else if when.advance_to_upper() {
+        // In order to use a timestamp oracle, we must be in the context of some timeline. In that
+        // context we would use the timestamp oracle in the following scenarios:
+        // - The isolation level is Strict Serializable and the `when` allows us to use the
+        //   the timestamp oracle (ex: queries with no AS OF).
+        // - The `when` requires us to use the timestamp oracle (ex: read-then-write queries).
+        if let Some(timeline) = &timeline {
+            if when.must_advance_to_timeline_ts()
+                || (when.can_advance_to_timeline_ts()
+                    && isolation_level == &vars::IsolationLevel::StrictSerializable)
+            {
+                let timestamp_oracle = self.get_timestamp_oracle(timeline);
+                oracle_read_ts = Some(timestamp_oracle.read_ts());
+                candidate.join_assign(&oracle_read_ts.unwrap());
+            }
+        }
+
+        // We advance to the upper in the following scenarios:
+        // - The isolation level is Serializable and the `when` allows us to advance to upper (ex:
+        //   queries with no AS OF). We avoid using the upper in Strict Serializable to prevent
+        //   reading source data that is being written to in the future.
+        // - The isolation level is Strict Serializable but there is no timelines and the `when`
+        //   allows us to advance to upper.
+        // - The `when` requires us to advance to the upper (ex: read-then-write queries).
+        if when.must_advance_to_upper()
+            || (when.can_advance_to_upper()
+                && (isolation_level == &vars::IsolationLevel::Serializable || timeline.is_none()))
+        {
             candidate.join_assign(&largest_not_in_advance_of_upper);
         }
 

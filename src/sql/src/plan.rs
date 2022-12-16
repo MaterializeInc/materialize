@@ -708,6 +708,9 @@ pub enum QueryWhen {
     /// The peek should occur at the latest possible timestamp that allows the
     /// peek to complete immediately.
     Immediately,
+    /// The peek should occur at a timestamp that allows the peek to see all
+    /// data written within Materialize.
+    Freshest,
     /// The peek should occur at the timestamp described by the specified
     /// expression.
     ///
@@ -723,28 +726,46 @@ impl QueryWhen {
     pub fn advance_to_timestamp(&self) -> Option<MirScalarExpr> {
         match self {
             QueryWhen::AtTimestamp(t) | QueryWhen::AtLeastTimestamp(t) => Some(t.clone()),
-            QueryWhen::Immediately => None,
+            QueryWhen::Immediately | QueryWhen::Freshest => None,
         }
     }
     /// Returns whether the candidate must be advanced to the since.
     pub fn advance_to_since(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => true,
+            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::Freshest => true,
+            QueryWhen::AtTimestamp(_) => false,
+        }
+    }
+    /// Returns whether the candidate can be advanced to the upper.
+    pub fn can_advance_to_upper(&self) -> bool {
+        match self {
+            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::Freshest => true,
             QueryWhen::AtTimestamp(_) => false,
         }
     }
     /// Returns whether the candidate must be advanced to the upper.
-    pub fn advance_to_upper(&self) -> bool {
+    pub fn must_advance_to_upper(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => true,
+            QueryWhen::Freshest => true,
+            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => {
+                false
+            }
+        }
+    }
+    /// Returns whether the candidate can be advanced to the timeline's timestamp.
+    pub fn can_advance_to_timeline_ts(&self) -> bool {
+        match self {
+            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::Freshest => true,
             QueryWhen::AtTimestamp(_) => false,
         }
     }
-    /// Returns whether the candidate must be advanced to the global timestamp.
-    pub fn advance_to_global_ts(&self) -> bool {
+    /// Returns whether the candidate must be advanced to the timeline's timestamp.
+    pub fn must_advance_to_timeline_ts(&self) -> bool {
         match self {
-            QueryWhen::Immediately => true,
-            QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => false,
+            QueryWhen::Freshest => true,
+            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => {
+                false
+            }
         }
     }
 }
