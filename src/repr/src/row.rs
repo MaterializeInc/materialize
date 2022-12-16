@@ -23,8 +23,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Strategy};
-use serde::ser::{SerializeMap, SerializeSeq};
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use uuid::Uuid;
 
@@ -305,39 +304,11 @@ impl PartialOrd for DatumList<'_> {
     }
 }
 
-impl<'a> Serialize for DatumList<'a> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut seq = serializer.serialize_seq(None)?;
-        let mut iter = self.iter();
-        while let Some(datum) = iter.next() {
-            seq.serialize_element(&datum)?;
-        }
-        seq.end()
-    }
-}
-
 /// A mapping from string keys to Datums
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct DatumMap<'a> {
     /// Points at the serialized datums, which should be sorted in key order
     data: &'a [u8],
-}
-
-impl<'a> Serialize for DatumMap<'a> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut map = serializer.serialize_map(None)?;
-        let mut iter = self.iter();
-        while let Some((key, val)) = iter.next() {
-            map.serialize_entry(&key, &val)?;
-        }
-        map.end()
-    }
 }
 
 /// Represents a single `Datum`, appropriate to be nested inside other
@@ -374,17 +345,6 @@ impl<'a> Ord for DatumNested<'a> {
 impl<'a> PartialOrd for DatumNested<'a> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
-    }
-}
-
-impl<'a> Serialize for DatumNested<'a> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut seq = serializer.serialize_seq(None)?;
-        seq.serialize_element(&self.datum())?;
-        seq.end()
     }
 }
 
