@@ -217,8 +217,8 @@ pub enum UpsertError {
     /// with the value.
     ///
     /// It is necessary to distinguish them because the necessary record to retract them is different.
-    /// (K, <errored V>) is retracted by (K, null), whereas (<errored K>, anything) is retracted by
-    /// ("bytes", null), where "bytes" is the string that failed to correctly decode as a key.
+    /// `(K, <errored V>)` is retracted by `(K, null)`, whereas `(<errored K>, anything)` is retracted by
+    /// `("bytes", null)`, where "bytes" is the string that failed to correctly decode as a key.
     KeyDecode(DecodeError),
     /// Wrapper around an error related to the value.
     Value(UpsertValueError),

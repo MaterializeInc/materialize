@@ -428,12 +428,12 @@ impl MirScalarExpr {
     /// `<literal> = <expr>`, it tries to simplify the equality by applying the inverse function of
     /// the outermost function call of `<expr>` (if exists):
     ///
-    /// <literal> = func(<inner_expr>), where f is invertible
+    /// `<literal> = func(<inner_expr>)`, where f is invertible
     ///  -->
-    /// <func^-1(literal)> = <inner_expr>
+    /// `<func^-1(literal)> = <inner_expr>`
     /// (if func^-1(literal) doesn't error out)
     ///
-    /// The return value is the <inner_expr> and the literal value that we get by applying the
+    /// The return value is the `<inner_expr>` and the literal value that we get by applying the
     /// inverse function.
     fn invert_casts_on_expr_eq_literal_inner(
         expr: &MirScalarExpr,

@@ -186,7 +186,7 @@ fn get_type_as_string(t: &syn::Type) -> String {
 ///
 /// Supported types are:
 /// A plain path type A -> extracts A
-/// Box<A>, Vec<A>, Option<A> -> extracts A
+/// `Box<A>`, `Vec<A>`, `Option<A>` -> extracts A
 /// Tuple (A, (B, C)) -> extracts A, B, C.
 /// Remove A, B, C from expected results if they are primitive types or listed
 /// in [EXTERNAL_TYPES].
