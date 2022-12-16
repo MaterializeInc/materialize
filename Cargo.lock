@@ -996,8 +996,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 [[package]]
 name = "chrono"
 version = "0.4.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16b0a3d9ed01224b22057780a37bb8c5dbfe1be8ba48678e7bf57ec4b385411f"
+source = "git+https://github.com/chronotope/chrono.git?branch=0.4.x#a1591e91f3a6af50e3d642039bbed1042f300d5b"
 dependencies = [
  "iana-time-zone",
  "num-integer",

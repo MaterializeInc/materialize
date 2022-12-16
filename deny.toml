@@ -158,6 +158,10 @@ allow-git = [
     # See: https://github.com/BurntSushi/rust-csv/issues/271
     "https://github.com/BurntSushi/rust-csv.git",
 
+    # Waiting for https://github.com/chronotope/chrono/pull/906
+    # to be released in the v0.4.x series.
+    "https://github.com/chronotope/chrono.git",
+
     # Waiting on v0.18.
     # See: https://github.com/open-telemetry/opentelemetry-rust/pull/779
     "https://github.com/MaterializeInc/opentelemetry-rust.git",
