@@ -1498,7 +1498,7 @@ impl<'a> Parser<'a> {
         } else {
             self.expected(
                 self.peek_pos(),
-                &format!("one of {}", keywords.iter().join(" or ")),
+                format!("one of {}", keywords.iter().join(" or ")),
                 self.peek_token(),
             )
         }
@@ -1552,7 +1552,7 @@ impl<'a> Parser<'a> {
             }
             _ => self.expected(
                 self.peek_pos(),
-                &format!("one of {}", tokens.iter().join(" or ")),
+                format!("one of {}", tokens.iter().join(" or ")),
                 self.peek_token(),
             ),
         }

@@ -201,7 +201,7 @@ fn test_http_sql() {
             server.inner.http_local_addr()
         ))
         .unwrap();
-        let (mut ws, _resp) = tungstenite::connect(&ws_url).unwrap();
+        let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
 
         f.run(|tc| {
             let msg = match tc.directive.as_str() {

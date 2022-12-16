@@ -99,7 +99,7 @@ impl Ca {
             )?;
             builder.build()
         };
-        fs::write(dir.path().join("ca.crt"), &cert.to_pem()?)?;
+        fs::write(dir.path().join("ca.crt"), cert.to_pem()?)?;
         Ok(Ca {
             dir,
             name,
@@ -164,8 +164,8 @@ impl Ca {
         };
         let cert_path = self.dir.path().join(Path::new(name).with_extension("crt"));
         let key_path = self.dir.path().join(Path::new(name).with_extension("key"));
-        fs::write(&cert_path, &cert.to_pem()?)?;
-        fs::write(&key_path, &pkey.private_key_to_pem_pkcs8()?)?;
+        fs::write(&cert_path, cert.to_pem()?)?;
+        fs::write(&key_path, pkey.private_key_to_pem_pkcs8()?)?;
         Ok((cert_path, key_path))
     }
 }
@@ -553,7 +553,7 @@ fn test_auth_expiry() {
     };
 
     let config = util::Config::default()
-        .with_tls(TlsMode::Require, &server_cert, &server_key)
+        .with_tls(TlsMode::Require, server_cert, server_key)
         .with_frontegg(&frontegg_auth);
     let server = util::start_server(config).unwrap();
 
@@ -1635,8 +1635,7 @@ fn test_auth_intermediate_ca() {
     // When the server is configured to present the entire certificate chain,
     // the client should be able to verify the chain even though it only knows
     // about the root CA.
-    let config =
-        util::Config::default().with_tls(TlsMode::Require, &server_cert_chain, &server_key);
+    let config = util::Config::default().with_tls(TlsMode::Require, server_cert_chain, &server_key);
     let server = util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require",

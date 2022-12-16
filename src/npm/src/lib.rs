@@ -156,15 +156,15 @@ const JS_DEV_VENDOR: &str = "src/http/static-dev/js/vendor";
 
 impl NpmPackage {
     fn css_path(&self) -> PathBuf {
-        Path::new(CSS_VENDOR).join(&format!("{}.css", self.name))
+        Path::new(CSS_VENDOR).join(format!("{}.css", self.name))
     }
 
     fn js_prod_path(&self) -> PathBuf {
-        Path::new(JS_PROD_VENDOR).join(&format!("{}.js", self.name))
+        Path::new(JS_PROD_VENDOR).join(format!("{}.js", self.name))
     }
 
     fn js_dev_path(&self) -> PathBuf {
-        Path::new(JS_DEV_VENDOR).join(&format!("{}.js", self.name))
+        Path::new(JS_DEV_VENDOR).join(format!("{}.js", self.name))
     }
 
     fn extra_path(&self) -> PathBuf {
@@ -186,10 +186,10 @@ impl NpmPackage {
             vec![]
         };
         Ok(Sha256::new()
-            .chain_update(Sha256::digest(&css_data))
-            .chain_update(Sha256::digest(&js_prod_data))
-            .chain_update(Sha256::digest(&js_dev_data))
-            .chain_update(Sha256::digest(&extra_data))
+            .chain_update(Sha256::digest(css_data))
+            .chain_update(Sha256::digest(js_prod_data))
+            .chain_update(Sha256::digest(js_dev_data))
+            .chain_update(Sha256::digest(extra_data))
             .finalize()
             .as_slice()
             .into())
@@ -215,7 +215,7 @@ pub fn ensure() -> Result<(), anyhow::Error> {
             pkg.version,
         );
         let res = client
-            .get(&url)
+            .get(url)
             .send()
             .and_then(|res| res.error_for_status())
             .with_context(|| format!("downloading {}", pkg.name))?;
