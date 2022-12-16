@@ -19,6 +19,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use uuid::Uuid;
 
+use mz_ore::cast::ReinterpretCast;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
 use mz_repr::adt::jsonb::JsonbRef;
@@ -367,7 +368,7 @@ impl Value {
             }
             Value::Bool(b) => b.to_sql(&PgType::BOOL, buf),
             Value::Bytea(b) => b.to_sql(&PgType::BYTEA, buf),
-            Value::Char(c) => i8::from_ne_bytes(c.to_ne_bytes()).to_sql(&PgType::CHAR, buf),
+            Value::Char(c) => i8::reinterpret_cast(*c).to_sql(&PgType::CHAR, buf),
             Value::Date(d) => d.pg_epoch_days().to_sql(&PgType::DATE, buf),
             Value::Float4(f) => f.to_sql(&PgType::FLOAT4, buf),
             Value::Float8(f) => f.to_sql(&PgType::FLOAT8, buf),
@@ -550,8 +551,9 @@ impl Value {
             Type::Int2Vector => Err("input of int2vector types is not implemented".into()),
             Type::Bool => bool::from_sql(ty.inner(), raw).map(Value::Bool),
             Type::Bytea => Vec::<u8>::from_sql(ty.inner(), raw).map(Value::Bytea),
-            Type::Char => i8::from_sql(ty.inner(), raw)
-                .map(|c| Value::Char(u8::from_ne_bytes(c.to_ne_bytes()))),
+            Type::Char => {
+                i8::from_sql(ty.inner(), raw).map(|c| Value::Char(u8::reinterpret_cast(c)))
+            }
             Type::Date => {
                 let days = i32::from_sql(ty.inner(), raw)?;
                 Ok(Value::Date(Date::from_pg_epoch(days)?))

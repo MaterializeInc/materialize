@@ -16,9 +16,6 @@ use std::mem::{size_of, transmute};
 use std::str;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
-use mz_ore::soft_assert;
-use mz_ore::vec::Vector;
-use mz_persist_types::Codec64;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
@@ -27,7 +24,10 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use uuid::Uuid;
 
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, ReinterpretCast};
+use mz_ore::soft_assert;
+use mz_ore::vec::Vector;
+use mz_persist_types::Codec64;
 
 use crate::adt::array::{
     Array, ArrayDimension, ArrayDimensions, InvalidArrayError, MAX_ARRAY_DIMENSIONS,
@@ -577,7 +577,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::Dummy => Datum::Dummy,
         Tag::Numeric => {
             let digits = read_byte(data, offset).into();
-            let exponent = i8::from_ne_bytes(read_byte(data, offset).to_ne_bytes());
+            let exponent = i8::reinterpret_cast(read_byte(data, offset));
             let bits = read_byte(data, offset);
 
             let lsu_u16_len = Numeric::digits_to_lsu_elements_len(digits);

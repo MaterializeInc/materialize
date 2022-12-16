@@ -60,6 +60,7 @@ use uuid::Uuid;
 
 use mz_controller::ControllerConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
+use mz_ore::cast::ReinterpretCast;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
@@ -368,7 +369,7 @@ impl<'a> FromSql<'a> for Slt {
                 let num_fields = read_be_i32(&mut raw)?;
                 let mut tuple = vec![];
                 for _ in 0..num_fields {
-                    let oid = u32::from_ne_bytes(read_be_i32(&mut raw)?.to_ne_bytes());
+                    let oid = u32::reinterpret_cast(read_be_i32(&mut raw)?);
                     let typ = match PgType::from_oid(oid) {
                         Some(typ) => typ,
                         None => return Err("unknown oid".into()),
