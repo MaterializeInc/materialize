@@ -98,7 +98,7 @@ where
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    snapshot: Option<(Vec<LeasedBatchPart<T>>, Antichain<T>)>,
+    snapshot: Option<Vec<LeasedBatchPart<T>>>,
     listen: Listen<K, V, T, D>,
 }
 
@@ -109,14 +109,9 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    fn new(
-        snapshot_parts: Vec<LeasedBatchPart<T>>,
-        snapshot_as_of: Antichain<T>,
-        listen: Listen<K, V, T, D>,
-    ) -> Self {
-        assert_eq!(snapshot_as_of, listen.as_of);
+    fn new(snapshot_parts: Vec<LeasedBatchPart<T>>, listen: Listen<K, V, T, D>) -> Self {
         Subscribe {
-            snapshot: Some((snapshot_parts, snapshot_as_of)),
+            snapshot: Some(snapshot_parts),
             listen,
         }
     }
@@ -129,31 +124,49 @@ where
     /// The returned `Antichain` represents the subscription progress as it will
     /// be _after_ the returned parts are fetched.
     #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
-    pub async fn next(&mut self) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
+    pub async fn next_parts(&mut self) -> Vec<ListenEvent<T, LeasedBatchPart<T>>> {
         // This is odd, but we move our handle into a `Listen`.
         self.listen.handle.maybe_heartbeat_reader().await;
 
         match self.snapshot.take() {
-            Some(x) => x,
-            None => self.listen.next_parts().await,
+            Some(parts) => vec![ListenEvent::Updates(parts)],
+            None => {
+                let (parts, upper) = self.listen.next_parts().await;
+                vec![ListenEvent::Updates(parts), ListenEvent::Progress(upper)]
+            }
         }
     }
 
     /// Equivalent to `next`, but rather than returning a [`LeasedBatchPart`],
     /// fetches and returns the data from within it.
     #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
-    pub async fn fetch_next(
+    pub async fn next(
         &mut self,
-    ) -> (
-        Vec<((Result<K, String>, Result<V, String>), T, D)>,
-        Antichain<T>,
-    ) {
-        let (parts, progress) = self.next().await;
-        let mut v = vec![];
-        for p in parts.into_iter() {
-            v.extend(self.listen.fetch_batch_part(p).await.into_iter());
+    ) -> Vec<ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
+        let events = self.next_parts().await;
+        let new_len = events
+            .iter()
+            .map(|event| match event {
+                ListenEvent::Updates(parts) => parts.len(),
+                ListenEvent::Progress(_) => 1,
+            })
+            .sum();
+        let mut ret = Vec::with_capacity(new_len);
+        for event in events {
+            match event {
+                ListenEvent::Updates(parts) => {
+                    for part in parts {
+                        let fetched_part = self.listen.fetch_batch_part(part).await;
+                        let updates = fetched_part.collect::<Vec<_>>();
+                        if !updates.is_empty() {
+                            ret.push(ListenEvent::Updates(updates));
+                        }
+                    }
+                }
+                ListenEvent::Progress(progress) => ret.push(ListenEvent::Progress(progress)),
+            }
         }
-        (v, progress)
+        ret
     }
 
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
@@ -177,7 +190,7 @@ where
     fn drop(&mut self) {
         // Return all leased parts from the snapshot to ensure they don't panic
         // if dropped.
-        if let Some((parts, _)) = self.snapshot.take() {
+        if let Some(parts) = self.snapshot.take() {
             for part in parts {
                 self.return_leased_part(part)
             }
@@ -190,11 +203,11 @@ where
 /// TODO: Unify this with [timely::dataflow::operators::to_stream::Event] or
 /// [timely::dataflow::operators::capture::event::Event].
 #[derive(Debug, PartialEq)]
-pub enum ListenEvent<K, V, T, D> {
+pub enum ListenEvent<T, D> {
     /// Progress of the shard.
     Progress(Antichain<T>),
     /// Data of the shard.
-    Updates(Vec<((Result<K, String>, Result<V, String>), T, D)>),
+    Updates(Vec<D>),
 }
 
 /// An ongoing subscription of updates to a shard.
@@ -237,7 +250,9 @@ where
     }
 
     /// Convert listener into futures::Stream
-    pub fn into_stream(mut self) -> impl Stream<Item = ListenEvent<K, V, T, D>> {
+    pub fn into_stream(
+        mut self,
+    ) -> impl Stream<Item = ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
         async_stream::stream!({
             loop {
                 for msg in self.next().await {
@@ -342,7 +357,9 @@ where
     /// If you have a use for consolidated listen output, given that snapshots can't be
     /// consolidated, come talk to us!
     #[instrument(level = "debug", name = "listen::next", skip_all, fields(shard = %self.handle.machine.shard_id()))]
-    pub async fn next(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
+    pub async fn next(
+        &mut self,
+    ) -> Vec<ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
         let (parts, progress) = self.next_parts().await;
         let mut ret = Vec::with_capacity(parts.len() + 1);
         for part in parts {
@@ -644,7 +661,7 @@ where
     ) -> Result<Subscribe<K, V, T, D>, Since<T>> {
         let snapshot_parts = self.snapshot(as_of.clone()).await?;
         let listen = self.listen(as_of.clone()).await?;
-        Ok(Subscribe::new(snapshot_parts, as_of, listen))
+        Ok(Subscribe::new(snapshot_parts, listen))
     }
 
     fn lease_batch_parts(
@@ -971,7 +988,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            !subscribe.snapshot.as_ref().unwrap().0.is_empty(),
+            !subscribe.snapshot.as_ref().unwrap().is_empty(),
             "snapshot must have batches for test to be meaningful"
         );
         drop(subscribe);
@@ -1023,15 +1040,18 @@ mod tests {
         width = 4;
         // Collect parts while continuing to write values
         for i in offset..offset + width {
-            let (mut new_parts, _) = subscribe.next().await;
-            parts.append(&mut new_parts);
-            // Here and elsewhere we "cheat" and immediately downgrade the since
-            // to demonstrate the effects of SeqNo leases immediately.
-            subscribe
-                .listen
-                .handle
-                .downgrade_since(&subscribe.listen.since)
-                .await;
+            for event in subscribe.next_parts().await {
+                if let ListenEvent::Updates(mut new_parts) = event {
+                    parts.append(&mut new_parts);
+                    // Here and elsewhere we "cheat" and immediately downgrade the since
+                    // to demonstrate the effects of SeqNo leases immediately.
+                    subscribe
+                        .listen
+                        .handle
+                        .downgrade_since(&subscribe.listen.since)
+                        .await;
+                }
+            }
 
             write
                 .expect_compare_and_append(
@@ -1076,9 +1096,12 @@ mod tests {
             subscribe.return_leased_part(part);
 
             // Simulates an exchange
-            let (parts, _) = subscribe.next().await;
-            for part in parts {
-                subsequent_parts.push(part.into_exchangeable_part());
+            for event in subscribe.next_parts().await {
+                if let ListenEvent::Updates(parts) = event {
+                    for part in parts {
+                        subsequent_parts.push(part.into_exchangeable_part());
+                    }
+                }
             }
 
             subscribe

@@ -39,6 +39,7 @@ use tracing::trace;
 
 use crate::cache::PersistClientCache;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
+use crate::read::ListenEvent;
 use crate::{PersistLocation, ShardId};
 
 /// Creates a new source that reads from a persist shard, distributing the work
@@ -205,7 +206,7 @@ where
         // will only write out new data once it knows that earlier writes went
         // through, including the initial downgrade of the shard upper to the
         // `as_of`.
-        yield (Vec::new(), as_of.clone(), 0);
+        yield ListenEvent::Progress(as_of.clone());
 
         let subscription = read.subscribe(as_of.clone()).await;
 
@@ -223,16 +224,18 @@ where
                     .return_leased_part(subscription.leased_part_from_exchangeable(leased_part));
             }
 
-            let (parts, progress) = subscription.next().await;
-            // If `until.less_equal(progress)`, it means that all subsequent batches will
-            // contain only times greater or equal to `until`, which means they can be dropped
-            // in their entirety. The current batch must be emitted, but we can stop afterwards.
-            if PartialOrder::less_equal(&until, &progress) {
-                done = true;
+            for event in subscription.next_parts().await {
+                if let ListenEvent::Progress(ref progress) = event {
+                    // If `until.less_equal(progress)`, it means that all subsequent batches will
+                    // contain only times greater or equal to `until`, which means they can be
+                    // dropped in their entirety. The current batch must be emitted, but we can
+                    // stop afterwards.
+                    if PartialOrder::less_equal(&until, progress) {
+                        done = true;
+                    }
+                }
+                yield event;
             }
-
-            let parts_size_bytes = parts.iter().map(|x| x.encoded_size_bytes()).sum();
-            yield (parts, progress, parts_size_bytes);
         }
 
         // Rather than simply end, we spawn a task that can continue to return
@@ -293,28 +296,21 @@ where
         loop {
             // While we have budget left for fetching more parts, read from the
             // subscription and pass them on.
+            let mut batch_parts = vec![];
             while inflight_bytes < max_inflight_bytes {
                 match pinned_stream.next().await {
-                    Some(Ok((parts, progress, size_in_bytes))) => {
+                    Some(Ok(ListenEvent::Updates(mut parts))) => {
+                        batch_parts.append(&mut parts);
+                    }
+                    Some(Ok(ListenEvent::Progress(progress))) => {
                         let session_cap = cap_set.delayed(&current_ts);
                         let mut descs_output = descs_output.activate();
                         let mut descs_session = descs_output.session(&session_cap);
 
-                        // Only track in-flight parts if flow control is enabled. Otherwise we
-                        // would leak memory, as tracked parts would never be drained.
-                        if flow_control_bytes.is_some() && size_in_bytes > 0 {
-                            inflight_parts.push((progress.clone(), size_in_bytes));
-                            inflight_bytes += size_in_bytes;
-                            trace!(
-                                "shard {} putting {} bytes inflight. total: {}. batch frontier {:?}",
-                                shard_id,
-                                size_in_bytes,
-                                inflight_bytes,
-                                progress,
-                            );
-                        }
+                        let mut bytes_emitted = 0;
 
-                        for part_desc in parts {
+                        for part_desc in std::mem::take(&mut batch_parts) {
+                            bytes_emitted += part_desc.encoded_size_bytes();
                             // Give the part to a random worker. This isn't
                             // round robin in an attempt to avoid skew issues:
                             // if your parts alternate size large, small, then
@@ -325,6 +321,20 @@ where
                             // okay so far. Continue to revisit as necessary.
                             let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
                             descs_session.give((worker_idx, part_desc.into_exchangeable_part()));
+                        }
+
+                        // Only track in-flight parts if flow control is enabled. Otherwise we
+                        // would leak memory, as tracked parts would never be drained.
+                        if flow_control_bytes.is_some() && bytes_emitted > 0 {
+                            inflight_parts.push((progress.clone(), bytes_emitted));
+                            inflight_bytes += bytes_emitted;
+                            trace!(
+                                "shard {} putting {} bytes inflight. total: {}. batch frontier {:?}",
+                                shard_id,
+                                bytes_emitted,
+                                inflight_bytes,
+                                progress,
+                            );
                         }
 
                         cap_set.downgrade(progress.iter());

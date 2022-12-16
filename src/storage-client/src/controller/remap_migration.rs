@@ -26,7 +26,7 @@ use tracing::info;
 
 use mz_expr::PartitionId;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::read::Subscribe;
+use mz_persist_client::read::{Subscribe, ListenEvent};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::ShardId;
 use mz_persist_types::Codec64;
@@ -72,20 +72,25 @@ where
 
         let mut progress = Antichain::from_elem(IntoTime::minimum());
         while PartialOrder::less_than(&progress, &self.upper) {
-            let (bound_updates, progress_inner) = self.subscription.fetch_next().await;
-
-            for ((update, _), ts, diff) in bound_updates.into_iter() {
-                let binding = match unpack_kafka_remap_binding(update.expect("invalid row")) {
-                    Some(b) => b,
-                    None => {
-                        assert!(updates.is_empty(), "cannot return once encountered updates");
-                        return None;
+            for event in self.subscription.next().await {
+                match event {
+                    ListenEvent::Updates(bound_updates) => {
+                        for ((update, _), ts, diff) in bound_updates.into_iter() {
+                            let binding = match unpack_kafka_remap_binding(update.expect("invalid row")) {
+                                Some(b) => b,
+                                None => {
+                                    assert!(updates.is_empty(), "cannot return once encountered updates");
+                                    return None;
+                                }
+                            };
+                            updates.push((binding, ts, diff))
+                        }
                     }
-                };
-                updates.push((binding, ts, diff))
+                    ListenEvent::Progress(new_progress) => {
+                        progress = new_progress;
+                    }
+                }
             }
-
-            progress = progress_inner;
         }
 
         let mut compat_source_upper = MutableOffsetAntichain::new();
@@ -163,16 +168,23 @@ where
         // Determine whether or not shard is empty and ensure all of its data is
         // properly formatted as `MzOffset` data.
         while !self.upper.less_equal(progress.as_option().unwrap()) {
-            let (bound_updates, progress_inner) = self.subscription.fetch_next().await;
-            for ((update, _), _, _) in bound_updates.into_iter() {
-                populated = true;
-                MzOffset::decode_row(&update.expect("invalid row").0.expect("invalid row"));
+            for event in self.subscription.next().await {
+                match event {
+                    ListenEvent::Updates(bound_updates) => {
+                        for ((update, _), _, _) in bound_updates.into_iter() {
+                            populated = true;
+                            MzOffset::decode_row(&update.expect("invalid row").0.expect("invalid row"));
+                        }
+                    }
+                    ListenEvent::Progress(new_progress) => {
+                        // Progress is closing shard.
+                        if new_progress.elements().is_empty() {
+                            break;
+                        }
+                        progress = new_progress;
+                    }
+                }
             }
-            // Progress is closing shard.
-            if progress_inner.elements().is_empty() {
-                break;
-            }
-            progress = progress_inner;
         }
 
         if populated {

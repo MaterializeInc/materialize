@@ -105,7 +105,7 @@ where
 pub struct PersistHandle<FromTime: SourceTimestamp, IntoTime: Timestamp + Lattice + Codec64> {
     id: GlobalId,
     since_handle: SinceHandle<SourceData, (), IntoTime, Diff, PersistEpoch>,
-    events: LocalBoxStream<'static, ListenEvent<SourceData, (), IntoTime, Diff>>,
+    events: LocalBoxStream<'static, ListenEvent<IntoTime, ((Result<SourceData, String>, Result<(), String>), IntoTime, Diff)>>,
     write_handle: WriteHandle<SourceData, (), IntoTime, Diff>,
     pending_batch: Vec<(FromTime, IntoTime, Diff)>,
 }
