@@ -12,6 +12,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
+use mz_ore::cast::ReinterpretCast;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::{strconv, ColumnType, ScalarType};
@@ -176,7 +177,7 @@ sqlfunc!(
         // Do not use this as a model for behavior in other contexts. OIDs
         // should not in general be thought of as freely convertible from
         // `i32`s.
-        Oid(u32::from_ne_bytes(a.to_ne_bytes()))
+        Oid(u32::reinterpret_cast(a))
     }
 );
 
@@ -189,7 +190,7 @@ sqlfunc!(
         // `PgLegacyChar` is signed.
         // See: https://github.com/postgres/postgres/blob/791b1b71da35d9d4264f72a87e4078b85a2fcfb4/src/backend/utils/adt/char.c#L91-L96
         let a = i8::try_from(a).map_err(|_| EvalError::CharOutOfRange)?;
-        Ok(PgLegacyChar(u8::from_ne_bytes(a.to_ne_bytes())))
+        Ok(PgLegacyChar(u8::reinterpret_cast(a)))
     }
 );
 

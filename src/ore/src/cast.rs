@@ -110,10 +110,14 @@ macro_rules! reinterpret_cast {
     };
 }
 
-reinterpret_cast!(u64, i64);
-reinterpret_cast!(i64, u64);
+reinterpret_cast!(u8, i8);
+reinterpret_cast!(i8, u8);
+reinterpret_cast!(u16, i16);
+reinterpret_cast!(i16, u16);
 reinterpret_cast!(u32, i32);
 reinterpret_cast!(i32, u32);
+reinterpret_cast!(u64, i64);
+reinterpret_cast!(i64, u64);
 
 /// Returns `Some` if `f` can losslessly be converted to an i64.
 #[allow(clippy::as_conversions)]

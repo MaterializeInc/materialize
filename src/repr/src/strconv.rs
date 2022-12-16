@@ -44,6 +44,7 @@ use ryu::Float as RyuFloat;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use mz_ore::cast::ReinterpretCast;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::str::StrExt;
@@ -241,7 +242,7 @@ pub fn parse_oid(s: &str) -> Result<u32, ParseError> {
         .trim()
         .parse()
         .map_err(|e| ParseError::invalid_input_syntax("oid", s).with_details(e))?;
-    Ok(u32::from_ne_bytes(oid.to_ne_bytes()))
+    Ok(u32::reinterpret_cast(oid))
 }
 
 fn parse_float<Fl>(type_name: &'static str, s: &str) -> Result<Fl, ParseError>
