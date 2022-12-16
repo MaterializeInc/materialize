@@ -297,7 +297,8 @@ where
     /// Politely expires this reader, releasing its since capability.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
-        self.machine.expire_critical_reader(&self.reader_id).await;
+        let (_, maintenance) = self.machine.expire_critical_reader(&self.reader_id).await;
+        maintenance.start_performing(&self.machine, &self.gc);
     }
 }
 

@@ -806,7 +806,8 @@ where
     /// happens.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
-        self.machine.expire_leased_reader(&self.reader_id).await;
+        let (_, maintenance) = self.machine.expire_leased_reader(&self.reader_id).await;
+        maintenance.start_performing(&self.machine, &self.gc);
         self.explicitly_expired = true;
     }
 
@@ -909,6 +910,7 @@ where
             }
         };
         let mut machine = self.machine.clone();
+        let gc = self.gc.clone();
         let reader_id = self.reader_id.clone();
         // Spawn a best-effort task to expire this read handle. It's fine if
         // this doesn't run to completion, we'd just have to wait out the lease
@@ -919,7 +921,8 @@ where
         let _ = handle.spawn_named(
             || format!("ReadHandle::expire ({})", self.reader_id),
             async move {
-                machine.expire_leased_reader(&reader_id).await;
+                let (_, maintenance) = machine.expire_leased_reader(&reader_id).await;
+                maintenance.start_performing(&machine, &gc);
             }
             .instrument(expire_span),
         );

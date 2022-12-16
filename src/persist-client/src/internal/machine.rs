@@ -631,34 +631,40 @@ where
         (seqno, existed, maintenance)
     }
 
-    pub async fn expire_leased_reader(&mut self, reader_id: &LeasedReaderId) -> SeqNo {
+    pub async fn expire_leased_reader(
+        &mut self,
+        reader_id: &LeasedReaderId,
+    ) -> (SeqNo, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
-        let (seqno, _existed, _maintenance) = self
+        let (seqno, _existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, _, state| {
                 state.expire_leased_reader(reader_id)
             })
             .await;
-        seqno
+        (seqno, maintenance)
     }
 
-    pub async fn expire_critical_reader(&mut self, reader_id: &CriticalReaderId) -> SeqNo {
+    pub async fn expire_critical_reader(
+        &mut self,
+        reader_id: &CriticalReaderId,
+    ) -> (SeqNo, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
-        let (seqno, _existed, _maintenance) = self
+        let (seqno, _existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, _, state| {
                 state.expire_critical_reader(reader_id)
             })
             .await;
-        seqno
+        (seqno, maintenance)
     }
 
-    pub async fn expire_writer(&mut self, writer_id: &WriterId) -> SeqNo {
+    pub async fn expire_writer(&mut self, writer_id: &WriterId) -> (SeqNo, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
-        let (seqno, _existed, _maintenance) = self
+        let (seqno, _existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_writer, |_, _, state| {
                 state.expire_writer(writer_id)
             })
             .await;
-        seqno
+        (seqno, maintenance)
     }
 
     pub async fn maybe_become_tombstone(&mut self) -> Option<RoutineMaintenance> {
@@ -1754,7 +1760,8 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let reader_id = args.expect("reader_id");
-        let _ = datadriven.machine.expire_critical_reader(&reader_id).await;
+        let (_, maintenance) = datadriven.machine.expire_critical_reader(&reader_id).await;
+        datadriven.routine.push(maintenance);
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
 
@@ -1763,7 +1770,8 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let reader_id = args.expect("reader_id");
-        let _ = datadriven.machine.expire_leased_reader(&reader_id).await;
+        let (_, maintenance) = datadriven.machine.expire_leased_reader(&reader_id).await;
+        datadriven.routine.push(maintenance);
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
 
@@ -1772,7 +1780,8 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let writer_id = args.expect("writer_id");
-        let _ = datadriven.machine.expire_writer(&writer_id).await;
+        let (_, maintenance) = datadriven.machine.expire_writer(&writer_id).await;
+        datadriven.routine.push(maintenance);
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
 

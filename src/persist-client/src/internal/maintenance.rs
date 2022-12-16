@@ -146,8 +146,8 @@ impl RoutineMaintenance {
                         expired,
                         machine.shard_id()
                     );
-                    let _ = machine.expire_leased_reader(&expired).await;
-                    RoutineMaintenance::default()
+                    let (_, maintenance) = machine.expire_leased_reader(&expired).await;
+                    maintenance
                 })
                 .map(Result::unwrap_or_default)
                 .boxed(),
@@ -162,8 +162,8 @@ impl RoutineMaintenance {
                         expired,
                         machine.shard_id()
                     );
-                    machine.expire_writer(&expired).await;
-                    RoutineMaintenance::default()
+                    let (_, maintenance) = machine.expire_writer(&expired).await;
+                    maintenance
                 })
                 .map(Result::unwrap_or_default)
                 .boxed(),
