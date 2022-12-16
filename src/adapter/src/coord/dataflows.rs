@@ -32,6 +32,7 @@ use mz_expr::{
     CollectionPlan, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
     UnmaterializableFunc, RECURSION_LIMIT,
 };
+use mz_ore::cast::ReinterpretCast;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
@@ -677,10 +678,9 @@ fn eval_unmaterializable_func(
         UnmaterializableFunc::MzVersionNum => {
             pack(Datum::Int32(state.config().build_info.version_num()))
         }
-        // TODO(benesch): rewrite this to make clear that presenting a large
-        // unsigned integer as a signed integer is fine.
-        #[allow(clippy::as_conversions)]
-        UnmaterializableFunc::PgBackendPid => pack(Datum::Int32(session.conn_id() as i32)),
+        UnmaterializableFunc::PgBackendPid => {
+            pack(Datum::Int32(i32::reinterpret_cast(session.conn_id())))
+        }
         UnmaterializableFunc::PgPostmasterStartTime => {
             let t: Datum = state.config().start_time.try_into()?;
             pack(t)

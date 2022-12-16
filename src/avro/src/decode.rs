@@ -1301,7 +1301,7 @@ pub fn give_value<D: AvroDecode>(d: D, v: &Value) -> Result<D::Out, AvroError> {
         Value::Bytes(val) => d.bytes::<&[u8]>(V(val)),
         Value::String(val) => d.string::<&[u8]>(V(val)),
         Value::Fixed(_len, val) => d.fixed::<&[u8]>(V(val)),
-        Value::Enum(idx, symbol) => d.enum_variant(symbol, *idx as usize),
+        Value::Enum(idx, symbol) => d.enum_variant(symbol, *idx),
         Value::Union {
             index,
             inner,
