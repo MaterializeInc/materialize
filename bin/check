@@ -51,6 +51,10 @@ disabled_lints=(
     # This lint has false positives where the pattern cannot be avoided without cloning
     # the key used in the map.
     clippy::map_entry
+
+    ## Its unclear if the performance gain here is worth it
+    ## TODO(guswynn): figure out if this should be enabled
+    clippy::box_default
 )
 
 extra_lints=(

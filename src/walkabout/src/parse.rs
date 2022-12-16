@@ -52,8 +52,8 @@ where
         match item {
             Item::Mod(item) if item.content.is_none() => {
                 let path = match stem {
-                    "mod" | "lib" => dir.join(&format!("{}.rs", item.ident)),
-                    _ => dir.join(&format!("{}/{}.rs", stem, item.ident)),
+                    "mod" | "lib" => dir.join(format!("{}.rs", item.ident)),
+                    _ => dir.join(format!("{}/{}.rs", stem, item.ident)),
                 };
                 collect_items(path, out)?;
             }
