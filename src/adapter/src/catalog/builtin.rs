@@ -1474,6 +1474,30 @@ WHERE
     mz_sources.size IS NOT NULL",
 };
 
+pub const MZ_SOURCE_STATUSES: BuiltinView = BuiltinView {
+    name: "mz_source_statuses",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_source_statuses AS
+WITH latest_events AS (
+    SELECT DISTINCT ON(source_id) *
+    FROM mz_internal.mz_source_status_history
+    ORDER BY source_id, occurred_at DESC
+)
+SELECT
+    mz_sources.id,
+    name,
+    mz_sources.type,
+    occurred_at as last_status_change_at,
+    coalesce(status, 'created') as status,
+    error,
+    details
+FROM mz_sources
+LEFT JOIN latest_events ON mz_sources.id = latest_events.source_id
+WHERE
+    -- This is a convenient way to filter out system sources, like the status_history table itself.
+    mz_sources.id NOT LIKE 's%' and mz_sources.type != 'subsource'",
+};
+
 pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_sink_status_history",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1528,6 +1552,30 @@ WHERE
     mz_sinks.size IS NOT NULL",
 };
 
+pub const MZ_SINK_STATUSES: BuiltinView = BuiltinView {
+    name: "mz_sink_statuses",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_sink_statuses AS
+WITH latest_events AS (
+    SELECT DISTINCT ON(sink_id) *
+    FROM mz_internal.mz_sink_status_history
+    ORDER BY sink_id, occurred_at DESC
+)
+SELECT
+    mz_sinks.id,
+    name,
+    mz_sinks.type,
+    occurred_at as last_status_change_at,
+    coalesce(status, 'created') as status,
+    error,
+    details
+FROM mz_sinks
+LEFT JOIN latest_events ON mz_sinks.id = latest_events.sink_id
+WHERE
+    -- This is a convenient way to filter out system sinks, like the status_history table itself.
+    mz_sinks.id NOT LIKE 's%'",
+};
+
 pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_storage_usage_by_shard",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1567,13 +1615,19 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
         .with_column("memory_bytes", ScalarType::UInt64.nullable(true)),
 });
 
-pub static MZ_STORAGE_HOST_METRICS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+pub static MZ_STORAGE_HOST_METRICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_storage_host_metrics",
     // TODO[btv] - make this public once we work out whether and how to fuse it with
     // the corresponding Compute tables.
     schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::StorageHostMetrics),
     desc: RelationDesc::empty()
-        .with_column("object_id", ScalarType::String.nullable(false))
+        // Right now (in production) each storage host is running exactly one
+        // source or sink, so we identify the hosts by the source/sink id. We
+        // have to change this once we allow multiple storage objects to share a
+        // "cluster".
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
         .with_column("memory_bytes", ScalarType::UInt64.nullable(true)),
 });
@@ -2217,8 +2271,8 @@ pub const MZ_CLUSTER_REPLICA_UTILIZATION: BuiltinView = BuiltinView {
 SELECT
     r.id AS replica_id,
     m.process_id,
-    m.cpu_nano_cores / s.cpu_nano_cores * 100 AS cpu_percent,
-    m.memory_bytes / s.memory_bytes * 100 AS memory_percent
+    m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
+    m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent
 FROM
     mz_cluster_replicas AS r
         JOIN mz_internal.mz_cluster_replica_sizes AS s ON r.size = s.size
@@ -2863,9 +2917,12 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
         Builtin::View(&MZ_SINK_STATUS),
+        Builtin::View(&MZ_SINK_STATUSES),
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
         Builtin::View(&MZ_SOURCE_STATUS),
+        Builtin::View(&MZ_SOURCE_STATUSES),
         Builtin::Source(&MZ_STORAGE_SHARDS),
+        Builtin::Source(&MZ_STORAGE_HOST_METRICS),
         Builtin::View(&MZ_STORAGE_USAGE),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),

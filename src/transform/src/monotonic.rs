@@ -116,6 +116,35 @@ impl MonotonicFlag {
                     }
                     result
                 }
+                MirRelationExpr::LetRec { ids, values, body } => {
+                    for id in ids.iter() {
+                        if locals.contains(id) {
+                            panic!("Shadowing of identifier: {:?}", id);
+                        }
+                    }
+                    // Pessimistically assume all bindings are non-monotonic, and
+                    // iteratively attempt to determine that some may be monotonic.
+                    //
+                    // TODO: This is suboptimal as long as there is one method to
+                    // both report and apply monotonicity information. We need to
+                    // be able to repeatedly report monotonicity information, and
+                    // then apply it subsequently. Ideally we would optimistically
+                    // assume all bindings were monotonic, and iteratively remove
+                    // any that are determined to be non-monotonic; only once this
+                    // concludes can we apply any transformations, however.
+                    let mut added = true;
+                    while added {
+                        added = false;
+                        for (id, value) in ids.iter().zip(&mut *values) {
+                            if self.apply(value, mon_ids, locals)? {
+                                added = true;
+                                locals.insert(*id);
+                            }
+                        }
+                    }
+
+                    self.apply(body, mon_ids, locals)?
+                }
                 // The default behavior.
                 // TODO: check that this is the behavior we want.
                 MirRelationExpr::Negate { .. } | MirRelationExpr::Constant { rows: Err(_), .. } => {

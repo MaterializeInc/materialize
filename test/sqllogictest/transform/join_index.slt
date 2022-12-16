@@ -679,3 +679,50 @@ Used Indexes:
   - materialize.public.big_idx_y
 
 EOF
+
+# FilterCharacteristics from behind a Get. %2 should come at the first or second position in every Delta path,
+# and %2 should have an "e", indicating the join ordering code's awareness of the equality filter.
+# The magic that makes this work is as follows:
+# - inline_mfp has to be true on the last RelationCSE call before JoinImplementation (i.e., in logical_cleanup_pass);
+# - There shouldn't be a RelationCSE between the CanonicalizeMfp that is before JoinImplementation and JoinImplementation.
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+WITH t(x) AS (
+  SELECT a
+  FROM big
+  WHERE a = 5
+)
+(
+  SELECT b1.a
+  FROM big as b1, big as b2, t
+)
+UNION ALL
+(SELECT * FROM t);
+----
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      CrossJoin type=delta // { arity: 1 }
+        implementation
+          %0:big » %2:l0[×]Ae » %1:big[×]A
+          %1:big » %2:l0[×]Ae » %0:big[×]A
+          %2:l0 » %0:big[×]A » %1:big[×]A
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            Get materialize.public.big // { arity: 14 }
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Project () // { arity: 0 }
+            Get materialize.public.big // { arity: 14 }
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Project () // { arity: 0 }
+            Get l0 // { arity: 15 }
+      Project (#0) // { arity: 1 }
+        Get l0 // { arity: 15 }
+  With
+    cte l0 =
+      ReadExistingIndex materialize.public.big lookup_value=(5)
+
+Used Indexes:
+  - materialize.public.big_idx_a
+
+EOF

@@ -343,3 +343,7 @@ impl TryFrom<Numeric> for Timestamp {
         })
     }
 }
+
+impl columnation::Columnation for Timestamp {
+    type InnerRegion = columnation::CloneRegion<Timestamp>;
+}

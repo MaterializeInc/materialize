@@ -11,17 +11,17 @@
 > CREATE CLUSTER bar REPLICAS ()
 > CREATE CLUSTER xyzzy REPLICAS (size_4 (SIZE '4'))
 
-> SELECT c.name, r.name, u.process_id, u.cpu_percent, u.memory_percent
+> SELECT c.name, r.name, u.process_id, u.cpu_percent > 0.0, u.memory_percent > 0.0
   FROM mz_clusters c
   JOIN mz_cluster_replicas r ON r.cluster_id = c.id
   JOIN mz_internal.mz_cluster_replica_utilization u ON r.id = u.replica_id
   WHERE c.name IN ('foo', 'bar', 'xyzzy')
   ORDER BY c.name, r.name, process_id
-foo size_1 0 0 0
-foo size_2_2 0 0 0
-foo size_2_2 1 0 0
-foo size_32 0 0 0
-xyzzy size_4 0 0 0
+foo size_1 0 true true
+foo size_2_2 0 true true
+foo size_2_2 1 true true
+foo size_32 0 true true
+xyzzy size_4 0 true true
 
 > DROP CLUSTER foo
 > DROP CLUSTER bar

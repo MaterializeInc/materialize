@@ -1321,6 +1321,14 @@ CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK = db.schem
 CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: AwsPrivatelink, value: Some(Object(Name(UnresolvedObjectName([Ident("db"), Ident("schema"), Ident("item")])))) }, CsrConnectionOption { name: Port, value: Some(Value(Number("8080"))) }] }, if_not_exists: false })
 
 parse-statement
+CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (SSH TUNNEL ssh)
+----
+CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (SSH TUNNEL = ssh)
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedObjectName([Ident("conn1")]), connection: Csr { with_options: [CsrConnectionOption { name: SshTunnel, value: Some(Object(Name(UnresolvedObjectName([Ident("ssh")])))) }] }, if_not_exists: false })
+
+
+parse-statement
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK db.schema.item, PORT 8080, URL 'http://localhost:8081')
 ----
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK = db.schema.item, PORT = 8080, URL = 'http://localhost:8081')

@@ -911,9 +911,14 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
         debug_info: LirDebugInfo<'_>,
     ) -> Result<(Self, AvailableCollections), ()> {
+        // TODO: This block should be removed once we can lower `MirRelationExpr::LetRec`.
+        let mut non_recursive = expr.clone();
+        non_recursive.make_nonrecursive();
+        assert!(!non_recursive.is_recursive());
+
         // We don't want to trace recursive calls, which is why the public `from_mir`
         // is annotated and delecates the work to a private (recursive) from_mir_inner.
-        Plan::from_mir_inner(expr, arrangements, debug_info)
+        Plan::from_mir_inner(&non_recursive, arrangements, debug_info)
     }
 
     fn from_mir_inner(
@@ -957,6 +962,11 @@ impl<T: timely::progress::Timestamp> Plan<T> {
             }
             MirRelationExpr::Project { .. } => {
                 panic!("This operator should have been extracted");
+            }
+            MirRelationExpr::LetRec { .. } => {
+                panic!(
+                    "We must extract potentially recursive objects into dataflow objects to build"
+                );
             }
             // These operators may not have been extracted, and need to result in a `Plan`.
             MirRelationExpr::Constant { rows, typ: _ } => {

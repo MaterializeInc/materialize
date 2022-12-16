@@ -33,10 +33,12 @@ use tokio_postgres::error::SqlState;
 use tracing::info;
 
 use mz_adapter::catalog::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
+use mz_adapter::TimestampExplanation;
 use mz_ore::assert_contains;
 use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
+use mz_repr::Timestamp;
 
 use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 
@@ -1078,7 +1080,7 @@ fn test_explain_timestamp_table() {
     let mut client = server.connect(postgres::NoTls).unwrap();
     let timestamp_re = Regex::new(r"\s*(\d+) \(\d+-\d\d-\d\d \d\d:\d\d:\d\d.\d\d\d\)").unwrap();
 
-    client.batch_execute("CREATE TABLE t1 (i1 INT)").unwrap();
+    client.batch_execute("CREATE TABLE t1 (i1 int)").unwrap();
 
     let expect = "                query timestamp:<TIMESTAMP>
           oracle read timestamp:<TIMESTAMP>
@@ -1098,6 +1100,22 @@ source materialize.public.t1 (u1, storage):
     let explain: String = row.get(0);
     let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
     assert_eq!(explain, expect, "{explain}\n\n{expect}");
+}
+
+// Test `EXPLAIN TIMESTAMP AS JSON`
+#[test]
+fn test_explain_timestamp_json() {
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t1 (i1 int)").unwrap();
+
+    let row = client
+        .query_one("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t1;", &[])
+        .unwrap();
+    let explain: String = row.get(0);
+    // Just check that we can round-trip to the original type
+    let _explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
 }
 
 // Test that a query that causes a compute instance to panic will resolve
@@ -1937,4 +1955,67 @@ fn test_cancel_on_dropped_cluster() {
     drop_client.batch_execute("DROP CLUSTER default").unwrap();
     read_client_cancel.cancel_query(postgres::NoTls).unwrap();
     handle.join().unwrap();
+}
+
+#[test]
+fn test_emit_timestamp_notice() {
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    client.batch_execute("CREATE TABLE t (i INT)").unwrap();
+    client
+        .batch_execute("SET emit_timestamp_notice = true")
+        .unwrap();
+    client.batch_execute("SELECT * FROM t").unwrap();
+
+    let timestamp_re = Regex::new("query timestamp: (.*)").unwrap();
+
+    // Wait until there's a query timestamp notice.
+    let first_timestamp = Retry::default()
+        .retry(|_| loop {
+            match rx.try_next() {
+                Ok(Some(msg)) => {
+                    if let Some(caps) = timestamp_re.captures(msg.message()) {
+                        let ts: u64 = caps.get(1).unwrap().as_str().parse().unwrap();
+                        return Ok(mz_repr::Timestamp::from(ts));
+                    }
+                }
+                Ok(None) => panic!("unexpected channel close"),
+                Err(e) => return Err(e),
+            }
+        })
+        .unwrap();
+
+    // Wait until the query timestamp notice goes up.
+    Retry::default()
+        .retry(|_| {
+            client.batch_execute("SELECT * FROM t").unwrap();
+            loop {
+                match rx.try_next() {
+                    Ok(Some(msg)) => {
+                        if let Some(caps) = timestamp_re.captures(msg.message()) {
+                            let ts: u64 = caps.get(1).unwrap().as_str().parse().unwrap();
+                            let ts = mz_repr::Timestamp::from(ts);
+                            if ts > first_timestamp {
+                                return Ok(());
+                            }
+                            return Err("not yet advanced");
+                        }
+                    }
+                    Ok(None) => panic!("unexpected channel close"),
+                    Err(_) => return Err("no messages available"),
+                }
+            }
+        })
+        .unwrap();
 }

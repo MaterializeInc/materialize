@@ -42,6 +42,14 @@ impl Attribute for SubtreeSize {
                 let value = self.results[n - 1 - body];
                 self.results.push(body + value + 1);
             }
+            LetRec { values, .. } => {
+                let body = self.results[n - 1];
+                let mut total = body;
+                for _ in 0..values.len() {
+                    total += self.results[n - 1 - total];
+                }
+                self.results.push(total + 1);
+            }
             Project { input: _, .. } => {
                 let input = self.results[n - 1];
                 self.results.push(input + 1);

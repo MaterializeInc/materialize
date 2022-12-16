@@ -52,6 +52,7 @@ use tracing::{info, trace, warn};
 
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
+use mz_ore::halt;
 use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
@@ -72,8 +73,8 @@ use crate::source::antichain::{MutableOffsetAntichain, OffsetAntichain};
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
 use crate::source::types::{
-    MaybeLength, SourceConnectionBuilder, SourceMessage, SourceMessageType, SourceMetrics,
-    SourceOutput, SourceReader, SourceReaderError, SourceReaderMetrics,
+    HealthStatusUpdate, MaybeLength, SourceConnectionBuilder, SourceMessage, SourceMessageType,
+    SourceMetrics, SourceOutput, SourceReader, SourceReaderError, SourceReaderMetrics,
 };
 
 // Interval after which the source operator will yield control.
@@ -126,7 +127,7 @@ struct SourceMessageBatch<Key, Value, Diff> {
         )>,
     >,
     /// The latest status update for the batch, if any.
-    status_update: Option<HealthStatus>,
+    status_update: Option<HealthStatusUpdate>,
     /// The current upper of the `SourceReader`, at the time this batch was
     /// emitted. Source uppers emitted via batches must never regress.
     source_upper: OffsetAntichain,
@@ -253,7 +254,7 @@ struct SourceReaderOperatorOutput<K, V, D> {
         )>,
     >,
     /// The latest status update for this worker, if any.
-    status_update: Option<HealthStatus>,
+    status_update: Option<HealthStatusUpdate>,
     /// A list of partitions that this source reader instance
     /// is sure it doesn't care about. Required so the
     /// remap operator can eventually determine whether
@@ -476,7 +477,7 @@ struct SourceConnectionStreams<G: Scope<Timestamp = Timestamp>, C: SourceConnect
         >,
     >,
     batch_upper_summaries: Stream<G, BatchUpperSummary>,
-    health_stream: Stream<G, (WorkerId, HealthStatus)>,
+    health_stream: Stream<G, (WorkerId, HealthStatusUpdate)>,
 }
 
 /// Reads from a [`SourceReader`] and returns a stream of "un-timestamped"
@@ -798,14 +799,20 @@ where
                             // cannot recover by the time an error reaches this far down the pipe.
                             // However, we don't actually shut down the source on error yet, so
                             // treating this as a possibly-temporary stall for now.
-                            Some(HealthStatus::StalledWithError(error.inner.to_string()))
+                            Some(HealthStatusUpdate {
+                                update: HealthStatus::StalledWithError(error.inner.to_string()),
+                                should_halt: false,
+                            })
                         }
                         (_, Some(status), _) => {
                             // This is the transient error case, and is correctly represented as
                             // a (temporary) stall.
                             Some(status.clone())
                         }
-                        (None, None, true) => Some(HealthStatus::Running),
+                        (None, None, true) => Some(HealthStatusUpdate {
+                            update: HealthStatus::Running,
+                            should_halt: false,
+                        }),
                         (None, None, false) => None,
                     };
 
@@ -844,7 +851,7 @@ where
 fn health_operator<G>(
     scope: &G,
     config: RawSourceCreationConfig,
-    health_stream: Stream<G, (usize, HealthStatus)>,
+    health_stream: Stream<G, (usize, HealthStatusUpdate)>,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -905,11 +912,17 @@ where
         while let Some(event) = input.next().await {
             if let Event::Data(_cap, rows) = event {
                 rows.swap(&mut buffer);
+                let mut halt_with = None;
                 for (worker_id, health_event) in buffer.drain(..) {
                     if !is_active_worker {
                         warn!("Health messages for source {source_id} passed to an unexpected worker id: {healthcheck_worker_id}")
                     }
-                    healths[worker_id] = health_event;
+
+                    let HealthStatusUpdate { update, should_halt } = health_event;
+                    if should_halt {
+                        halt_with = Some(update.clone());
+                    }
+                    healths[worker_id] = update;
                 }
 
                 let new_status = overall_status(&healths);
@@ -920,6 +933,9 @@ where
                     }
 
                     last_reported_status = new_status.clone();
+                }
+                if let Some(halt_with) = halt_with {
+                    halt!("halting with status {halt_with:?}");
                 }
             }
         }

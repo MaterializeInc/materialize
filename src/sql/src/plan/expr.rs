@@ -104,6 +104,13 @@ pub enum HirRelationExpr {
         id: mz_expr::Id,
         typ: RelationType,
     },
+    /// Mutually recursive CTE
+    LetRec {
+        /// List of bindings all of which are in scope of each other.
+        bindings: Vec<(String, mz_expr::LocalId, HirRelationExpr, RelationType)>,
+        /// Result of the AST node.
+        body: Box<HirRelationExpr>,
+    },
     /// CTE
     Let {
         name: String,
@@ -1024,6 +1031,7 @@ impl HirRelationExpr {
             HirRelationExpr::Constant { typ, .. } => typ.clone(),
             HirRelationExpr::Get { typ, .. } => typ.clone(),
             HirRelationExpr::Let { body, .. } => body.typ(outers, params),
+            HirRelationExpr::LetRec { body, .. } => body.typ(outers, params),
             HirRelationExpr::Project { input, outputs } => {
                 let input_typ = input.typ(outers, params);
                 RelationType::new(
@@ -1107,6 +1115,7 @@ impl HirRelationExpr {
             HirRelationExpr::Constant { typ, .. } => typ.column_types.len(),
             HirRelationExpr::Get { typ, .. } => typ.column_types.len(),
             HirRelationExpr::Let { body, .. } => body.arity(),
+            HirRelationExpr::LetRec { body, .. } => body.arity(),
             HirRelationExpr::Project { outputs, .. } => outputs.len(),
             HirRelationExpr::Map { input, scalars } => input.arity() + scalars.len(),
             HirRelationExpr::CallTable { func, .. } => func.output_arity(),
@@ -1332,6 +1341,12 @@ impl HirRelationExpr {
                 f(value, depth)?;
                 f(body, depth)?;
             }
+            HirRelationExpr::LetRec { bindings, body } => {
+                for (_, _, value, _) in bindings.iter() {
+                    f(value, depth)?;
+                }
+                f(body, depth)?;
+            }
             HirRelationExpr::Project { input, .. } => {
                 f(input, depth)?;
             }
@@ -1407,6 +1422,12 @@ impl HirRelationExpr {
             | HirRelationExpr::CallTable { .. } => (),
             HirRelationExpr::Let { body, value, .. } => {
                 f(value, depth)?;
+                f(body, depth)?;
+            }
+            HirRelationExpr::LetRec { bindings, body } => {
+                for (_, _, value, _) in bindings.iter_mut() {
+                    f(value, depth)?;
+                }
                 f(body, depth)?;
             }
             HirRelationExpr::Project { input, .. } => {
@@ -1487,6 +1508,7 @@ impl HirRelationExpr {
                 }
                 HirRelationExpr::Union { .. }
                 | HirRelationExpr::Let { .. }
+                | HirRelationExpr::LetRec { .. }
                 | HirRelationExpr::Project { .. }
                 | HirRelationExpr::Distinct { .. }
                 | HirRelationExpr::TopK { .. }
@@ -1535,6 +1557,7 @@ impl HirRelationExpr {
                 }
                 HirRelationExpr::Union { .. }
                 | HirRelationExpr::Let { .. }
+                | HirRelationExpr::LetRec { .. }
                 | HirRelationExpr::Project { .. }
                 | HirRelationExpr::Distinct { .. }
                 | HirRelationExpr::TopK { .. }
@@ -1660,6 +1683,12 @@ impl VisitChildren<Self> for HirRelationExpr {
                 f(value);
                 f(body);
             }
+            LetRec { bindings, body } => {
+                for (_, _, value, _) in bindings.iter() {
+                    f(value);
+                }
+                f(body);
+            }
             Project { input, outputs: _ } => f(input),
             Map { input, scalars: _ } => {
                 f(input);
@@ -1736,6 +1765,12 @@ impl VisitChildren<Self> for HirRelationExpr {
                 f(value);
                 f(body);
             }
+            LetRec { bindings, body } => {
+                for (_, _, value, _) in bindings.iter_mut() {
+                    f(value);
+                }
+                f(body);
+            }
             Project { input, outputs: _ } => f(input),
             Map { input, scalars: _ } => {
                 f(input);
@@ -1810,6 +1845,12 @@ impl VisitChildren<Self> for HirRelationExpr {
                 body,
             } => {
                 f(value)?;
+                f(body)?;
+            }
+            LetRec { bindings, body } => {
+                for (_, _, value, _) in bindings.iter() {
+                    f(value)?;
+                }
                 f(body)?;
             }
             Project { input, outputs: _ } => f(input)?,
@@ -1889,6 +1930,12 @@ impl VisitChildren<Self> for HirRelationExpr {
                 f(value)?;
                 f(body)?;
             }
+            LetRec { bindings, body } => {
+                for (_, _, value, _) in bindings.iter_mut() {
+                    f(value)?;
+                }
+                f(body)?;
+            }
             Project { input, outputs: _ } => f(input)?,
             Map { input, scalars: _ } => {
                 f(input)?;
@@ -1955,6 +2002,10 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 value: _,
                 body: _,
             }
+            | LetRec {
+                bindings: _,
+                body: _,
+            }
             | Project {
                 input: _,
                 outputs: _,
@@ -2019,6 +2070,10 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 name: _,
                 id: _,
                 value: _,
+                body: _,
+            }
+            | LetRec {
+                bindings: _,
                 body: _,
             }
             | Project {
@@ -2088,6 +2143,10 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 value: _,
                 body: _,
             }
+            | LetRec {
+                bindings: _,
+                body: _,
+            }
             | Project {
                 input: _,
                 outputs: _,
@@ -2154,6 +2213,10 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 name: _,
                 id: _,
                 value: _,
+                body: _,
+            }
+            | LetRec {
+                bindings: _,
                 body: _,
             }
             | Project {

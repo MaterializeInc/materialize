@@ -519,6 +519,7 @@ mz_raw_compute_operator_durations_internal      log   <null>
 mz_scheduling_parks_internal                    log   <null>
 mz_sink_status_history                          source <null>
 mz_source_status_history                        source <null>
+mz_storage_host_metrics                         source <null>
 mz_storage_shards                               source <null>
 mz_worker_compute_frontiers                     log   <null>
 mz_worker_compute_import_frontiers              log   <null>
@@ -555,7 +556,9 @@ mz_records_per_dataflow_operator
 mz_scheduling_elapsed
 mz_scheduling_parks
 mz_sink_status
+mz_sink_statuses
 mz_source_status
+mz_source_statuses
 mz_worker_compute_delays
 mz_show_cluster_replicas
 mz_show_indexes

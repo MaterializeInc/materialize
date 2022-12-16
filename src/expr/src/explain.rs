@@ -134,6 +134,9 @@ impl<'a> ViewExplanation<'a> {
 
                     walk(body, explanation);
                 }
+                LetRec { .. } => {
+                    unimplemented!("Unknown how to implement");
+                }
             }
 
             // Then record the node.
@@ -236,6 +239,9 @@ impl<'a> ViewExplanation<'a> {
             },
             // Lets are annotated on the chain ID that they correspond to.
             Let { .. } => (),
+            LetRec { .. } => {
+                unimplemented!("Unknown how to implement");
+            }
             Project { outputs, .. } => {
                 writeln!(f, "| Project {}", bracketed("(", ")", Indices(outputs)))?
             }
