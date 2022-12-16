@@ -460,17 +460,13 @@ pub trait DisplayableInTimeline {
 }
 
 impl DisplayableInTimeline for mz_repr::Timestamp {
-    // TODO(benesch): remove this once this function no longer makes use of
-    // potentially dangerous `as` conversions.
-    #[allow(clippy::as_conversions)]
     fn fmt(&self, timeline: Option<&Timeline>, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(Timeline::EpochMilliseconds) = timeline {
             let ts_ms: u64 = self.into();
-            let ts = ts_ms / 1000;
-            let nanos = ((ts_ms % 1000) as u32) * 1000000;
-            let ndt = NaiveDateTime::from_timestamp_opt(ts as i64, nanos);
-            if let Some(ndt) = ndt {
-                return write!(f, "{:13} ({})", self, ndt.format("%Y-%m-%d %H:%M:%S%.3f"));
+            if let Ok(ts_ms) = i64::try_from(ts_ms) {
+                if let Some(ndt) = NaiveDateTime::from_timestamp_millis(ts_ms) {
+                    return write!(f, "{:13} ({})", self, ndt.format("%Y-%m-%d %H:%M:%S%.3f"));
+                }
             }
         }
         write!(f, "{:13}", self)

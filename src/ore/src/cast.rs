@@ -82,6 +82,39 @@ cast_from!(isize, i64);
 #[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
 cast_from!(isize, i128);
 
+/// A trait for reinterpreting casts.
+///
+/// `ReinterpretCast` is like `as`, but it allows the caller to be specific about their
+/// intentions to reinterpreting the bytes from one type to another. For example, if we
+/// have some `u32` that we want to use as the return value of a postgres function, and
+/// we don't mind converting large unsigned numbers to negative signed numbers, then
+/// we would use `ReinterpretCast<i32>`.
+///
+/// `ReinterpretCast` should be preferred to the `as` operator, since it explicitly
+/// conveys the intention to reinterpret the type.
+pub trait ReinterpretCast<T> {
+    /// Performs the cast.
+    fn reinterpret_cast(from: T) -> Self;
+}
+
+macro_rules! reinterpret_cast {
+    ($from:ty, $to:ty) => {
+        paste! {
+            impl ReinterpretCast<$from> for $to {
+                #[allow(clippy::as_conversions)]
+                fn reinterpret_cast(from: $from) -> $to {
+                    from as $to
+                }
+            }
+        }
+    };
+}
+
+reinterpret_cast!(u64, i64);
+reinterpret_cast!(i64, u64);
+reinterpret_cast!(u32, i32);
+reinterpret_cast!(i32, u32);
+
 /// Returns `Some` if `f` can losslessly be converted to an i64.
 #[allow(clippy::as_conversions)]
 pub fn f64_to_i64(f: f64) -> Option<i64> {

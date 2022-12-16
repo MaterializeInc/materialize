@@ -401,10 +401,9 @@ impl Value {
             (&Value::String(_), SchemaPiece::String) => true,
             (&Value::Fixed(n, _), SchemaPiece::Fixed { size }) => n == *size,
             (&Value::String(ref s), SchemaPiece::Enum { symbols, .. }) => symbols.contains(s),
-            (&Value::Enum(i, ref s), SchemaPiece::Enum { symbols, .. }) => symbols
-                .get(i as usize)
-                .map(|symbol| symbol == s)
-                .unwrap_or(false),
+            (&Value::Enum(i, ref s), SchemaPiece::Enum { symbols, .. }) => {
+                symbols.get(i).map(|symbol| symbol == s).unwrap_or(false)
+            }
             (
                 &Value::Union {
                     index,

@@ -149,7 +149,7 @@ pub enum Datum<'a> {
     // calling `<` on Datums (see `fn lt` in scalar/func.rs).
     /// An unknown value.
     Null,
-    // A range of values, e.g. [-1, 1).
+    /// A range of values, e.g. [-1, 1).
     Range(Range<'a>),
 }
 

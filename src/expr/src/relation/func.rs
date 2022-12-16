@@ -542,6 +542,7 @@ fn count<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
+    // TODO(jkosh44) This should error when the count can't fit inside of an `i64` instead of returning a negative result.
     let x: i64 = datums.into_iter().filter(|d| !d.is_null()).count() as i64;
     Datum::from(x)
 }
@@ -839,15 +840,12 @@ where
         };
         let vec_offset = idx - offset;
 
-        // TODO(benesch): remove potentially dangerous usage of `as`.
-        #[allow(clippy::as_conversions)]
-        let lagged_value = if vec_offset >= 0 {
-            datums
-                .get(vec_offset as usize)
+        let lagged_value = match u64::try_from(vec_offset) {
+            Ok(vec_offset) => datums
+                .get(usize::cast_from(vec_offset))
                 .map(|d| d.0)
-                .unwrap_or(*default_value)
-        } else {
-            *default_value
+                .unwrap_or(*default_value),
+            Err(_) => *default_value,
         };
 
         result.push((lagged_value, *original_row));

@@ -2729,14 +2729,14 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             // For the `Trace` stage, return the entire trace as (time, path, plan) triples.
             Trace => {
-                // TODO(benesch): remove this once this module no longer makes
-                // use of potentially dangerous `as` conversions.
-                #[allow(clippy::as_conversions)]
                 let rows = trace
                     .into_iter()
                     .map(|entry| {
                         Row::pack_slice(&[
-                            Datum::from(entry.duration.as_nanos() as u64),
+                            Datum::from(
+                                // The trace would have to take over 584 years to overflow a u64.
+                                u64::try_from(entry.duration.as_nanos()).unwrap_or(u64::MAX),
+                            ),
                             Datum::from(entry.path.as_str()),
                             Datum::from(entry.plan.as_str()),
                         ])
