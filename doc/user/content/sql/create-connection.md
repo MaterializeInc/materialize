@@ -215,7 +215,10 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-### Tunnels (AWS PrivateLink, SSH tunnel) {#kafka-tunnels}
+### Tunnels {#kafka-tunnels}
+
+You can tunnel a connection to a Kafka broker through an AWS PrivateLink service
+or an SSH bastion host.
 
 #### Syntax
 
@@ -231,7 +234,7 @@ The full syntax for the `BROKERS` option is:
 
 Field                                   | Value            | Required | Description
 ----------------------------------------|------------------|:--------:|-------------------------------
-`connection`                            | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic for this broker should be routed.
+`aws_connection`                        | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic for this broker should be routed.
 `PORT`                                  | `integer`        |          | The port of the AWS PrivateLink service to connect to. Defaults to the broker's port.
 `ssh_connection`                        | object name      | ✓        | The name of an [SSH tunnel connection](#ssh-tunnel) through which network traffic for this broker should be routed.
 
