@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use axum::extract::{FromRequest, RequestParts};
+use axum::extract::FromRequestParts;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::{routing, Extension, Router};
@@ -247,19 +247,22 @@ struct AuthedUser {
 pub struct AuthedClient(pub SessionClient);
 
 #[async_trait]
-impl<B> FromRequest<B> for AuthedClient
+impl<S> FromRequestParts<S> for AuthedClient
 where
-    B: Send,
+    S: Send + Sync,
 {
     type Rejection = (StatusCode, String);
 
-    async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        req: &mut http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
         let AuthedUser {
             user,
             create_if_not_exists,
-        } = req.extensions().get::<AuthedUser>().unwrap();
+        } = req.extensions.get::<AuthedUser>().unwrap();
         let adapter_client = req
-            .extensions()
+            .extensions
             .get::<Delayed<mz_adapter::Client>>()
             .unwrap()
             .clone();

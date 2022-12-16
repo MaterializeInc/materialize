@@ -20,7 +20,7 @@ aws-sig-auth = { version = "0.51.0", default-features = false, features = ["aws-
 aws-sigv4 = { version = "0.51.0", features = ["aws-smithy-eventstream", "bytes", "form_urlencoded", "http", "percent-encoding", "sign-eventstream", "sign-http"] }
 aws-smithy-http = { version = "0.51.0", default-features = false, features = ["aws-smithy-eventstream", "event-stream", "rt-tokio", "tokio", "tokio-util"] }
 aws-types = { version = "0.51.0", default-features = false, features = ["hardcoded-credentials"] }
-axum = { version = "0.5.17", features = ["form", "headers", "http1", "json", "matched-path", "original-uri", "query", "serde_json", "serde_urlencoded", "tower-log"] }
+axum = { git = "https://github.com/tokio-rs/axum.git", features = ["form", "headers", "http1", "json", "matched-path", "original-uri", "query", "tokio", "tower-log", "ws"] }
 base64 = { version = "0.13.1", features = ["alloc", "std"] }
 bstr = { version = "0.2.14", features = ["lazy_static", "regex-automata", "serde", "serde1", "serde1-nostd", "std", "unicode"] }
 byteorder = { version = "1.4.3", features = ["std"] }
@@ -51,9 +51,9 @@ hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git", features 
 hyper = { version = "0.14.23", features = ["client", "full", "h2", "http1", "http2", "runtime", "server", "socket2", "stream", "tcp"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 k8s-openapi = { version = "0.16.0", features = ["api", "http", "percent-encoding", "url", "v1_23"] }
-kube = { version = "0.76.0", features = ["client", "config", "derive", "kube-client", "kube-derive", "kube-runtime", "openssl-tls", "runtime", "ws"] }
-kube-client = { version = "0.76.0", default-features = false, features = ["__non_core", "base64", "bytes", "chrono", "client", "config", "dirs", "either", "futures", "http-body", "hyper", "hyper-openssl", "hyper-timeout", "jsonpatch", "jsonpath_lib", "openssl", "openssl-tls", "pem", "pin-project", "rand", "serde_yaml", "tokio", "tokio-tungstenite", "tokio-util", "tower", "tower-http", "tracing", "ws"] }
-kube-core = { version = "0.76.0", default-features = false, features = ["json-patch", "jsonpatch", "schema", "schemars", "ws"] }
+kube = { version = "0.77.0", features = ["client", "config", "derive", "kube-client", "kube-derive", "kube-runtime", "openssl-tls", "runtime", "ws"] }
+kube-client = { version = "0.77.0", default-features = false, features = ["__non_core", "base64", "bytes", "chrono", "client", "config", "dirs", "either", "futures", "http-body", "hyper", "hyper-openssl", "hyper-timeout", "jsonpatch", "jsonpath_lib", "openssl", "openssl-tls", "pem", "pin-project", "rand", "serde_yaml", "tokio", "tokio-tungstenite", "tokio-util", "tower", "tower-http", "tracing", "ws"] }
+kube-core = { version = "0.77.0", default-features = false, features = ["json-patch", "jsonpatch", "schema", "schemars", "ws"] }
 libc = { version = "0.2.137", features = ["extra_traits", "std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.8.1", features = ["hashbrown"] }
@@ -87,12 +87,12 @@ ring = { version = "0.16.20", features = ["alloc", "dev_urandom_fallback", "once
 schemars = { version = "0.8.11", features = ["derive", "schemars_derive", "uuid1"] }
 scopeguard = { version = "1.1.0", features = ["use_std"] }
 semver = { version = "1.0.14", features = ["serde", "std"] }
-serde = { version = "1.0.147", features = ["alloc", "derive", "serde_derive", "std"] }
+serde = { version = "1.0.151", features = ["alloc", "derive", "serde_derive", "std"] }
 serde_json = { version = "1.0.89", features = ["alloc", "arbitrary_precision", "float_roundtrip", "indexmap", "preserve_order", "raw_value", "std"] }
 sha2 = { version = "0.10.6", features = ["std"] }
 smallvec = { version = "1.10.0", default-features = false, features = ["serde", "union", "write"] }
 socket2 = { version = "0.4.7", default-features = false, features = ["all"] }
-syn = { version = "1.0.103", features = ["clone-impls", "derive", "extra-traits", "full", "parsing", "printing", "proc-macro", "quote", "visit", "visit-mut"] }
+syn = { version = "1.0.105", features = ["clone-impls", "derive", "extra-traits", "full", "parsing", "printing", "proc-macro", "quote", "visit", "visit-mut"] }
 textwrap = { version = "0.15.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["alloc", "formatting", "macros", "parsing", "quickcheck", "serde", "serde-well-known", "std"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode", "getopts", "getopts-dep"] }
@@ -118,7 +118,7 @@ aws-sig-auth = { version = "0.51.0", default-features = false, features = ["aws-
 aws-sigv4 = { version = "0.51.0", features = ["aws-smithy-eventstream", "bytes", "form_urlencoded", "http", "percent-encoding", "sign-eventstream", "sign-http"] }
 aws-smithy-http = { version = "0.51.0", default-features = false, features = ["aws-smithy-eventstream", "event-stream", "rt-tokio", "tokio", "tokio-util"] }
 aws-types = { version = "0.51.0", default-features = false, features = ["hardcoded-credentials"] }
-axum = { version = "0.5.17", features = ["form", "headers", "http1", "json", "matched-path", "original-uri", "query", "serde_json", "serde_urlencoded", "tower-log"] }
+axum = { git = "https://github.com/tokio-rs/axum.git", features = ["form", "headers", "http1", "json", "matched-path", "original-uri", "query", "tokio", "tower-log", "ws"] }
 base64 = { version = "0.13.1", features = ["alloc", "std"] }
 bstr = { version = "0.2.14", features = ["lazy_static", "regex-automata", "serde", "serde1", "serde1-nostd", "std", "unicode"] }
 byteorder = { version = "1.4.3", features = ["std"] }
@@ -150,9 +150,9 @@ hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git", features 
 hyper = { version = "0.14.23", features = ["client", "full", "h2", "http1", "http2", "runtime", "server", "socket2", "stream", "tcp"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 k8s-openapi = { version = "0.16.0", features = ["api", "http", "percent-encoding", "url", "v1_23"] }
-kube = { version = "0.76.0", features = ["client", "config", "derive", "kube-client", "kube-derive", "kube-runtime", "openssl-tls", "runtime", "ws"] }
-kube-client = { version = "0.76.0", default-features = false, features = ["__non_core", "base64", "bytes", "chrono", "client", "config", "dirs", "either", "futures", "http-body", "hyper", "hyper-openssl", "hyper-timeout", "jsonpatch", "jsonpath_lib", "openssl", "openssl-tls", "pem", "pin-project", "rand", "serde_yaml", "tokio", "tokio-tungstenite", "tokio-util", "tower", "tower-http", "tracing", "ws"] }
-kube-core = { version = "0.76.0", default-features = false, features = ["json-patch", "jsonpatch", "schema", "schemars", "ws"] }
+kube = { version = "0.77.0", features = ["client", "config", "derive", "kube-client", "kube-derive", "kube-runtime", "openssl-tls", "runtime", "ws"] }
+kube-client = { version = "0.77.0", default-features = false, features = ["__non_core", "base64", "bytes", "chrono", "client", "config", "dirs", "either", "futures", "http-body", "hyper", "hyper-openssl", "hyper-timeout", "jsonpatch", "jsonpath_lib", "openssl", "openssl-tls", "pem", "pin-project", "rand", "serde_yaml", "tokio", "tokio-tungstenite", "tokio-util", "tower", "tower-http", "tracing", "ws"] }
+kube-core = { version = "0.77.0", default-features = false, features = ["json-patch", "jsonpatch", "schema", "schemars", "ws"] }
 libc = { version = "0.2.137", features = ["extra_traits", "std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.8.1", features = ["hashbrown"] }
@@ -186,12 +186,12 @@ ring = { version = "0.16.20", features = ["alloc", "dev_urandom_fallback", "once
 schemars = { version = "0.8.11", features = ["derive", "schemars_derive", "uuid1"] }
 scopeguard = { version = "1.1.0", features = ["use_std"] }
 semver = { version = "1.0.14", features = ["serde", "std"] }
-serde = { version = "1.0.147", features = ["alloc", "derive", "serde_derive", "std"] }
+serde = { version = "1.0.151", features = ["alloc", "derive", "serde_derive", "std"] }
 serde_json = { version = "1.0.89", features = ["alloc", "arbitrary_precision", "float_roundtrip", "indexmap", "preserve_order", "raw_value", "std"] }
 sha2 = { version = "0.10.6", features = ["std"] }
 smallvec = { version = "1.10.0", default-features = false, features = ["serde", "union", "write"] }
 socket2 = { version = "0.4.7", default-features = false, features = ["all"] }
-syn = { version = "1.0.103", features = ["clone-impls", "derive", "extra-traits", "full", "parsing", "printing", "proc-macro", "quote", "visit", "visit-mut"] }
+syn = { version = "1.0.105", features = ["clone-impls", "derive", "extra-traits", "full", "parsing", "printing", "proc-macro", "quote", "visit", "visit-mut"] }
 textwrap = { version = "0.15.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["alloc", "formatting", "macros", "parsing", "quickcheck", "serde", "serde-well-known", "std"] }
 time-macros = { version = "0.2.6", default-features = false, features = ["formatting", "parsing", "serde"] }
