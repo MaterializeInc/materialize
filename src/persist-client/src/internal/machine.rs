@@ -213,14 +213,14 @@ where
         &mut self,
         reader_id: &CriticalReaderId,
         purpose: &str,
-    ) -> CriticalReaderState<T> {
+    ) -> (CriticalReaderState<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
-        let (_seqno, state, _maintenance) = self
+        let (_seqno, state, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
                 state.register_critical_reader::<O>(&cfg.hostname, reader_id, purpose)
             })
             .await;
-        state
+        (state, maintenance)
     }
 
     pub async fn register_writer(
@@ -229,9 +229,9 @@ where
         purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
-    ) -> (Upper<T>, WriterState<T>) {
+    ) -> (Upper<T>, WriterState<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
-        let (_seqno, (shard_upper, writer_state), _maintenance) = self
+        let (_seqno, (shard_upper, writer_state), maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
                 state.register_writer(
                     &cfg.hostname,
@@ -242,7 +242,7 @@ where
                 )
             })
             .await;
-        (shard_upper, writer_state)
+        (shard_upper, writer_state, maintenance)
     }
 
     pub async fn compare_and_append(
@@ -1648,10 +1648,11 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let reader_id = args.expect("reader_id");
-        let state = datadriven
+        let (state, maintenance) = datadriven
             .machine
             .register_critical_reader::<u64>(&reader_id, "tests")
             .await;
+        datadriven.routine.push(maintenance);
         Ok(format!(
             "{} {:?}\n",
             datadriven.machine.seqno(),
@@ -1686,7 +1687,7 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let writer_id = args.expect("writer_id");
-        let (upper, _state) = datadriven
+        let (upper, _state, maintenance) = datadriven
             .machine
             .register_writer(
                 &writer_id,
@@ -1695,6 +1696,7 @@ pub mod datadriven {
                 (datadriven.client.cfg.now)(),
             )
             .await;
+        datadriven.routine.push(maintenance);
         Ok(format!(
             "{} {:?}\n",
             datadriven.machine.seqno(),
