@@ -578,7 +578,7 @@ impl fmt::Display for TypeCategory {
 // easily change it now, as it's used as the e.g. default sink progress topic.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnvironmentId {
-    cloud_provider: String,
+    cloud_provider: CloudProvider,
     cloud_provider_region: String,
     organization_id: Uuid,
     ordinal: u64,
@@ -588,7 +588,7 @@ impl EnvironmentId {
     /// Creates a dummy `EnvironmentId` for use in tests.
     pub fn for_tests() -> EnvironmentId {
         EnvironmentId {
-            cloud_provider: "local".into(),
+            cloud_provider: CloudProvider::Local,
             cloud_provider_region: "az1".into(),
             organization_id: Uuid::new_v4(),
             ordinal: 0,
@@ -596,7 +596,7 @@ impl EnvironmentId {
     }
 
     /// Returns the cloud provider associated with this environment ID.
-    pub fn cloud_provider(&self) -> &str {
+    pub fn cloud_provider(&self) -> &CloudProvider {
         &self.cloud_provider
     }
 
@@ -616,6 +616,21 @@ impl EnvironmentId {
     }
 }
 
+// *Warning*: once the LaunchDarkly integration is live, our contexts will be
+// populated using this key. Consequently, any changes to that trait
+// implementation will also have to be reflected in the existing feature
+// targeting config in LaunchDarkly, otherwise environments might receive
+// different configs upon restart.
+impl fmt::Display for EnvironmentId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}-{}-{}-{}",
+            self.cloud_provider, self.cloud_provider_region, self.organization_id, self.ordinal
+        )
+    }
+}
+
 impl FromStr for EnvironmentId {
     type Err = InvalidEnvironmentIdError;
 
@@ -630,7 +645,7 @@ impl FromStr for EnvironmentId {
         });
         let captures = MATCHER.captures(s).ok_or(InvalidEnvironmentIdError)?;
         Ok(EnvironmentId {
-            cloud_provider: captures["cloud_provider"].into(),
+            cloud_provider: CloudProvider::from_str(&captures["cloud_provider"])?,
             cloud_provider_region: captures["cloud_provider_region"].into(),
             organization_id: captures["organization_id"]
                 .parse()
@@ -642,17 +657,7 @@ impl FromStr for EnvironmentId {
     }
 }
 
-impl fmt::Display for EnvironmentId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{}-{}-{}-{}",
-            self.cloud_provider, self.cloud_provider_region, self.organization_id, self.ordinal
-        )
-    }
-}
-
-/// The error type for [`EnvironmentId::from_str]`.
+/// The error type for [`EnvironmentId::from_str`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct InvalidEnvironmentIdError;
 
@@ -663,6 +668,62 @@ impl fmt::Display for InvalidEnvironmentIdError {
 }
 
 impl Error for InvalidEnvironmentIdError {}
+
+impl From<InvalidCloudProviderError> for InvalidEnvironmentIdError {
+    fn from(_: InvalidCloudProviderError) -> Self {
+        InvalidEnvironmentIdError
+    }
+}
+
+/// Identifies a supported cloud provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CloudProvider {
+    /// A pseudo-provider value used by local development environments.
+    Local,
+    /// A pseudo-provider value used by mzcompose.
+    MzCompose,
+    /// A pseudo-provider value used by cloudtest.
+    Cloudtest,
+    /// Amazon Web Services.
+    Aws,
+}
+
+impl fmt::Display for CloudProvider {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            CloudProvider::Local => f.write_str("local"),
+            CloudProvider::MzCompose => f.write_str("mzcompose"),
+            CloudProvider::Cloudtest => f.write_str("cloudtest"),
+            CloudProvider::Aws => f.write_str("aws"),
+        }
+    }
+}
+
+impl FromStr for CloudProvider {
+    type Err = InvalidCloudProviderError;
+
+    fn from_str(s: &str) -> Result<CloudProvider, InvalidCloudProviderError> {
+        match s {
+            "local" => Ok(CloudProvider::Local),
+            "mzcompose" => Ok(CloudProvider::MzCompose),
+            "cloudtest" => Ok(CloudProvider::Cloudtest),
+            "aws" => Ok(CloudProvider::Aws),
+            _ => Err(InvalidCloudProviderError),
+        }
+    }
+}
+
+/// The error type for [`CloudProvider::from_str`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct InvalidCloudProviderError;
+
+impl fmt::Display for InvalidCloudProviderError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("invalid cloud provider")
+    }
+}
+
+impl Error for InvalidCloudProviderError {}
 
 /// An error returned by the catalog.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -960,13 +1021,15 @@ impl<'a, T> ErsatzCatalog<'a, T> {
 mod tests {
     use crate::catalog::{EnvironmentId, InvalidEnvironmentIdError};
 
+    use super::CloudProvider;
+
     #[test]
     fn test_environment_id() {
         for (input, expected) in [
             (
                 "local-az1-1497a3b7-a455-4fc4-8752-b44a94b5f90a-452",
                 Ok(EnvironmentId {
-                    cloud_provider: "local".into(),
+                    cloud_provider: CloudProvider::Local,
                     cloud_provider_region: "az1".into(),
                     organization_id: "1497a3b7-a455-4fc4-8752-b44a94b5f90a".parse().unwrap(),
                     ordinal: 452,
@@ -975,7 +1038,7 @@ mod tests {
             (
                 "aws-us-east-1-1497a3b7-a455-4fc4-8752-b44a94b5f90a-0",
                 Ok(EnvironmentId {
-                    cloud_provider: "aws".into(),
+                    cloud_provider: CloudProvider::Aws,
                     cloud_provider_region: "us-east-1".into(),
                     organization_id: "1497a3b7-a455-4fc4-8752-b44a94b5f90a".parse().unwrap(),
                     ordinal: 0,
