@@ -1615,13 +1615,19 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
         .with_column("memory_bytes", ScalarType::UInt64.nullable(true)),
 });
 
-pub static MZ_STORAGE_HOST_METRICS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+pub static MZ_STORAGE_HOST_METRICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_storage_host_metrics",
     // TODO[btv] - make this public once we work out whether and how to fuse it with
     // the corresponding Compute tables.
     schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::StorageHostMetrics),
     desc: RelationDesc::empty()
-        .with_column("object_id", ScalarType::String.nullable(false))
+        // Right now (in production) each storage host is running exactly one
+        // source or sink, so we identify the hosts by the source/sink id. We
+        // have to change this once we allow multiple storage objects to share a
+        // "cluster".
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
         .with_column("memory_bytes", ScalarType::UInt64.nullable(true)),
 });
@@ -2916,6 +2922,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_SOURCE_STATUS),
         Builtin::View(&MZ_SOURCE_STATUSES),
         Builtin::Source(&MZ_STORAGE_SHARDS),
+        Builtin::Source(&MZ_STORAGE_HOST_METRICS),
         Builtin::View(&MZ_STORAGE_USAGE),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),

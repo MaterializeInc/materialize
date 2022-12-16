@@ -18,6 +18,7 @@
 //! Eventually, the source is dropped with either `drop_sources()` or by allowing compaction to the
 //! empty frontier.
 
+use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt::{self, Debug};
@@ -29,7 +30,6 @@ use async_trait::async_trait;
 use bytes::BufMut;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
-use futures::stream::StreamExt;
 use itertools::Itertools;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -39,7 +39,7 @@ use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::Mutex;
-use tokio_stream::StreamMap;
+use tokio_stream::{StreamExt, StreamMap};
 use tracing::debug;
 
 use mz_build_info::BuildInfo;
@@ -67,6 +67,7 @@ use crate::types::sources::{IngestionDescription, SourceData, SourceExport};
 
 mod collection_mgmt;
 mod hosts;
+mod metrics_scraper;
 mod persist_handles;
 mod rehydration;
 
@@ -104,6 +105,7 @@ pub enum IntrospectionType {
     SinkStatusHistory,
     SourceStatusHistory,
     ShardMapping,
+    StorageHostMetrics,
 }
 
 /// Describes how data is written to the collection.
@@ -622,11 +624,19 @@ pub struct StorageControllerState<
     stashed_response: Option<StorageResponse<T>>,
     /// Storage hosts that should be deprovisioned during the next call to `StorageController::process`.
     pending_host_deprovisions: BTreeSet<GlobalId>,
+    /// Commands that should be send to storage instances during the next call
+    /// to `StorageController::process`.
+    pending_compaction_commands: Vec<(GlobalId, Antichain<T>)>,
 
     /// Interface for managed collections
     pub(super) collection_manager: collection_mgmt::CollectionManager,
     /// Tracks which collection is responsible for which [`IntrospectionType`].
     pub(super) introspection_ids: HashMap<IntrospectionType, GlobalId>,
+    /// Tokens for tasks that drive updating introspection collections. Dropping
+    /// this will make sure that any tasks (or other resources) will stop when
+    /// needed.
+    // TODO(aljoscha): Should these live somewhere else?
+    introspection_tokens: HashMap<GlobalId, Box<dyn Any + Send + Sync>>,
     /// The fencing token for this instance of the controller.
     envd_epoch: NonZeroI64,
 }
@@ -768,8 +778,10 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             persist_read_handles: persist_handles::PersistReadWorker::new(),
             stashed_response: None,
             pending_host_deprovisions: BTreeSet::new(),
+            pending_compaction_commands: Vec::new(),
             collection_manager,
             introspection_ids: HashMap::new(),
+            introspection_tokens: HashMap::new(),
             envd_epoch,
         }
     }
@@ -1009,6 +1021,41 @@ where
                         IntrospectionType::ShardMapping => {
                             self.truncate_managed_collection(id).await;
                             self.initialize_shard_mapping().await;
+                        }
+                        IntrospectionType::StorageHostMetrics => {
+                            // This has some subtlety, points from guswynn:
+                            //
+                            //   - This takes the collection to empty, at roughly
+                            //   now(), but doesn't delete the old data (that we
+                            //   definitely want to be able to see!
+                            //
+                            //   - This uses the CollectionManager once, which
+                            //   requires that this collection is registered to
+                            //   PersistWriteHandles, which it is, above.
+                            //
+                            //   - The CollectionManager manages writes and
+                            //   bumping the upper, the metric task simply
+                            //   produces the values that are send to the
+                            //   manager.
+
+                            // The metrics scraper assumes that the collection
+                            // sums up to empty when starting up. When needed,
+                            // we can change the scraper to reconcile its
+                            // internal state with the current state of the
+                            // output collection.
+                            self.truncate_managed_collection(id).await;
+
+                            let metrics_fetcher = self.hosts.metrics_fetcher();
+                            let scraper_token = metrics_scraper::spawn_metrics_scraper(
+                                id.clone(),
+                                metrics_fetcher,
+                                // This does a shallow copy.
+                                self.state.collection_manager.clone(),
+                            );
+
+                            // Make sure this is dropped when the controller is
+                            // dropped, so that the internal task will stop.
+                            self.state.introspection_tokens.insert(id, scraper_token);
                         }
                         IntrospectionType::SourceStatusHistory
                         | IntrospectionType::SinkStatusHistory => {
@@ -1373,17 +1420,9 @@ where
             .downgrade(compaction_commands.clone());
 
         for (id, frontier) in compaction_commands {
-            // TODO(petrosagg): make this a strict check
-            if let Some(client) = self.hosts.client(id) {
-                client.send(StorageCommand::AllowCompaction(vec![(
-                    id,
-                    frontier.clone(),
-                )]));
-
-                if frontier.is_empty() {
-                    self.state.pending_host_deprovisions.insert(id);
-                }
-            }
+            // Acquiring a client for a storage instance requires await, so we
+            // instead stash these for later and process when we can.
+            self.state.pending_compaction_commands.push((id, frontier));
         }
     }
 
@@ -1416,6 +1455,22 @@ where
             Some(StorageResponse::DroppedIds(_ids)) => {
                 // TODO(petrosagg): It looks like the storage controller never cleans up GlobalIds
                 // from its state. It should probably be done as a reaction to this response.
+            }
+        }
+
+        // TODO(aljoscha): We could consolidate these before sending to
+        // instances, but this seems fine for now.
+        for (id, frontier) in self.state.pending_compaction_commands.drain(..) {
+            // TODO(petrosagg): make this a strict check
+            if let Some(client) = self.hosts.client(id) {
+                client.send(StorageCommand::AllowCompaction(vec![(
+                    id,
+                    frontier.clone(),
+                )]));
+
+                if frontier.is_empty() {
+                    self.state.pending_host_deprovisions.insert(id);
+                }
             }
         }
 
@@ -1487,18 +1542,20 @@ where
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
+        let hosts = StorageHosts::new(
+            StorageHostsConfig {
+                build_info,
+                orchestrator,
+                storaged_image,
+                init_container_image,
+            },
+            Arc::clone(&persist_clients),
+        );
+
         Self {
             state: StorageControllerState::new(postgres_url, tx, now, postgres_factory, envd_epoch)
                 .await,
-            hosts: StorageHosts::new(
-                StorageHostsConfig {
-                    build_info,
-                    orchestrator,
-                    storaged_image,
-                    init_container_image,
-                },
-                Arc::clone(&persist_clients),
-            ),
+            hosts,
             internal_response_queue: rx,
             persist_location,
             persist: persist_clients,
