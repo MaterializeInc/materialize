@@ -33,9 +33,14 @@ Materialize provides public Kafka topics for its users to use as a source. The K
     ```sql
     CREATE SCHEMA shop;
     ```
+1. Create the connection:
 
-1. Create the sources:
     ```sql
+    CREATE CONNECTION shop.kafka_conn TO KAFKA (BROKER 'localhost:9092');
+    ```
+
+1. Create the sources, one per topic:
+    <!-- ```sql
     CREATE TABLE IF NOT EXISTS shop.users (
         id INT,
         email TEXT,
@@ -69,15 +74,15 @@ Materialize provides public Kafka topics for its users to use as a source. The K
     INSERT INTO shop.users VALUES (1, 'random@email.com', true, current_timestamp(), current_timestamp());
     INSERT INTO shop.items VALUES (1, 'Random Random', 'Category', 230, 3, current_timestamp(), current_timestamp(), current_timestamp());
     INSERT INTO shop.purchases VALUES (1, 1, 1, 1, 3, 10, current_timestamp(), current_timestamp());
-    ```
+    ``` -->
 
-    <!-- ```sql
+    ```sql
     CREATE SOURCE purchases
     FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.shop.purchases'
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
     ENVELOPE DEBEZIUM;
 
-    CREATE SOURCE itemsxw
+    CREATE SOURCE items
     FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.shop.items'
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
     ENVELOPE DEBEZIUM;
@@ -86,7 +91,7 @@ Materialize provides public Kafka topics for its users to use as a source. The K
     FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.shop.users'
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
     ENVELOPE DEBEZIUM;
-    ``` -->
+    ```
 
     <!-- Each topic contains different data:
     * Items: items by category and stock
