@@ -17,10 +17,9 @@
 //! Persist command-line utilities
 
 use mz_build_info::{build_info, BuildInfo};
-use mz_orchestrator_tracing::TracingCliArgs;
+use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::task::RuntimeExt;
-use mz_ore::tracing::TracingConfig;
 use tokio::runtime::Handle;
 use tracing::{info_span, Instrument};
 
@@ -63,12 +62,10 @@ fn main() {
         .expect("Failed building the Runtime");
 
     let _ = runtime
-        .block_on(mz_ore::tracing::configure(
-            "persist-open-loop",
-            TracingConfig::from(&args.tracing),
-            sentry_tracing::default_event_filter,
-            (BUILD_INFO.version, BUILD_INFO.sha, BUILD_INFO.time),
-        ))
+        .block_on(args.tracing.configure_tracing(StaticTracingConfig {
+            service_name: "persist-open-loop",
+            build_info: BUILD_INFO,
+        }))
         .expect("failed to init tracing");
 
     let root_span = info_span!("persistcli");
@@ -105,8 +102,6 @@ fn main() {
             runtime.block_on(crate::admin::run(command).instrument(root_span))
         }
     };
-
-    mz_ore::tracing::shutdown();
 
     if let Err(err) = res {
         eprintln!("error: {:#}", err);

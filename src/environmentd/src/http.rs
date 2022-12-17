@@ -47,7 +47,7 @@ use mz_adapter::session::{ExternalUserMetadata, Session, User};
 use mz_adapter::SessionClient;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::tracing::TracingTargetCallbacks;
+use mz_ore::tracing::TracingHandle;
 
 use crate::server::{ConnectionHandler, Server};
 use crate::BUILD_INFO;
@@ -161,7 +161,7 @@ impl Server for HttpServer {
 
 pub struct InternalHttpConfig {
     pub metrics_registry: MetricsRegistry,
-    pub tracing_target_callbacks: TracingTargetCallbacks,
+    pub tracing_handle: TracingHandle,
     pub adapter_client_rx: oneshot::Receiver<mz_adapter::Client>,
 }
 
@@ -173,7 +173,7 @@ impl InternalHttpServer {
     pub fn new(
         InternalHttpConfig {
             metrics_registry,
-            tracing_target_callbacks,
+            tracing_handle,
             adapter_client_rx,
         }: InternalHttpConfig,
     ) -> InternalHttpServer {
@@ -190,22 +190,29 @@ impl InternalHttpServer {
             )
             .route(
                 "/api/opentelemetry/config",
-                routing::put(move |payload| async move {
-                    mz_http_util::handle_modify_filter_target(
-                        tracing_target_callbacks.tracing,
-                        payload,
-                    )
-                    .await
+                routing::put({
+                    let tracing_handle = tracing_handle.clone();
+                    move |payload| async move {
+                        mz_http_util::handle_reload_tracing_filter(
+                            &tracing_handle,
+                            TracingHandle::reload_opentelemetry_filter,
+                            payload,
+                        )
+                        .await
+                    }
                 }),
             )
             .route(
                 "/api/stderr/config",
-                routing::put(move |payload| async move {
-                    mz_http_util::handle_modify_filter_target(
-                        tracing_target_callbacks.stderr,
-                        payload,
-                    )
-                    .await
+                routing::put({
+                    move |payload| async move {
+                        mz_http_util::handle_reload_tracing_filter(
+                            &tracing_handle,
+                            TracingHandle::reload_stderr_log_filter,
+                            payload,
+                        )
+                        .await
+                    }
                 }),
             )
             .route("/api/tracing", routing::get(mz_http_util::handle_tracing))

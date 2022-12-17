@@ -19,7 +19,6 @@
 //!  * The **[`OpenTelemetryContext`]** type, which carries a tracing span
 //!    across thread or task boundaries within a process.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
@@ -55,12 +54,12 @@ use crate::netio::SocketAddr;
 ///
 /// See the [`configure`] function for details.
 #[derive(Debug, Clone)]
-pub struct TracingConfig {
+pub struct TracingConfig<F> {
+    /// The name of the service.
+    pub service_name: &'static str,
     /// Configuration of the stderr log.
     pub stderr_log: StderrLogConfig,
-    /// Optional configuration for the [`opentelemetry`] library.
-    /// The boolean specifies if you wish to enable the OpenTelemetry
-    /// collector by default
+    /// Optional configuration of the [`opentelemetry`] library.
     pub opentelemetry: Option<OpenTelemetryConfig>,
     /// Optional configuration for the [Tokio console] integration.
     ///
@@ -69,16 +68,24 @@ pub struct TracingConfig {
     #[cfg(feature = "tokio-console")]
     pub tokio_console: Option<TokioConsoleConfig>,
     /// Optional Sentry configuration.
-    pub sentry: Option<SentryConfig>,
+    pub sentry: Option<SentryConfig<F>>,
+    /// The version of this build of the service.
+    pub build_version: &'static str,
+    /// The commit SHA of this build of the service.
+    pub build_sha: &'static str,
+    /// The time of this build of the service.
+    pub build_time: &'static str,
 }
 
 /// Configures Sentry reporting.
 #[derive(Debug, Clone)]
-pub struct SentryConfig {
+pub struct SentryConfig<F> {
     /// Sentry data source name to submit events to.
     pub dsn: String,
     /// Additional tags to include on each Sentry event/exception.
     pub tags: HashMap<String, String>,
+    /// A filter that classifies events before sending them to Sentry.
+    pub event_filter: F,
 }
 
 /// Configures the stderr log.
@@ -104,58 +111,6 @@ pub enum StderrLogFormat {
     ///
     /// Best suited for ingestion in structured logging aggregators.
     Json,
-}
-
-/// Callbacks used to dynamically modify tracing-related filters
-#[derive(Debug, Clone)]
-pub struct TracingTargetCallbacks {
-    /// Modifies filter targets for OpenTelemetry tracing
-    pub tracing: DynamicTargetsCallback,
-    /// Modifies filter targets for stderr logging
-    pub stderr: DynamicTargetsCallback,
-}
-
-impl Default for TracingTargetCallbacks {
-    fn default() -> Self {
-        Self {
-            tracing: DynamicTargetsCallback::none(),
-            stderr: DynamicTargetsCallback::none(),
-        }
-    }
-}
-
-/// A callback used to modify tracing filters
-pub struct DynamicTargetsCallback {
-    callback: Arc<dyn Fn(Targets) -> Result<(), anyhow::Error> + Send + Sync>,
-}
-
-impl DynamicTargetsCallback {
-    /// Updates stderr log filtering with `targets`
-    pub fn call(&self, targets: Targets) -> Result<(), anyhow::Error> {
-        (self.callback)(targets)
-    }
-
-    /// A callback that does nothing. Useful for tests.
-    pub fn none() -> Self {
-        Self {
-            callback: Arc::new(|_| Ok(())),
-        }
-    }
-}
-
-impl std::fmt::Debug for DynamicTargetsCallback {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("StderrLogFilterCallback")
-            .finish_non_exhaustive()
-    }
-}
-
-impl Clone for DynamicTargetsCallback {
-    fn clone(&self) -> Self {
-        DynamicTargetsCallback {
-            callback: Arc::clone(&self.callback),
-        }
-    }
 }
 
 /// Configuration for the [`opentelemetry`] library.
@@ -197,6 +152,62 @@ pub struct TokioConsoleConfig {
     pub retention: Duration,
 }
 
+type Reloader = Arc<dyn Fn(Targets) -> Result<(), anyhow::Error> + Send + Sync>;
+
+/// A handle to the tracing infrastructure configured with [`configure`].
+#[derive(Clone)]
+pub struct TracingHandle {
+    stderr_log: Reloader,
+    opentelemetry: Reloader,
+}
+
+impl TracingHandle {
+    /// Creates a inoperative tracing handle.
+    ///
+    /// Primarily useful in tests.
+    pub fn disabled() -> TracingHandle {
+        TracingHandle {
+            stderr_log: Arc::new(|_| Ok(())),
+            opentelemetry: Arc::new(|_| Ok(())),
+        }
+    }
+
+    /// Dynamically reloads the stderr log filter.
+    pub fn reload_stderr_log_filter(&self, targets: Targets) -> Result<(), anyhow::Error> {
+        (self.stderr_log)(targets)
+    }
+
+    /// Dynamically reloads the OpenTelemetry log filter.
+    pub fn reload_opentelemetry_filter(&self, targets: Targets) -> Result<(), anyhow::Error> {
+        (self.opentelemetry)(targets)
+    }
+}
+
+impl std::fmt::Debug for TracingHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("TracingHandle").finish_non_exhaustive()
+    }
+}
+
+/// A guard for the tracing infrastructure configured with [`configure`].
+///
+/// This guard should be kept alive for the lifetime of the program.
+pub struct TracingGuard {
+    _sentry_guard: Option<sentry::ClientInitGuard>,
+}
+
+impl Drop for TracingGuard {
+    fn drop(&mut self) {
+        opentelemetry::global::shutdown_tracer_provider();
+    }
+}
+
+impl std::fmt::Debug for TracingGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("TracingGuard").finish_non_exhaustive()
+    }
+}
+
 /// Enables application tracing via the [`tracing`] and [`opentelemetry`]
 /// libraries.
 ///
@@ -218,24 +229,12 @@ pub struct TokioConsoleConfig {
 // Setting up OpenTelemetry in the background requires we are in a Tokio runtime
 // context, hence the `async`.
 #[allow(clippy::unused_async)]
-pub async fn configure<C, F>(
-    service_name: &str,
-    config: C,
-    // _Effectively_ unused if `sentry_config` is not set in the `config`,
-    // as its not dynamically configured and is likely a closure with
-    // an opaque type. Note that the sentry layer is statically configured
-    // to never receive events more verbose than `INFO`.
-    sentry_event_filter: F,
-    (build_version, build_sha, build_time): (&str, &str, &str),
-) -> Result<(TracingTargetCallbacks, Option<sentry::ClientInitGuard>), anyhow::Error>
+pub async fn configure<F>(
+    config: TracingConfig<F>,
+) -> Result<(TracingHandle, TracingGuard), anyhow::Error>
 where
-    C: Into<TracingConfig>,
     F: Fn(&tracing::Metadata<'_>) -> sentry_tracing::EventFilter + Send + Sync + 'static,
 {
-    let service_name = service_name.to_string();
-
-    let config = config.into();
-
     let stderr_log_layer: Box<dyn Layer<Registry> + Send + Sync> = match config.stderr_log.format {
         StderrLogFormat::Text { prefix } => {
             // See: https://no-color.org/
@@ -252,18 +251,14 @@ where
         }
         StderrLogFormat::Json => Box::new(fmt::layer().with_writer(io::stderr).json()),
     };
-    let (stderr_filter, stderr_filter_reloader) = reload::Layer::new(config.stderr_log.filter);
-    let stderr_log_layer = stderr_log_layer.with_filter(stderr_filter);
-    let stderr_callback = DynamicTargetsCallback {
-        callback: Arc::new(move |targets| {
-            stderr_filter_reloader.reload(targets)?;
-            Ok(())
-        }),
-    };
+    let (stderr_log_filter, stderr_log_filter_reloader) =
+        reload::Layer::new(config.stderr_log.filter);
+    let stderr_log_layer = stderr_log_layer.with_filter(stderr_log_filter);
+    let stderr_log_reloader =
+        Arc::new(move |targets| Ok(stderr_log_filter_reloader.reload(targets)?));
 
-    let (otel_layer, otel_reloader) = if let Some(otel_config) = config.opentelemetry {
-        // TODO(guswynn): figure out where/how to call
-        // opentelemetry::global::shutdown_tracer_provider();
+    let (otel_layer, otel_reloader): (_, Reloader) = if let Some(otel_config) = config.opentelemetry
+    {
         opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
 
         // Manually set up an OpenSSL-backed, h2, proxied `Channel`,
@@ -296,10 +291,14 @@ where
             .tracing()
             .with_trace_config(
                 trace::config().with_resource(
-                    // The latter resources wins, so if the user specifies `service.name` on the
-                    // cli, it wins
-                    Resource::new([KeyValue::new("service.name", service_name.clone())])
-                        .merge(&otel_config.resource),
+                    // The latter resources win, so if the user specifies
+                    // `service.name` in the configuration, it will override the
+                    // `service.name` value we configure here.
+                    Resource::new([KeyValue::new(
+                        "service.name",
+                        config.service_name.to_string(),
+                    )])
+                    .merge(&otel_config.resource),
                 ),
             )
             .with_exporter(exporter)
@@ -308,25 +307,16 @@ where
         let (filter, filter_handle) = reload::Layer::new(if otel_config.start_enabled {
             otel_config.filter
         } else {
-            // the default `Targets` has everything disabled
+            // The default `Targets` has everything disabled.
             Targets::default()
         });
         let layer = tracing_opentelemetry::layer()
             .with_tracer(tracer)
             .with_filter(filter);
-        let reloader = DynamicTargetsCallback {
-            callback: Arc::new(move |targets| {
-                filter_handle.reload(targets)?;
-                Ok(())
-            }),
-        };
+        let reloader = Arc::new(move |targets| Ok(filter_handle.reload(targets)?));
         (Some(layer), reloader)
     } else {
-        let reloader = DynamicTargetsCallback {
-            callback: Arc::new(move |_targets| {
-                bail!("Tried to set targets for otel collector but there is no endpoint");
-            }),
-        };
+        let reloader = Arc::new(move |_| bail!("OpenTelemetry is disabled"));
         (None, reloader)
     };
 
@@ -347,37 +337,24 @@ where
         None
     };
 
-    let sentry_guard = if let Some(sentry_config) = config.sentry {
-        let mut sentry_client_options = sentry::ClientOptions {
+    let (sentry_guard, sentry_layer) = if let Some(sentry_config) = config.sentry {
+        let guard = sentry::init((sentry_config.dsn, sentry::ClientOptions {
             attach_stacktrace: true,
+            release: Some(config.build_version.into()),
             ..Default::default()
-        };
-        sentry_client_options.release = Some(Cow::Owned(build_version.to_string()));
-
-        let guard = sentry::init((sentry_config.dsn, sentry_client_options));
+        }));
 
         sentry::configure_scope(|scope| {
-            scope.set_tag("service_name", service_name);
-            scope.set_tag("build_sha", build_sha.to_string());
-            scope.set_tag("build_time", build_time.to_string());
+            scope.set_tag("service_name", config.service_name);
+            scope.set_tag("build_sha", config.build_sha.to_string());
+            scope.set_tag("build_time", config.build_time.to_string());
             for (k, v) in sentry_config.tags {
                 scope.set_tag(&k, v);
             }
         });
 
-        Some(guard)
-    } else {
-        None
-    };
-
-    let stack = tracing_subscriber::registry();
-    let stack = stack.with(stderr_log_layer);
-    let stack = stack.with(otel_layer);
-    #[cfg(feature = "tokio-console")]
-    let stack = stack.with(tokio_console_layer);
-    let stack = stack.with(
-        sentry_tracing::layer()
-            .event_filter(sentry_event_filter)
+        let layer = sentry_tracing::layer()
+            .event_filter(sentry_config.event_filter)
             // WARNING, ENTERING THE SPOOKY ZONE
             //
             // While sentry provides an event filter above that maps events to types of sentry events, its `Layer`
@@ -402,8 +379,19 @@ where
             // we will continue to place this here, as the sentry layer only cares about
             // events <= INFO, so we want to use the fast-path if no other layer
             // is interested in high-fidelity events.
-            .with_filter(tracing::level_filters::LevelFilter::INFO),
-    );
+            .with_filter(tracing::level_filters::LevelFilter::INFO);
+
+        (Some(guard), Some(layer))
+    } else {
+        (None, None)
+    };
+
+    let stack = tracing_subscriber::registry();
+    let stack = stack.with(stderr_log_layer);
+    let stack = stack.with(otel_layer);
+    #[cfg(feature = "tokio-console")]
+    let stack = stack.with(tokio_console_layer);
+    let stack = stack.with(sentry_layer);
     stack.init();
 
     #[cfg(feature = "tokio-console")]
@@ -415,18 +403,15 @@ where
         tracing::info!("starting tokio console on {endpoint}");
     }
 
-    Ok((
-        TracingTargetCallbacks {
-            tracing: otel_reloader,
-            stderr: stderr_callback,
-        },
-        sentry_guard,
-    ))
-}
+    let handle = TracingHandle {
+        stderr_log: stderr_log_reloader,
+        opentelemetry: otel_reloader,
+    };
+    let guard = TracingGuard {
+        _sentry_guard: sentry_guard,
+    };
 
-/// Shutdown any tracing infra, if any.
-pub fn shutdown() {
-    opentelemetry::global::shutdown_tracer_provider();
+    Ok((handle, guard))
 }
 
 /// Returns the level of a specific target from a [`Targets`].
