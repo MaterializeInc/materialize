@@ -36,6 +36,7 @@ mz-cloud-resources = { path = "../cloud-resources" }
 mz-controller = { path = "../controller" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-http-util = { path = "../http-util" }
+mz-interchange = { path = "../interchange" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-orchestrator-process = { path = "../orchestrator-process" }

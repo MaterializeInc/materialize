@@ -18,14 +18,16 @@ use axum::Json;
 use futures::Future;
 use http::StatusCode;
 use itertools::izip;
-use mz_ore::iter::IteratorExt;
 use serde::{Deserialize, Serialize};
 
 use mz_adapter::session::{EndTransactionAction, RowBatchStream, TransactionStatus};
 use mz_adapter::{ExecuteResponse, ExecuteResponseKind, PeekResponseUnary, SessionClient};
+use mz_interchange::encode::TypedDatum;
+use mz_interchange::json::ToJson;
+use mz_ore::iter::IteratorExt;
 use mz_ore::result::ResultExt;
 use mz_pgwire::Severity;
-use mz_repr::{Datum, RowArena};
+use mz_repr::{Datum, RelationDesc, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
 use mz_sql::plan::Plan;
@@ -162,7 +164,7 @@ pub struct SqlResponse {
 enum StatementResult {
     SqlResult(SqlResult),
     Subscribe {
-        col_names: Vec<String>,
+        desc: RelationDesc,
         tag: String,
         rx: RowBatchStream,
     },
@@ -338,12 +340,14 @@ impl ResultSender for WebSocket {
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
                 (true, msgs)
             }
-            StatementResult::Subscribe {
-                col_names,
-                tag,
-                mut rx,
-            } => {
-                send(self, WebSocketResponse::Rows(col_names)).await?;
+            StatementResult::Subscribe { desc, tag, mut rx } => {
+                send(
+                    self,
+                    WebSocketResponse::Rows(
+                        desc.iter_names().map(|name| name.to_string()).collect(),
+                    ),
+                )
+                .await?;
 
                 let mut datum_vec = mz_repr::DatumVec::new();
                 loop {
@@ -351,9 +355,16 @@ impl ResultSender for WebSocket {
                         Some(PeekResponseUnary::Rows(rows)) => {
                             for row in rows {
                                 let datums = datum_vec.borrow_with(&row);
+                                let types = &desc.typ().column_types;
                                 send(
                                     self,
-                                    WebSocketResponse::Row(datums.iter().map(From::from).collect()),
+                                    WebSocketResponse::Row(
+                                        datums
+                                            .iter()
+                                            .enumerate()
+                                            .map(|(i, d)| TypedDatum::new(*d, &types[i]).json())
+                                            .collect(),
+                                    ),
                                 )
                                 .await?;
                             }
@@ -649,7 +660,7 @@ async fn execute_stmt<S: ResultSender>(
             return Ok(SqlResult::err(client, e).into());
         }
     };
-    let col_names = match desc.relation_desc {
+    let col_names = match &desc.relation_desc {
         Some(desc) => desc.iter_names().map(|name| name.to_string()).collect(),
         None => vec![],
     };
@@ -722,13 +733,14 @@ async fn execute_stmt<S: ResultSender>(
             let mut datum_vec = mz_repr::DatumVec::new();
             for row in rows {
                 let datums = datum_vec.borrow_with(&row);
-                sql_rows.push(datums.iter().map(From::from).collect());
+                let types = &desc.relation_desc.as_ref().unwrap().typ().column_types;
+                sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json()).collect());
             }
             let tag = format!("SELECT {}", sql_rows.len());
             SqlResult::rows(client, tag, sql_rows, col_names).into()
         }
         ExecuteResponse::Subscribing { rx }  => {
-            StatementResult::Subscribe { tag:"SUBSCRIBE".into(), col_names, rx }
+            StatementResult::Subscribe { tag:"SUBSCRIBE".into(), desc: desc.relation_desc.unwrap(), rx }
         },
         res @ (ExecuteResponse::Fetch { .. }
         | ExecuteResponse::CopyTo { .. }

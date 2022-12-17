@@ -96,7 +96,7 @@ where
     let value_fields = datums
         .into_iter()
         .zip(names_types)
-        .map(|(datum, (name, typ))| (name.to_string(), TypedDatum::new(datum, typ.clone()).json()))
+        .map(|(datum, (name, typ))| (name.to_string(), TypedDatum::new(datum, typ).json()))
         .collect();
     serde_json::Value::Object(value_fields)
 }
@@ -165,14 +165,14 @@ impl ToJson for TypedDatum<'_> {
                     let values = list
                         .into_iter()
                         .map(|datum| {
-                            let datum = TypedDatum::new(
+                            TypedDatum::new(
                                 datum,
-                                ColumnType {
+                                &ColumnType {
                                     nullable: true,
                                     scalar_type: ty.unwrap_collection_element_type().clone(),
                                 },
-                            );
-                            datum.json()
+                            )
+                            .json()
                         })
                         .collect();
                     serde_json::Value::Array(values)
@@ -184,7 +184,7 @@ impl ToJson for TypedDatum<'_> {
                         .zip(list.into_iter())
                         .map(|((name, typ), datum)| {
                             let name = name.to_string();
-                            let datum = TypedDatum::new(datum, typ.clone());
+                            let datum = TypedDatum::new(datum, typ);
                             let value = datum.json();
                             (name, value)
                         })
@@ -196,14 +196,14 @@ impl ToJson for TypedDatum<'_> {
                     let elements = map
                         .into_iter()
                         .map(|(key, datum)| {
-                            let datum = TypedDatum::new(
+                            let value = TypedDatum::new(
                                 datum,
-                                ColumnType {
+                                &ColumnType {
                                     nullable: true,
                                     scalar_type: (**value_type).clone(),
                                 },
-                            );
-                            let value = datum.json();
+                            )
+                            .json();
                             (key.to_string(), value)
                         })
                         .collect();

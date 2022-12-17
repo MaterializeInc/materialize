@@ -188,7 +188,7 @@ ws-text
 {"query": "SUBSCRIBE (VALUES (1)); SELECT 1"}
 ----
 {"type":"Rows","payload":["mz_timestamp","mz_diff","column1"]}
-{"type":"Row","payload":[1.8446744073709552e19,1,1]}
+{"type":"Row","payload":["18446744073709551615",1,1]}
 {"type":"CommandComplete","payload":"SUBSCRIBE"}
 {"type":"Error","payload":"SUBSCRIBE in transactions must be the only read statement"}
 {"type":"ReadyForQuery","payload":"I"}

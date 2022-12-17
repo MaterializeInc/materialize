@@ -16,7 +16,7 @@ use itertools::Itertools;
 use once_cell::sync::Lazy;
 use serde_json::json;
 
-use mz_avro::types::{AvroMap, DecimalValue, Value};
+use mz_avro::types::{AvroMap, DecimalValue, ToAvro, Value};
 use mz_avro::Schema;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
@@ -250,8 +250,7 @@ where
         .zip_eq(datums)
         .map(|((name, typ), datum)| {
             let name = name.as_str().to_owned();
-            use mz_avro::types::ToAvro;
-            (name, TypedDatum::new(datum, typ.clone()).avro())
+            (name, TypedDatum::new(datum, typ).avro())
         })
         .collect();
     let v = Value::Record(value_fields);
@@ -358,14 +357,14 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     let values = list
                         .into_iter()
                         .map(|datum| {
-                            let datum = TypedDatum::new(
+                            TypedDatum::new(
                                 datum,
-                                ColumnType {
+                                &ColumnType {
                                     nullable: true,
                                     scalar_type: ty.unwrap_collection_element_type().clone(),
                                 },
-                            );
-                            datum.avro()
+                            )
+                            .avro()
                         })
                         .collect();
                     Value::Array(values)
@@ -375,14 +374,14 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     let elements = map
                         .into_iter()
                         .map(|(key, datum)| {
-                            let datum = TypedDatum::new(
+                            let value = TypedDatum::new(
                                 datum,
-                                ColumnType {
+                                &ColumnType {
                                     nullable: true,
                                     scalar_type: (**value_type).clone(),
                                 },
-                            );
-                            let value = datum.avro();
+                            )
+                            .avro();
                             (key.to_string(), value)
                         })
                         .collect();
@@ -395,7 +394,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         .zip(list.into_iter())
                         .map(|((name, typ), datum)| {
                             let name = name.to_string();
-                            let datum = TypedDatum::new(datum, typ.clone());
+                            let datum = TypedDatum::new(datum, typ);
                             let value = datum.avro();
                             (name, value)
                         })

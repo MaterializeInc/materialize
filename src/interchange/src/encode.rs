@@ -23,12 +23,12 @@ pub trait Encode {
 #[derive(Debug)]
 pub struct TypedDatum<'a> {
     pub datum: Datum<'a>,
-    pub typ: ColumnType,
+    pub typ: &'a ColumnType,
 }
 
 impl<'a> TypedDatum<'a> {
     /// Pairs a datum and its type, for encoding.
-    pub fn new(datum: Datum<'a>, typ: ColumnType) -> Self {
+    pub fn new(datum: Datum<'a>, typ: &'a ColumnType) -> Self {
         Self { datum, typ }
     }
 }
