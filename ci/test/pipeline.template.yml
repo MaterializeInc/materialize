@@ -120,7 +120,7 @@ steps:
       - "**/Cargo.toml"
       - "**/*.rs"
       - "**/*.proto"
-      - "**/testdata/**/*"
+      - "**/testdata/**"
     env:
       AWS_DEFAULT_REGION: "us-east-2"
     plugins:
