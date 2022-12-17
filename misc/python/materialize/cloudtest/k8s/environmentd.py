@@ -112,9 +112,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 f"--persist-blob-url=s3://minio:minio123@persist/persist?endpoint={s3_endpoint}&region=minio",
                 "--orchestrator=kubernetes",
                 "--orchestrator-kubernetes-image-pull-policy=if-not-present",
-                "--persist-consensus-url=postgres://postgres@postgres.default?options=--search_path=consensus",
-                "--adapter-stash-url=postgres://postgres@postgres.default?options=--search_path=catalog",
-                "--storage-stash-url=postgres://postgres@postgres.default?options=--search_path=storage",
+                "--persist-consensus-url=postgres://root@cockroach.default:26257?options=--search_path=consensus",
+                "--adapter-stash-url=postgres://root@cockroach.default:26257?options=--search_path=catalog",
+                "--storage-stash-url=postgres://root@cockroach.default:26257?options=--search_path=storage",
                 "--internal-sql-listen-addr=0.0.0.0:6877",
                 "--unsafe-mode",
                 # cloudtest may be called upon to spin up older versions of Mz too!

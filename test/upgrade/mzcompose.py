@@ -19,7 +19,6 @@ from semver import Version
 from materialize import util
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
-    Cockroach,
     Kafka,
     Materialized,
     Postgres,
@@ -32,13 +31,7 @@ from materialize.mzcompose.services import (
 # All released Materialize versions, in order from most to least recent.
 all_versions = util.released_materialize_versions()
 
-mz_options: Dict[Version, str] = {
-    Version.parse(
-        "0.27.0"
-    ): " --persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus"
-    " --adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter"
-    " --storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage "
-}
+mz_options: Dict[Version, str] = {}
 
 SERVICES = [
     TestCerts(),
@@ -56,16 +49,12 @@ SERVICES = [
         ],
     ),
     Postgres(),
-    Cockroach(),
     Materialized(
         options=" ".join(mz_options.values()),
         environment_extra=[
             "SSL_KEY_PASSWORD=mzmzmz",
         ],
-        volumes_extra=[
-            "/cockroach-data",
-            "secrets:/share/secrets",
-        ],
+        volumes_extra=["secrets:/share/secrets"],
     ),
     # N.B.: we need to use `validate_postgres_stash=False` because testdrive uses
     # HEAD to load the catalog from disk but does *not* run migrations. There
@@ -149,19 +138,7 @@ def test_upgrade_from_version(
 
     c.down(destroy_volumes=True)
     c.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "postgres", "cockroach"]
-    )
-
-    # We use a CockroachDB instance *outside* of the `materialized` container
-    # so that we don't unnecessarily test CockroachDB upgrades in addition to
-    # Materialize updates.
-    c.sql(
-        """CREATE SCHEMA adapter;
-           CREATE SCHEMA storage;
-           CREATE SCHEMA consensus;
-        """,
-        service="cockroach",
-        user="root",
+        services=["zookeeper", "kafka", "schema-registry", "postgres"]
     )
 
     if from_version != "current_source":
@@ -216,10 +193,7 @@ def test_upgrade_from_version(
 
     with c.override(
         Testdrive(
-            entrypoint_extra=[
-                "--validate-postgres-stash=postgres://root@cockroach:26257?options=--search_path=adapter"
-            ],
-            volumes_extra=["secrets:/share/secrets"],
+            validate_postgres_stash=True, volumes_extra=["secrets:/share/secrets"]
         )
     ):
         c.run(

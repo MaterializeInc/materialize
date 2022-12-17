@@ -56,6 +56,7 @@ use tokio_postgres::types::Kind as PgKind;
 use tokio_postgres::types::Type as PgType;
 use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use tower_http::cors::AllowOrigin;
+use tracing::{error, info};
 use uuid::Uuid;
 
 use mz_controller::ControllerConfig;
@@ -63,6 +64,7 @@ use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::cast::ReinterpretCast;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_ore::tracing::TracingHandle;
@@ -776,7 +778,19 @@ impl RunnerInner {
         let environment_id = EnvironmentId::for_tests();
         let (consensus_uri, adapter_stash_url, storage_stash_url) = {
             let postgres_url = &config.postgres_url;
-            let (client, conn) = tokio_postgres::connect(postgres_url, NoTls).await?;
+            info!(%postgres_url, "starting server");
+            let (client, conn) = Retry::default()
+                .max_tries(5)
+                .retry_async(|_| async {
+                    match tokio_postgres::connect(postgres_url, NoTls).await {
+                        Ok(c) => Ok(c),
+                        Err(e) => {
+                            error!(%e, "failed to connect to postgres");
+                            Err(e)
+                        }
+                    }
+                })
+                .await?;
             task::spawn(|| "sqllogictest_connect", async move {
                 if let Err(e) = conn.await {
                     panic!("connection error: {}", e);

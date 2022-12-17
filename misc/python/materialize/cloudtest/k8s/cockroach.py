@@ -14,7 +14,6 @@ from kubernetes.client import (
     V1ConfigMapVolumeSource,
     V1Container,
     V1ContainerPort,
-    V1EnvVar,
     V1LabelSelector,
     V1ObjectMeta,
     V1PersistentVolumeClaim,
@@ -34,66 +33,60 @@ from kubernetes.client import (
 from materialize.cloudtest.k8s import K8sConfigMap, K8sService, K8sStatefulSet
 
 
-class PostgresConfigMap(K8sConfigMap):
+class CockroachConfigMap(K8sConfigMap):
     def __init__(self) -> None:
         self.config_map = V1ConfigMap(
             metadata=V1ObjectMeta(
-                name="postgres-init",
+                name="cockroach-init",
             ),
             data={
-                "connections.sql": dedent(
-                    """
-                    ALTER SYSTEM SET max_connections = 5000;
-                    """
-                ),
                 "schemas.sql": dedent(
                     """
                 CREATE SCHEMA consensus;
                 CREATE SCHEMA catalog;
                 CREATE SCHEMA storage;
-            """
+                """
                 ),
             },
         )
 
 
-class PostgresService(K8sService):
+class CockroachService(K8sService):
     def __init__(self) -> None:
-        service_port = V1ServicePort(name="sql", port=5432)
+        service_port = V1ServicePort(name="sql", port=26257)
 
         self.service = V1Service(
             api_version="v1",
             kind="Service",
-            metadata=V1ObjectMeta(name="postgres", labels={"app": "postgres"}),
+            metadata=V1ObjectMeta(name="cockroach", labels={"app": "cockroach"}),
             spec=V1ServiceSpec(
-                type="NodePort", ports=[service_port], selector={"app": "postgres"}
+                type="NodePort", ports=[service_port], selector={"app": "cockroach"}
             ),
         )
 
 
-class PostgresStatefulSet(K8sStatefulSet):
+class CockroachStatefulSet(K8sStatefulSet):
     def generate_stateful_set(self) -> V1StatefulSet:
-        metadata = V1ObjectMeta(name="postgres", labels={"app": "postgres"})
-        label_selector = V1LabelSelector(match_labels={"app": "postgres"})
-        env = [V1EnvVar(name="POSTGRES_HOST_AUTH_METHOD", value="trust")]
-        ports = [V1ContainerPort(container_port=5432, name="sql")]
+        metadata = V1ObjectMeta(name="cockroach", labels={"app": "cockroach"})
+        label_selector = V1LabelSelector(match_labels={"app": "cockroach"})
+        ports = [V1ContainerPort(container_port=26257, name="sql")]
         volume_mounts = [
-            V1VolumeMount(name="data", mount_path="/data"),
+            V1VolumeMount(name="data", mount_path="/cockroach/cockroach-data"),
             V1VolumeMount(
-                name="postgres-init", mount_path="/docker-entrypoint-initdb.d"
+                name="cockroach-init", mount_path="/docker-entrypoint-initdb.d"
             ),
         ]
 
         volume_config = V1ConfigMapVolumeSource(
-            name="postgres-init",
+            name="cockroach-init",
         )
 
-        volumes = [V1Volume(name="postgres-init", config_map=volume_config)]
+        volumes = [V1Volume(name="cockroach-init", config_map=volume_config)]
 
         container = V1Container(
-            name="postgres",
-            image="postgres:14.3",
-            env=env,
+            name="cockroach",
+            image="cockroachdb/cockroach:v22.2.0",
+            args=["start-single-node", "--insecure"],
             ports=ports,
             volume_mounts=volume_mounts,
         )
@@ -115,7 +108,7 @@ class PostgresStatefulSet(K8sStatefulSet):
             kind="StatefulSet",
             metadata=metadata,
             spec=V1StatefulSetSpec(
-                service_name="postgres",
+                service_name="cockroach",
                 replicas=1,
                 selector=label_selector,
                 template=template_spec,
@@ -124,8 +117,8 @@ class PostgresStatefulSet(K8sStatefulSet):
         )
 
 
-POSTGRES_RESOURCES = [
-    PostgresConfigMap(),
-    PostgresService(),
-    PostgresStatefulSet(),
+COCKROACH_RESOURCES = [
+    CockroachConfigMap(),
+    CockroachService(),
+    CockroachStatefulSet(),
 ]

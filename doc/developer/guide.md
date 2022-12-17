@@ -44,42 +44,26 @@ We recommend that you do _not_ install Rust via your system's package manager.
 We closely track the most recent version of Rust. The version of Rust in your
 package manager is likely too old to build Materialize.
 
-### PostgreSQL
+### CockroachDB
 
-Running Materialize locally requires a running PostgreSQL server.
+Running Materialize locally requires a running CockroachDB server.
 
-On macOS, when using Homebrew, Postgres can be installed and started via:
-
-```shell
-brew install postgresql
-brew services start postgresql
-```
-
-On Debian-based Linux variants:
+On macOS, when using Homebrew, CockroachDB can be installed and started via:
 
 ```shell
-apt install postgresql
+brew install cockroachdb/cockroach/cockroach
+brew services start cockroach
 ```
 
-If you can run `psql` without arguments and connect, you're all set. For the
-latter to work, you may need to create a new database with `createdb`. If you
-issue `createdb` without any arguments, a database with your username will be
-created.
+On Linux, we recommend using Docker:
 
-To also run `bin/cargo-test`, you'll need to add the following to your Postgres
-config. The location of your Postgres config file can be shown using `psql -c
-'SHOW config_file'` on macOS or using `sudo -u postgres psql -c 'SHOW
-config_file'` on Ubuntu. Common locations are:
-`/opt/homebrew/var/postgres/postgresql.conf` on macOS,
-`/etc/postgresql/13/main/postgresql.conf` on Ubuntu, and
-`/var/lib/postgres/data/postgresql.conf` on Arch Linux. Then, restart Postgres.
+```shell
+docker run --name=cockroach -d -p 26257:26257 -p 8080:8080 cockroachdb/cockroach:v22.2.0 start-single-node --insecure
+```
 
-```
-wal_level=logical
-max_wal_senders=20
-max_replication_slots=20
-max_connections = 5000
-```
+If you can successfully connect to CockroachDB with either
+`psql postgres://root@localhost:26257` or `cockroach sql --insecure`, you're
+all set.
 
 ### Confluent Platform
 

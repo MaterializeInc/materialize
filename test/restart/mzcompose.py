@@ -9,9 +9,9 @@
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
+    Cockroach,
     Kafka,
     Materialized,
-    Postgres,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
@@ -26,7 +26,7 @@ SERVICES = [
     Materialized(),
     Testdrive(),
     testdrive_no_reset,
-    Postgres(),
+    Cockroach(),
 ]
 
 
@@ -97,29 +97,38 @@ def workflow_stash(c: Composition) -> None:
     c.rm_volumes("mzdata", "pgdata", force=True)
 
     materialized = Materialized(
-        options=["--adapter-stash-url", "postgres://postgres:postgres@postgres"],
+        options=[
+            "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
+            "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
+            "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
+        ],
     )
-    postgres = Postgres(image="postgres:14.4")
+    cockroach = Cockroach()
 
-    with c.override(materialized, postgres):
-        c.up("postgres")
-        c.wait_for_postgres()
+    with c.override(materialized, cockroach):
+        c.up("cockroach")
+        c.wait_for_cockroach()
+
+        c.sql("CREATE SCHEMA adapter", service="cockroach", user="root")
+        c.sql("CREATE SCHEMA storage", service="cockroach", user="root")
+        c.sql("CREATE SCHEMA consensus", service="cockroach", user="root")
+
         c.start_and_wait_for_tcp(services=["materialized"])
         c.wait_for_materialized("materialized")
 
         c.sql("CREATE TABLE a (i INT)")
 
-        c.stop("postgres")
-        c.up("postgres")
-        c.wait_for_postgres()
+        c.stop("cockroach")
+        c.up("cockroach")
+        c.wait_for_cockroach()
 
         c.sql("CREATE TABLE b (i INT)")
 
-        c.rm("postgres", stop=True, destroy_volumes=True)
-        c.up("postgres")
-        c.wait_for_postgres()
+        c.rm("cockroach")
+        c.up("cockroach")
+        c.wait_for_cockroach()
 
-        # Postgres cleared its database, so this should fail.
+        # CockroachDB cleared its database, so this should fail.
         try:
             c.sql("CREATE TABLE c (i INT)")
             raise Exception("expected unreachable")
