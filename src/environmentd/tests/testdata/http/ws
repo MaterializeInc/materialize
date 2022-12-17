@@ -1,0 +1,201 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+ws-text
+{"query": "bad sql"}
+----
+{"type":"Error","payload":"Expected a keyword at the beginning of a statement, found identifier \"bad\""}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"queries": [{"query": "bad sql"}]}
+----
+{"type":"Error","payload":"Expected a keyword at the beginning of a statement, found identifier \"bad\""}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query": "select NULL"}
+----
+{"type":"Rows","payload":["?column?"]}
+{"type":"Row","payload":[null]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-binary
+{"query": "select 'binary'"}
+----
+{"type":"Rows","payload":["?column?"]}
+{"type":"Row","payload":["binary"]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query": "select 1,2; values ('a'), ('b')"}
+----
+{"type":"Rows","payload":["?column?","?column?"]}
+{"type":"Row","payload":[1,2]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Rows","payload":["column1"]}
+{"type":"Row","payload":["a"]}
+{"type":"Row","payload":["b"]}
+{"type":"CommandComplete","payload":"SELECT 2"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query": ""}
+----
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query": ";;;"}
+----
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query": ";;select 1;"}
+----
+{"type":"Rows","payload":["?column?"]}
+{"type":"Row","payload":[1]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query": ";;select 1;; select 2;;"}
+----
+{"type":"Rows","payload":["?column?"]}
+{"type":"Row","payload":[1]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"Rows","payload":["?column?"]}
+{"type":"Row","payload":[2]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"queries": []}
+----
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"queries": [{"query": ""}]}
+----
+{"type":"Error","payload":"each query must contain exactly 1 statement, but \"\" contains 0"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"queries": [{"query": "select $1"}]}
+----
+{"type":"Error","payload":"request supplied 0 parameters, but SELECT $1 requires 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"queries": [{"query": "select $1::int", "params": []}]}
+----
+{"type":"Error","payload":"request supplied 0 parameters, but SELECT ($1)::int4 requires 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"queries": [{"query": "select $1::int", "params": ["2"]}]}
+----
+{"type":"Rows","payload":["int4"]}
+{"type":"Row","payload":[2]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"queries": [{"query": "select $1::int", "params": ["z"]}]}
+----
+{"type":"Error","payload":"unable to decode parameter: invalid input syntax for type integer: invalid digit found in string: \"z\""}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"queries": [{"query": "select $1::int", "params": [2]}]}
+----
+{"type":"Error","payload":"data did not match any variant of untagged enum SqlRequest"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"queries": [{"query": "select $1::int", "params": [null]}]}
+----
+{"type":"Rows","payload":["int4"]}
+{"type":"Row","payload":[null]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# Test that transactions are preserved across requests.
+
+ws-text
+{"query": "BEGIN; SELECT 1"}
+----
+{"type":"CommandComplete","payload":"BEGIN"}
+{"type":"Rows","payload":["?column?"]}
+{"type":"Row","payload":[1]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"T"}
+
+ws-text
+{"query": "CREATE VIEW v AS SELECT 1"}
+----
+{"type":"Error","payload":"CREATE VIEW v AS SELECT 1 cannot be run inside a transaction block"}
+{"type":"ReadyForQuery","payload":"E"}
+
+ws-text
+{"query": "CREATE VIEW v AS SELECT 1"}
+----
+{"type":"Error","payload":"current transaction is aborted, commands ignored until end of transaction block"}
+{"type":"ReadyForQuery","payload":"E"}
+
+
+ws-text
+{"query": "SELECT 2"}
+----
+{"type":"Error","payload":"current transaction is aborted, commands ignored until end of transaction block"}
+{"type":"ReadyForQuery","payload":"E"}
+
+ws-text
+{"query": "ROLLBACK; SELECT 2"}
+----
+{"type":"CommandComplete","payload":"ROLLBACK"}
+{"type":"Rows","payload":["?column?"]}
+{"type":"Row","payload":[2]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query": "SUBSCRIBE v"}
+----
+{"type":"Error","payload":"unknown catalog item 'v'"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query": "CREATE TABLE t (i INT)"}
+----
+{"type":"CommandComplete","payload":"CREATE TABLE"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query": "INSERT INTO t VALUES (1), (2), (3), (4)"}
+----
+{"type":"CommandComplete","payload":"INSERT 0 4"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query": "SUBSCRIBE (VALUES (1)); SELECT 1"}
+----
+{"type":"Rows","payload":["mz_timestamp","mz_diff","column1"]}
+{"type":"Row","payload":[1.8446744073709552e19,1,1]}
+{"type":"CommandComplete","payload":"SUBSCRIBE"}
+{"type":"Error","payload":"SUBSCRIBE in transactions must be the only read statement"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text rows=2 fixtimestamp=true
+{"query": "SUBSCRIBE t"}
+----
+{"type":"Rows","payload":["mz_timestamp","mz_diff","i"]}
+{"type":"Row","payload":["<TIMESTAMP>",1,1]}
+{"type":"Row","payload":["<TIMESTAMP>",1,2]}

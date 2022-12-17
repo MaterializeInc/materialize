@@ -33,8 +33,8 @@ use mz_ore::future::OreSinkExt;
 use mz_ore::netio::{self, AsyncReady};
 
 use crate::message::{
-    BackendMessage, ErrorResponse, FrontendMessage, FrontendStartupMessage, TransactionStatus,
-    VERSION_CANCEL, VERSION_GSSENC, VERSION_SSL,
+    BackendMessage, ErrorResponse, FrontendMessage, FrontendStartupMessage, VERSION_CANCEL,
+    VERSION_GSSENC, VERSION_SSL,
 };
 use crate::server::Conn;
 
@@ -337,11 +337,7 @@ impl Encoder<BackendMessage> for Codec {
             BackendMessage::CloseComplete => (),
             BackendMessage::EmptyQueryResponse => (),
             BackendMessage::ReadyForQuery(status) => {
-                dst.put_u8(match status {
-                    TransactionStatus::Idle => b'I',
-                    TransactionStatus::InTransaction => b'T',
-                    TransactionStatus::Failed => b'E',
-                });
+                dst.put_u8(status.into());
             }
             BackendMessage::ParameterStatus(name, value) => {
                 dst.put_string(name);
