@@ -82,6 +82,11 @@ pub struct TracingConfig<F> {
 pub struct SentryConfig<F> {
     /// Sentry data source name to submit events to.
     pub dsn: String,
+    /// The environment name to report to Sentry.
+    ///
+    /// If unset, the Sentry SDK will attempt to read the value from the
+    /// `SENTRY_ENVIRONMENT` environment variable.
+    pub environment: Option<String>,
     /// Additional tags to include on each Sentry event/exception.
     pub tags: HashMap<String, String>,
     /// A filter that classifies events before sending them to Sentry.
@@ -338,11 +343,15 @@ where
     };
 
     let (sentry_guard, sentry_layer) = if let Some(sentry_config) = config.sentry {
-        let guard = sentry::init((sentry_config.dsn, sentry::ClientOptions {
-            attach_stacktrace: true,
-            release: Some(config.build_version.into()),
-            ..Default::default()
-        }));
+        let guard = sentry::init((
+            sentry_config.dsn,
+            sentry::ClientOptions {
+                attach_stacktrace: true,
+                release: Some(config.build_version.into()),
+                environment: sentry_config.environment.map(Into::into),
+                ..Default::default()
+            },
+        ));
 
         sentry::configure_scope(|scope| {
             scope.set_tag("service_name", config.service_name);
