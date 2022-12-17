@@ -50,7 +50,7 @@ use mz_orchestrator_kubernetes::{
     KubernetesImagePullPolicy, KubernetesOrchestrator, KubernetesOrchestratorConfig,
 };
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
-use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
+use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs, TracingOrchestrator};
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metric;
@@ -509,13 +509,11 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     } else {
         None
     };
-    let (tracing_target_callbacks, _sentry_guard) =
-        runtime.block_on(mz_ore::tracing::configure(
-            "environmentd",
-            &args.tracing,
-            mz_service::tracing::mz_sentry_event_filter,
-            (BUILD_INFO.version, BUILD_INFO.sha, BUILD_INFO.time),
-        ))?;
+    let (tracing_handle, _tracing_guard) =
+        runtime.block_on(args.tracing.configure_tracing(StaticTracingConfig {
+            service_name: "environmentd",
+            build_info: BUILD_INFO,
+        }))?;
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
@@ -789,7 +787,7 @@ max log level: {max_log_level}",
             args.aws_external_id_prefix,
             secrets_reader,
         ),
-        tracing_target_callbacks,
+        tracing_handle,
         storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
         segment_api_key: args.segment_api_key,
         egress_ips: args.announce_egress_ip,

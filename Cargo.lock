@@ -3777,6 +3777,7 @@ dependencies = [
 name = "mz-http-util"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "askama",
  "axum",
  "headers",
@@ -3995,10 +3996,14 @@ dependencies = [
  "futures-core",
  "http",
  "humantime",
+ "mz-build-info",
  "mz-orchestrator",
  "mz-ore",
  "mz-repr",
+ "mz-service",
  "opentelemetry",
+ "sentry-tracing",
+ "tracing",
  "tracing-subscriber",
  "workspace-hack",
 ]

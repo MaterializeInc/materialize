@@ -36,6 +36,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task;
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
@@ -246,7 +247,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         default_storage_host_size: None,
         availability_zones: Default::default(),
         connection_context,
-        tracing_target_callbacks: mz_ore::tracing::TracingTargetCallbacks::default(),
+        tracing_handle: TracingHandle::disabled(),
         storage_usage_collection_interval: config.storage_usage_collection_interval,
         segment_api_key: None,
         egress_ips: vec![],

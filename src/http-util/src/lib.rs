@@ -16,6 +16,7 @@ use axum::Json;
 use axum::TypedHeader;
 use headers::ContentType;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::tracing::TracingHandle;
 use prometheus::Encoder;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -115,14 +116,15 @@ pub struct DynamicFilterTarget {
     targets: String,
 }
 
-/// Allows dynamic control of the stderr log filter
+/// Dynamically reloads a filter for a tracing layer.
 #[allow(clippy::unused_async)]
-pub async fn handle_modify_filter_target(
-    callback: mz_ore::tracing::DynamicTargetsCallback,
+pub async fn handle_reload_tracing_filter(
+    handle: &TracingHandle,
+    reload: fn(&TracingHandle, Targets) -> Result<(), anyhow::Error>,
     Json(cfg): Json<DynamicFilterTarget>,
 ) -> impl IntoResponse {
     match cfg.targets.parse::<Targets>() {
-        Ok(targets) => match callback.call(targets) {
+        Ok(targets) => match reload(handle, targets) {
             Ok(()) => (StatusCode::OK, cfg.targets.to_string()),
             Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),
         },

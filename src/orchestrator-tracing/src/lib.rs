@@ -25,6 +25,7 @@ use opentelemetry::sdk::resource::Resource;
 use opentelemetry::KeyValue;
 use tracing_subscriber::filter::Targets;
 
+use mz_build_info::BuildInfo;
 #[cfg(feature = "tokio-console")]
 use mz_orchestrator::ServicePort;
 use mz_orchestrator::{
@@ -38,6 +39,7 @@ use mz_ore::netio::SocketAddr;
 use mz_ore::tracing::TokioConsoleConfig;
 use mz_ore::tracing::{
     OpenTelemetryConfig, SentryConfig, StderrLogConfig, StderrLogFormat, TracingConfig,
+    TracingGuard, TracingHandle,
 };
 
 /// Command line arguments for application tracing.
@@ -196,55 +198,74 @@ impl Default for TracingCliArgs {
     }
 }
 
-impl From<&TracingCliArgs> for TracingConfig {
-    fn from(args: &TracingCliArgs) -> TracingConfig {
-        TracingConfig {
+impl TracingCliArgs {
+    pub async fn configure_tracing(
+        &self,
+        StaticTracingConfig {
+            service_name,
+            build_info,
+        }: StaticTracingConfig,
+    ) -> Result<(TracingHandle, TracingGuard), anyhow::Error> {
+        mz_ore::tracing::configure(TracingConfig {
+            service_name,
             stderr_log: StderrLogConfig {
-                format: match args.log_format {
+                format: match self.log_format {
                     LogFormat::Text => StderrLogFormat::Text {
-                        prefix: args.log_prefix.clone(),
+                        prefix: self.log_prefix.clone(),
                     },
                     LogFormat::Json => StderrLogFormat::Json,
                 },
-                filter: args.log_filter.inner.clone(),
+                filter: self.log_filter.inner.clone(),
             },
-            opentelemetry: args.opentelemetry_endpoint.clone().map(|endpoint| {
+            opentelemetry: self.opentelemetry_endpoint.clone().map(|endpoint| {
                 OpenTelemetryConfig {
                     endpoint,
-                    headers: args
+                    headers: self
                         .opentelemetry_header
                         .iter()
                         .map(|header| (header.key.clone(), header.value.clone()))
                         .collect(),
-                    filter: args.opentelemetry_filter.inner.clone(),
+                    filter: self.opentelemetry_filter.inner.clone(),
                     resource: Resource::new(
-                        args.opentelemetry_resource
+                        self.opentelemetry_resource
                             .iter()
                             .cloned()
                             .map(|kv| KeyValue::new(kv.key, kv.value)),
                     ),
-                    start_enabled: args.opentelemetry_enabled.value,
+                    start_enabled: self.opentelemetry_enabled.value,
                 }
             }),
             #[cfg(feature = "tokio-console")]
-            tokio_console: args.tokio_console_listen_addr.clone().map(|listen_addr| {
+            tokio_console: self.tokio_console_listen_addr.clone().map(|listen_addr| {
                 TokioConsoleConfig {
                     listen_addr,
-                    publish_interval: args.tokio_console_publish_interval,
-                    retention: args.tokio_console_retention,
+                    publish_interval: self.tokio_console_publish_interval,
+                    retention: self.tokio_console_retention,
                 }
             }),
-            sentry: args.sentry_dsn.clone().map(|dsn| SentryConfig {
+            sentry: self.sentry_dsn.clone().map(|dsn| SentryConfig {
                 dsn,
-                tags: args
+                tags: self
                     .opentelemetry_resource
                     .iter()
                     .cloned()
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
+                event_filter: mz_service::tracing::mz_sentry_event_filter,
             }),
-        }
+            build_version: build_info.version,
+            build_sha: build_info.sha,
+            build_time: build_info.time,
+        })
+        .await
     }
+}
+
+/// The fields of [`TracingConfig`] that are not set by command-line arguments.
+pub struct StaticTracingConfig {
+    /// See [`TracingConfig::service_name`].
+    pub service_name: &'static str,
+    pub build_info: BuildInfo,
 }
 
 /// Wraps an [`Orchestrator`] to inject tracing into all created services.

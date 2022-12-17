@@ -38,7 +38,7 @@ use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task;
-use mz_ore::tracing::TracingTargetCallbacks;
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
@@ -139,8 +139,8 @@ pub struct Config {
     // === Tracing options. ===
     /// The metrics registry to use.
     pub metrics_registry: MetricsRegistry,
-    /// Callbacks used to modify tracing/logging filters
-    pub tracing_target_callbacks: TracingTargetCallbacks,
+    /// Handle to tracing.
+    pub tracing_handle: TracingHandle,
 
     // === Testing options. ===
     /// A now generation function for mocking time.
@@ -250,7 +250,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     task::spawn(|| "internal_http_server", {
         let internal_http_server = InternalHttpServer::new(InternalHttpConfig {
             metrics_registry: config.metrics_registry.clone(),
-            tracing_target_callbacks: config.tracing_target_callbacks,
+            tracing_handle: config.tracing_handle,
             adapter_client_rx: internal_http_adapter_client_rx,
         });
         server::serve(internal_http_conns, internal_http_server)
