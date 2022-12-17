@@ -187,7 +187,7 @@ fn test_http_sql() {
     // documented JSON formats.
 
     let fixtimestamp_re = regex::Regex::new("\\d{13}(\\.0)?").unwrap();
-    let fixtimestamp_replace = "\"<TIMESTAMP>\"";
+    let fixtimestamp_replace = "<TIMESTAMP>";
 
     datadriven::walk("tests/testdata/http", |f| {
         let server = util::start_server(util::Config::default()).unwrap();
