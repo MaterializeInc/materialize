@@ -116,7 +116,11 @@ steps:
     timeout_in_minutes: 30
     artifact_paths: target/nextest/ci/junit_cargo-test.xml
     inputs:
-      - "*"
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - "**/*.rs"
+      - "**/*.proto"
+      - "**/testdata/**/*"
     env:
       AWS_DEFAULT_REGION: "us-east-2"
     plugins:
