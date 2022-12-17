@@ -8,6 +8,8 @@ menu:
     name: "WebSocket API"
 ---
 
+{{< alpha enabled-by-default="true" />}}
+
 You can access Materialize through its interactive WebSocket API endpoint:
 
 ```bash
