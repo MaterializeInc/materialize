@@ -3630,6 +3630,7 @@ dependencies = [
  "mz-controller",
  "mz-frontegg-auth",
  "mz-http-util",
+ "mz-interchange",
  "mz-npm",
  "mz-orchestrator",
  "mz-orchestrator-kubernetes",
