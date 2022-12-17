@@ -166,18 +166,18 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     };
     let (consensus_uri, adapter_stash_url, storage_stash_url) = {
         let seed = config.seed;
-        let postgres_url = env::var("POSTGRES_URL")
-            .map_err(|_| anyhow!("POSTGRES_URL environment variable is not set"))?;
-        let mut conn = postgres::Client::connect(&postgres_url, NoTls)?;
+        let cockroach_url = env::var("COCKROACH_URL")
+            .map_err(|_| anyhow!("COCKROACH_URL environment variable is not set"))?;
+        let mut conn = postgres::Client::connect(&cockroach_url, NoTls)?;
         conn.batch_execute(&format!(
             "CREATE SCHEMA IF NOT EXISTS consensus_{seed};
              CREATE SCHEMA IF NOT EXISTS adapter_{seed};
              CREATE SCHEMA IF NOT EXISTS storage_{seed};",
         ))?;
         (
-            format!("{postgres_url}?options=--search_path=consensus_{seed}"),
-            format!("{postgres_url}?options=--search_path=adapter_{seed}"),
-            format!("{postgres_url}?options=--search_path=storage_{seed}"),
+            format!("{cockroach_url}?options=--search_path=consensus_{seed}"),
+            format!("{cockroach_url}?options=--search_path=adapter_{seed}"),
+            format!("{cockroach_url}?options=--search_path=storage_{seed}"),
         )
     };
     let metrics_registry = MetricsRegistry::new();

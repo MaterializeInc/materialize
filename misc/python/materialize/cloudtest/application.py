@@ -17,13 +17,13 @@ from pg8000.exceptions import InterfaceError
 
 from materialize import ROOT, mzbuild
 from materialize.cloudtest.k8s import K8sResource
+from materialize.cloudtest.k8s.cockroach import COCKROACH_RESOURCES
 from materialize.cloudtest.k8s.debezium import DEBEZIUM_RESOURCES
 from materialize.cloudtest.k8s.environmentd import (
     EnvironmentdService,
     EnvironmentdStatefulSet,
 )
 from materialize.cloudtest.k8s.minio import Minio
-from materialize.cloudtest.k8s.postgres import POSTGRES_RESOURCES
 from materialize.cloudtest.k8s.postgres_source import POSTGRES_SOURCE_RESOURCES
 from materialize.cloudtest.k8s.redpanda import REDPANDA_RESOURCES
 from materialize.cloudtest.k8s.role_binding import AdminRoleBinding
@@ -114,7 +114,7 @@ class MaterializeApplication(Application):
         )
 
         self.resources = [
-            *POSTGRES_RESOURCES,
+            *COCKROACH_RESOURCES,
             *POSTGRES_SOURCE_RESOURCES,
             *REDPANDA_RESOURCES,
             *DEBEZIUM_RESOURCES,

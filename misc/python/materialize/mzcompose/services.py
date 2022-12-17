@@ -498,7 +498,7 @@ class Cockroach(Service):
         super().__init__(
             name="cockroach",
             config={
-                "image": "cockroachdb/cockroach:v22.1.2",
+                "image": "cockroachdb/cockroach:v22.2.0",
                 "ports": [26257],
                 "command": "start-single-node --insecure",
                 "volumes": ["/cockroach/cockroach-data"],
@@ -792,13 +792,13 @@ class TestCerts(Service):
 class SqlLogicTest(Service):
     def __init__(
         self,
-        name: str = "sqllogictest-svc",
+        name: str = "sqllogictest",
         mzbuild: str = "sqllogictest",
         environment: List[str] = [
             "MZ_SOFT_ASSERTIONS=1",
         ],
         volumes: List[str] = ["../..:/workdir"],
-        depends_on: List[str] = ["postgres"],
+        depends_on: List[str] = ["cockroach"],
     ) -> None:
         super().__init__(
             name=name,

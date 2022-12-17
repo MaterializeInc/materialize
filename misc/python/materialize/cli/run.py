@@ -10,11 +10,10 @@
 # run.py — build and run a core service or test.
 
 import argparse
-import getpass
 import os
 import shutil
-import sys
 import uuid
+from urllib.parse import urlparse
 
 import psutil
 
@@ -24,10 +23,7 @@ from materialize.ui import UIError
 KNOWN_PROGRAMS = ["environmentd", "sqllogictest"]
 REQUIRED_SERVICES = ["storaged", "computed"]
 
-if sys.platform == "darwin":
-    DEFAULT_POSTGRES = f"postgres://{getpass.getuser()}@%2Ftmp"
-else:
-    DEFAULT_POSTGRES = f"postgres://{getpass.getuser()}@%2Fvar%2Frun%2Fpostgresql"
+DEFAULT_POSTGRES = f"postgres://root@localhost:26257/materialize"
 
 
 def main() -> int:
@@ -53,7 +49,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--postgres",
-        help="PostgreSQL connection string",
+        help="Postgres/CockroachDB connection string",
         default=os.getenv("MZDEV_POSTGRES", DEFAULT_POSTGRES),
     )
     parser.add_argument(
@@ -121,6 +117,8 @@ def main() -> int:
         if args.program == "environmentd":
             _handle_lingering_services(kill=args.reset)
             mzdata = ROOT / "mzdata"
+            db = urlparse(args.postgres).path.removeprefix("/")
+            _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
             for schema in ["consensus", "adapter", "storage"]:
                 if args.reset:
                     _run_sql(args.postgres, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
@@ -210,7 +208,7 @@ def _run_sql(url: str, sql: str) -> None:
     except Exception as e:
         raise UIError(
             f"unable to execute postgres statement: {e}",
-            hint="Have you installed and configured PostgreSQL for passwordless authentication?",
+            hint="Have you installed and started CockroachDB?",
         )
 
 

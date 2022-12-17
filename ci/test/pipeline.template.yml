@@ -290,6 +290,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: restart
+          run: stash
     agents:
       queue: linux-x86_64
 

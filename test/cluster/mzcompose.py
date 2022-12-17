@@ -16,6 +16,7 @@ from pg8000.dbapi import ProgrammingError
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
+    Cockroach,
     Computed,
     Kafka,
     Localstack,
@@ -540,17 +541,15 @@ def workflow_test_remote_storaged(c: Composition) -> None:
 
     with c.override(
         Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
-        # Use a separate PostgreSQL service for persist rather than the one in
+        # Use a separate CockroachDB service for persist rather than the one in
         # the `Materialized` service, so that crashing `environmentd` does not
-        # also take down PostgreSQL.
-        Postgres(),
-        Materialized(
-            options="--persist-consensus-url=postgres://postgres:postgres@postgres"
-        ),
+        # also take down CockroachDB.
+        Cockroach(),
+        Materialized(options="--persist-consensus-url=postgres://root@cockroach:26257"),
     ):
         dependencies = [
             "materialized",
-            "postgres",
+            "cockroach",
             "storaged",
             "zookeeper",
             "kafka",

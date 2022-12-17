@@ -732,6 +732,34 @@ class Composition:
         )
 
     # TODO(benesch): replace with Docker health checks.
+    def wait_for_cockroach(
+        self,
+        *,
+        dbname: str = "defaultdb",
+        port: Optional[int] = None,
+        host: str = "localhost",
+        timeout_secs: int = 120,
+        query: str = "SELECT 1",
+        user: str = "root",
+        password: Optional[str] = None,
+        expected: Union[Iterable[Any], Literal["any"]] = [[1]],
+        print_result: bool = False,
+        service: str = "cockroach",
+    ) -> None:
+        """Wait for a CockroachDB service to start."""
+        _wait_for_pg(
+            dbname=dbname,
+            host=host,
+            port=self.port(service, port) if port else self.default_port(service),
+            timeout_secs=timeout_secs,
+            query=query,
+            user=user,
+            password=password,
+            expected=expected,
+            print_result=print_result,
+        )
+
+    # TODO(benesch): replace with Docker health checks.
     def wait_for_materialized(
         self,
         service: str = "materialized",
@@ -947,7 +975,7 @@ def _wait_for_pg(
     port: int,
     host: str,
     user: str,
-    password: str,
+    password: Optional[str],
     expected: Union[Iterable[Any], Literal["any"]],
     print_result: bool = False,
 ) -> None:

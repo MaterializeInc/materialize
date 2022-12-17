@@ -11,7 +11,13 @@ import os
 
 from materialize import spawn
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Kafka, Postgres, SchemaRegistry, Zookeeper
+from materialize.mzcompose.services import (
+    Cockroach,
+    Kafka,
+    Postgres,
+    SchemaRegistry,
+    Zookeeper,
+)
 
 SERVICES = [
     Zookeeper(),
@@ -27,18 +33,22 @@ SERVICES = [
     ),
     SchemaRegistry(),
     Postgres(image="postgres:14.2"),
+    Cockroach(),
 ]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("args", nargs="*")
     args = parser.parse_args()
-    c.start_and_wait_for_tcp(["zookeeper", "kafka", "schema-registry", "postgres"])
+    c.start_and_wait_for_tcp(
+        ["zookeeper", "kafka", "schema-registry", "postgres", "cockroach"]
+    )
     # Heads up: this intentionally runs on the host rather than in a Docker
     # image. See #13010.
     postgres_url = (
         f"postgres://postgres:postgres@localhost:{c.default_port('postgres')}"
     )
+    cockroach_url = f"postgres://root@localhost:{c.default_port('cockroach')}"
     spawn.runv(
         [
             "cargo",
@@ -57,6 +67,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             KAFKA_ADDRS=f"localhost:30123",
             SCHEMA_REGISTRY_URL=f"http://localhost:{c.default_port('schema-registry')}",
             POSTGRES_URL=postgres_url,
+            COCKROACH_URL=cockroach_url,
             MZ_SOFT_ASSERTIONS="1",
             MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mtlz-test-persist-1d-lifecycle-delete",
             MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=postgres_url,
