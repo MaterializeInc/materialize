@@ -188,6 +188,12 @@ pub struct TracingCliArgs {
     /// Sentry data source to submit events and exceptions (e.g. panics) to.
     #[clap(long, env = "SENTRY_DSN")]
     pub sentry_dsn: Option<String>,
+    /// The environment name to report to Sentry.
+    ///
+    /// Ignored unless the `--sentry-dsn` option is specified.
+    ///
+    /// See: <https://docs.sentry.io/platforms/rust/configuration/options/#environment>
+    pub sentry_environment: Option<String>,
 }
 
 impl Default for TracingCliArgs {
@@ -245,6 +251,7 @@ impl TracingCliArgs {
             }),
             sentry: self.sentry_dsn.clone().map(|dsn| SentryConfig {
                 dsn,
+                environment: self.sentry_environment.clone(),
                 tags: self
                     .opentelemetry_resource
                     .iter()
@@ -265,6 +272,7 @@ impl TracingCliArgs {
 pub struct StaticTracingConfig {
     /// See [`TracingConfig::service_name`].
     pub service_name: &'static str,
+    /// The build information for this service.
     pub build_info: BuildInfo,
 }
 
@@ -343,6 +351,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 #[cfg(feature = "tokio-console")]
                 tokio_console_retention,
                 sentry_dsn,
+                sentry_environment,
             } = &self.tracing_args;
             args.push(format!("--log-filter={log_filter}"));
             args.push(format!("--log-format={log_format}"));
@@ -383,6 +392,9 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
             }
             if let Some(dsn) = sentry_dsn {
                 args.push(format!("--sentry-dsn={dsn}"));
+            }
+            if let Some(environment) = sentry_environment {
+                args.push(format!("--sentry-environment={environment}"));
             }
             args
         };
