@@ -17,6 +17,7 @@ fn main() {
         .extern_path(".mz_repr.adt.char", "::mz_repr::adt::char")
         .extern_path(".mz_repr.adt.datetime", "::mz_repr::adt::datetime")
         .extern_path(".mz_repr.adt.numeric", "::mz_repr::adt::numeric")
+        .extern_path(".mz_repr.adt.range", "::mz_repr::adt::range")
         .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")
         .extern_path(".mz_repr.adt.varchar", "::mz_repr::adt::varchar")
         .extern_path(".mz_repr.chrono", "::mz_repr::chrono")

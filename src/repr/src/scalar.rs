@@ -1306,7 +1306,9 @@ impl RustType<ProtoScalarType> for ScalarType {
                     custom_id: custom_id.map(|id| id.into_proto()),
                 })),
                 ScalarType::MzTimestamp => MzTimestamp(()),
-                ScalarType::Range { element_type: _ } => todo!(),
+                ScalarType::Range { element_type } => Range(Box::new(ProtoRange {
+                    element_type: Some(element_type.into_proto()),
+                })),
             }),
         }
     }
@@ -1379,13 +1381,13 @@ impl RustType<ProtoScalarType> for ScalarType {
                 custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
             }),
             MzTimestamp(()) => Ok(ScalarType::MzTimestamp),
-            // Range(x) => Ok(ScalarType::Range {
-            //     element_type: Box::new(
-            //         x.element_type
-            //             .map(|x| *x)
-            //             .into_rust_if_some("ProtoRange::element_type")?,
-            //     ),
-            // }),
+            Range(x) => Ok(ScalarType::Range {
+                element_type: Box::new(
+                    x.element_type
+                        .map(|x| *x)
+                        .into_rust_if_some("ProtoRange::element_type")?,
+                ),
+            }),
         }
     }
 }

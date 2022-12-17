@@ -27,6 +27,7 @@ _float8
 _int2
 _int2vector
 _int4
+_int4range
 _int8
 _uint2
 _uint4

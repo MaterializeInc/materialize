@@ -164,6 +164,7 @@ impl TypeCategory {
             CatalogType::Record { .. } => TypeCategory::Composite,
             CatalogType::Map { .. } | CatalogType::Pseudo => Self::Pseudo,
             CatalogType::MzTimestamp => Self::String,
+            CatalogType::Range { .. } => Self::Range,
         }
     }
 

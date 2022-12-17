@@ -1205,7 +1205,10 @@ where
 {
     let buf = &mut LexBuf::new(s);
 
+    buf.take_while(|ch| ch.is_ascii_whitespace());
+
     if buf.consume_str("empty") {
+        buf.take_while(|ch| ch.is_ascii_whitespace());
         if buf.next().is_none() {
             return Ok(None);
         } else {
@@ -1219,8 +1222,6 @@ where
         _ => bail!("Missing left parenthesis or bracket."),
     };
 
-    buf.take_while(|ch| ch.is_ascii_whitespace());
-
     let lower_bound = match buf.peek() {
         Some(',') => None,
         Some(_) => {
@@ -1231,11 +1232,11 @@ where
         None => bail!("Unexpected end of input."),
     };
 
+    buf.take_while(|ch| ch.is_ascii_whitespace());
+
     if buf.next() != Some(',') {
         bail!("Missing comma after lower bound.")
     }
-
-    buf.take_while(|ch| ch.is_ascii_whitespace());
 
     let upper_bound = match buf.peek() {
         Some(']' | ')') => None,

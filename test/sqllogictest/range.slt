@@ -1,0 +1,534 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+query T
+select '[0,100)'::int4range::text;
+----
+[0,100)
+
+query T
+select pg_typeof('[0,100)'::int4range);
+----
+int4range
+
+query T
+select 'empty'::int4range::text;
+----
+empty
+
+query T
+select pg_typeof('empty'::int4range);
+----
+int4range
+
+query T
+select null::int4range::text
+----
+NULL
+
+query error integer out of range
+SELECT '[2,2147483647]'::int4range::text;
+
+query error integer out of range
+SELECT '(2147483647,2147483647]'::int4range::text;
+
+# Parameterized input on
+#   xjoin(["(","["],
+#       xjoin([null,-1,0,1],
+#           xjoin(
+#               [null,-1,0,1],
+#               ["),"]"]
+#           )
+#       )
+#   )
+
+query T
+SELECT '(,)'::int4range::text;
+----
+(,)
+
+query T
+SELECT '(,-1)'::int4range::text;
+----
+(,-1)
+
+query T
+SELECT '(,0)'::int4range::text;
+----
+(,0)
+
+query T
+SELECT '(,1)'::int4range::text;
+----
+(,1)
+
+query T
+SELECT '(,]'::int4range::text;
+----
+(,)
+
+query T
+SELECT '(,-1]'::int4range::text;
+----
+(,0)
+
+query T
+SELECT '(,0]'::int4range::text;
+----
+(,1)
+
+query T
+SELECT '(,1]'::int4range::text;
+----
+(,2)
+
+query T
+SELECT '(-1,)'::int4range::text;
+----
+[0,)
+
+query T
+SELECT '(-1,-1)'::int4range::text;
+----
+empty
+
+query T
+SELECT '(-1,0)'::int4range::text;
+----
+empty
+
+query T
+SELECT '(-1,1)'::int4range::text;
+----
+[0,1)
+
+query T
+SELECT '(-1,]'::int4range::text;
+----
+[0,)
+
+query T
+SELECT '(-1,-1]'::int4range::text;
+----
+empty
+
+query T
+SELECT '(-1,0]'::int4range::text;
+----
+[0,1)
+
+query T
+SELECT '(-1,1]'::int4range::text;
+----
+[0,2)
+
+query T
+SELECT '(0,)'::int4range::text;
+----
+[1,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(0,-1)'::int4range::text;
+
+query T
+SELECT '(0,0)'::int4range::text;
+----
+empty
+
+query T
+SELECT '(0,1)'::int4range::text;
+----
+empty
+
+query T
+SELECT '(0,]'::int4range::text;
+----
+[1,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(0,-1]'::int4range::text;
+
+query T
+SELECT '(0,0]'::int4range::text;
+----
+empty
+
+query T
+SELECT '(0,1]'::int4range::text;
+----
+[1,2)
+
+query T
+SELECT '(1,)'::int4range::text;
+----
+[2,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(1,-1)'::int4range::text;
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(1,0)'::int4range::text;
+
+query T
+SELECT '(1,1)'::int4range::text;
+----
+empty
+
+query T
+SELECT '(1,]'::int4range::text;
+----
+[2,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(1,-1]'::int4range::text;
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(1,0]'::int4range::text;
+
+query T
+SELECT '(1,1]'::int4range::text;
+----
+empty
+
+query T
+SELECT '[,)'::int4range::text;
+----
+(,)
+
+query T
+SELECT '[,-1)'::int4range::text;
+----
+(,-1)
+
+query T
+SELECT '[,0)'::int4range::text;
+----
+(,0)
+
+query T
+SELECT '[,1)'::int4range::text;
+----
+(,1)
+
+query T
+SELECT '[,]'::int4range::text;
+----
+(,)
+
+query T
+SELECT '[,-1]'::int4range::text;
+----
+(,0)
+
+query T
+SELECT '[,0]'::int4range::text;
+----
+(,1)
+
+query T
+SELECT '[,1]'::int4range::text;
+----
+(,2)
+
+query T
+SELECT '[-1,)'::int4range::text;
+----
+[-1,)
+
+query T
+SELECT '[-1,-1)'::int4range::text;
+----
+empty
+
+query T
+SELECT '[-1,0)'::int4range::text;
+----
+[-1,0)
+
+query T
+SELECT '[-1,1)'::int4range::text;
+----
+[-1,1)
+
+query T
+SELECT '[-1,]'::int4range::text;
+----
+[-1,)
+
+query T
+SELECT '[-1,-1]'::int4range::text;
+----
+[-1,0)
+
+query T
+SELECT '[-1,0]'::int4range::text;
+----
+[-1,1)
+
+query T
+SELECT '[-1,1]'::int4range::text;
+----
+[-1,2)
+
+query T
+SELECT '[0,)'::int4range::text;
+----
+[0,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[0,-1)'::int4range::text;
+
+query T
+SELECT '[0,0)'::int4range::text;
+----
+empty
+
+query T
+SELECT '[0,1)'::int4range::text;
+----
+[0,1)
+
+query T
+SELECT '[0,]'::int4range::text;
+----
+[0,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[0,-1]'::int4range::text;
+
+query T
+SELECT '[0,0]'::int4range::text;
+----
+[0,1)
+
+query T
+SELECT '[0,1]'::int4range::text;
+----
+[0,2)
+
+query T
+SELECT '[1,)'::int4range::text;
+----
+[1,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[1,-1)'::int4range::text;
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[1,0)'::int4range::text;
+
+query T
+SELECT '[1,1)'::int4range::text;
+----
+empty
+
+query T
+SELECT '[1,]'::int4range::text;
+----
+[1,)
+
+# Range bound errors
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[1,-1]'::int4range::text;
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[1,0]'::int4range::text;
+
+# Whitespace handling
+query T
+SELECT
+	DISTINCT column1::int4range::text
+FROM
+	(
+		VALUES
+			('   empty'),
+			('empty  '),
+			('  [1,)'),
+			('[  1,)'),
+			('[1  ,)'),
+			('[  1  ,)'),
+            ('[1,  2)'),
+			('[1,2  )'),
+			('[1,  2  )'),
+			('[1,)  '),
+			('  (,1)'),
+			('(,  1)'),
+			('  (,)  ')
+	) t;
+----
+(,)
+(,1)
+[1,)
+[1,2)
+empty
+
+# Input errors
+query error invalid input syntax for type range
+SELECT '[1,  )'::int4range
+
+query error invalid input syntax for type range
+SELECT '(  ,1)'::int4range
+
+query error invalid input syntax for type range
+SELECT '(  ,  )'::int4range
+
+query error invalid input syntax for type range
+SELECT 'emptyy'::int4range;
+
+query error invalid input syntax for type range
+SELECT ''::int4range;
+
+query error invalid input syntax for type range
+SELECT '1'::int4range;
+
+query error invalid input syntax for type range
+SELECT 'd'::int4range;
+
+query error invalid input syntax for type range
+SELECT ','::int4range;
+
+query error invalid input syntax for type range
+SELECT ')'::int4range;
+
+query error invalid input syntax for type range
+SELECT '{'::int4range;
+
+query error invalid input syntax for type range
+SELECT '('::int4range;
+
+query error invalid input syntax for type range
+SELECT '['::int4range;
+
+query error invalid input syntax for type range
+SELECT '(1)'::int4range;
+
+query error invalid input syntax for type range
+SELECT '[1]'::int4range;
+
+query error invalid input syntax for type range
+SELECT '(1,'::int4range;
+
+query error invalid input syntax for type range
+SELECT '[1,'::int4range;
+
+query error invalid input syntax for type range
+SELECT '(1,1'::int4range;
+
+query error invalid input syntax for type range
+SELECT '[1,1'::int4range;
+
+query error invalid input syntax for type range
+SELECT '(1,1]1'::int4range;
+
+query error invalid input syntax for type range
+SELECT '[1,1]a'::int4range;
+
+query error invalid input syntax for type range
+SELECT '(1,1]]'::int4range;
+
+query error invalid input syntax for type range
+SELECT '[1,1]}'::int4range;
+
+query error invalid input syntax for type range
+SELECT '(1,1]  ]'::int4range;
+
+query error invalid input syntax for type range
+SELECT '[1,1]  }'::int4range;
+
+statement ok
+CREATE TABLE r (a int4range);
+
+statement ok
+INSERT INTO r VALUES
+    ('[,1)'::int4range),
+    ('[,1]'::int4range),
+    ('[,)'::int4range),
+    ('[,]'::int4range),
+    ('(,1)'::int4range),
+    ('(,1]'::int4range),
+    ('(,)'::int4range),
+    ('(,]'::int4range),
+    ('[-1,1)'::int4range),
+    ('[-1,1]'::int4range),
+    ('(-1,1)'::int4range),
+    ('(-1,1]'::int4range),
+    ('[0,0)'::int4range),
+    ('[0,0]'::int4range),
+    ('(0,0)'::int4range),
+    ('(0,0]'::int4range),
+    ('[1,)'::int4range),
+    ('[1,]'::int4range),
+    ('(1,)'::int4range),
+    ('(1,]'::int4range);
+
+query T
+SELECT a::text AS t FROM r ORDER BY a;
+----
+empty
+empty
+empty
+(,1)
+(,1)
+(,2)
+(,2)
+(,)
+(,)
+(,)
+(,)
+[-1,1)
+[-1,2)
+[0,1)
+[0,1)
+[0,2)
+[1,)
+[1,)
+[2,)
+[2,)
+
+# Test range in list
+query T
+SELECT (LIST['(,)', 'empty', '[-1,1]']::int4range list)::text;
+----
+{(,),empty,[-1,2)}
+
+query T
+SELECT ('{"(,)","empty","[-1,1]"}'::int4range list)::text;
+----
+{(,),empty,[-1,2)}
+
+# Test range in array
+query T
+SELECT (ARRAY['(,)', 'empty', '[-1,1]']::_int4range)::text;
+----
+{(,),empty,[-1,2)}
+
+query T
+SELECT ('{"(,)","empty","[-1,1]"}'::_int4range)::text;
+----
+{(,),empty,[-1,2)}
+
+# Test builtin functions
+
+query error operator does not exist: int4range = int4range
+select '(,)'::int4range = '(,)'::int4range;
+
+query error operator does not exist: int4range <> int4range
+select '(,)'::int4range != '(,)'::int4range;
+
+query error operator does not exist: int4range > int4range
+select '(,)'::int4range > '(,)'::int4range;
+
+query error operator does not exist: int4range >= int4range
+select '(,)'::int4range >= '(,)'::int4range;
+
+query error operator does not exist: int4range < int4range
+select '(,)'::int4range < '(,)'::int4range;
+
+query error operator does not exist: int4range <= int4range
+select '(,)'::int4range <= '(,)'::int4range;

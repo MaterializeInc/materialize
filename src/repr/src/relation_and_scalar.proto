@@ -77,6 +77,10 @@ message ProtoScalarType {
         optional global_id.ProtoGlobalId custom_id = 3;
     }
 
+    message ProtoRange {
+        ProtoScalarType element_type = 1;
+    }
+
     oneof kind  {
         google.protobuf.Empty Bool = 1;
         google.protobuf.Empty Int16 = 2;
@@ -110,5 +114,6 @@ message ProtoScalarType {
         google.protobuf.Empty UInt32 = 30;
         google.protobuf.Empty UInt64 = 31;
         google.protobuf.Empty MzTimestamp = 32;
+        ProtoRange Range = 33;
     }
 }
