@@ -28,6 +28,7 @@ fn main() {
                 "repr/src/adt/datetime.proto",
                 "repr/src/adt/interval.proto",
                 "repr/src/adt/numeric.proto",
+                "repr/src/adt/range.proto",
                 "repr/src/adt/regex.proto",
                 "repr/src/adt/varchar.proto",
             ],

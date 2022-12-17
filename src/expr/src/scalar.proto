@@ -19,6 +19,7 @@ import "repr/src/adt/array.proto";
 import "repr/src/adt/char.proto";
 import "repr/src/adt/datetime.proto";
 import "repr/src/adt/numeric.proto";
+import "repr/src/adt/range.proto";
 import "repr/src/adt/regex.proto";
 import "repr/src/adt/varchar.proto";
 import "repr/src/chrono.proto";
@@ -210,6 +211,7 @@ message ProtoUnaryFunc {
         ProtoCastToVariableType cast_string_to_array = 89;
         ProtoCastToVariableType cast_string_to_list = 90;
         ProtoCastToVariableType cast_string_to_map = 91;
+        ProtoCastToVariableType cast_string_to_range = 281;
         google.protobuf.Empty cast_string_to_time = 4;
         google.protobuf.Empty cast_string_to_timestamp = 5;
         google.protobuf.Empty cast_string_to_timestamp_tz = 6;
@@ -259,6 +261,7 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_array_to_list_one_dim = 137;
         mz_repr.relation_and_scalar.ProtoScalarType cast_map_to_string = 138;
         google.protobuf.Empty cast_int2_vector_to_string = 139;
+        mz_repr.relation_and_scalar.ProtoScalarType cast_range_to_string = 282;
         google.protobuf.Empty ceil_float32 = 140;
         google.protobuf.Empty ceil_float64 = 141;
         google.protobuf.Empty ceil_numeric = 142;
@@ -721,5 +724,6 @@ message ProtoEvalError {
         google.protobuf.Empty mz_timestamp_out_of_range = 59;
         google.protobuf.Empty mz_timestamp_step_overflow = 60;
         google.protobuf.Empty timestamp_cannot_be_nan = 61;
+        mz_repr.adt.range.ProtoInvalidRangeError invalid_range = 62;
     }
 }

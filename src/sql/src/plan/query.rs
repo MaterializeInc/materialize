@@ -4819,6 +4819,11 @@ fn scalar_type_from_catalog(
                     value_type: Box::new(scalar_type_from_catalog(scx, *value_id, &[])?),
                     custom_id: Some(id),
                 }),
+                CatalogType::Range {
+                    element_reference: element_id,
+                } => Ok(ScalarType::Range {
+                    element_type: Box::new(scalar_type_from_catalog(scx, *element_id, &[])?),
+                }),
                 CatalogType::Record { fields } => {
                     let scalars: Vec<(ColumnName, ColumnType)> = fields
                         .iter()

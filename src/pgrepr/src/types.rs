@@ -717,13 +717,14 @@ impl Type {
             Type::RegType => &postgres_types::Type::REGTYPE,
             Type::Int2Vector => &postgres_types::Type::INT2_VECTOR,
             Type::MzTimestamp => &MZ_TIMESTAMP,
-            Type::Range { element_type } => match **element_type {
+            Type::Range { element_type } => match &**element_type {
                 Type::Int4 => &postgres_types::Type::INT4_RANGE,
+                Type::Int8 => &postgres_types::Type::INT8_RANGE,
                 Type::Numeric { .. } => &postgres_types::Type::NUM_RANGE,
                 Type::Timestamp { .. } => &postgres_types::Type::TS_RANGE,
                 Type::TimestampTz { .. } => &postgres_types::Type::TSTZ_RANGE,
                 Type::Date => &postgres_types::Type::DATE_RANGE,
-                _ => unreachable!(),
+                t => unreachable!("{t:?} is not a range element type"),
             },
         }
     }

@@ -472,6 +472,9 @@ pub enum CatalogType<T: TypeReference> {
     Oid,
     PgLegacyChar,
     Pseudo,
+    Range {
+        element_reference: T::Reference,
+    },
     Record {
         fields: Vec<(ColumnName, T::Reference)>,
     },

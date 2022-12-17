@@ -15,12 +15,15 @@ use std::hash::{Hash, Hasher};
 
 use bitflags::bitflags;
 use mz_lowertest::MzReflect;
+use mz_proto::{RustType, TryFromProtoError};
 use num_traits::CheckedAdd;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::DatumKind;
 use crate::Datum;
+
+include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.range.rs"));
 
 bitflags! {
     pub(crate) struct Flags: u8 {
@@ -42,6 +45,7 @@ bitflags! {
 /// `Range<DatumNested<'a>>`, which lets us avoid unnecessary boxing of the
 /// range's finite bounds, which are most often expressed as `Datum`.
 pub struct Range<D> {
+    /// None value represents empty range
     pub inner: Option<RangeInner<D>>,
 }
 
@@ -108,11 +112,17 @@ where
         <Self>::try_from(d)
             .unwrap_or_else(|_| panic!("cannot take {} to {}", d, type_name::<Self>()))
     }
+
+    fn err_type_name() -> &'static str;
 }
 
 impl<'a> RangeOps<'a> for i32 {
     fn step() -> Option<i32> {
         Some(1)
+    }
+
+    fn err_type_name() -> &'static str {
+        "integer"
     }
 }
 
@@ -177,7 +187,7 @@ impl<'a> Range<Datum<'a>> {
     ///   does not have step and both bounds are inclusive
     ///
     /// # Panics
-    /// - If the upper and lower bound finite and of different types.
+    /// - If the upper and lower bounds are finite and of different types.
     pub fn canonicalize(&mut self) -> Result<(), InvalidRangeError> {
         let (lower, upper) = match &mut self.inner {
             Some(inner) => (&mut inner.lower, &mut inner.upper),
@@ -198,10 +208,11 @@ impl<'a> Range<Datum<'a>> {
             _ => {}
         };
 
-        lower.canonicalize();
-        upper.canonicalize();
+        lower.canonicalize()?;
+        upper.canonicalize()?;
 
-        // If (x,x], range is empty
+        // The only way that you have two inclusive bounds with equal value are
+        // if type does not have step.
         if !(lower.inclusive && upper.inclusive)
             && lower.bound >= upper.bound
             // None is less than any Some, so only need to check this condition.
@@ -355,19 +366,19 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
         }
     }
 
-    fn canonicalize(&mut self) {
-        match self.bound {
+    fn canonicalize(&mut self) -> Result<(), InvalidRangeError> {
+        Ok(match self.bound {
             None => {
                 self.inclusive = false;
             }
             Some(value) => match value {
-                d @ Datum::Int32(_) => self.canonicalize_inner::<i32>(d),
+                d @ Datum::Int32(_) => self.canonicalize_inner::<i32>(d)?,
                 d => unreachable!("{d:?} not yet supported in ranges"),
             },
-        }
+        })
     }
 
-    fn canonicalize_inner<T: RangeOps<'a>>(&mut self, d: Datum<'a>)
+    fn canonicalize_inner<T: RangeOps<'a>>(&mut self, d: Datum<'a>) -> Result<(), InvalidRangeError>
     where
         <T as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
     {
@@ -375,10 +386,20 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
             // Upper bounds must be exclusive, lower bounds inclusive
             if UPPER == self.inclusive {
                 let cur = <T>::unwrap_datum(d);
-                self.bound = cur.checked_add(&step).map(|t| t.into());
+                self.bound = Some(
+                    cur.checked_add(&step)
+                        .ok_or_else(|| {
+                            InvalidRangeError::CanonicalizationOverflow(
+                                T::err_type_name().to_string(),
+                            )
+                        })?
+                        .into(),
+                );
                 self.inclusive = !UPPER;
             }
         }
+
+        Ok(())
     }
 }
 
@@ -387,6 +408,7 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
 )]
 pub enum InvalidRangeError {
     MisorderedRangeBounds,
+    CanonicalizationOverflow(String),
 }
 
 impl Display for InvalidRangeError {
@@ -394,6 +416,9 @@ impl Display for InvalidRangeError {
         match self {
             InvalidRangeError::MisorderedRangeBounds => {
                 f.write_str("range lower bound must be less than or equal to range upper bound")
+            }
+            InvalidRangeError::CanonicalizationOverflow(t) => {
+                write!(f, "{} out of range", t)
             }
         }
     }
@@ -409,5 +434,30 @@ impl Error for InvalidRangeError {
 impl From<InvalidRangeError> for String {
     fn from(e: InvalidRangeError) -> Self {
         e.to_string()
+    }
+}
+
+impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
+    fn into_proto(&self) -> ProtoInvalidRangeError {
+        use proto_invalid_range_error::*;
+        use Kind::*;
+        let kind = match self {
+            InvalidRangeError::MisorderedRangeBounds => MisorderedRangeBounds(()),
+            InvalidRangeError::CanonicalizationOverflow(s) => CanonicalizationOverflow(s.clone()),
+        };
+        ProtoInvalidRangeError { kind: Some(kind) }
+    }
+
+    fn from_proto(proto: ProtoInvalidRangeError) -> Result<Self, TryFromProtoError> {
+        use proto_invalid_range_error::Kind::*;
+        match proto.kind {
+            Some(kind) => match kind {
+                MisorderedRangeBounds(()) => Ok(InvalidRangeError::MisorderedRangeBounds),
+                CanonicalizationOverflow(s) => Ok(InvalidRangeError::CanonicalizationOverflow(s)),
+            },
+            None => Err(TryFromProtoError::missing_field(
+                "`ProtoInvalidRangeError::kind`",
+            )),
+        }
     }
 }

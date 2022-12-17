@@ -30,6 +30,7 @@ use mz_pgrepr::TypeFromOidError;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::datetime::DateTimeUnits;
+use mz_repr::adt::range::InvalidRangeError;
 use mz_repr::adt::regex::Regex;
 use mz_repr::arb_datum;
 use mz_repr::strconv::{ParseError, ParseHexError};
@@ -2248,6 +2249,7 @@ pub enum EvalError {
         dims: Option<(usize, usize)>,
     },
     TypeFromOid(String),
+    InvalidRange(InvalidRangeError),
 }
 
 impl fmt::Display for EvalError {
@@ -2398,6 +2400,7 @@ impl fmt::Display for EvalError {
                 write!(f, "cannot concatenate incompatible arrays")
             }
             EvalError::TypeFromOid(msg) => write!(f, "{msg}"),
+            EvalError::InvalidRange(e) => e.fmt(f),
         }
     }
 }
@@ -2483,6 +2486,12 @@ impl From<TimestampError> for EvalError {
         match e {
             TimestampError::OutOfRange => EvalError::TimestampOutOfRange,
         }
+    }
+}
+
+impl From<InvalidRangeError> for EvalError {
+    fn from(e: InvalidRangeError) -> EvalError {
+        EvalError::InvalidRange(e)
     }
 }
 
@@ -2592,6 +2601,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 })
             }
             EvalError::TypeFromOid(v) => TypeFromOid(v.clone()),
+            EvalError::InvalidRange(error) => InvalidRange(error.into_proto()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2687,6 +2697,7 @@ impl RustType<ProtoEvalError> for EvalError {
                     dims: v.dims.into_rust()?,
                 }),
                 TypeFromOid(v) => Ok(EvalError::TypeFromOid(v)),
+                InvalidRange(e) => Ok(EvalError::InvalidRange(e.into_rust()?)),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }

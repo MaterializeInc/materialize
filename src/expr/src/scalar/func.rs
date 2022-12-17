@@ -3686,6 +3686,7 @@ derive_unary!(
     CastStringToArray,
     CastStringToList,
     CastStringToMap,
+    CastStringToRange,
     CastStringToTime,
     CastStringToTimestamp,
     CastStringToTimestampTz,
@@ -3734,6 +3735,7 @@ derive_unary!(
     CastArrayToListOneDim,
     CastMapToString,
     CastInt2VectorToString,
+    CastRangeToString,
     CeilFloat32,
     CeilFloat64,
     CeilNumeric,
@@ -4015,6 +4017,12 @@ impl Arbitrary for UnaryFunc {
                     cast_expr: Box::new(expr),
                 })
             }),
+            (any::<ScalarType>(), any::<MirScalarExpr>()).prop_map(|(return_ty, expr)| {
+                UnaryFunc::CastStringToRange(CastStringToRange {
+                    return_ty,
+                    cast_expr: Box::new(expr),
+                })
+            }),
             CastStringToTime::arbitrary().prop_map_into(),
             CastStringToTimestamp::arbitrary().prop_map_into(),
             CastStringToTimestampTz::arbitrary().prop_map_into(),
@@ -4077,6 +4085,7 @@ impl Arbitrary for UnaryFunc {
             CastArrayToListOneDim::arbitrary().prop_map_into(),
             CastMapToString::arbitrary().prop_map_into(),
             CastInt2VectorToString::arbitrary().prop_map_into(),
+            CastRangeToString::arbitrary().prop_map_into(),
             CeilFloat32::arbitrary().prop_map_into(),
             CeilFloat64::arbitrary().prop_map_into(),
             CeilNumeric::arbitrary().prop_map_into(),
@@ -4324,6 +4333,12 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                     cast_expr: Some(inner.cast_expr.into_proto()),
                 }))
             }
+            UnaryFunc::CastStringToRange(inner) => {
+                CastStringToRange(Box::new(ProtoCastToVariableType {
+                    return_ty: Some(inner.return_ty.into_proto()),
+                    cast_expr: Some(inner.cast_expr.into_proto()),
+                }))
+            }
             UnaryFunc::CastStringToTime(_) => CastStringToTime(()),
             UnaryFunc::CastStringToTimestamp(_) => CastStringToTimestamp(()),
             UnaryFunc::CastStringToTimestampTz(_) => CastStringToTimestampTz(()),
@@ -4390,6 +4405,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastArrayToListOneDim(_) => CastArrayToListOneDim(()),
             UnaryFunc::CastMapToString(func) => CastMapToString(func.ty.into_proto()),
             UnaryFunc::CastInt2VectorToString(_) => CastInt2VectorToString(()),
+            UnaryFunc::CastRangeToString(func) => CastRangeToString(func.ty.into_proto()),
             UnaryFunc::CeilFloat32(_) => CeilFloat32(()),
             UnaryFunc::CeilFloat64(_) => CeilFloat64(()),
             UnaryFunc::CeilNumeric(_) => CeilNumeric(()),
@@ -4664,6 +4680,15 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                         .into_rust_if_some("ProtoCastStringToList::cast_expr")?,
                 }
                 .into()),
+                CastStringToRange(inner) => Ok(impls::CastStringToRange {
+                    return_ty: inner
+                        .return_ty
+                        .into_rust_if_some("ProtoCastStringToRange::return_ty")?,
+                    cast_expr: inner
+                        .cast_expr
+                        .into_rust_if_some("ProtoCastStringToRange::cast_expr")?,
+                }
+                .into()),
                 CastStringToMap(inner) => Ok(impls::CastStringToMap {
                     return_ty: inner
                         .return_ty
@@ -4762,6 +4787,10 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 }
                 .into()),
                 CastInt2VectorToString(_) => Ok(impls::CastInt2VectorToString.into()),
+                CastRangeToString(ty) => Ok(impls::CastRangeToString {
+                    ty: ty.into_rust()?,
+                }
+                .into()),
                 CeilFloat32(_) => Ok(impls::CeilFloat32.into()),
                 CeilFloat64(_) => Ok(impls::CeilFloat64.into()),
                 CeilNumeric(_) => Ok(impls::CeilNumeric.into()),

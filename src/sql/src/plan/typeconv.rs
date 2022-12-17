@@ -483,6 +483,15 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
                 cast_expr: Box::new(cast_expr),
             })))
         }),
+        (String, Range) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
+            let return_ty = to_type.clone();
+            let to_el_type = to_type.unwrap_range_element_type();
+            let cast_expr = plan_hypothetical_cast(ecx, ccx, from_type, to_el_type)?;
+            Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToRange(func::CastStringToRange {
+                return_ty,
+                cast_expr: Box::new(cast_expr),
+            })))
+        }),
         (String, Int2Vector) => Explicit: CastStringToInt2Vector(func::CastStringToInt2Vector),
         (String, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
             let length = to_type.unwrap_char_length();
@@ -630,7 +639,13 @@ static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = 
         (Numeric, UInt16) => Assignment: CastNumericToUint16(func::CastNumericToUint16),
         (Numeric, UInt32) => Assignment: CastNumericToUint32(func::CastNumericToUint32),
         (Numeric, UInt64) => Assignment: CastNumericToUint64(func::CastNumericToUint64),
-        (Numeric, String) => Assignment: CastNumericToString(func::CastNumericToString)
+        (Numeric, String) => Assignment: CastNumericToString(func::CastNumericToString),
+
+        // Range
+        (Range, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
+            let ty = from_type.clone();
+            Some(|e: HirScalarExpr| e.call_unary(CastRangeToString(func::CastRangeToString { ty })))
+        })
     }
 });
 
