@@ -88,9 +88,9 @@ impl S3BlobConfig {
         }
 
         if let Some(endpoint) = endpoint {
-            loader = loader.endpoint_resolver(Endpoint::immutable(
-                endpoint.parse().expect("valid S3 endpoint URI"),
-            ))
+            let endpoint = Endpoint::immutable(endpoint)
+                .map_err(|e| format!("parsing S3 blob endpoint: {e}"))?;
+            loader = loader.endpoint_resolver(endpoint)
         }
 
         loader = loader.timeout_config(
@@ -260,7 +260,7 @@ impl Blob for S3Blob {
             .await;
         let first_part = match object {
             Ok(object) => object,
-            Err(SdkError::ServiceError { err, .. }) if err.is_no_such_key() => return Ok(None),
+            Err(SdkError::ServiceError(err)) if err.err().is_no_such_key() => return Ok(None),
             Err(err) => return Err(ExternalError::from(anyhow!("s3 get meta err: {}", err))),
         };
         let num_parts = if first_part.parts_count() == 0 {
@@ -518,7 +518,7 @@ impl Blob for S3Blob {
             .await;
         let size_bytes = match head_res {
             Ok(x) => u64::try_from(x.content_length).expect("file in S3 cannot have negative size"),
-            Err(SdkError::ServiceError { err, .. }) if err.is_not_found() => return Ok(None),
+            Err(SdkError::ServiceError(err)) if err.err().is_not_found() => return Ok(None),
             Err(err) => return Err(ExternalError::from(anyhow!("s3 delete head err: {}", err))),
         };
         let _ = self

@@ -211,7 +211,9 @@ impl AwsConfig {
             .region(region)
             .credentials_provider(cred_provider);
         if let Some(endpoint) = &self.endpoint {
-            loader = loader.endpoint_resolver(Endpoint::immutable(endpoint.0.clone()));
+            let endpoint =
+                Endpoint::immutable_uri(endpoint.0.clone()).expect("invalid AWS endpoint");
+            loader = loader.endpoint_resolver(endpoint);
         }
         loader.load().await
     }

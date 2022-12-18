@@ -50,14 +50,11 @@ pub async fn run_create_bucket(
         })
         .send()
         .await
+        .map_err(|e| e.into_service_error())
     {
         Ok(_)
-        | Err(SdkError::ServiceError {
-            err:
-                CreateBucketError {
-                    kind: CreateBucketErrorKind::BucketAlreadyOwnedByYou(_),
-                    ..
-                },
+        | Err(CreateBucketError {
+            kind: CreateBucketErrorKind::BucketAlreadyOwnedByYou(_),
             ..
         }) => {
             state.s3_buckets_created.insert(bucket);
@@ -208,7 +205,7 @@ async fn run_add_bucket_notifications(
         Ok(r) => r
             .queue_url
             .expect("queue creation should always return the url"),
-        Err(SdkError::ServiceError { err, .. }) if err.is_queue_name_exists() => {
+        Err(SdkError::ServiceError(e)) if e.err().is_queue_name_exists() => {
             let resp = state
                 .sqs_client
                 .get_queue_url()

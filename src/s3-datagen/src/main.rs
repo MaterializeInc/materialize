@@ -12,7 +12,6 @@ use std::iter;
 
 use aws_sdk_s3::error::{CreateBucketError, CreateBucketErrorKind};
 use aws_sdk_s3::model::{BucketLocationConstraint, CreateBucketConfiguration};
-use aws_sdk_s3::types::SdkError;
 use clap::Parser;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use tracing::event;
@@ -124,19 +123,15 @@ async fn run() -> anyhow::Result<()> {
         .send()
         .await
         .map(|_| info!("created s3 bucket {}", args.bucket))
-        .or_else(|e| match e {
-            SdkError::ServiceError {
-                err:
-                    CreateBucketError {
-                        kind: CreateBucketErrorKind::BucketAlreadyOwnedByYou(_),
-                        ..
-                    },
+        .or_else(|e| match e.into_service_error() {
+            CreateBucketError {
+                kind: CreateBucketErrorKind::BucketAlreadyOwnedByYou(_),
                 ..
             } => {
                 event!(Level::INFO, bucket = %args.bucket, "reusing existing bucket");
                 Ok(())
             }
-            _ => Err(e),
+            e => Err(e),
         })?;
 
     let mut total_created = 0;
