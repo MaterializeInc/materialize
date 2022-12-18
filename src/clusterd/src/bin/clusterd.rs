@@ -31,6 +31,7 @@ use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistConfig;
 use mz_pid_file::PidFile;
+use mz_service::emit_boot_diagnostics;
 use mz_service::grpc::GrpcServer;
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
@@ -142,6 +143,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_timely_util::panic::halt_on_timely_communication_panic();
 
     let _failpoint_scenario = FailScenario::setup();
+
+    emit_boot_diagnostics!(&BUILD_INFO);
 
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {
