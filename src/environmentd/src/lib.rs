@@ -46,12 +46,13 @@ use mz_stash::Stash;
 use mz_storage_client::types::connections::ConnectionContext;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
-pub use crate::http::{SqlResponse, WebSocketResponse};
 use crate::server::ListenerHandle;
 
 mod http;
 mod server;
 mod telemetry;
+
+pub use crate::http::{SqlResponse, WebSocketResponse};
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 
