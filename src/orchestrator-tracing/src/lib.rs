@@ -193,6 +193,7 @@ pub struct TracingCliArgs {
     /// Ignored unless the `--sentry-dsn` option is specified.
     ///
     /// See: <https://docs.sentry.io/platforms/rust/configuration/options/#environment>
+    #[clap(long, env = "SENTRY_ENVIRONMENT")]
     pub sentry_environment: Option<String>,
 }
 
