@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-libc = "0.2.137"
+libc = "0.2.138"
 mz-ore = { path = "../ore", default-features = false }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 

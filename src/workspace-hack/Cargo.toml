@@ -54,7 +54,7 @@ k8s-openapi = { version = "0.16.0", features = ["api", "http", "percent-encoding
 kube = { version = "0.77.0", features = ["client", "config", "derive", "kube-client", "kube-derive", "kube-runtime", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.77.0", default-features = false, features = ["__non_core", "base64", "bytes", "chrono", "client", "config", "dirs", "either", "futures", "http-body", "hyper", "hyper-openssl", "hyper-timeout", "jsonpatch", "jsonpath_lib", "openssl", "openssl-tls", "pem", "pin-project", "rand", "serde_yaml", "tokio", "tokio-tungstenite", "tokio-util", "tower", "tower-http", "tracing", "ws"] }
 kube-core = { version = "0.77.0", default-features = false, features = ["json-patch", "jsonpatch", "schema", "schemars", "ws"] }
-libc = { version = "0.2.137", features = ["extra_traits", "std"] }
+libc = { version = "0.2.138", features = ["extra_traits", "std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.8.1", features = ["hashbrown"] }
 memchr = { version = "2.4.1", features = ["std", "use_std"] }
@@ -154,7 +154,7 @@ k8s-openapi = { version = "0.16.0", features = ["api", "http", "percent-encoding
 kube = { version = "0.77.0", features = ["client", "config", "derive", "kube-client", "kube-derive", "kube-runtime", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.77.0", default-features = false, features = ["__non_core", "base64", "bytes", "chrono", "client", "config", "dirs", "either", "futures", "http-body", "hyper", "hyper-openssl", "hyper-timeout", "jsonpatch", "jsonpath_lib", "openssl", "openssl-tls", "pem", "pin-project", "rand", "serde_yaml", "tokio", "tokio-tungstenite", "tokio-util", "tower", "tower-http", "tracing", "ws"] }
 kube-core = { version = "0.77.0", default-features = false, features = ["json-patch", "jsonpatch", "schema", "schemars", "ws"] }
-libc = { version = "0.2.137", features = ["extra_traits", "std"] }
+libc = { version = "0.2.138", features = ["extra_traits", "std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.8.1", features = ["hashbrown"] }
 memchr = { version = "2.4.1", features = ["std", "use_std"] }
@@ -215,14 +215,14 @@ zeroize = { version = "1.5.7", features = ["alloc", "serde"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 byteorder = { version = "1.4.3", default-features = false, features = ["i128"] }
-libc = { version = "0.2.137", default-features = false, features = ["use_std"] }
+libc = { version = "0.2.138", default-features = false, features = ["use_std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["alloc", "race", "std", "unstable"] }
 tikv-jemalloc-sys = { version = "0.4.2+5.2.1-patched.2", features = ["background_threads", "background_threads_runtime_support", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 byteorder = { version = "1.4.3", default-features = false, features = ["i128"] }
-libc = { version = "0.2.137", default-features = false, features = ["use_std"] }
+libc = { version = "0.2.138", default-features = false, features = ["use_std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["alloc", "race", "std", "unstable"] }
 tikv-jemalloc-sys = { version = "0.4.2+5.2.1-patched.2", features = ["background_threads", "background_threads_runtime_support", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
