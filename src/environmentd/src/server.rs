@@ -13,15 +13,26 @@ use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
+use socket2::{SockRef, TcpKeepalive};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tracing::{debug, error};
 
 use mz_ore::task;
+
+/// TCP keepalive settings. The idle time and interval match CockroachDB [0].
+/// The number of retries matches the Linux default.
+///
+/// [0]: https://github.com/cockroachdb/cockroach/pull/14063
+const KEEPALIVE: TcpKeepalive = TcpKeepalive::new()
+    .with_time(Duration::from_secs(60))
+    .with_interval(Duration::from_secs(60))
+    .with_retries(9);
 
 /// A future that handles a connection.
 pub type ConnectionHandler = Pin<Box<dyn Future<Output = Result<(), anyhow::Error>> + Send>>;
@@ -101,6 +112,14 @@ where
         //
         // [0]: https://news.ycombinator.com/item?id=10608356
         conn.set_nodelay(true).expect("set_nodelay failed");
+        // Enable TCP keepalives to avoid any idle connection timeouts that may
+        // be enforced by networking devices between us and the client. Idle SQL
+        // connections are expected--e.g., a `SUBSCRIBE` to a view containing
+        // critical alerts will ideally be producing no data most of the time.
+        if let Err(e) = SockRef::from(&conn).set_tcp_keepalive(&KEEPALIVE) {
+            error!("failed enabling keepalive: {e}");
+            continue;
+        }
         let fut = server.handle_connection(conn);
         task::spawn(|| &task_name, async {
             if let Err(e) = fut.await {
