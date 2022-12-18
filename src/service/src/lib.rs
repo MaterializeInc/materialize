@@ -13,6 +13,7 @@
 //! previously shared between storaged and computed. The code shared here is not
 //! obviously reusable by future services we may split out of environmentd.
 
+pub mod boot;
 pub mod client;
 pub mod grpc;
 pub mod local;

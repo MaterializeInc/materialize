@@ -27,7 +27,6 @@
 pub mod assert;
 pub mod bits;
 pub mod cast;
-pub mod cgroup;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "cli")))]
 #[cfg(feature = "cli")]
 pub mod cli;

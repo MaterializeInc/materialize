@@ -33,7 +33,6 @@ use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
 use once_cell::sync::Lazy;
 use prometheus::IntGauge;
-use sysinfo::{CpuExt, SystemExt};
 use tokio::sync::Mutex;
 use tower_http::cors::{self, AllowOrigin};
 
@@ -51,7 +50,6 @@ use mz_orchestrator_kubernetes::{
 };
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs, TracingOrchestrator};
-use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
@@ -59,6 +57,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
+use mz_service::emit_boot_diagnostics;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash::PostgresFactory;
 use mz_storage_client::types::connections::ConnectionContext;
@@ -80,9 +79,9 @@ mod sys;
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-pub static VERSION: Lazy<String> = Lazy::new(|| mz_environmentd::BUILD_INFO.human_version());
-pub static LONG_VERSION: Lazy<String> = Lazy::new(|| {
-    iter::once(mz_environmentd::BUILD_INFO.human_version())
+static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
+static LONG_VERSION: Lazy<String> = Lazy::new(|| {
+    iter::once(BUILD_INFO.human_version())
         .chain(build_info())
         .join("\n")
 });
@@ -664,68 +663,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         postgres_factory: PostgresFactory::new(&metrics_registry),
     };
 
-    // When inside a cgroup with a cpu limit,
-    // the logical cpus can be lower than the physical cpus.
-    let memory_limit = detect_memory_limit().unwrap_or(MemoryLimit {
-        max: None,
-        swap_max: None,
-    });
-    let memory_max_str = match memory_limit.max {
-        Some(max) => format!(", {}KiB limit", max / 1024),
-        None => "".to_owned(),
-    };
-    let swap_max_str = match memory_limit.swap_max {
-        Some(max) => format!(", {}KiB limit", max / 1024),
-        None => "".to_owned(),
-    };
-
-    // Print system information as the very first thing in the logs. The goal is
-    // to increase the probability that we can reproduce a reported bug if all
-    // we get is the log file.
-    let mut system = sysinfo::System::new();
-    system.refresh_system();
-
-    eprintln!(
-        "booting server
-environmentd {mz_version}
-{dep_versions}
-invoked as: {invocation}
-os: {os}
-cpus: {ncpus_logical} logical, {ncpus_physical} physical, {ncpus_useful} useful
-cpu0: {cpu0}
-memory: {memory_total}KB total, {memory_used}KB used{memory_limit}
-swap: {swap_total}KB total, {swap_used}KB used{swap_limit}
-max log level: {max_log_level}",
-        mz_version = mz_environmentd::BUILD_INFO.human_version(),
-        dep_versions = build_info().join("\n"),
-        invocation = {
-            use shell_words::quote as escape;
-            env::args()
-                .into_iter()
-                .map(|arg| escape(&arg).into_owned())
-                .join(" ")
-        },
-        os = os_info::get(),
-        ncpus_logical = num_cpus::get(),
-        ncpus_physical = num_cpus::get_physical(),
-        ncpus_useful = ncpus_useful,
-        cpu0 = {
-            match &system.cpus().get(0) {
-                None => "<unknown>".to_string(),
-                Some(cpu0) => format!("{} {}MHz", cpu0.brand(), cpu0.frequency()),
-            }
-        },
-        memory_total = system.total_memory(),
-        memory_used = system.used_memory(),
-        memory_limit = memory_max_str,
-        swap_total = system.total_swap(),
-        swap_used = system.used_swap(),
-        swap_limit = swap_max_str,
-        max_log_level = ::tracing::level_filters::LevelFilter::current(),
-    );
-
-    sys::adjust_rlimits();
-
     let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
         None => Default::default(),
         Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
@@ -742,6 +679,9 @@ max log level: {max_log_level}",
             bail!("default storage host size is unknown");
         }
     }
+
+    emit_boot_diagnostics!(&BUILD_INFO);
+    sys::adjust_rlimits();
 
     let server = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         sql_listen_addr: args.sql_listen_addr,
