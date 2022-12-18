@@ -57,7 +57,7 @@ kube-core = { version = "0.77.0", default-features = false, features = ["json-pa
 libc = { version = "0.2.138", features = ["extra_traits", "std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.8.1", features = ["hashbrown"] }
-memchr = { version = "2.4.1", features = ["std", "use_std"] }
+memchr = { version = "2.5.0", features = ["std", "use_std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1", features = ["acct", "aio", "dir", "env", "event", "feature", "fs", "hostname", "inotify", "ioctl", "kmod", "memoffset", "mman", "mount", "mqueue", "net", "personality", "pin-utils", "poll", "process", "pthread", "ptrace", "quota", "reboot", "resource", "sched", "signal", "socket", "term", "time", "ucontext", "uio", "user", "zerocopy"] }
 nom = { version = "7.1.0", features = ["alloc", "std"] }
@@ -157,7 +157,7 @@ kube-core = { version = "0.77.0", default-features = false, features = ["json-pa
 libc = { version = "0.2.138", features = ["extra_traits", "std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.8.1", features = ["hashbrown"] }
-memchr = { version = "2.4.1", features = ["std", "use_std"] }
+memchr = { version = "2.5.0", features = ["std", "use_std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1", features = ["acct", "aio", "dir", "env", "event", "feature", "fs", "hostname", "inotify", "ioctl", "kmod", "memoffset", "mman", "mount", "mqueue", "net", "personality", "pin-utils", "poll", "process", "pthread", "ptrace", "quota", "reboot", "resource", "sched", "signal", "socket", "term", "time", "ucontext", "uio", "user", "zerocopy"] }
 nom = { version = "7.1.0", features = ["alloc", "std"] }
