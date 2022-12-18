@@ -102,7 +102,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", feat
 tokio-stream = { version = "0.1.11", features = ["net", "sync", "time", "tokio-util"] }
 tokio-util = { version = "0.7.4", features = ["codec", "compat", "futures-io", "io", "slab", "time", "tracing"] }
 tower = { version = "0.4.13", features = ["__common", "balance", "buffer", "discover", "filter", "futures-core", "futures-util", "indexmap", "limit", "load", "log", "make", "pin-project", "pin-project-lite", "rand", "ready-cache", "retry", "slab", "timeout", "tokio", "tokio-util", "tracing", "util"] }
-tower-http = { version = "0.3.4", features = ["auth", "base64", "cors", "map-response-body", "tower", "trace", "tracing", "util"] }
+tower-http = { version = "0.3.5", features = ["auth", "base64", "cors", "map-response-body", "tower", "trace", "tracing", "util"] }
 tracing = { version = "0.1.37", features = ["attributes", "log", "std", "tracing-attributes"] }
 tracing-core = { version = "0.1.30", features = ["once_cell", "std"] }
 tracing-subscriber = { version = "0.3.16", features = ["alloc", "ansi", "env-filter", "fmt", "json", "matchers", "nu-ansi-term", "once_cell", "regex", "registry", "serde", "serde_json", "sharded-slab", "smallvec", "std", "thread_local", "tracing", "tracing-log", "tracing-serde"] }
@@ -203,7 +203,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", feat
 tokio-stream = { version = "0.1.11", features = ["net", "sync", "time", "tokio-util"] }
 tokio-util = { version = "0.7.4", features = ["codec", "compat", "futures-io", "io", "slab", "time", "tracing"] }
 tower = { version = "0.4.13", features = ["__common", "balance", "buffer", "discover", "filter", "futures-core", "futures-util", "indexmap", "limit", "load", "log", "make", "pin-project", "pin-project-lite", "rand", "ready-cache", "retry", "slab", "timeout", "tokio", "tokio-util", "tracing", "util"] }
-tower-http = { version = "0.3.4", features = ["auth", "base64", "cors", "map-response-body", "tower", "trace", "tracing", "util"] }
+tower-http = { version = "0.3.5", features = ["auth", "base64", "cors", "map-response-body", "tower", "trace", "tracing", "util"] }
 tracing = { version = "0.1.37", features = ["attributes", "log", "std", "tracing-attributes"] }
 tracing-core = { version = "0.1.30", features = ["once_cell", "std"] }
 tracing-subscriber = { version = "0.3.16", features = ["alloc", "ansi", "env-filter", "fmt", "json", "matchers", "nu-ansi-term", "once_cell", "regex", "registry", "serde", "serde_json", "sharded-slab", "smallvec", "std", "thread_local", "tracing", "tracing-log", "tracing-serde"] }
