@@ -374,7 +374,7 @@ impl State {
                     Err(_) => return String::new(),
                 };
                 let mut uri = Uri::builder().build().unwrap();
-                endpoint.set_endpoint(&mut uri, None);
+                endpoint.set_endpoint(&mut uri, None).unwrap();
                 uri.to_string()
             }
             _ => String::new(),

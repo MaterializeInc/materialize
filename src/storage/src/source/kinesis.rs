@@ -244,18 +244,18 @@ impl SourceReader for KinesisSourceReader {
                             }
                             output
                         }
-                        Err(SdkError::DispatchFailure(e)) => {
+                        Err(e @ SdkError::DispatchFailure(_)) => {
                             // todo@jldlaughlin: Parse this to determine fatal/retriable?
                             error!("{}", e);
                             self.shard_queue.push_back((shard_id, shard_iterator));
                             // Do not send error message as this would cause source to terminate
                             return NextMessage::TransientDelay;
                         }
-                        Err(SdkError::ServiceError { err, .. })
-                            if err.is_expired_iterator_exception() =>
+                        Err(SdkError::ServiceError(err))
+                            if err.err().is_expired_iterator_exception() =>
                         {
                             // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
-                            error!("{}", err);
+                            error!("{}", err.err());
                             // XXX(petrosagg): We are fabricating a timestamp here. Is the
                             // error truly definite?
                             let ts = (
@@ -263,12 +263,12 @@ impl SourceReader for KinesisSourceReader {
                                 MzOffset::from(self.processed_message_count),
                             );
                             let msg = Err(SourceReaderError {
-                                inner: SourceErrorDetails::Other(err.to_string()),
+                                inner: SourceErrorDetails::Other(err.err().to_string()),
                             });
                             return NextMessage::Ready(SourceMessageType::InProgress(msg, ts, ()));
                         }
-                        Err(SdkError::ServiceError { err, .. })
-                            if err.is_provisioned_throughput_exceeded_exception() =>
+                        Err(SdkError::ServiceError(err))
+                            if err.err().is_provisioned_throughput_exceeded_exception() =>
                         {
                             self.shard_queue.push_back((shard_id, shard_iterator));
                             // Do not send error message as this would cause source to terminate

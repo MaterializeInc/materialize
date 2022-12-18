@@ -264,7 +264,7 @@ async fn main() {
                     args.aws_secret_access_key,
                     None,
                 ))
-                .endpoint_resolver(Endpoint::immutable(endpoint))
+                .endpoint_resolver(Endpoint::immutable_uri(endpoint).unwrap())
                 .load()
                 .await;
             let account = "000000000000".into();
