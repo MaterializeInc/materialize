@@ -153,9 +153,21 @@ mod read_policy;
 mod sequencer;
 mod sql;
 
+// TODO: We can have only two consts here, instead of three,
+// once there exists a `const` way to convert between a `Timestamp`
+// and a `Duration`
+
+/// `DEFAULT_LOGICAL_COMPACTION_WINDOW`, in milliseconds.
 /// The default is set to a second to track the default timestamp frequency for sources.
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: Option<mz_repr::Timestamp> =
-    Some(Timestamp::new(1_000));
+const DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS: u64 = 1000;
+
+/// The default logical compaction window for new objects
+pub const DEFAULT_LOGICAL_COMPACTION_WINDOW: Duration =
+    Duration::from_millis(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
+
+/// `DEFAULT_LOGICAL_COMPACTION_WINDOW` as an `EpochMillis` timestamp
+pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_TS: mz_repr::Timestamp =
+    Timestamp::new(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
 
 /// A dummy availability zone to use when no availability zones are explicitly
 /// specified.
@@ -473,7 +485,15 @@ impl<S: Append + 'static> Coordinator<S> {
         info!("coordinator init: beginning bootstrap");
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
-        let mut policies_to_set: CollectionIdBundle = Default::default();
+        //
+        // TODO[btv] -- This is of type `Timestamp` because that's what `initialize_read_policies`
+        // takes, but it's not clear that that type makes sense. Read policies are logically
+        // durations, not instants.
+        //
+        // Ultimately, it doesn't concretely matter today, because the type ends up just being
+        // u64 anyway.
+        let mut policies_to_set: BTreeMap<Timestamp, CollectionIdBundle> = Default::default();
+        policies_to_set.insert(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS, Default::default());
 
         info!("coordinator init: creating compute replicas");
         for instance in self.catalog.compute_instances() {
@@ -499,12 +519,21 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
+                // TODO - Should these windows be configurable?
                 policies_to_set
+                    .get_mut(&DEFAULT_LOGICAL_COMPACTION_WINDOW_TS)
+                    .expect(
+                        "Default policy map was inserted just after `policies_to_set` was created.",
+                    )
                     .compute_ids
                     .entry(instance.id)
                     .or_insert_with(BTreeSet::new)
                     .extend(replica.config.logging.source_ids());
                 policies_to_set
+                    .get_mut(&DEFAULT_LOGICAL_COMPACTION_WINDOW_TS)
+                    .expect(
+                        "Default policy map was inserted just after `policies_to_set` was created.",
+                    )
                     .storage_ids
                     .extend(replica.config.logging.source_ids());
 
@@ -559,6 +588,16 @@ impl<S: Append + 'static> Coordinator<S> {
                 entry.item().typ(),
                 entry.id()
             );
+            let policy = entry
+                .item()
+                .initial_logical_compaction_window()
+                .map(|duration| {
+                    let ts = Timestamp::from(
+                        u64::try_from(duration.as_millis())
+                            .expect("Timestamp millis must fit in u64"),
+                    );
+                    ts
+                });
             match entry.item() {
                 // Currently catalog item rebuild assumes that sinks and
                 // indexes are always built individually and does not store information
@@ -619,8 +658,11 @@ impl<S: Append + 'static> Coordinator<S> {
                         )])
                         .await
                         .unwrap();
-
-                    policies_to_set.storage_ids.insert(entry.id());
+                    policies_to_set
+                        .entry(policy.expect("sources have a compaction window"))
+                        .or_insert_with(Default::default)
+                        .storage_ids
+                        .insert(entry.id());
                 }
                 CatalogItem::Table(table) => {
                     let collection_desc = table.desc.clone().into();
@@ -630,11 +672,19 @@ impl<S: Append + 'static> Coordinator<S> {
                         .await
                         .unwrap();
 
-                    policies_to_set.storage_ids.insert(entry.id());
+                    policies_to_set
+                        .entry(policy.expect("tables have a compaction window"))
+                        .or_insert_with(Default::default)
+                        .storage_ids
+                        .insert(entry.id());
                 }
                 CatalogItem::Index(idx) => {
+                    let policy_entry = policies_to_set
+                        .entry(policy.expect("indexes have a compaction window"))
+                        .or_insert_with(Default::default);
+
                     if logs.contains(&idx.on) {
-                        policies_to_set
+                        policy_entry
                             .compute_ids
                             .entry(idx.compute_instance)
                             .or_insert_with(BTreeSet::new)
@@ -645,10 +695,10 @@ impl<S: Append + 'static> Coordinator<S> {
                             .build_index_dataflow(entry.id())?;
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.compute_instance)`,
                         // but we cannot call that as it will also downgrade the read hold on the index.
-                        policies_to_set
+                        policy_entry
                             .compute_ids
                             .entry(idx.compute_instance)
-                            .or_insert_with(BTreeSet::new)
+                            .or_insert_with(Default::default)
                             .extend(dataflow.export_ids());
                         let dataflow_plan =
                             vec![self.finalize_dataflow(dataflow, idx.compute_instance)];
@@ -668,7 +718,11 @@ impl<S: Append + 'static> Coordinator<S> {
                         .await
                         .unwrap();
 
-                    policies_to_set.storage_ids.insert(entry.id());
+                    policies_to_set
+                        .entry(policy.expect("materialized views have a compaction window"))
+                        .or_insert_with(Default::default)
+                        .storage_ids
+                        .insert(entry.id());
 
                     // Re-create the sink on the compute instance.
                     let id_bundle = self
@@ -775,8 +829,15 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Having installed all entries, creating all constraints, we can now relax read policies.
-        self.initialize_read_policies(&policies_to_set, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS)
-            .await;
+        //
+        // TODO -- Improve `initialize_read_policies` API so we can avoid calling this in a loop.
+        //
+        // As of this writing, there can only be at most two keys in `policies_to_set`,
+        // so the extra load isn't crazy, but that might not be true in general if we
+        // open up custom compaction windows to users.
+        for (ts, policies) in policies_to_set {
+            self.initialize_read_policies(&policies, Some(ts)).await;
+        }
 
         info!("coordinator init: announcing completion of initialization to controller");
         // Announce the completion of initialization.

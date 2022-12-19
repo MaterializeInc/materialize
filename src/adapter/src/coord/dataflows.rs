@@ -41,7 +41,7 @@ use mz_stash::Append;
 use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View};
 use crate::coord::ddl::CatalogTxn;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_MS};
+use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::AdapterError;
 
@@ -110,7 +110,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.initialize_compute_read_policies(
             output_ids,
             instance,
-            DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+            Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
         )
         .await;
     }

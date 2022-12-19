@@ -18,22 +18,24 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::{routing, Json, Router};
 use chrono::{DateTime, Utc};
 use http::StatusCode;
+use mz_storage_client::types::sources::Timeline;
 use postgres::Row;
 use regex::Regex;
 use serde_json::json;
+use timely::order::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::error::SqlState;
 use tracing::info;
 
 use mz_adapter::catalog::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
-use mz_adapter::TimestampExplanation;
+use mz_adapter::{TimestampContext, TimestampExplanation};
 use mz_ore::assert_contains;
 use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::retry::Retry;
@@ -1116,6 +1118,84 @@ fn test_explain_timestamp_json() {
     let explain: String = row.get(0);
     // Just check that we can round-trip to the original type
     let _explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+}
+
+// Test that the since for `mz_cluster_replica_utilization` is held back by at least
+// 30 days, which is required for the frontend observability work.
+//
+// Feel free to modify this test if that product requirement changes,
+// but please at least keep _something_ that tests that custom compaction windows are working.
+#[test]
+fn test_utilization_hold() {
+    const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
+
+    let now_millis = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    let past_millis = now_millis - THIRTY_DAYS_MS;
+
+    let now = Arc::new(Mutex::new(past_millis));
+    let now_fn = {
+        let timestamp = Arc::clone(&now);
+        NowFn::from(move || *timestamp.lock().unwrap())
+    };
+    let data_dir = tempfile::tempdir().unwrap();
+    let config = util::Config::default()
+        .with_now(now_fn)
+        .data_directory(data_dir.path());
+
+    // Create the server with the past time, to make sure the table is created.
+    let server = util::start_server(config).unwrap();
+
+    // Fast-forward time to make sure the table is still readable at the old time.
+    *now.lock().unwrap() = now_millis;
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    let q =
+        "EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM mz_internal.mz_cluster_replica_utilization";
+    let row = client.query_one(q, &[]).unwrap();
+    let explain: String = row.get(0);
+    let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+
+    // If we're not in EpochMilliseconds, the timestamp math below is invalid, so assert that here.
+    assert!(matches!(
+        explain.determination.timestamp_context,
+        TimestampContext::TimelineTimestamp(Timeline::EpochMilliseconds, _)
+    ));
+    let since = explain
+        .determination
+        .since
+        .into_option()
+        .expect("The since must be finite");
+    let past_since = Timestamp::from(past_millis);
+    assert!(since.less_equal(&past_since));
+
+    // Check that we can turn off retention
+    let mut sys_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    sys_client
+        .execute("ALTER SYSTEM SET metrics_retention='1s'", &[])
+        .unwrap();
+
+    let row = client.query_one(q, &[]).unwrap();
+    let explain: String = row.get(0);
+    let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+    let since = explain
+        .determination
+        .since
+        .into_option()
+        .expect("The since must be finite");
+    // Check that since is not more than 2 seconds in the past
+    assert!(Timestamp::new(now_millis).less_equal(&since.step_forward_by(&Timestamp::new(2000))));
 }
 
 // Test that a query that causes a compute instance to panic will resolve

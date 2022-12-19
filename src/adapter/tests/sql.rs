@@ -89,6 +89,8 @@ async fn datadriven() {
                                         defaults: vec![Expr::null(); 0],
                                         conn_id: None,
                                         depends_on: vec![],
+                                        custom_logical_compaction_window: None,
+                                        is_retained_metrics_relation: false,
                                     }),
                                 }],
                                 |_| Ok(()),

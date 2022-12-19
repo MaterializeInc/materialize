@@ -305,6 +305,19 @@ pub const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
     internal: false,
 };
 
+/// The logical compaction window for builtin tables and sources that have the
+/// `retained_metrics_relation` flag set.
+///
+/// The existence of this variable is a bit of a hack until we have a fully general
+/// solution for controlling retention windows.
+pub const METRICS_RETENTION: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("metrics_retention"),
+    // 30 days
+    value: &Duration::from_secs(30 * 24 * 60 * 60),
+    description: "The time to retain cluster and storage host utilization metrics (Materialize).",
+    internal: true,
+};
+
 static DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<Vec<String>> = Lazy::new(Vec::new);
 static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<String>>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("allowed_cluster_replica_sizes"),
@@ -937,6 +950,7 @@ pub struct SystemVars {
     allowed_cluster_replica_sizes: SystemVar<Vec<String>>, // TODO: BTreeSet<String> will be better
     window_functions: SystemVar<bool>,
     config_has_synced_once: SystemVar<bool>,
+    metrics_retention: SystemVar<Duration>,
 }
 
 impl Default for SystemVars {
@@ -958,6 +972,7 @@ impl Default for SystemVars {
             allowed_cluster_replica_sizes: SystemVar::new(&ALLOWED_CLUSTER_REPLICA_SIZES),
             window_functions: SystemVar::new(&WINDOW_FUNCTIONS),
             config_has_synced_once: SystemVar::new(&CONFIG_HAS_SYNCED_ONCE),
+            metrics_retention: SystemVar::new(&METRICS_RETENTION),
         }
     }
 }
@@ -966,7 +981,7 @@ impl SystemVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 16] = [
+        let vars: [&dyn Var; 17] = [
             &self.max_aws_privatelink_connections,
             &self.max_tables,
             &self.max_sources,
@@ -983,6 +998,7 @@ impl SystemVars {
             &self.allowed_cluster_replica_sizes,
             &self.window_functions,
             &self.config_has_synced_once,
+            &self.metrics_retention,
         ];
         vars.into_iter()
     }
@@ -1042,6 +1058,8 @@ impl SystemVars {
             Ok(&self.window_functions)
         } else if name == CONFIG_HAS_SYNCED_ONCE.name {
             Ok(&self.config_has_synced_once)
+        } else if name == METRICS_RETENTION.name {
+            Ok(&self.metrics_retention)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1089,6 +1107,8 @@ impl SystemVars {
             self.window_functions.is_default(value)
         } else if name == CONFIG_HAS_SYNCED_ONCE.name {
             self.config_has_synced_once.is_default(value)
+        } else if name == METRICS_RETENTION.name {
+            self.metrics_retention.is_default(value)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1145,6 +1165,8 @@ impl SystemVars {
             self.window_functions.set(value)
         } else if name == CONFIG_HAS_SYNCED_ONCE.name {
             self.config_has_synced_once.set(value)
+        } else if name == METRICS_RETENTION.name {
+            self.metrics_retention.set(value)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1196,6 +1218,8 @@ impl SystemVars {
             Ok(self.window_functions.reset())
         } else if name == CONFIG_HAS_SYNCED_ONCE.name {
             Ok(self.config_has_synced_once.reset())
+        } else if name == METRICS_RETENTION.name {
+            Ok(self.metrics_retention.reset())
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -1279,6 +1303,10 @@ impl SystemVars {
     /// Returns the `config_has_synced_once` configuration parameter.
     pub fn config_has_synced_once(&self) -> bool {
         *self.config_has_synced_once.value()
+    }
+
+    pub fn metrics_retention(&self) -> Duration {
+        *self.metrics_retention.value()
     }
 }
 
