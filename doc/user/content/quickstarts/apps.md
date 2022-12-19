@@ -27,20 +27,40 @@ The key concepts present in this quickstart will also apply to many other projec
 
 ### Create the sources
 
-Materialize provides public Kafka topics for its users to use as a source. The Kafka topics contain data from a fictional eCommerce and receive updates every second. You will use the data in them to build the analytics.
+Materialize provides public Kafka topics and a Confluent Schema Registry for its users. The Kafka topics contain data from a fictional eCommerce and receive updates every second. You will use the data in them to build the analytics for the dashboard.
 
 1. In your `psql` terminal, create a new schema:
 
     ```sql
     CREATE SCHEMA shop;
     ```
-1. Create the connection:
 
+1. Create the connection to the Confluent Schema Registry:
     ```sql
-    CREATE CONNECTION shop.kafka_conn TO KAFKA (BROKER 'localhost:9092');
+    CREATE SECRET IF NOT EXISTS shop.csr_username AS '<TBD>';
+    CREATE SECRET IF NOT EXISTS shop.csr_password AS '<TBD>';
+
+    CREATE CONNECTION shop.csr_basic_http
+    FOR CONFLUENT SCHEMA REGISTRY
+    URL '<TBD>',
+    USERNAME = SECRET csr_username,
+    PASSWORD = SECRET csr_password;
     ```
 
-1. Create the sources, one per topic:
+1. Create the connection to the Kafka broker:
+
+    ```sql
+    CREATE SECRET shop.kafka_password AS '<TBD>';
+
+    CREATE CONNECTION shop.kafka_connection TO KAFKA (
+        BROKER 'TBD',
+        SASL MECHANISMS = 'SCRAM-SHA-256',
+        SASL USERNAME = 'TBD',
+        SASL PASSWORD = SECRET shop.kafka_password
+    );
+    ```
+
+1. Create the sources, one per Kafka topic:
     <!-- ```sql
     CREATE TABLE IF NOT EXISTS shop.users (
         id INT,
@@ -79,27 +99,25 @@ Materialize provides public Kafka topics for its users to use as a source. The K
 
     ```sql
     CREATE SOURCE purchases
-    FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.shop.purchases'
-    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-    ENVELOPE DEBEZIUM;
+    FROM KAFKA CONNECTION shop.kafka_connection (TOPIC 'purchases')
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION shop.csr_basic_http
+    WITH (SIZE = '3xsmall');
 
     CREATE SOURCE items
-    FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.shop.items'
-    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-    ENVELOPE DEBEZIUM;
+    FROM KAFKA CONNECTION shop.kafka_connection (TOPIC 'items')
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION shop.csr_basic_http
+    WITH (SIZE = '3xsmall');
 
     CREATE SOURCE users
-    FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.shop.users'
-    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-    ENVELOPE DEBEZIUM;
+    FROM KAFKA CONNECTION shop.kafka_connection (TOPIC 'users')
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION shop.csr_basic_http
+    WITH (SIZE = '3xsmall');
     ```
 
     <!-- Each topic contains different data:
     * Items: items by category and stock
     * Users: registration and vip access
     * Purchases: item purchases from users -->
-
-<!-- Calculating the same insights over and over again is **inefficient**. -->
 
 ### Build the analytics
 
