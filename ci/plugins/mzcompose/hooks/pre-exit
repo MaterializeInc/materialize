@@ -21,6 +21,7 @@ run() {
 
 run logs --no-color > services.log
 buildkite-agent artifact upload services.log
+buildkite-agent artifact upload /var/log/dmesg
 
 # docker-compose kill may fail attempting to kill containers
 # that have just exited on their own because of the
