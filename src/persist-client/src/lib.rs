@@ -51,10 +51,6 @@ pub mod critical;
 pub mod error;
 pub mod fetch;
 pub mod inspect;
-pub mod operators {
-    //! [timely] operators for reading and writing persist Shards.
-    pub mod shard_source;
-}
 pub mod read;
 pub mod usage;
 pub mod write;

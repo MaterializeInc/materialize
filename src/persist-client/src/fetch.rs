@@ -111,7 +111,7 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 enum FetchBatchFilter<T> {
     Snapshot {
         as_of: Antichain<T>,
@@ -416,23 +416,12 @@ pub struct FetchedPart<K, V, T, D> {
     _phantom: PhantomData<fn() -> (K, V, D)>,
 }
 
-impl<K, V, T: Clone, D> Clone for FetchedPart<K, V, T, D> {
-    fn clone(&self) -> Self {
-        Self {
-            metrics: Arc::clone(&self.metrics),
-            ts_filter: self.ts_filter.clone(),
-            part: self.part.clone(),
-            _phantom: self._phantom.clone(),
-        }
-    }
-}
-
 /// A [Blob] object that has been fetched, but has no associated decoding
 /// logic.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct EncodedPart<T> {
     registered_desc: Description<T>,
-    part: Arc<BlobTraceBatchPart<T>>,
+    part: BlobTraceBatchPart<T>,
 
     needs_truncation: bool,
     part_idx: usize,
@@ -529,7 +518,7 @@ where
 
         EncodedPart {
             registered_desc,
-            part: Arc::new(part),
+            part,
             part_idx: 0,
             idx: 0,
             needs_truncation,
