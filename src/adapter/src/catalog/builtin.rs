@@ -1269,8 +1269,7 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("connection_id", ScalarType::String.nullable(true))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("envelope_type", ScalarType::String.nullable(true)),
-            is_retained_metrics_relation: true,
-
+    is_retained_metrics_relation: true,
 });
 pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sinks",
