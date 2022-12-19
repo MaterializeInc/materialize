@@ -7144,6 +7144,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "timely-poll-failure"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "mz-timely-util",
+ "timely",
+ "tokio",
+ "workspace-hack",
+]
+
+[[package]]
 name = "timely_bytes"
 version = "0.12.0"
 source = "git+https://github.com/TimelyDataflow/timely-dataflow#faf5eb6457e69ac2bfbbb8a0f62deda55aa2c927"
@@ -7284,6 +7295,17 @@ checksum = "f213a84bffbd61b8fa0ba8a044b4bbe35d471d0b518867181e82bd5c15542784"
 dependencies = [
  "libc",
  "tokio",
+]
+
+[[package]]
+name = "tokio-poll-failure"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "futures",
+ "reqwest",
+ "tokio",
+ "workspace-hack",
 ]
 
 [[package]]

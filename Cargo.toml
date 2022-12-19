@@ -56,6 +56,8 @@ members = [
     "src/storage-client",
     "src/testdrive",
     "src/timely-util",
+    "src/timely-poll-failure",
+    "src/tokio-poll-failure",
     "src/transform",
     "src/cloud-resources",
     "src/walkabout",
