@@ -531,6 +531,7 @@ mz_cluster_replica_heartbeats
 mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
+mz_storage_host_sizes
 mz_storage_usage_by_shard
 mz_view_foreign_keys
 mz_view_keys
@@ -557,8 +558,10 @@ mz_scheduling_elapsed
 mz_scheduling_parks
 mz_sink_status
 mz_sink_statuses
+mz_sink_utilization
 mz_source_status
 mz_source_statuses
+mz_source_utilization
 mz_worker_compute_delays
 mz_show_cluster_replicas
 mz_show_indexes
@@ -577,7 +580,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-35
+36
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

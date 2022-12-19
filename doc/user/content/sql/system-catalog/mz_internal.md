@@ -399,6 +399,32 @@ Field       | Type       | Meaning
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`mz_timestamp`] | The next timestamp at which the dataflow may change.
 
+### `mz_source_utilization`
+
+The `mz_source_utilization` table gives the last known CPU and RAM utilization
+statistics for all extant sources, as a percentage of the total allocation.
+
+At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+
+| Field            | Type      | Meaning                                                    |
+|------------------|-----------|------------------------------------------------------------|
+| `source_id`      | [`uint8`] | The ID of a source.                                        |
+| `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
+| `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
+
+### `mz_sink_utilization`
+
+The `mz_sink_utilization` table gives the last known CPU and RAM utilization
+statistics for all extant sinks, as a percentage of the total allocation.
+
+At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+
+| Field            | Type      | Meaning                                                    |
+|------------------|-----------|------------------------------------------------------------|
+| `sink_id`        | [`uint8`] | The ID of a sink.                                          |
+| `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
+| `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
+
 ### `mz_storage_host_metrics`
 
 The `mz_storage_host_metrics` table gives the last known CPU and RAM utilization statistics
@@ -409,9 +435,26 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 Field              | Type       | Meaning
 -------------------|------------|--------
 `id`               | [`text`]   | The ID of the storage object (source or sink).
-`process_id`       | [`bigint`] | An identifier of a process within a replica.
+`process_id`       | [`bigint`] | An identifier of a process within a host.
 `cpu_nano_cores`   | [`bigint`] | Approximate CPU usage, in billionths of a vCPU core.
 `memory_bytes`     | [`bigint`] | Approximate RAM usage, in bytes.
+
+### `mz_storage_host_sizes`
+
+The `mz_storage_host_sizes` table contains a mapping of logical sizes
+(e.g. "xlarge") to physical sizes (number of workers, and CPU and memory allocations per process).
+
+{{< warning >}}
+The values in this table may change at any time, and users should not rely on
+them for any kind of capacity planning.
+{{< /warning >}}
+
+| Field            | Type      | Meaning                                                       |
+|------------------|-----------|---------------------------------------------------------------|
+| `size`           | [`text`]  | The human-readable size.                                      |
+| `workers`        | [`uint8`] | The number of Timely Dataflow workers per process.            |
+| `cpu_nano_cores` | [`uint8`] | The CPU allocation per process, in billionths of a vCPU core. |
+| `memory_bytes`   | [`uint8`] | The RAM allocation per process, in billionths of a vCPU core. |
 
 ### `mz_source_status`
 
