@@ -157,6 +157,8 @@ mod sql;
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW: Duration = Duration::from_secs(1);
 
 /// `DEFAULT_LOGICAL_COMPACTION_WINDOW` in the `EpochMillis` domain
+// `u64::try_from` is not const, so we can't use it here.
+#[allow(clippy::as_conversions)]
 pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: mz_repr::Timestamp =
     Timestamp::new(DEFAULT_LOGICAL_COMPACTION_WINDOW.as_millis() as u64);
 

@@ -1149,7 +1149,7 @@ fn test_utilization_hold() {
         .data_directory(data_dir.path());
 
     // Create the server with the past time, to make sure the table is created.
-    let server = util::start_server(config.clone()).unwrap();
+    let server = util::start_server(config).unwrap();
 
     // Fast-forward time to make sure the table is still readable at the old time.
     *now.lock().unwrap() = now_millis;
