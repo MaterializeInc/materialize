@@ -245,11 +245,12 @@ impl fmt::Debug for PrettyBytes<'_> {
     }
 }
 
-/// Fetches the contents of a blob batch part
+/// Fetches the updates in a blob batch part
 pub async fn blob_batch_part(
     blob_uri: &str,
     shard_id: ShardId,
     partial_key: String,
+    limit: usize,
 ) -> Result<impl serde::Serialize, anyhow::Error> {
     let blob = BlobConfig::try_from(blob_uri).await?;
     let blob = blob.clone().open().await?;
@@ -269,6 +270,9 @@ pub async fn blob_batch_part(
         updates: Vec::new(),
     };
     while let Some((k, v, t, d)) = encoded_part.next() {
+        if out.updates.len() > limit {
+            break;
+        }
         out.updates.push(BatchPartUpdate {
             k: format!("{:?}", PrettyBytes(k)),
             v: format!("{:?}", PrettyBytes(v)),
