@@ -42,6 +42,7 @@
 "ANYCOMPATIBLEARRAY"
 "ANYCOMPATIBLELIST"
 "ANYCOMPATIBLEMAP"
+"ANYCOMPATIBLERANGE"
 "anycompatiblemultirange"
 "anycompatiblenonarray"
 "anycompatiblerange"

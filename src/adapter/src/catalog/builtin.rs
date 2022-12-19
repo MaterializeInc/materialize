@@ -681,6 +681,16 @@ pub const TYPE_ANYNONARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
+pub const TYPE_ANYRANGE: BuiltinType<NameReference> = BuiltinType {
+    name: "anyrange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::TYPE_ANYRANGE_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
+};
+
 pub const TYPE_CHAR: BuiltinType<NameReference> = BuiltinType {
     name: "char",
     schema: PG_CATALOG_SCHEMA,
@@ -881,6 +891,16 @@ pub const TYPE_ANYCOMPATIBLENONARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "anycompatiblenonarray",
     schema: PG_CATALOG_SCHEMA,
     oid: oid::TYPE_ANYCOMPATIBLENONARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
+};
+
+pub const TYPE_ANYCOMPATIBLERANGE: BuiltinType<NameReference> = BuiltinType {
+    name: "anycompatiblerange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::TYPE_ANYCOMPATIBLERANGE_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
         array_id: None,
@@ -2849,6 +2869,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_ANYARRAY),
         Builtin::Type(&TYPE_ANYELEMENT),
         Builtin::Type(&TYPE_ANYNONARRAY),
+        Builtin::Type(&TYPE_ANYRANGE),
         Builtin::Type(&TYPE_BOOL),
         Builtin::Type(&TYPE_BOOL_ARRAY),
         Builtin::Type(&TYPE_BYTEA),
@@ -2906,6 +2927,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_ANYCOMPATIBLENONARRAY),
         Builtin::Type(&TYPE_ANYCOMPATIBLELIST),
         Builtin::Type(&TYPE_ANYCOMPATIBLEMAP),
+        Builtin::Type(&TYPE_ANYCOMPATIBLERANGE),
         Builtin::Type(&TYPE_UINT2),
         Builtin::Type(&TYPE_UINT2_ARRAY),
         Builtin::Type(&TYPE_UINT4),
