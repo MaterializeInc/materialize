@@ -38,7 +38,7 @@ use crate::types::sources::SourceInstanceDesc;
 
 use super::error::CollectionMissing;
 use super::orchestrator::ComputeOrchestrator;
-use super::replica::Replica;
+use super::replica::{Replica, ReplicaResponse};
 use super::{
     CollectionState, ComputeControllerResponse, ComputeInstanceId, ComputeReplicaLocation,
     ReplicaId,
@@ -241,7 +241,7 @@ where
     /// rehydration.
     ///
     /// This method is cancellation safe.
-    pub async fn recv(&mut self) -> Result<(ReplicaId, ComputeResponse<T>), ReplicaId> {
+    pub async fn recv(&mut self) -> Result<(ReplicaId, ReplicaResponse<T>), ReplicaId> {
         // Receive responses from any of the replicas, and take appropriate
         // action.
         let response = self
