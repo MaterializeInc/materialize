@@ -86,11 +86,11 @@ seqno=v5 batches=b0,b1
 seqno=v6 batches=b0,b1,b2
 
 # compact and merge b0 and b1 into b0_1
-compact output=b0_1 inputs=(b0,b1) lower=0 upper=2 since=0 writer_id=w11111111-1111-1111-1111-111111111111
+compact output=b0_1 inputs=(b0,b1) lower=0 upper=2 since=0
 ----
 parts=1 len=3
 
-apply-merge-res input=b0_1 writer_id=w11111111-1111-1111-1111-111111111111
+apply-merge-res input=b0_1
 ----
 v7 true
 

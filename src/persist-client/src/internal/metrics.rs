@@ -306,6 +306,7 @@ impl MetricsVecs {
             init_state: self.cmd_metrics("init_state"),
             add_and_remove_rollups: self.cmd_metrics("add_and_remove_rollups"),
             register: self.cmd_metrics("register"),
+            clone_reader: self.cmd_metrics("clone_reader"),
             compare_and_append: self.cmd_metrics("compare_and_append"),
             compare_and_append_noop:             registry.register(metric!(
                 name: "mz_persist_cmd_compare_and_append_noop",
@@ -318,7 +319,6 @@ impl MetricsVecs {
             expire_reader: self.cmd_metrics("expire_reader"),
             expire_writer: self.cmd_metrics("expire_writer"),
             merge_res: self.cmd_metrics("merge_res"),
-            become_tombstone: self.cmd_metrics("become_tombstone"),
         }
     }
 
@@ -483,6 +483,7 @@ pub struct CmdsMetrics {
     pub(crate) init_state: CmdMetrics,
     pub(crate) add_and_remove_rollups: CmdMetrics,
     pub(crate) register: CmdMetrics,
+    pub(crate) clone_reader: CmdMetrics,
     pub(crate) compare_and_append: CmdMetrics,
     pub(crate) compare_and_append_noop: IntCounter,
     pub(crate) compare_and_downgrade_since: CmdMetrics,
@@ -492,7 +493,6 @@ pub struct CmdsMetrics {
     pub(crate) expire_reader: CmdMetrics,
     pub(crate) expire_writer: CmdMetrics,
     pub(crate) merge_res: CmdMetrics,
-    pub(crate) become_tombstone: CmdMetrics,
 }
 
 #[derive(Debug)]

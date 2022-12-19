@@ -500,7 +500,7 @@ impl PersistClient {
 
         let reader_id = LeasedReaderId::new();
         let heartbeat_ts = (self.cfg.now)();
-        let reader_state = machine
+        let (_, read_cap) = machine
             .register_leased_reader(
                 &reader_id,
                 purpose,
@@ -515,7 +515,7 @@ impl PersistClient {
             gc,
             Arc::clone(&self.blob),
             reader_id,
-            reader_state.since,
+            read_cap.since,
             heartbeat_ts,
         )
         .await;

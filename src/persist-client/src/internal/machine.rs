@@ -9,6 +9,7 @@
 
 //! Implementation of the persist state machine.
 
+use std::convert::Infallible;
 use std::fmt::Debug;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 use std::sync::Arc;
@@ -39,7 +40,7 @@ use crate::internal::metrics::{
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
     CompareAndAppendBreak, CriticalReaderState, HollowBatch, IdempotencyToken, LeasedReaderState,
-    NoOpStateTransition, Since, State, StateCollections, Upper, WriterState,
+    Since, State, StateCollections, Upper, WriterState,
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::StateVersions;
@@ -178,9 +179,9 @@ where
         purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
-    ) -> LeasedReaderState<T> {
+    ) -> (Upper<T>, LeasedReaderState<T>) {
         let metrics = Arc::clone(&self.metrics);
-        let (_seqno, reader_state, _maintenance) = self
+        let (seqno, (shard_upper, read_cap), _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, cfg, state| {
                 state.register_leased_reader(
                     &cfg.hostname,
@@ -192,21 +193,8 @@ where
                 )
             })
             .await;
-        // Usually, the reader gets an initial seqno hold of the seqno at which
-        // it was registered. However, on a tombstone shard the seqno hold
-        // happens to get computed as the tombstone seqno + 1
-        // (State::clone_apply provided seqno.next(), the non-no-op commit
-        // seqno, to the work fn and this is what register_reader uses for the
-        // seqno hold). The real invariant we want to protect here is that the
-        // hold is >= the seqno_since, so validate that instead of anything more
-        // specific.
-        debug_assert!(
-            reader_state.seqno >= self.state.seqno_since(),
-            "{} vs {}",
-            reader_state.seqno,
-            self.state.seqno_since()
-        );
-        reader_state
+        debug_assert_eq!(seqno, read_cap.seqno);
+        (shard_upper, read_cap)
     }
 
     pub async fn register_critical_reader<O: Opaque + Codec64>(
@@ -243,6 +231,30 @@ where
             })
             .await;
         (shard_upper, writer_state)
+    }
+
+    pub async fn clone_reader(
+        &mut self,
+        new_reader_id: &LeasedReaderId,
+        purpose: &str,
+        lease_duration: Duration,
+        heartbeat_timestamp_ms: u64,
+    ) -> LeasedReaderState<T> {
+        let metrics = Arc::clone(&self.metrics);
+        let (seqno, read_cap, _maintenance) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.clone_reader, |seqno, cfg, state| {
+                state.clone_reader(
+                    &cfg.hostname,
+                    new_reader_id,
+                    purpose,
+                    seqno,
+                    lease_duration,
+                    heartbeat_timestamp_ms,
+                )
+            })
+            .await;
+        debug_assert_eq!(seqno, read_cap.seqno);
+        read_cap
     }
 
     pub async fn compare_and_append(
@@ -427,16 +439,10 @@ where
                         };
                         compact_reqs.push(req);
                     }
-                    let mut writer_maintenance = WriterMaintenance {
+                    let writer_maintenance = WriterMaintenance {
                         routine,
                         compaction: compact_reqs,
                     };
-
-                    // Slightly unfortunate: as the only non-apply_unbatched_idempotent_cmd user,
-                    // compare_and_append has to have its own check for maybe_become_tombstone.
-                    if let Some(tombstone_maintenance) = self.maybe_become_tombstone().await {
-                        writer_maintenance.routine.merge(tombstone_maintenance);
-                    }
                     return Ok(Ok((seqno, writer_maintenance)));
                 }
                 Err(CompareAndAppendBreak::AlreadyCommitted) => {
@@ -739,44 +745,6 @@ where
         seqno
     }
 
-    pub async fn maybe_become_tombstone(&mut self) -> Option<RoutineMaintenance> {
-        if !self.state.upper().is_empty() || !self.state.since().is_empty() {
-            return None;
-        }
-
-        let metrics = Arc::clone(&self.metrics);
-        let mut retry = self
-            .metrics
-            .retries
-            .idempotent_cmd
-            .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
-        loop {
-            let res = self
-                .apply_unbatched_cmd(&metrics.cmds.become_tombstone, |_, _, state| {
-                    state.become_tombstone()
-                })
-                .await;
-            let err = match res {
-                Ok((_seqno, _res, maintenance)) => return Some(maintenance),
-                Err(err) => err,
-            };
-            if retry.attempt() >= INFO_MIN_ATTEMPTS {
-                info!(
-                    "maybe_become_tombstone received an indeterminate error, retrying in {:?}: {}",
-                    retry.next_sleep(),
-                    err
-                );
-            } else {
-                debug!(
-                    "maybe_become_tombstone received an indeterminate error, retrying in {:?}: {}",
-                    retry.next_sleep(),
-                    err
-                );
-            }
-            retry = retry.sleep().await;
-        }
-    }
-
     pub async fn snapshot(
         &mut self,
         as_of: &Antichain<T>,
@@ -849,11 +817,7 @@ where
 
     async fn apply_unbatched_idempotent_cmd<
         R,
-        WorkFn: FnMut(
-            SeqNo,
-            &PersistConfig,
-            &mut StateCollections<T>,
-        ) -> ControlFlow<NoOpStateTransition<R>, R>,
+        WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<Infallible, R>,
     >(
         &mut self,
         cmd: &CmdMetrics,
@@ -866,16 +830,9 @@ where
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
             match self.apply_unbatched_cmd(cmd, &mut work_fn).await {
-                Ok((seqno, x, mut maintenance)) => match x {
-                    Ok(x) => {
-                        if let Some(tombstone_maintenance) = self.maybe_become_tombstone().await {
-                            maintenance.merge(tombstone_maintenance);
-                        }
-                        return (seqno, x, maintenance);
-                    }
-                    Err(NoOpStateTransition(x)) => {
-                        return (seqno, x, maintenance);
-                    }
+                Ok((seqno, x, maintenance)) => match x {
+                    Ok(x) => return (seqno, x, maintenance),
+                    Err(infallible) => match infallible {},
                 },
                 Err(err) => {
                     if retry.attempt() >= INFO_MIN_ATTEMPTS {
@@ -900,13 +857,10 @@ where
         mut work_fn: WorkFn,
     ) -> Result<(SeqNo, Result<R, E>, RoutineMaintenance), Indeterminate> {
         let is_write = cmd.name == self.metrics.cmds.compare_and_append.name;
-        let is_rollup = cmd.name == self.metrics.cmds.add_and_remove_rollups.name;
         cmd.run_cmd(|cas_mismatch_metric| async move {
             let mut garbage_collection;
 
             loop {
-                let was_tombstone_before = self.state.collections.is_tombstone();
-
                 let (work_ret, mut new_state) = match self
                     .state
                     .clone_apply(&self.cfg, &mut work_fn)
@@ -916,22 +870,6 @@ where
                         return Ok((self.state.seqno(), Err(err), RoutineMaintenance::default()))
                     }
                 };
-
-                // Sanity check that all state transitions have special case for
-                // being a tombstone. The ones that do will return a Break and
-                // return out of this method above. The one exception is adding
-                // a rollup, because we want to be able to add a rollup for the
-                // tombstone state.
-                //
-                // TODO: Even better would be to write the rollup in the
-                // tombstone transition so it's a single terminal state
-                // transition, but it'll be tricky to get right.
-                if was_tombstone_before && !is_rollup {
-                    panic!(
-                        "cmd {} unexpectedly tried to commit a new state on a tombstone: {:?}",
-                        cmd.name, self.state
-                    );
-                }
 
                 // Find out if this command has been selected to perform gc, so
                 // that it will fire off a background request to the
@@ -1004,7 +942,7 @@ where
 
                         let maintenance = RoutineMaintenance {
                             garbage_collection,
-                            lease_expiration: lease_expiration.unwrap_or_default(),
+                            lease_expiration,
                             write_rollup: self.state.need_rollup(),
                         };
 
@@ -1260,9 +1198,6 @@ pub mod datadriven {
             }
             let mut batches = vec![];
             x.collections.trace.map_batches(|b| {
-                if b.parts.is_empty() {
-                    return;
-                }
                 for (batch_name, original_batch) in &datadriven.batches {
                     if original_batch.parts == b.parts {
                         batches.push(batch_name.to_owned());
@@ -1494,7 +1429,6 @@ pub mod datadriven {
         let lower = args.expect_antichain("lower");
         let upper = args.expect_antichain("upper");
         let since = args.expect_antichain("since");
-        let writer_id = args.optional("writer_id");
         let target_size = args.optional("target_size");
         let memory_bound = args.optional("memory_bound");
 
@@ -1521,14 +1455,13 @@ pub mod datadriven {
             desc: Description::new(lower, upper, since),
             inputs,
         };
-        let writer_id = writer_id.unwrap_or_else(WriterId::new);
         let res = Compactor::<String, (), u64, i64>::compact(
             cfg,
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.client.cpu_heavy_runtime),
             req,
-            writer_id,
+            WriterId::new(),
         )
         .await?;
 
@@ -1664,7 +1597,7 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let reader_id = args.expect("reader_id");
-        let reader_state = datadriven
+        let (_, state) = datadriven
             .machine
             .register_leased_reader(
                 &reader_id,
@@ -1676,7 +1609,7 @@ pub mod datadriven {
         Ok(format!(
             "{} {:?}\n",
             datadriven.machine.seqno(),
-            reader_state.since.elements(),
+            state.since.elements(),
         ))
     }
 
