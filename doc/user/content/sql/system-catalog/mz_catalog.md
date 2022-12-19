@@ -321,6 +321,7 @@ Field            | Type       | Meaning
 `type`           | [`text`]   | The type of the source: `kafka`, `postgres`, `load-generator`, or `subsource`.
 `connection_id`  | [`text`]   | The ID of the connection associated with the source, if any.
 `size`           | [`text`]   | The [size](/sql/create-source/#sizing-a-source) of the source.
+`envelope_type`  | [`text`]   | The [envelope](/sql/create-source/#envelopes) of the source: `none`, `upsert`, or `debezium`.
 
 ### `mz_storage_usage`
 

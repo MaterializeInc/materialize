@@ -72,7 +72,7 @@ use mz_storage_client::types::hosts::{StorageHostConfig, StorageHostResourceAllo
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
 };
-use mz_storage_client::types::sources::{SourceDesc, Timeline};
+use mz_storage_client::types::sources::{SourceDesc, SourceEnvelope, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
@@ -1504,6 +1504,44 @@ impl Source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.name(),
             DataSourceDesc::Source => "subsource",
             DataSourceDesc::Introspection(_) => "source",
+        }
+    }
+
+    /// Envelope of the source.
+    pub fn envelope(&self) -> Option<&str> {
+        // Note how "none"/"append-only" is different from `None`. Source
+        // sources don't have an envelope (internal logs, for example), while
+        // other sources have an envelope that we call the "NONE"-envelope.
+
+        match &self.data_source {
+            // NOTE(aljoscha): We could move the block for ingestsions into
+            // `SourceEnvelope` itself, but that one feels more like an internal
+            // thing and adapter should own how we represent envelopes as a
+            // string? It would not be hard to convince me otherwise, though.
+            DataSourceDesc::Ingestion(ingestion) => match ingestion.desc.envelope() {
+                SourceEnvelope::None(_) => Some("none"),
+                SourceEnvelope::Debezium(_) => {
+                    // NOTE(aljoscha): This is currently not used in production.
+                    // DEBEZIUM sources transparently use `DEBEZIUM UPSERT`.
+                    Some("debezium")
+                }
+                SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
+                    mz_storage_client::types::sources::UpsertStyle::Default(_) => Some("upsert"),
+                    mz_storage_client::types::sources::UpsertStyle::Debezium { .. } => {
+                        // NOTE(aljoscha): Should we somehow mark that this is
+                        // using upsert internally? See note above about
+                        // DEBEZIUM.
+                        Some("debezium")
+                    }
+                },
+                SourceEnvelope::CdcV2 => {
+                    // TODO(aljoscha): Should we even report this? It's
+                    // currently not exposed.
+                    Some("materialize")
+                }
+            },
+            DataSourceDesc::Source => None,
+            DataSourceDesc::Introspection(_) => None,
         }
     }
 

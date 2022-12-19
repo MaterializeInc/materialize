@@ -605,9 +605,6 @@ def workflow_test_resource_limits(c: Composition) -> None:
         c.run("testdrive", "resources/resource-limits.td")
 
 
-# TODO: Would be nice to update this test to use a builtin table that can be materialized.
-#  pg_proc, and most postgres catalog views, cannot be materialized because they use
-#  pg_catalog.current_database(). So we can't test making indexes and materialized views.
 def workflow_test_builtin_migration(c: Composition) -> None:
     """Exercise the builtin object migration code by upgrading between two versions
     that will have a migration triggered between them. Create a materialized view
@@ -616,8 +613,7 @@ def workflow_test_builtin_migration(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     with c.override(
-        # Random commit before pg_proc, mz_dataflow_operator_reachability, mz_show_cluster_replicas, and
-        # mz_cluster_replica_statuses were updated.
+        # Random commit before the migrations that we are testing.
         Materialized(
             image="materialize/materialized:devel-aa4128c9c485322f90ab0af2b9cb4d16e1c470c0",
             default_size=1,
@@ -631,6 +627,8 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         c.testdrive(
             input=dedent(
                 """
+        # pg_catalog.pg_proc migration
+
         # The limit is added to avoid having to update the number every time we add a function.
         > CREATE VIEW v1 AS SELECT COUNT(*) FROM (SELECT * FROM pg_proc ORDER BY oid LIMIT 5);
         > SELECT * FROM v1;
@@ -638,12 +636,16 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         ! SELECT DISTINCT proowner FROM pg_proc;
         contains:column "proowner" does not exist
 
+        # mz_internal.mz_dataflow_operator_reachability migration
+
         # Populate mz_dataflow_operator_reachability
         > CREATE TABLE t (a INT);
         > CREATE DEFAULT INDEX ON t;
 
         > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
         "bigint list"
+
+        # mz_internal.mz_cluster_replica_statuses migration
 
         > SELECT pg_typeof(process_id) FROM mz_internal.mz_cluster_replica_statuses LIMIT 1;
         "bigint"
@@ -653,9 +655,19 @@ def workflow_test_builtin_migration(c: Composition) -> None:
 
         > SELECT last_update FROM mz_internal.mz_cluster_replica_statuses LIMIT 0;
 
+        # mz_internal.mz_show_cluster_replicas migration
+
         ! SELECT ready FROM mz_internal.mz_show_cluster_replicas LIMIT 0;
         contains:column "ready" does not exist
 
+        # mz_catalog.mz_sources migration
+
+        > CREATE MATERIALIZED VIEW source_types AS SELECT type FROM mz_catalog.mz_sources WHERE id LIKE 'u%';
+
+        > CREATE SOURCE load_gen_source FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+
+        > SELECT * FROM source_types
+        load-generator
     """
             )
         )
@@ -674,14 +686,20 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         c.testdrive(
             input=dedent(
                 """
+        # pg_catalog.pg_proc migration
+
         > SELECT * FROM v1;
         5
         # This column is new after the migration
         > SELECT DISTINCT proowner FROM pg_proc;
         <null>
 
+        # mz_internal.mz_dataflow_operator_reachability migration
+
         > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
         "uint8 list"
+
+        # mz_internal.mz_cluster_replica_statuses migration
 
         > SELECT pg_typeof(process_id) FROM mz_internal.mz_cluster_replica_statuses LIMIT 1;
         "uint8"
@@ -691,8 +709,14 @@ def workflow_test_builtin_migration(c: Composition) -> None:
 
         > SELECT updated_at FROM mz_internal.mz_cluster_replica_statuses LIMIT 0;
 
+        # mz_internal.mz_show_cluster_replicas migration
+
         > SELECT ready FROM mz_internal.mz_show_cluster_replicas LIMIT 0;
 
+        # mz_catalog.mz_sources migration
+
+        > SELECT * FROM source_types
+        load-generator
     """
             )
         )
@@ -710,14 +734,20 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         c.testdrive(
             input=dedent(
                 """
+        # pg_catalog.pg_proc migration
+
         > SELECT * FROM v1;
         5
         # This column is new after the migration
         > SELECT DISTINCT proowner FROM pg_proc;
         <null>
 
+        # mz_internal.mz_dataflow_operator_reachability migration
+
         > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
         "uint8 list"
+
+        # mz_internal.mz_cluster_replica_statuses migration
 
         > SELECT pg_typeof(process_id) FROM mz_internal.mz_cluster_replica_statuses LIMIT 1;
         "uint8"
@@ -727,8 +757,16 @@ def workflow_test_builtin_migration(c: Composition) -> None:
 
         > SELECT updated_at FROM mz_internal.mz_cluster_replica_statuses LIMIT 0;
 
+        # mz_internal.mz_show_cluster_replicas migration
+
         > SELECT ready FROM mz_internal.mz_show_cluster_replicas LIMIT 0;
 
+        # mz_catalog.mz_sources migration
+
+        # mz_catalog.mz_sources migration
+
+        > SELECT * FROM source_types
+        load-generator
     """
             )
         )
