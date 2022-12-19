@@ -99,12 +99,10 @@ pub trait ReinterpretCast<T> {
 
 macro_rules! reinterpret_cast {
     ($from:ty, $to:ty) => {
-        paste! {
-            impl ReinterpretCast<$from> for $to {
-                #[allow(clippy::as_conversions)]
-                fn reinterpret_cast(from: $from) -> $to {
-                    from as $to
-                }
+        impl ReinterpretCast<$from> for $to {
+            #[allow(clippy::as_conversions)]
+            fn reinterpret_cast(from: $from) -> $to {
+                from as $to
             }
         }
     };
