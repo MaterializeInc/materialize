@@ -33,6 +33,7 @@ Type | Aliases | Use | Size (bytes) | Catalog name | Syntax
 [`oid`](oid) | | PostgreSQL object identifier | 4 | Named | `123`
 [`real`](float) | `float4` | Single precision floating-point number | 4 | Named | `1.23`
 [`record`](record) | | Tuple with arbitrary contents | Variable | Unnameable | `ROW($expr, ...)`
+[`smallint`](integer) | `int2` | Small signed integer | 2 | Named | `123`
 [`text`](text) | `string` | Unicode string | Variable | Named | `'foo'`
 [`time`](time) | | Time without date | 4 | Named | `TIME '01:23:45'`
 [`timestamp`](timestamp) | | Date and time | 8 | Named | `TIMESTAMP '2007-02-01 15:04:05'`
