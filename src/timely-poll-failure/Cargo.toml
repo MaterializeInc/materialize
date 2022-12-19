@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 clap = { version = "3.2.20", features = [ "derive" ] }
+futures = { version = "0.3.25", features = ["alloc", "async-await", "executor", "futures-executor", "std"] }
 mz-timely-util = { path = "../timely-util" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.23.0", features = ["fs", "rt", "sync", "test-util", "net"] }

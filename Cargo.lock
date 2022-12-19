@@ -7148,6 +7148,7 @@ name = "timely-poll-failure"
 version = "0.0.0"
 dependencies = [
  "clap",
+ "futures",
  "mz-timely-util",
  "timely",
  "tokio",
