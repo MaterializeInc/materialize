@@ -3654,15 +3654,13 @@ impl<S: Append + 'static> Coordinator<S> {
                 u64::MAX
             }),
         ));
-        let ids = self
+        let policies = self
             .catalog
             .entries()
             .filter(|entry| entry.item().is_retained_metrics_relation())
-            .map(|entry| entry.id())
+            .map(|entry| (entry.id(), policy.clone()))
             .collect::<Vec<_>>();
-        for id in ids {
-            self.update_storage_base_read_policy(id, policy.clone())
-        }
+        self.update_storage_base_read_policies(policies)
     }
 
     // Returns the name of the portal to execute.

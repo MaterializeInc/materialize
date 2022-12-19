@@ -515,14 +515,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 // TODO - Should these windows be configurable?
                 policies_to_set
                     .get_mut(&DEFAULT_LOGICAL_COMPACTION_WINDOW_MS)
-                    .unwrap()
+                    .expect(
+                        "Default policy map was inserted just after `policies_to_set` was created.",
+                    )
                     .compute_ids
                     .entry(instance.id)
                     .or_insert_with(BTreeSet::new)
                     .extend(replica.config.logging.source_ids());
                 policies_to_set
                     .get_mut(&DEFAULT_LOGICAL_COMPACTION_WINDOW_MS)
-                    .unwrap()
+                    .expect(
+                        "Default policy map was inserted just after `policies_to_set` was created.",
+                    )
                     .storage_ids
                     .extend(replica.config.logging.source_ids());
 
@@ -818,6 +822,12 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // Having installed all entries, creating all constraints, we can now relax read policies.
+        //
+        // TODO -- Improve `initialize_read_policies` API so we can avoid calling this in a loop.
+        //
+        // As of this writing, there can only be at most two keys in `policies_to_set`,
+        // so the extra load isn't crazy, but that might not be true in general if we
+        // open up custom compaction windows to users.
         for (ts, policies) in policies_to_set {
             self.initialize_read_policies(&policies, Some(ts)).await;
         }
