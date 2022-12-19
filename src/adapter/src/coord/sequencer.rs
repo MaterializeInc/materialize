@@ -73,7 +73,7 @@ use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
     peek, Coordinator, Message, PendingReadTxn, PendingTxn, SendDiffs, SinkConnectionReady,
-    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+    DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain_new::optimizer_trace::OptimizerTrace;
@@ -586,7 +586,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     self.initialize_storage_read_policies(
                         vec![source_id],
-                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_MS),
+                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
                     )
                     .await;
                 }
@@ -931,7 +931,7 @@ impl<S: Append + 'static> Coordinator<S> {
             self.initialize_compute_read_policies(
                 arranged_introspection_source_ids,
                 instance_id,
-                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_MS),
+                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
             )
             .await;
         }
@@ -940,12 +940,12 @@ impl<S: Append + 'static> Coordinator<S> {
             self.initialize_compute_read_policies(
                 persisted_introspection_source_ids.clone(),
                 instance_id,
-                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_MS),
+                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
             )
             .await;
             self.initialize_storage_read_policies(
                 persisted_introspection_source_ids,
-                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_MS),
+                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
             )
             .await;
         }
@@ -1081,12 +1081,12 @@ impl<S: Append + 'static> Coordinator<S> {
             self.initialize_compute_read_policies(
                 log_source_ids.clone(),
                 instance_id,
-                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_MS),
+                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
             )
             .await;
             self.initialize_storage_read_policies(
                 log_source_ids,
-                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_MS),
+                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
             )
             .await;
         }
@@ -1148,7 +1148,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 self.initialize_storage_read_policies(
                     vec![table_id],
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_MS),
+                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
                 )
                 .await;
 
@@ -1559,7 +1559,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 self.initialize_storage_read_policies(
                     vec![id],
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_MS),
+                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
                 )
                 .await;
 
@@ -3398,7 +3398,7 @@ impl<S: Append + 'static> Coordinator<S> {
             options.push(match o {
                 IndexOptionName::LogicalCompactionWindow => {
                     IndexOption::LogicalCompactionWindow(Some(Duration::from_millis(
-                        DEFAULT_LOGICAL_COMPACTION_WINDOW_MS.into(),
+                        DEFAULT_LOGICAL_COMPACTION_WINDOW_TS.into(),
                     )))
                 }
             });

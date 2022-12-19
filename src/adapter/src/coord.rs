@@ -153,14 +153,21 @@ mod read_policy;
 mod sequencer;
 mod sql;
 
-/// The default is set to a second to track the default timestamp frequency for sources.
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW: Duration = Duration::from_secs(1);
+// TODO: We can have only two consts here, instead of three,
+// once there exists a `const` way to convert between a `Timestamp`
+// and a `Duration`
 
-/// `DEFAULT_LOGICAL_COMPACTION_WINDOW` in the `EpochMillis` domain
-// `u64::try_from` is not const, so we can't use it here.
-#[allow(clippy::as_conversions)]
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_MS: mz_repr::Timestamp =
-    Timestamp::new(DEFAULT_LOGICAL_COMPACTION_WINDOW.as_millis() as u64);
+/// `DEFAULT_LOGICAL_COMPACTION_WINDOW`, in milliseconds.
+/// The default is set to a second to track the default timestamp frequency for sources.
+const DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS: u64 = 1000;
+
+/// The default logical compaction window for new objects
+pub const DEFAULT_LOGICAL_COMPACTION_WINDOW: Duration =
+    Duration::from_millis(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
+
+/// `DEFAULT_LOGICAL_COMPACTION_WINDOW` as an `EpochMillis` timestamp
+pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_TS: mz_repr::Timestamp =
+    Timestamp::new(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
 
 /// A dummy availability zone to use when no availability zones are explicitly
 /// specified.
@@ -486,7 +493,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // Ultimately, it doesn't concretely matter today, because the type ends up just being
         // u64 anyway.
         let mut policies_to_set: BTreeMap<Timestamp, CollectionIdBundle> = Default::default();
-        policies_to_set.insert(DEFAULT_LOGICAL_COMPACTION_WINDOW_MS, Default::default());
+        policies_to_set.insert(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS, Default::default());
 
         info!("coordinator init: creating compute replicas");
         for instance in self.catalog.compute_instances() {
@@ -514,7 +521,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 // TODO - Should these windows be configurable?
                 policies_to_set
-                    .get_mut(&DEFAULT_LOGICAL_COMPACTION_WINDOW_MS)
+                    .get_mut(&DEFAULT_LOGICAL_COMPACTION_WINDOW_TS)
                     .expect(
                         "Default policy map was inserted just after `policies_to_set` was created.",
                     )
@@ -523,7 +530,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .or_insert_with(BTreeSet::new)
                     .extend(replica.config.logging.source_ids());
                 policies_to_set
-                    .get_mut(&DEFAULT_LOGICAL_COMPACTION_WINDOW_MS)
+                    .get_mut(&DEFAULT_LOGICAL_COMPACTION_WINDOW_TS)
                     .expect(
                         "Default policy map was inserted just after `policies_to_set` was created.",
                     )
