@@ -126,6 +126,11 @@ Replicating tables that contain [data types](/sql/types/) unsupported in Materia
 ##### Truncation
 
 Tables replicated into Materialize should not be truncated. If a table is truncated while replicated, the whole source becomes inaccessible and will not produce any data until it is recreated.
+Instead, remove all rows from a table using an unqualified `DELETE`.
+
+```sql
+DELETE FROM t;
+```
 
 ## Examples
 
