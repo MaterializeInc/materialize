@@ -65,24 +65,28 @@ class CreateSink(Action):
             sink is not None
         ), "CreateSink Action can not be referenced directly, it is produced by CreateSinkParameterized factory"
         self.sink = sink
+        super().__init__(capabilities)
 
     def run(self, c: Composition) -> None:
+        # The sink-derived source has upsert semantics, so produce a "normal" ViewExists output
+        # from the 'before' and the 'after'
+
         dest_view_sql = dedent(
             f"""
             > CREATE MATERIALIZED VIEW {self.sink.dest_view.name} AS
-              SELECT SUM(c1)::int AS c1, SUM(c2)::int AS c2, SUM(min)::int AS min, SUM(max)::int AS max FROM (
-                SELECT (after).c1, (after).c2, (after).min, (after).max FROM {self.sink.name}_source
+              SELECT SUM(count_all)::int AS count_all, SUM(count_distinct)::int AS count_distinct, SUM(min_value)::int AS min_value, SUM(max_value)::int AS max_value FROM (
+                SELECT (after).count_all, (after).count_distinct, (after).min_value, (after).max_value FROM {self.sink.name}_source
                 UNION ALL
-                SELECT -(before).c1, -(before).c2, -(before).min, -(before).max FROM {self.sink.name}_source
+                SELECT -(before).count_all, -(before).count_distinct, -(before).min_value, -(before).max_value FROM {self.sink.name}_source
               );
             """
             if self.sink.dest_view.expensive_aggregates
             else f"""
             > CREATE MATERIALIZED VIEW {self.sink.dest_view.name} AS
-              SELECT SUM(c1)::int AS c1 FROM (
-                SELECT (after).c1 FROM {self.sink.name}_source
+              SELECT SUM(count_all)::int AS count_all FROM (
+                SELECT (after).count_all FROM {self.sink.name}_source
                 UNION ALL
-                SELECT -(before).c1 FROM {self.sink.name}_source
+                SELECT -(before).count_all FROM {self.sink.name}_source
               );
             """
         )
@@ -104,9 +108,6 @@ class CreateSink(Action):
                   FROM KAFKA CONNECTION {self.sink.name}_kafka_conn (TOPIC 'sink-{self.sink.name}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn
                   ENVELOPE NONE
-
-                # The sink-dervied source has upsert semantics, so produce a "normal" ViewExists output
-                # from the 'before' and the 'after'
             """
             )
             + dest_view_sql

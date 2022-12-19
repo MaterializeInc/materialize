@@ -42,12 +42,13 @@ mz-ore = { path = "../ore", features = ["tracing_"] }
 mz-persist = { path = "../persist" }
 mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
+mz-timely-util = { path = "../timely-util" }
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
-sentry-tracing = "0.29.0"
-semver = "1.0.14"
+sentry-tracing = "0.29.1"
+semver = "1.0.16"
 serde = { version = "1.0.147", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.23.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
@@ -60,7 +61,7 @@ tokio-console = ["mz-ore/tokio-console"]
 
 [dev-dependencies]
 async-trait = "0.1.59"
-axum = "0.5.17"
+axum = { version = "0.6.1" }
 clap = { version = "3.2.20", features = ["derive", "env"] }
 criterion = { version = "0.4.0", features = ["html_reports"] }
 datadriven = { version = "0.6.0", features = ["async"] }

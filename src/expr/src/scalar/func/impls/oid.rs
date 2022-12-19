@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_ore::cast::ReinterpretCast;
 use mz_pgrepr::Type;
 use mz_repr::adt::system::{Oid, RegClass, RegProc, RegType};
 use mz_repr::strconv;
@@ -33,7 +34,7 @@ sqlfunc!(
         //
         // Do not use this as a model for behavior in other contexts. OIDs
         // should not in general be thought of as freely convertible to `i32`s.
-        i32::from_ne_bytes(a.0.to_ne_bytes())
+        i32::reinterpret_cast(a.0)
     }
 );
 

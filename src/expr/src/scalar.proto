@@ -720,5 +720,6 @@ message ProtoEvalError {
         google.protobuf.Empty date_out_of_range = 58;
         google.protobuf.Empty mz_timestamp_out_of_range = 59;
         google.protobuf.Empty mz_timestamp_step_overflow = 60;
+        google.protobuf.Empty timestamp_cannot_be_nan = 61;
     }
 }

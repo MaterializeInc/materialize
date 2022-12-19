@@ -38,7 +38,7 @@ use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task;
-use mz_ore::tracing::TracingTargetCallbacks;
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
@@ -46,6 +46,7 @@ use mz_stash::Stash;
 use mz_storage_client::types::connections::ConnectionContext;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
+pub use crate::http::{SqlResponse, WebSocketResponse};
 use crate::server::ListenerHandle;
 
 mod http;
@@ -138,8 +139,8 @@ pub struct Config {
     // === Tracing options. ===
     /// The metrics registry to use.
     pub metrics_registry: MetricsRegistry,
-    /// Callbacks used to modify tracing/logging filters
-    pub tracing_target_callbacks: TracingTargetCallbacks,
+    /// Handle to tracing.
+    pub tracing_handle: TracingHandle,
 
     // === Testing options. ===
     /// A now generation function for mocking time.
@@ -249,7 +250,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     task::spawn(|| "internal_http_server", {
         let internal_http_server = InternalHttpServer::new(InternalHttpConfig {
             metrics_registry: config.metrics_registry.clone(),
-            tracing_target_callbacks: config.tracing_target_callbacks,
+            tracing_handle: config.tracing_handle,
             adapter_client_rx: internal_http_adapter_client_rx,
         });
         server::serve(internal_http_conns, internal_http_server)
@@ -300,21 +301,15 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
 
     // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
     let system_parameter_frontend = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
-        let ld_user_key = config
-            .frontegg
-            .as_ref()
-            .map(|frontegg| frontegg.tenant_id().to_string())
-            .unwrap_or_else(|| "anonymous-dev@materialize.com".to_string());
         let ld_key_map = config.launchdarkly_key_map;
+        let env_id = config.environment_id.clone();
         // The `SystemParameterFrontend::new` call needs to be wrapped in a
         // spawn_blocking call because the LaunchDarkly SDK initialization uses
         // `reqwest::blocking::client`. This should be revisited after the SDK
         // is updated to 1.0.0.
         let system_parameter_frontend = task::spawn_blocking(
             || "SystemParameterFrontend::new",
-            move || {
-                SystemParameterFrontend::new(ld_sdk_key.as_str(), ld_user_key.as_str(), ld_key_map)
-            },
+            move || SystemParameterFrontend::new(env_id, ld_sdk_key.as_str(), ld_key_map),
         )
         .await??;
         Some(Arc::new(system_parameter_frontend))

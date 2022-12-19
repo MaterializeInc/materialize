@@ -29,7 +29,7 @@ use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::types::connections::KafkaConnection;
-use mz_storage_client::types::hosts::StorageHostConfig;
+use mz_storage_client::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 
 use crate::catalog::builtin::{
@@ -45,7 +45,9 @@ use crate::catalog::{
     MaterializedView, Role, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
 
-use super::builtin::{MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_CLUSTER_REPLICA_SIZES};
+use super::builtin::{
+    MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_CLUSTER_REPLICA_SIZES, MZ_STORAGE_HOST_SIZES,
+};
 use super::{AwsPrincipalContext, DataSourceDesc, Ingestion};
 
 /// An update to a built-in table.
@@ -903,6 +905,39 @@ impl CatalogState {
                     let row = Row::pack_slice(&[
                         size.as_str().into(),
                         u64::cast_from(scale.get()).into(),
+                        u64::cast_from(workers.get()).into(),
+                        cpu_limit.as_nanocpus().into(),
+                        memory_bytes.into(),
+                    ]);
+                    BuiltinTableUpdate { id, row, diff: 1 }
+                },
+            )
+            .collect();
+        updates
+    }
+
+    pub fn pack_all_storage_host_size_updates(&self) -> Vec<BuiltinTableUpdate> {
+        let id = self.resolve_builtin_table(&MZ_STORAGE_HOST_SIZES);
+        let updates = self
+            .storage_host_sizes
+            .0
+            .iter()
+            .map(
+                |(
+                    size,
+                    StorageHostResourceAllocation {
+                        memory_limit,
+                        cpu_limit,
+                        workers,
+                    },
+                )| {
+                    // Just invent something when the limits are `None`,
+                    // which only happens in non-prod environments (tests, process orchestrator, etc.)
+                    let cpu_limit = cpu_limit.unwrap_or(CpuLimit::MAX);
+                    let MemoryLimit(ByteSize(memory_bytes)) =
+                        (*memory_limit).unwrap_or(MemoryLimit::MAX);
+                    let row = Row::pack_slice(&[
+                        size.as_str().into(),
                         u64::cast_from(workers.get()).into(),
                         cpu_limit.as_nanocpus().into(),
                         memory_bytes.into(),

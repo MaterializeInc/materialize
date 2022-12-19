@@ -121,6 +121,19 @@ impl<'a> Displayable<'a, HirRelationExpr> {
                     Ok(())
                 })?;
             }
+            LetRec { bindings, body } => {
+                writeln!(f, "{}Return", ctx.indent)?;
+                ctx.indented(|ctx| Displayable::from(body.as_ref()).fmt_text(f, ctx))?;
+                writeln!(f, "{}Where Recursive", ctx.indent)?;
+                ctx.indented(|ctx| {
+                    for (_name, id, value, _type) in bindings.iter().rev() {
+                        // TODO: print the name and not the id
+                        writeln!(f, "{}cte {} =", ctx.indent, *id)?;
+                        ctx.indented(|ctx| Displayable::from(value).fmt_text(f, ctx))?;
+                    }
+                    Ok(())
+                })?;
+            }
             Get { id, .. } => match id {
                 Id::Local(id) => {
                     // TODO: resolve local id to the human-readable name from the context

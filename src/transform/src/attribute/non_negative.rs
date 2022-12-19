@@ -70,6 +70,10 @@ impl Attribute for NonNegative {
                 let body = self.results[n - 1];
                 self.results.push(body);
             }
+            LetRec { .. } => {
+                let body = self.results[n - 1];
+                self.results.push(body);
+            }
             Project { input: _, .. } => {
                 let input = self.results[n - 1];
                 self.results.push(input);

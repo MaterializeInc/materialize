@@ -16,11 +16,12 @@ use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
-use mz_orchestrator_tracing::TracingCliArgs;
+use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::tracing::TracingHandle;
 use mz_pid_file::PidFile;
 use mz_service::grpc::GrpcServer;
 use mz_service::secrets::SecretsReaderCliArgs;
@@ -96,13 +97,13 @@ async fn main() {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
-    let (tracing_target_callbacks, _sentry_guard) = mz_ore::tracing::configure(
-        "computed",
-        &args.tracing,
-        mz_service::tracing::mz_sentry_event_filter,
-        (BUILD_INFO.version, BUILD_INFO.sha, BUILD_INFO.time),
-    )
-    .await?;
+    let (tracing_handle, _tracing_guard) = args
+        .tracing
+        .configure_tracing(StaticTracingConfig {
+            service_name: "computed",
+            build_info: BUILD_INFO,
+        })
+        .await?;
 
     // Keep this _after_ the mz_ore::tracing::configure call so that its panic
     // hook runs _before_ the one that sends things to sentry.
@@ -136,22 +137,30 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 )
                 .route(
                     "/api/opentelemetry/config",
-                    routing::put(move |payload| async move {
-                        mz_http_util::handle_modify_filter_target(
-                            tracing_target_callbacks.tracing,
-                            payload,
-                        )
-                        .await
+                    routing::put({
+                        let tracing_handle = tracing_handle.clone();
+                        move |payload| async move {
+                            mz_http_util::handle_reload_tracing_filter(
+                                &tracing_handle,
+                                TracingHandle::reload_opentelemetry_filter,
+                                payload,
+                            )
+                            .await
+                        }
                     }),
                 )
                 .route(
                     "/api/stderr/config",
-                    routing::put(move |payload| async move {
-                        mz_http_util::handle_modify_filter_target(
-                            tracing_target_callbacks.stderr,
-                            payload,
-                        )
-                        .await
+                    routing::put({
+                        let tracing_handle = tracing_handle.clone();
+                        move |payload| async move {
+                            mz_http_util::handle_reload_tracing_filter(
+                                &tracing_handle,
+                                TracingHandle::reload_stderr_log_filter,
+                                payload,
+                            )
+                            .await
+                        }
                     }),
                 )
                 .into_make_service(),

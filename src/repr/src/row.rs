@@ -16,19 +16,18 @@ use std::mem::{size_of, transmute};
 use std::str;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
-use mz_ore::soft_assert;
-use mz_ore::vec::Vector;
-use mz_persist_types::Codec64;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Strategy};
-use serde::ser::{SerializeMap, SerializeSeq};
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use uuid::Uuid;
 
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, ReinterpretCast};
+use mz_ore::soft_assert;
+use mz_ore::vec::Vector;
+use mz_persist_types::Codec64;
 
 use crate::adt::array::{
     Array, ArrayDimension, ArrayDimensions, InvalidArrayError, MAX_ARRAY_DIMENSIONS,
@@ -166,6 +165,70 @@ impl Ord for Row {
     }
 }
 
+#[allow(missing_debug_implementations)]
+mod columnation {
+
+    use super::Row;
+    use columnation::{Columnation, Region, StableRegion};
+
+    /// Region allocation for `Row` data.
+    ///
+    /// Content bytes are stored in stable contiguous memory locations,
+    /// and then a `Row` referencing them is falsified.
+    #[derive(Default)]
+    pub struct RowStack {
+        region: StableRegion<u8>,
+    }
+
+    impl Columnation for Row {
+        type InnerRegion = RowStack;
+    }
+
+    impl Region for RowStack {
+        type Item = Row;
+        #[inline]
+        fn clear(&mut self) {
+            self.region.clear();
+        }
+        #[inline(always)]
+        unsafe fn copy(&mut self, item: &Row) -> Row {
+            if item.data.spilled() {
+                let bytes = self.region.copy_slice(&item.data[..]);
+                Row {
+                    data: smallvec::SmallVec::from_raw_parts(
+                        bytes.as_mut_ptr(),
+                        item.data.len(),
+                        item.data.capacity(),
+                    ),
+                }
+            } else {
+                item.clone()
+            }
+        }
+
+        fn reserve_items<'a, I>(&mut self, items: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self::Item> + Clone,
+        {
+            self.region.reserve(
+                items
+                    .filter(|row| row.data.spilled())
+                    .map(|row| row.data.len())
+                    .sum(),
+            );
+        }
+
+        fn reserve_regions<'a, I>(&mut self, regions: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self> + Clone,
+        {
+            self.region.reserve(regions.map(|r| r.region.len()).sum());
+        }
+    }
+}
+
 /// Packs datums into a [`Row`].
 ///
 /// Creating a `RowPacker` via [`Row::packer`] starts a packing operation on the
@@ -241,39 +304,11 @@ impl PartialOrd for DatumList<'_> {
     }
 }
 
-impl<'a> Serialize for DatumList<'a> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut seq = serializer.serialize_seq(None)?;
-        let mut iter = self.iter();
-        while let Some(datum) = iter.next() {
-            seq.serialize_element(&datum)?;
-        }
-        seq.end()
-    }
-}
-
 /// A mapping from string keys to Datums
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct DatumMap<'a> {
     /// Points at the serialized datums, which should be sorted in key order
     data: &'a [u8],
-}
-
-impl<'a> Serialize for DatumMap<'a> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut map = serializer.serialize_map(None)?;
-        let mut iter = self.iter();
-        while let Some((key, val)) = iter.next() {
-            map.serialize_entry(&key, &val)?;
-        }
-        map.end()
-    }
 }
 
 /// Represents a single `Datum`, appropriate to be nested inside other
@@ -310,17 +345,6 @@ impl<'a> Ord for DatumNested<'a> {
 impl<'a> PartialOrd for DatumNested<'a> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
-    }
-}
-
-impl<'a> Serialize for DatumNested<'a> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut seq = serializer.serialize_seq(None)?;
-        seq.serialize_element(&self.datum())?;
-        seq.end()
     }
 }
 
@@ -553,7 +577,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::Dummy => Datum::Dummy,
         Tag::Numeric => {
             let digits = read_byte(data, offset).into();
-            let exponent = i8::from_ne_bytes(read_byte(data, offset).to_ne_bytes());
+            let exponent = i8::reinterpret_cast(read_byte(data, offset));
             let bits = read_byte(data, offset);
 
             let lsu_u16_len = Numeric::digits_to_lsu_elements_len(digits);

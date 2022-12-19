@@ -150,7 +150,7 @@ async fn report_traits_loop(
                     environment_id.organization_id(),
                     environment_id.organization_id(),
                     json!({
-                        environment_id.cloud_provider(): {
+                        environment_id.cloud_provider().to_string(): {
                             environment_id.cloud_provider_region(): traits,
                         }
                     }),

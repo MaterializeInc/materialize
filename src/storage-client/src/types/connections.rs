@@ -9,7 +9,9 @@
 
 //! Connection types.
 
+use std::any::Any;
 use std::collections::BTreeMap;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
@@ -332,25 +334,8 @@ impl KafkaConnection {
                         aws_privatelink.port,
                     );
                 }
-                Tunnel::Ssh {
-                    connection_id,
-                    connection,
-                } => {
-                    // Setup the config...
-                    let secret = connection_context
-                        .secrets_reader
-                        .read(*connection_id)
-                        .await?;
-                    let key_set = SshKeyPairSet::from_bytes(&secret)?;
-                    let key_pair = key_set.primary().clone();
-                    let ssh_tunnel_config = SshTunnelConfig {
-                        host: connection.host.clone(),
-                        port: connection.port,
-                        user: connection.user.clone(),
-                        key_pair,
-                    };
-
-                    // ...extract the broker address pieces...
+                Tunnel::Ssh(ssh_tunnel) => {
+                    // Extract the host address pieces...
                     let mut broker_iter = broker.address.splitn(2, ':');
 
                     let broker_host = broker_iter.next().context("BROKER is not address:port")?;
@@ -360,27 +345,22 @@ impl KafkaConnection {
                         .parse()
                         .context("BROKER port is not an integer")?;
 
-                    // ...build the tunnel...
-                    let (session, local_port) =
-                        ssh_tunnel_config.connect(broker_host, broker_port).await?;
-
-                    // ...record it in the broker lookup, with a task that
-                    // will shutdown the session on drop.
-                    let (tx, rx) = channel();
-                    mz_ore::task::spawn(|| "kafka_broker_ssh_session".to_string(), async move {
-                        let _: Result<(), _> = rx.await;
-                        session
-                            .close()
-                            .await
-                            .err()
-                            .map(|e| tracing::error!("failed to close ssh tunnel: {e}"));
-                    });
+                    let (local_port, token) = ssh_tunnel
+                        .build_ssh_tunnel_for_url(
+                            &*connection_context.secrets_reader,
+                            broker_host,
+                            broker_port,
+                            "kafka",
+                        )
+                        .await?;
 
                     context.add_broker_rewrite_with_token(
                         &broker.address,
                         "localhost",
                         Some(local_port),
-                        tx,
+                        // Note, this does double-boxing, but its only relevant during dropping,
+                        // so not a performance problem.
+                        token,
                     );
                 }
             }
@@ -481,6 +461,20 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
     }
 }
 
+/// A `mz_ccsr::Client` optionally enriched with a keep-alive tokens.
+#[derive(Debug)]
+pub struct CsrClient {
+    inner: mz_ccsr::Client,
+    _drop_token: Option<Box<dyn Any + Send + Sync>>,
+}
+
+impl Deref for CsrClient {
+    type Target = mz_ccsr::Client;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
 /// A connection to a Confluent Schema Registry.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct CsrConnection {
@@ -493,8 +487,8 @@ pub struct CsrConnection {
     pub tls_identity: Option<TlsIdentity>,
     /// Optional HTTP authentication credentials for the schema registry.
     pub http_auth: Option<CsrConnectionHttpAuth>,
-    /// The ID of an AWS PrivateLink connection through which to tunnel.
-    pub aws_privatelink_id: Option<GlobalId>,
+    /// A tunnel through which to route traffic.
+    pub tunnel: Tunnel,
 }
 
 impl CsrConnection {
@@ -502,7 +496,7 @@ impl CsrConnection {
     pub async fn connect(
         &self,
         secrets_reader: &dyn SecretsReader,
-    ) -> Result<mz_ccsr::Client, anyhow::Error> {
+    ) -> Result<CsrClient, anyhow::Error> {
         let mut client_config = mz_ccsr::ClientConfig::new(self.url.clone());
         if let Some(root_cert) = &self.tls_root_cert {
             let root_cert = root_cert.get_string(secrets_reader).await?;
@@ -532,27 +526,59 @@ impl CsrConnection {
             client_config = client_config.auth(username, password);
         }
 
-        if let Some(aws_privatelink_id) = self.aws_privatelink_id {
-            // `net::lookup_host` requires a port but the port will be ignored
-            // when passed to `resolve_to_addrs`. We use a dummy port that will
-            // be easy to spot in the logs to make it obvious if some component
-            // downstream incorrectly starts using this port.
-            const DUMMY_PORT: u16 = 11111;
+        let mut drop_token = None;
+        match &self.tunnel {
+            Tunnel::Direct => {}
+            Tunnel::Ssh(ssh_tunnel) => {
+                // TODO: use types to enforce that the URL has a string hostname.
+                let host = self
+                    .url
+                    .host_str()
+                    .ok_or_else(|| anyhow!("url missing host"))?;
 
-            // TODO: use types to enforce that the URL has a string hostname.
-            let host = self
-                .url
-                .host_str()
-                .ok_or_else(|| anyhow!("url missing host"))?;
-            let privatelink_host = mz_cloud_resources::vpc_endpoint_name(aws_privatelink_id);
-            let addrs: Vec<_> = net::lookup_host((privatelink_host, DUMMY_PORT))
-                .await
-                .context("resolving PrivateLink host")?
-                .collect();
-            client_config = client_config.resolve_to_addrs(host, &addrs)
+                let (local_port, token) = ssh_tunnel
+                    .build_ssh_tunnel_for_url(
+                        secrets_reader,
+                        host,
+                        // Default to the default http port, but this
+                        // could default to 8081...
+                        self.url.port().unwrap_or(80),
+                        "csr",
+                    )
+                    .await?;
+
+                client_config = client_config
+                    .override_url(Url::parse(&format!("http://localhost:{}", local_port)).unwrap());
+                drop_token = Some(token);
+            }
+            Tunnel::AwsPrivatelink(connection) => {
+                assert!(connection.port.is_none());
+
+                // `net::lookup_host` requires a port but the port will be ignored
+                // when passed to `resolve_to_addrs`. We use a dummy port that will
+                // be easy to spot in the logs to make it obvious if some component
+                // downstream incorrectly starts using this port.
+                const DUMMY_PORT: u16 = 11111;
+
+                // TODO: use types to enforce that the URL has a string hostname.
+                let host = self
+                    .url
+                    .host_str()
+                    .ok_or_else(|| anyhow!("url missing host"))?;
+                let privatelink_host =
+                    mz_cloud_resources::vpc_endpoint_name(connection.connection_id);
+                let addrs: Vec<_> = net::lookup_host((privatelink_host, DUMMY_PORT))
+                    .await
+                    .context("resolving PrivateLink host")?
+                    .collect();
+                client_config = client_config.resolve_to_addrs(host, &addrs)
+            }
         }
 
-        client_config.build()
+        Ok(CsrClient {
+            inner: client_config.build()?,
+            _drop_token: drop_token,
+        })
     }
 }
 
@@ -563,7 +589,7 @@ impl RustType<ProtoCsrConnection> for CsrConnection {
             tls_root_cert: self.tls_root_cert.into_proto(),
             tls_identity: self.tls_identity.into_proto(),
             http_auth: self.http_auth.into_proto(),
-            aws_privatelink_id: self.aws_privatelink_id.into_proto(),
+            tunnel: Some(self.tunnel.into_proto()),
         }
     }
 
@@ -573,7 +599,9 @@ impl RustType<ProtoCsrConnection> for CsrConnection {
             tls_root_cert: proto.tls_root_cert.into_rust()?,
             tls_identity: proto.tls_identity.into_rust()?,
             http_auth: proto.http_auth.into_rust()?,
-            aws_privatelink_id: proto.aws_privatelink_id.into_rust()?,
+            tunnel: proto
+                .tunnel
+                .into_rust_if_some("ProtoCsrConnection::tunnel")?,
         })
     }
 }
@@ -588,15 +616,15 @@ impl Arbitrary for CsrConnection {
             any::<Option<StringOrSecret>>(),
             any::<Option<TlsIdentity>>(),
             any::<Option<CsrConnectionHttpAuth>>(),
-            any::<Option<GlobalId>>(),
+            any::<Tunnel>(),
         )
             .prop_map(
-                |(url, tls_root_cert, tls_identity, http_auth, aws_privatelink_id)| CsrConnection {
+                |(url, tls_root_cert, tls_identity, http_auth, tunnel)| CsrConnection {
                     url,
                     tls_root_cert,
                     tls_identity,
                     http_auth,
-                    aws_privatelink_id,
+                    tunnel,
                 },
             )
             .boxed()
@@ -708,10 +736,10 @@ impl PostgresConnection {
 
         let tunnel = match &self.tunnel {
             Tunnel::Direct => mz_postgres_util::TunnelConfig::Direct,
-            Tunnel::Ssh {
+            Tunnel::Ssh(SshTunnel {
                 connection_id,
                 connection,
-            } => {
+            }) => {
                 let secret = secrets_reader.read(*connection_id).await?;
                 let key_set = SshKeyPairSet::from_bytes(&secret)?;
                 let key_pair = key_set.primary().clone();
@@ -821,10 +849,7 @@ pub enum Tunnel {
     /// No tunneling.
     Direct,
     /// Via the specified SSH tunnel connection.
-    Ssh {
-        connection_id: GlobalId,
-        connection: SshConnection,
-    },
+    Ssh(SshTunnel),
     /// Via the specified AWS PrivateLink connection.
     AwsPrivatelink(AwsPrivatelink),
 }
@@ -835,13 +860,7 @@ impl RustType<ProtoTunnel> for Tunnel {
         ProtoTunnel {
             tunnel: Some(match &self {
                 Tunnel::Direct => ProtoTunnelField::Direct(()),
-                Tunnel::Ssh {
-                    connection_id,
-                    connection,
-                } => ProtoTunnelField::Ssh(ProtoSshTunnel {
-                    connection_id: Some(connection_id.into_proto()),
-                    connection: Some(connection.into_proto()),
-                }),
+                Tunnel::Ssh(ssh) => ProtoTunnelField::Ssh(ssh.into_proto()),
                 Tunnel::AwsPrivatelink(aws) => ProtoTunnelField::AwsPrivatelink(aws.into_proto()),
             }),
         }
@@ -852,17 +871,8 @@ impl RustType<ProtoTunnel> for Tunnel {
         Ok(match proto.tunnel {
             None => return Err(TryFromProtoError::missing_field("ProtoTunnel::tunnel")),
             Some(ProtoTunnelField::Direct(())) => Tunnel::Direct,
-            Some(ProtoTunnelField::Ssh(ssh)) => Tunnel::Ssh {
-                connection_id: ssh
-                    .connection_id
-                    .into_rust_if_some("ProtoTunnel::ssh::connection_id")?,
-                connection: ssh
-                    .connection
-                    .into_rust_if_some("ProtoTunnel::ssh::connection")?,
-            },
-            Some(ProtoTunnelField::AwsPrivatelink(connection_id)) => {
-                Tunnel::AwsPrivatelink(connection_id.into_rust()?)
-            }
+            Some(ProtoTunnelField::Ssh(ssh)) => Tunnel::Ssh(ssh.into_rust()?),
+            Some(ProtoTunnelField::AwsPrivatelink(aws)) => Tunnel::AwsPrivatelink(aws.into_rust()?),
         })
     }
 }
@@ -936,5 +946,73 @@ impl RustType<ProtoAwsPrivatelink> for AwsPrivatelink {
                 .into_rust_if_some("ProtoAwsPrivatelink::connection_id")?,
             port: proto.port.into_rust()?,
         })
+    }
+}
+
+/// Specifies an AWS PrivateLink service for a [`Tunnel`].
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct SshTunnel {
+    /// id of the ssh connection
+    pub connection_id: GlobalId,
+    /// ssh connection object
+    pub connection: SshConnection,
+}
+
+impl RustType<ProtoSshTunnel> for SshTunnel {
+    fn into_proto(&self) -> ProtoSshTunnel {
+        ProtoSshTunnel {
+            connection_id: Some(self.connection_id.into_proto()),
+            connection: Some(self.connection.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoSshTunnel) -> Result<Self, TryFromProtoError> {
+        Ok(SshTunnel {
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoSshTunnel::connection_id")?,
+            connection: proto
+                .connection
+                .into_rust_if_some("ProtoSshTunnel::connection")?,
+        })
+    }
+}
+
+impl SshTunnel {
+    /// Setup and ssh tunnel to `remote_host:remote_port`, returning the local port
+    /// and a drop token for the session.
+    async fn build_ssh_tunnel_for_url(
+        &self,
+        secrets_reader: &dyn SecretsReader,
+        remote_host: &str,
+        remote_port: u16,
+        debug_str: &str,
+    ) -> Result<(u16, Box<dyn Any + Send + Sync>), anyhow::Error> {
+        // Setup the config...
+        let secret = secrets_reader.read(self.connection_id).await?;
+        let key_set = SshKeyPairSet::from_bytes(&secret)?;
+        let key_pair = key_set.primary().clone();
+        let ssh_tunnel_config = SshTunnelConfig {
+            host: self.connection.host.clone(),
+            port: self.connection.port,
+            user: self.connection.user.clone(),
+            key_pair,
+        };
+
+        // ...build the tunnel...
+        let (session, local_port) = ssh_tunnel_config.connect(remote_host, remote_port).await?;
+
+        // ...record it in the broker lookup, with a task that
+        // will shutdown the session on drop.
+        let (tx, rx) = channel();
+        mz_ore::task::spawn(|| format!("{}_ssh_session", debug_str), async move {
+            let _: Result<(), _> = rx.await;
+            session
+                .close()
+                .await
+                .err()
+                .map(|e| tracing::error!("failed to close ssh tunnel: {e}"));
+        });
+        Ok((local_port, Box::new(tx)))
     }
 }

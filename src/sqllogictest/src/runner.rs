@@ -60,10 +60,12 @@ use uuid::Uuid;
 
 use mz_controller::ControllerConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
+use mz_ore::cast::ReinterpretCast;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_pgrepr::{oid, Interval, Jsonb, Numeric, Value};
@@ -368,7 +370,7 @@ impl<'a> FromSql<'a> for Slt {
                 let num_fields = read_be_i32(&mut raw)?;
                 let mut tuple = vec![];
                 for _ in 0..num_fields {
-                    let oid = u32::from_ne_bytes(read_be_i32(&mut raw)?.to_ne_bytes());
+                    let oid = u32::reinterpret_cast(read_be_i32(&mut raw)?);
                     let typ = match PgType::from_oid(oid) {
                         Some(typ) => typ,
                         None => return Err("unknown oid".into()),
@@ -841,7 +843,7 @@ impl RunnerInner {
             default_storage_host_size: None,
             availability_zones: Default::default(),
             connection_context,
-            tracing_target_callbacks: mz_ore::tracing::TracingTargetCallbacks::default(),
+            tracing_handle: TracingHandle::disabled(),
             storage_usage_collection_interval: Duration::from_secs(3600),
             segment_api_key: None,
             egress_ips: vec![],

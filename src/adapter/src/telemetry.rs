@@ -23,7 +23,7 @@ impl EnvironmentIdExt for EnvironmentId {
     fn as_segment_context(&self) -> serde_json::Value {
         json!({
             "group_id": self.organization_id(),
-            "cloud_provider": self.cloud_provider(),
+            "cloud_provider": self.cloud_provider().to_string(),
             "cloud_provider_region": self.cloud_provider_region(),
         })
     }

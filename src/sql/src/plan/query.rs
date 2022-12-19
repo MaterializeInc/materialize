@@ -1066,17 +1066,38 @@ fn plan_query_inner(
     }?;
 
     // Both introduce `Let` bindings atop `result` and re-install shadowed bindings.
-    for (id, value, shadowed_val) in cte_bindings.into_iter().rev() {
-        if let Some(cte) = qcx.ctes.remove(&id) {
-            result = HirRelationExpr::Let {
-                name: cte.name,
-                id: id.clone(),
-                value: Box::new(value),
-                body: Box::new(result),
-            };
+    match &q.ctes {
+        CteBlock::Simple(_) => {
+            for (id, value, shadowed_val) in cte_bindings.into_iter().rev() {
+                if let Some(cte) = qcx.ctes.remove(&id) {
+                    result = HirRelationExpr::Let {
+                        name: cte.name,
+                        id: id.clone(),
+                        value: Box::new(value),
+                        body: Box::new(result),
+                    };
+                }
+                if let Some(shadowed_val) = shadowed_val {
+                    qcx.ctes.insert(id, shadowed_val);
+                }
+            }
         }
-        if let Some(shadowed_val) = shadowed_val {
-            qcx.ctes.insert(id, shadowed_val);
+        CteBlock::MutuallyRecursive(_) => {
+            let mut bindings = Vec::new();
+            for (id, value, shadowed_val) in cte_bindings.into_iter() {
+                if let Some(cte) = qcx.ctes.remove(&id) {
+                    bindings.push((cte.name, id, value, cte.desc.typ().clone()));
+                }
+                if let Some(shadowed_val) = shadowed_val {
+                    qcx.ctes.insert(id, shadowed_val);
+                }
+            }
+            if !bindings.is_empty() {
+                result = HirRelationExpr::LetRec {
+                    bindings,
+                    body: Box::new(result),
+                }
+            }
         }
     }
 
@@ -1177,10 +1198,6 @@ pub fn plan_ctes(
 
                 result.push((cte.id, val, shadowed_descs.remove(&cte.id)));
             }
-
-            Err(PlanError::Unstructured(
-                "recursive query planned, but not supported in HIR".to_string(),
-            ))?;
         }
     }
 
@@ -1576,7 +1593,7 @@ struct SelectPlan {
 
 generate_extracted_config!(SelectOption, (ExpectedGroupSize, u64));
 
-/// Plans a SELECT query with an intrusive ORDER BY clause.
+/// Plans a SELECT query. The SELECT query may contain an intrusive ORDER BY clause.
 ///
 /// Normally, the ORDER BY clause occurs after the columns specified in the
 /// SELECT list have been projected. In a query like
@@ -1593,9 +1610,6 @@ generate_extracted_config!(SelectOption, (ExpectedGroupSize, u64));
 ///
 /// where expressions in the ORDER BY clause can refer to *both* input columns
 /// and output columns.
-///
-/// This function handles queries of the latter class. For queries of the
-/// former class, see `plan_view_select`.
 fn plan_view_select(
     qcx: &QueryContext,
     mut s: Select<Aug>,

@@ -22,9 +22,8 @@ use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
-use mz_ore::result::ResultExt;
-use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use num::traits::CheckedNeg;
+use proptest::{prelude::*, strategy::*};
 use proptest_derive::Arbitrary;
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
@@ -33,8 +32,10 @@ use sha2::{Sha224, Sha256, Sha384, Sha512};
 
 use mz_lowertest::MzReflect;
 use mz_ore::cast;
+use mz_ore::cast::CastFrom;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::option::OptionExt;
+use mz_ore::result::ResultExt;
 use mz_pgrepr::Type;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
@@ -43,6 +44,7 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::any_regex;
+use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::chrono::any_naive_datetime;
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
@@ -353,8 +355,6 @@ fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::Time(t)
 }
 
-// TODO(benesch): remove potentially dangerous usage of `as`.
-#[allow(clippy::as_conversions)]
 fn round_numeric_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let mut a = a.unwrap_numeric().0;
     let mut b = b.unwrap_int32();
@@ -368,12 +368,12 @@ fn round_numeric_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, Eva
 
         // Ensure rescale doesn't exceed max precision by putting a ceiling on
         // b equal to the maximum remaining scale the value can support.
-        b = std::cmp::min(
-            b,
-            (u32::from(numeric::NUMERIC_DATUM_MAX_PRECISION)
-                - (numeric::get_precision(&a) - u32::from(numeric::get_scale(&a))))
-                as i32,
-        );
+        let max_remaining_scale = u32::from(numeric::NUMERIC_DATUM_MAX_PRECISION)
+            - (numeric::get_precision(&a) - u32::from(numeric::get_scale(&a)));
+        b = match i32::try_from(max_remaining_scale) {
+            Ok(max_remaining_scale) => std::cmp::min(b, max_remaining_scale),
+            Err(_) => b,
+        };
         cx.rescale(&mut a, &numeric::Numeric::from(-b));
     } else {
         // To avoid invalid operations, clamp b to be within 1 more than the
@@ -1284,8 +1284,6 @@ where
     Datum::String(temp_storage.push_string(fmt.render(ts)))
 }
 
-// TODO(benesch): remove potentially dangerous usage of `as`.
-#[allow(clippy::as_conversions)]
 fn jsonb_get_int64<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
@@ -1296,12 +1294,13 @@ fn jsonb_get_int64<'a>(
     match a {
         Datum::List(list) => {
             let i = if i >= 0 {
-                i
+                usize::cast_from(u64::try_from(i).expect("known to be positive"))
             } else {
                 // index backwards from the end
-                (list.iter().count() as i64) + i
+                let i = usize::cast_from(u64::try_from(i.abs()).expect("known to be positive"));
+                (list.iter().count()).wrapping_sub(i)
             };
-            match list.iter().nth(i as usize) {
+            match list.iter().nth(i) {
                 Some(d) if stringify => jsonb_stringify(d, temp_storage),
                 Some(d) => d,
                 None => Datum::Null,
@@ -1340,8 +1339,6 @@ fn jsonb_get_string<'a>(
     }
 }
 
-// TODO(benesch): remove potentially dangerous usage of `as`.
-#[allow(clippy::as_conversions)]
 fn jsonb_get_path<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
@@ -1364,12 +1361,14 @@ fn jsonb_get_path<'a>(
             Datum::List(list) => match strconv::parse_int64(key) {
                 Ok(i) => {
                     let i = if i >= 0 {
-                        i
+                        usize::cast_from(u64::try_from(i).expect("known to be positive"))
                     } else {
                         // index backwards from the end
-                        (list.iter().count() as i64) + i
+                        let i =
+                            usize::cast_from(u64::try_from(i.abs()).expect("known to be positive"));
+                        (list.iter().count()).wrapping_sub(i)
                     };
-                    match list.iter().nth(i as usize) {
+                    match list.iter().nth(i) {
                         Some(e) => e,
                         None => return Datum::Null,
                     }
@@ -1524,18 +1523,17 @@ fn jsonb_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> D
     }
 }
 
-// TODO(benesch): remove potentially dangerous usage of `as`.
-#[allow(clippy::as_conversions)]
 fn jsonb_delete_int64<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     let i = b.unwrap_int64();
     match a {
         Datum::List(list) => {
             let i = if i >= 0 {
-                i
+                usize::cast_from(u64::try_from(i).expect("known to be positive"))
             } else {
                 // index backwards from the end
-                (list.iter().count() as i64) + i
-            } as usize;
+                let i = usize::cast_from(u64::try_from(i.abs()).expect("known to be positive"));
+                (list.iter().count()).wrapping_sub(i)
+            };
             let elems = list
                 .iter()
                 .enumerate()
@@ -3534,8 +3532,6 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
         self.inverse()
     }
 }
-
-use proptest::{prelude::*, strategy::*};
 
 derive_unary!(
     Not,

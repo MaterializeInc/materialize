@@ -1,0 +1,421 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regular query works.
+http
+{"query":"select 1+2 as col"}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[3]],"col_names":["col"],"notices":[]}]}
+
+# Multiple queries are ok.
+http
+{"query":"select 1; select 2"}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"tag":"SELECT 1","rows":[[2]],"col_names":["?column?"],"notices":[]}]}
+
+# Arrays + lists work
+http
+{"query":"select array[1], list[2]"}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[[1],[2]]],"col_names":["array","list"],"notices":[]}]}
+
+# Succeeding and failing queries can mix and match.
+http
+{"query":"select 1; select * from noexist;"}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"error":"unknown catalog item 'noexist'","notices":[]}]}
+
+# CREATEs should work when provided alone.
+http
+{"query":"create view v as select 1"}
+----
+200 OK
+{"results":[{"ok":"CREATE VIEW","notices":[]}]}
+
+# Partial errors make it to the client.
+http
+{"query":"create view if not exists v as select 1"}
+----
+200 OK
+{"results":[{"ok":"CREATE VIEW","notices":[{"message":"view \"v\" already exists, skipping","severity":"notice"}]}]}
+
+# Multiple CREATEs do not work.
+http
+{"query":"create view v1 as select 1; create view v2 as select 1"}
+----
+200 OK
+{"results":[{"error":"CREATE VIEW v1 AS SELECT 1 cannot be run inside a transaction block","notices":[]}]}
+
+# Syntax errors fail the request.
+http
+{"query":"'"}
+----
+400 Bad Request
+unterminated quoted string
+
+# Tables
+http
+{"query":"create table t (a int);"}
+----
+200 OK
+{"results":[{"ok":"CREATE TABLE","notices":[]}]}
+
+http
+{"query":"insert into t values (1)"}
+----
+200 OK
+{"results":[{"ok":"INSERT 0 1","notices":[]}]}
+
+http
+{"query":"select * from t;"}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["a"],"notices":[]}]}
+
+http
+{"query":"delete from t"}
+----
+200 OK
+{"results":[{"ok":"DELETE 1","notices":[]}]}
+
+http
+{"query":"delete from t"}
+----
+200 OK
+{"results":[{"ok":"DELETE 0","notices":[]}]}
+
+# Txns, read only
+http
+{"query":"begin; select 1; commit"}
+----
+200 OK
+{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"COMMIT","notices":[]}]}
+
+http
+{"query":"begin; select 1; commit; select 2;"}
+----
+200 OK
+{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"COMMIT","notices":[]},{"tag":"SELECT 1","rows":[[2]],"col_names":["?column?"],"notices":[]}]}
+
+http
+{"query":"select 1; begin; select 2; commit;"}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[2]],"col_names":["?column?"],"notices":[]},{"ok":"COMMIT","notices":[]}]}
+
+http
+{"query":"begin; select 1/0; commit; select 2;"}
+----
+200 OK
+{"results":[{"ok":"BEGIN","notices":[]},{"error":"division by zero","notices":[]}]}
+
+http
+{"query":"begin; select 1; commit; select 1/0;"}
+----
+200 OK
+{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"COMMIT","notices":[]},{"error":"division by zero","notices":[]}]}
+
+http
+{"query":"select 1/0; begin; select 2; commit;"}
+----
+200 OK
+{"results":[{"error":"division by zero","notices":[]}]}
+
+http
+{"query":"select 1; begin; select 1/0; commit;"}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"BEGIN","notices":[]},{"error":"division by zero","notices":[]}]}
+
+# Txns w/ writes
+
+# Implicit txn aborted on first error
+http
+{"query":"insert into t values (1); select 1/0; insert into t values (2)"}
+----
+200 OK
+{"results":[{"ok":"INSERT 0 1","notices":[]},{"error":"division by zero","notices":[]}]}
+
+ # Values not successfully written due to aborted txn
+http
+{"query":"select * from t;"}
+----
+200 OK
+{"results":[{"tag":"SELECT 0","rows":[],"col_names":["a"],"notices":[]}]}
+
+# Explicit txn invocation commits values w/in txn, irrespective of results outside txn
+http
+{"query":"begin; insert into t values (1); commit; insert into t values (2); select 1/0;"}
+----
+200 OK
+{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"COMMIT","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"error":"division by zero","notices":[]}]}
+
+http
+{"query":"select * from t;"}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["a"],"notices":[]}]}
+
+http
+{"query":"delete from t;"}
+----
+200 OK
+{"results":[{"ok":"DELETE 1","notices":[]}]}
+
+http
+{"query":"delete from t;"}
+----
+200 OK
+{"results":[{"ok":"DELETE 0","notices":[]}]}
+
+http
+{"query":"insert into t values (1); begin; insert into t values (2); insert into t values (3); commit;"}
+----
+200 OK
+{"results":[{"ok":"INSERT 0 1","notices":[]},{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"COMMIT","notices":[]}]}
+
+http
+{"query":"select * from t;"}
+----
+200 OK
+{"results":[{"tag":"SELECT 3","rows":[[1],[2],[3]],"col_names":["a"],"notices":[]}]}
+
+http
+{"query":"delete from t;"}
+----
+200 OK
+{"results":[{"ok":"DELETE 3","notices":[]}]}
+
+# Explicit txn must be terminated to commit
+http
+{"query":"begin; insert into t values (1)"}
+----
+200 OK
+{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]}]}
+
+http
+{"query":"select * from t;"}
+----
+200 OK
+{"results":[{"tag":"SELECT 0","rows":[],"col_names":["a"],"notices":[]}]}
+
+# Empty query OK.
+http
+{"query":""}
+----
+200 OK
+{"results":[]}
+
+# Does not support parameters
+http
+{"query":"select $1"}
+----
+200 OK
+{"results":[{"error":"request supplied 0 parameters, but SELECT $1 requires 1","notices":[]}]}
+
+http
+{"query":"subscribe (select * from t)"}
+----
+400 Bad Request
+unsupported via this API: SUBSCRIBE (SELECT * FROM t)
+
+http
+{"query":"copy (select 1) to stdout"}
+----
+400 Bad Request
+unsupported via this API: COPY (SELECT 1) TO STDOUT
+
+http
+{"query":"EXPLAIN SELECT 1"}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[["Explained Query (fast path):\n  Constant\n    - (1)\n"]],"col_names":["Optimized Plan"],"notices":[]}]}
+
+http
+{"query":"SHOW VIEWS"}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[["v"]],"col_names":["name"],"notices":[]}]}
+
+http
+{"query":"SET cluster = default"}
+----
+200 OK
+{"results":[{"ok":"SET","notices":[]}]}
+
+# Parameterized queries work
+http
+{"queries":[{"query":"select $1+$2::int as col","params":["1","2"]}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[3]],"col_names":["col"],"notices":[]}]}
+
+ # Parameters can be present and empty
+http
+{"queries":[{"query":"select 3 as col","params":[]}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[3]],"col_names":["col"],"notices":[]}]}
+
+# Multiple statements
+http
+{"queries":[{"query":"select 1 as col","params":[]},{"query":"select $1+$2::int as col","params":["1","2"]}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["col"],"notices":[]},{"tag":"SELECT 1","rows":[[3]],"col_names":["col"],"notices":[]}]}
+
+http
+{"queries":[{"query":"select $1+$2::int as col","params":["1","2"]},{"query":"select 1 as col","params":[]}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[3]],"col_names":["col"],"notices":[]},{"tag":"SELECT 1","rows":[[1]],"col_names":["col"],"notices":[]}]}
+
+http
+{"queries":[{"query":"select $1+$2::int as col","params":["1","2"]},{"query":"select $1*$2::int as col","params":["2","3"]}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[3]],"col_names":["col"],"notices":[]},{"tag":"SELECT 1","rows":[[6]],"col_names":["col"],"notices":[]}]}
+
+# Quotes escaped
+http
+{"queries":[{"query":"select length($1), length($2)","params":["abc","'abc'"]}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[3,5]],"col_names":["length","length"],"notices":[]}]}
+
+# All parameters values treated as strings
+http
+{"queries":[{"query":"select length($1), length($2)","params":["sum(a)","SELECT * FROM t;"]}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[6,16]],"col_names":["length","length"],"notices":[]}]}
+
+# Too many parameters
+http
+{"queries":[{"query":"select $1 as col","params":["1","2"]}]}
+----
+200 OK
+{"results":[{"error":"request supplied 2 parameters, but SELECT $1 AS col requires 1","notices":[]}]}
+
+# Too few parameters
+http
+{"queries":[{"query":"select $1+$2::int as col","params":["1"]}]}
+----
+200 OK
+{"results":[{"error":"request supplied 1 parameters, but SELECT $1 + ($2)::int4 AS col requires 2","notices":[]}]}
+
+# NaN
+http
+{"queries":[{"query":"select $1::decimal+2 as col","params":["nan"]}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[["NaN"]],"col_names":["col"],"notices":[]}]}
+
+# Null string value parameters
+http
+{"queries":[{"query":"select $1+$2::int as col","params":["1",null]}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[[null]],"col_names":["col"],"notices":[]}]}
+
+# Empty query
+http
+{"queries":[{"query":"","params":[]}]}
+----
+400 Bad Request
+each query must contain exactly 1 statement, but "" contains 0
+
+# Empty query w/ param
+http
+{"queries":[{"query":"","params":["1"]}]}
+----
+400 Bad Request
+each query must contain exactly 1 statement, but "" contains 0
+
+http
+{"queries":[{"query":"select 1 as col","params":[]},{"query":"","params":[null]}]}
+----
+400 Bad Request
+each query must contain exactly 1 statement, but "" contains 0
+
+# Multiple statements
+http
+{"queries":[{"query":"select 1 as col","params":[]},{"query":"select 1; select 2;","params":[null]}]}
+----
+400 Bad Request
+each query must contain exactly 1 statement, but "select 1; select 2;" contains 2
+
+# Rolledback
+http
+{"queries":[{"query":"begin;","params":[]},{"query":"insert into t values (1);","params":[]},{"query":"rollback","params":[]}]}
+----
+200 OK
+{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"ROLLBACK","notices":[]}]}
+
+# Implicit txn
+http
+{"queries":[{"query":"insert into t values (1);","params":[]},{"query":"select 1/0;","params":[]}]}
+----
+200 OK
+{"results":[{"ok":"INSERT 0 1","notices":[]},{"error":"division by zero","notices":[]}]}
+
+# Errors prevent commit + further execution
+http
+{"queries":[{"query":"begin;","params":[]},{"query":"insert into t values (1);","params":[]},{"query":"select 1/0;","params":[]},{"query":"select * from t","params":[]},{"query":"commit","params":[]}]}
+----
+200 OK
+{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"error":"division by zero","notices":[]}]}
+
+# Requires explicit commit in explicit txn
+http
+{"queries":[{"query":"begin;","params":[]},{"query":"insert into t values (1);","params":[]}]}
+----
+200 OK
+{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]}]}
+
+http
+{"queries":[{"query":"select * from t","params":[]}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 0","rows":[],"col_names":["a"],"notices":[]}]}
+
+# Writes
+http
+{"queries":[{"query":"insert into t values ($1);","params":["1"]},{"query":"begin;","params":[]},{"query":"insert into t values ($1);","params":["2"]},{"query":"insert into t values ($1);","params":["3"]},{"query":"commit;","params":[]},{"query":"select 1/0","params":[]}]}
+----
+200 OK
+{"results":[{"ok":"INSERT 0 1","notices":[]},{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"COMMIT","notices":[]},{"error":"division by zero","notices":[]}]}
+
+http
+{"queries":[{"query":"select * from t","params":[]}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 3","rows":[[1],[2],[3]],"col_names":["a"],"notices":[]}]}
+
+http
+{"queries":[{"query":"insert into t values ($1);","params":["4"]},{"query":"begin;","params":[]},{"query":"select 1/0;","params":[]},{"query":"commit;","params":[]}]}
+----
+200 OK
+{"results":[{"ok":"INSERT 0 1","notices":[]},{"ok":"BEGIN","notices":[]},{"error":"division by zero","notices":[]}]}
+
+http
+{"queries":[{"query":"select * from t","params":[]}]}
+----
+200 OK
+{"results":[{"tag":"SELECT 3","rows":[[1],[2],[3]],"col_names":["a"],"notices":[]}]}
+
+http
+{"queries":[{"query":"subscribe (select * from t)","params":[]}]}
+----
+400 Bad Request
+unsupported via this API: SUBSCRIBE (SELECT * FROM t)

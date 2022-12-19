@@ -73,7 +73,7 @@ def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
     c.run("testdrive", "--no-reset", "pg-source.td")
 
 
-def workflow_kafka_via_ssh_tunnel(c: Composition) -> None:
+def workflow_kafka_csr_via_ssh_tunnel(c: Composition) -> None:
     c.start_and_wait_for_tcp(
         services=[
             "zookeeper",
@@ -251,7 +251,7 @@ def workflow_rotated_ssh_key_after_restart(c: Composition) -> None:
 
 def workflow_default(c: Composition) -> None:
     workflow_basic_ssh_features(c)
-    workflow_kafka_via_ssh_tunnel(c)
+    workflow_kafka_csr_via_ssh_tunnel(c)
     workflow_ssh_key_after_restart(c)
     workflow_rotated_ssh_key_after_restart(c)
     workflow_pg_via_ssh_tunnel(c)

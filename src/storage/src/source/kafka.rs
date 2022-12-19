@@ -339,7 +339,7 @@ impl SourceReader for KafkaSourceReader {
                         "kafka error when polling consumer for source: {} topic: {} : {}",
                         self.source_name, self.topic_name, e
                     );
-                    next_message = NextMessage::Ready(SourceMessageType::SourceStatus(
+                    next_message = NextMessage::Ready(SourceMessageType::status(
                         HealthStatus::StalledWithError(message),
                     ))
                 }
@@ -370,7 +370,7 @@ impl SourceReader for KafkaSourceReader {
                     next_message = self.handle_message(Ok(message), ts);
                 }
                 Err(error) => {
-                    next_message = NextMessage::Ready(SourceMessageType::SourceStatus(
+                    next_message = NextMessage::Ready(SourceMessageType::status(
                         HealthStatus::StalledWithError(error),
                     ))
                 }
@@ -390,7 +390,7 @@ impl SourceReader for KafkaSourceReader {
             // are more messages in the queue; in that case, we'll rely on the client reporting that
             // error again in the future if the error condition persists.
             if let NextMessage::Pending = next_message {
-                next_message = NextMessage::Ready(SourceMessageType::SourceStatus(status))
+                next_message = NextMessage::Ready(SourceMessageType::status(status))
             }
         }
 

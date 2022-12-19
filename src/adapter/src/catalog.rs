@@ -2485,6 +2485,45 @@ impl<S: Append> Catalog<S> {
         if let Some(system_parameter_frontend) = config.system_parameter_frontend {
             if !catalog.state.system_config().config_has_synced_once() {
                 tracing::info!("parameter sync on boot: start sync");
+
+                // We intentionally block initial startup, potentially forever,
+                // on initializing LaunchDarkly. This may seem scary, but the
+                // alternative is even scarier. Over time, we expect that the
+                // compiled-in default values for the system parameters will
+                // drift substantially from the defaults configured in
+                // LaunchDarkly, to the point that starting an environment
+                // without loading the latest values from LaunchDarkly will
+                // result in running an untested configuration.
+                //
+                // Note this only applies during initial startup. Restarting
+                // after we've synced once doesn't block on LaunchDarkly, as it
+                // seems reasonable to assume that the last-synced configuration
+                // was valid enough.
+                //
+                // This philosophy appears to provide a good balance between not
+                // running untested configurations in production while also not
+                // making LaunchDarkly a "tier 1" dependency for existing
+                // environments.
+                //
+                // If this proves to be an issue, we could seek to address the
+                // configuration drift in a different way--for example, by
+                // writing a script that runs in CI nightly and checks for
+                // deviation between the compiled Rust code and LaunchDarkly.
+                //
+                // If it is absolutely necessary to bring up a new environment
+                // while LaunchDarkly is down, the following manual mitigation
+                // can be performed:
+                //
+                //    1. Edit the environmentd startup parameters to omit the
+                //       LaunchDarkly configuration.
+                //    2. Boot environmentd.
+                //    3. Run `ALTER SYSTEM config_has_synced_once = true`.
+                //    4. Adjust any other parameters as necessary to avoid
+                //       running a nonstandard configuration in production.
+                //    5. Edit the environmentd startup parameters to restore the
+                //       LaunchDarkly configuration, for when LaunchDarkly comes
+                //       back online.
+                //    6. Reboot environmentd.
                 system_parameter_frontend.ensure_initialized().await;
 
                 let mut params = SynchronizedParameters::new(catalog.state.system_config().clone());

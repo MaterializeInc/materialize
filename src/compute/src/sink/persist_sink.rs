@@ -49,7 +49,6 @@ where
 {
     fn render_continuous_sink(
         &self,
-        scope: &G,
         compute_state: &mut ComputeState,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
@@ -62,7 +61,7 @@ where
         let desired_collection = sinked_collection.map(Ok).concat(&err_collection.map(Err));
 
         persist_sink(
-            scope,
+            &sinked_collection.scope(),
             sink_id,
             &self.storage_metadata,
             desired_collection,

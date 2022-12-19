@@ -49,6 +49,8 @@ class CreatePostgresCdcTable(Action):
         else:
             assert False
 
+        super().__init__(capabilities)
+
     def run(self, c: Composition) -> None:
         if self.new_postgres_cdc_table:
             assert self.postgres_cdc_table is not None

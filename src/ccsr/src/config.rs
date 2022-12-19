@@ -76,6 +76,14 @@ impl ClientConfig {
         self
     }
 
+    /// Overrides the url.
+    ///
+    /// Useful for certain kinds of tunneling.
+    pub fn override_url(mut self, url: Url) -> ClientConfig {
+        self.url = url;
+        self
+    }
+
     /// Builds the [`Client`].
     pub fn build(self) -> Result<Client, anyhow::Error> {
         let mut builder = reqwest::ClientBuilder::new();

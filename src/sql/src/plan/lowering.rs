@@ -298,6 +298,60 @@ impl HirRelationExpr {
                         body
                     })
                 }
+                LetRec { bindings, body } => {
+                    // We use the outer type with the HIR types to form MIR CTE types.
+                    let outer_column_types = get_outer.typ().column_types;
+
+                    // Rename and introduce all bindings.
+                    let mut shadowed_bindings = Vec::with_capacity(bindings.len());
+                    let mut mir_ids = Vec::with_capacity(bindings.len());
+                    for (_name, id, _value, typ) in bindings.iter() {
+                        let mir_id = mz_expr::LocalId::new(id_gen.allocate_id());
+                        mir_ids.push(mir_id);
+                        let shadowed = cte_map.insert(
+                            id.clone(),
+                            CteDesc {
+                                new_id: mir_id,
+                                relation_type: RelationType::new(
+                                    outer_column_types
+                                        .iter()
+                                        .cloned()
+                                        .chain(typ.column_types.iter().cloned())
+                                        .collect::<Vec<_>>(),
+                                ),
+                                outer_relation: get_outer.clone(),
+                            },
+                        );
+                        shadowed_bindings.push((*id, shadowed));
+                    }
+
+                    let mut mir_values = Vec::with_capacity(bindings.len());
+                    for (_name, _id, value, _typ) in bindings.into_iter() {
+                        mir_values.push(value.applied_to(
+                            id_gen,
+                            get_outer.clone(),
+                            col_map,
+                            cte_map,
+                        ));
+                    }
+
+                    let mir_body = body.applied_to(id_gen, get_outer, col_map, cte_map);
+
+                    // Remove our bindings and reinstate any shadowed bindings.
+                    for (id, shadowed) in shadowed_bindings {
+                        if let Some(shadowed) = shadowed {
+                            cte_map.insert(id, shadowed);
+                        } else {
+                            cte_map.remove(&id);
+                        }
+                    }
+
+                    mz_expr::MirRelationExpr::LetRec {
+                        ids: mir_ids,
+                        values: mir_values,
+                        body: Box::new(mir_body),
+                    }
+                }
                 Project { input, outputs } => {
                     // Projections should be applied to the decorrelated `inner`, and to its columns,
                     // which means rebasing `outputs` to start `get_outer.arity()` columns later.

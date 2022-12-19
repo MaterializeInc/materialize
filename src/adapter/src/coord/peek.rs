@@ -27,6 +27,7 @@ use mz_compute_client::response::PeekResponse;
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_expr::explain::Indices;
 use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_ore::cast::CastFrom;
 use mz_ore::str::Indent;
 use mz_ore::str::StrExt;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -323,9 +324,9 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                     )))?
                 };
                 if count > 0 {
-                    // TODO(benesch): rewrite to avoid `as`.
-                    #[allow(clippy::as_conversions)]
-                    results.push((row, NonZeroUsize::new(count as usize).unwrap()));
+                    let count =
+                        usize::cast_from(u64::try_from(count).expect("known to be positive"));
+                    results.push((row, NonZeroUsize::new(count).unwrap()));
                 }
             }
             let results = finishing.finish(results, self.catalog.system_config().max_result_size());

@@ -13,7 +13,7 @@ use itertools::Itertools;
 use postgres::error::SqlState;
 
 use mz_adapter::session::ClientSeverity as AdapterClientSeverity;
-use mz_adapter::session::TransactionStatus as AdapterTransactionStatus;
+use mz_adapter::session::TransactionCode;
 use mz_adapter::{AdapterError, AdapterNotice, StartupMessage};
 use mz_expr::EvalError;
 use mz_repr::{ColumnName, NotNullViolation, RelationDesc};
@@ -226,7 +226,7 @@ pub enum BackendMessage {
         tag: String,
     },
     EmptyQueryResponse,
-    ReadyForQuery(TransactionStatus),
+    ReadyForQuery(TransactionCode),
     RowDescription(Vec<FieldDescription>),
     DataRow(Vec<Option<mz_pgrepr::Value>>),
     ParameterStatus(&'static str, String),
@@ -256,30 +256,6 @@ pub enum BackendMessage {
 impl From<ErrorResponse> for BackendMessage {
     fn from(err: ErrorResponse) -> BackendMessage {
         BackendMessage::ErrorResponse(err)
-    }
-}
-
-/// A local representation of [`AdapterTransactionStatus`]
-#[derive(Debug, Clone, Copy)]
-pub enum TransactionStatus {
-    /// Not currently in a transaction
-    Idle,
-    /// Currently in a transaction
-    InTransaction,
-    /// Currently in a transaction block which is failed
-    Failed,
-}
-
-impl<T> From<&AdapterTransactionStatus<T>> for TransactionStatus {
-    /// Convert from the Session's version
-    fn from(status: &AdapterTransactionStatus<T>) -> TransactionStatus {
-        match status {
-            AdapterTransactionStatus::Default => TransactionStatus::Idle,
-            AdapterTransactionStatus::Started(_) => TransactionStatus::InTransaction,
-            AdapterTransactionStatus::InTransaction(_) => TransactionStatus::InTransaction,
-            AdapterTransactionStatus::InTransactionImplicit(_) => TransactionStatus::InTransaction,
-            AdapterTransactionStatus::Failed(_) => TransactionStatus::Failed,
-        }
     }
 }
 
@@ -433,6 +409,7 @@ impl ErrorResponse {
             AdapterNotice::ClusterReplicaStatusChanged { .. } => SqlState::WARNING,
             AdapterNotice::DroppedActiveDatabase { .. } => SqlState::WARNING,
             AdapterNotice::DroppedActiveCluster { .. } => SqlState::WARNING,
+            AdapterNotice::QueryTimestamp { .. } => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -584,6 +561,7 @@ impl Severity {
             AdapterNotice::ClusterReplicaStatusChanged { .. } => Severity::Notice,
             AdapterNotice::DroppedActiveDatabase { .. } => Severity::Notice,
             AdapterNotice::DroppedActiveCluster { .. } => Severity::Notice,
+            AdapterNotice::QueryTimestamp { .. } => Severity::Notice,
         }
     }
 }

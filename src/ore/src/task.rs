@@ -72,7 +72,7 @@ impl<T> JoinHandleExt<T> for JoinHandle<T> {
 ///
 /// See [`tokio::task::spawn`] and the [module][`self`] docs for more
 /// information.
-#[cfg(not(all(tokio_unstable, feature = "task")))]
+#[cfg(not(tokio_unstable))]
 #[track_caller]
 pub fn spawn<Fut, Name, NameClosure>(_nc: NameClosure, future: Fut) -> JoinHandle<Fut::Output>
 where
@@ -89,7 +89,7 @@ where
 ///
 /// See [`tokio::task::spawn`] and the [module][`self`] docs for more
 /// information.
-#[cfg(all(tokio_unstable, feature = "task"))]
+#[cfg(tokio_unstable)]
 #[track_caller]
 pub fn spawn<Fut, Name, NameClosure>(nc: NameClosure, future: Fut) -> JoinHandle<Fut::Output>
 where
@@ -110,7 +110,7 @@ where
 ///
 /// See [`tokio::task::spawn_blocking`] and the [module][`self`] docs for more
 /// information.
-#[cfg(not(all(tokio_unstable, feature = "task")))]
+#[cfg(not(tokio_unstable))]
 #[track_caller]
 #[allow(clippy::disallowed_methods)]
 pub fn spawn_blocking<Function, Output, Name, NameClosure>(
@@ -131,7 +131,7 @@ where
 ///
 /// See [`tokio::task::spawn_blocking`] and the [module][`self`] docs for more
 /// information.
-#[cfg(all(tokio_unstable, feature = "task"))]
+#[cfg(tokio_unstable)]
 #[track_caller]
 #[allow(clippy::disallowed_methods)]
 pub fn spawn_blocking<Function, Output, Name, NameClosure>(

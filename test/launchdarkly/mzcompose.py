@@ -26,7 +26,11 @@ from launchdarkly_api.model.patch_with_comment import PatchWithComment  # type: 
 from launchdarkly_api.model.variation import Variation  # type: ignore
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.services import Materialized, Testdrive
+from materialize.mzcompose.services import (
+    DEFAULT_MZ_ENVIRONMENT_ID,
+    Materialized,
+    Testdrive,
+)
 from materialize.ui import UIError
 
 # Access keys required for interacting with LaunchDarkly.
@@ -38,9 +42,9 @@ LAUNCHDARKLY_SDK_KEY = environ.get("LAUNCHDARKLY_SDK_KEY")
 BUILDKITE_JOB_ID = environ.get("BUILDKITE_JOB_ID", uuid1())
 BUILDKITE_PULL_REQUEST = environ.get("BUILDKITE_PULL_REQUEST")
 
-# This should always coincide with the default ld_user_key passed to
-# SystemParameterFrontend::new in the Rust codebase.
-LD_USER_KEY = "anonymous-dev@materialize.com"
+# This should always coincide with the MZ_ENVIRONMENT_ID value passed to the
+# Materialize service.
+LD_USER_KEY = DEFAULT_MZ_ENVIRONMENT_ID
 # A unique feature flag key to use for this test.
 LD_FEATURE_FLAG_KEY = f"ci-test-{BUILDKITE_JOB_ID}"
 
@@ -49,7 +53,7 @@ SERVICES = [
         environment_extra=[
             f"MZ_LAUNCHDARKLY_SDK_KEY={LAUNCHDARKLY_SDK_KEY}",
             f"MZ_LAUNCHDARKLY_KEY_MAP=max_result_size={LD_FEATURE_FLAG_KEY}",
-            "MZ_LOG_FILTER=mz_adapter::catalog=debug,mz_adapter::config=debug,info",
+            "MZ_LOG_FILTER=mz_adapter::catalog=debug,mz_adapter::config=debug",
             "MZ_CONFIG_SYNC_LOOP_INTERVAL=1s",
         ]
     ),
@@ -108,7 +112,7 @@ def workflow_default(c: Composition) -> None:
                 environment_extra=[
                     f"MZ_LAUNCHDARKLY_SDK_KEY={LAUNCHDARKLY_SDK_KEY}",
                     f"MZ_LAUNCHDARKLY_KEY_MAP=max_result_size={LD_FEATURE_FLAG_KEY}",
-                    "MZ_LOG_FILTER=mz_adapter::catalog=debug,mz_adapter::config=debug,info",
+                    "MZ_LOG_FILTER=mz_adapter::catalog=debug,mz_adapter::config=debug",
                 ]
             )
         ):

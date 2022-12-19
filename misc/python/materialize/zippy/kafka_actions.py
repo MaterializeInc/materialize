@@ -83,11 +83,12 @@ class CreateTopicParameterized(ActionFactory):
         if new_topic_name:
             return [
                 CreateTopic(
+                    capabilities=capabilities,
                     topic=TopicExists(
                         name=new_topic_name,
                         envelope=random.choice(self.envelopes),
                         partitions=random.randint(1, 10),
-                    )
+                    ),
                 )
             ]
         else:
@@ -95,8 +96,9 @@ class CreateTopicParameterized(ActionFactory):
 
 
 class CreateTopic(Action):
-    def __init__(self, topic: TopicExists) -> None:
+    def __init__(self, capabilities: Capabilities, topic: TopicExists) -> None:
         self.topic = topic
+        super().__init__(capabilities)
 
     def provides(self) -> List[Capability]:
         return [self.topic]
@@ -124,6 +126,10 @@ class Ingest(Action):
     def __init__(self, capabilities: Capabilities) -> None:
         self.topic = random.choice(capabilities.get(TopicExists))
         self.delta = random.randint(1, 100000)
+        super().__init__(capabilities)
+
+    def __str__(self) -> str:
+        return f"{Action.__str__(self)} {self.topic.name}"
 
 
 class KafkaInsert(Ingest):

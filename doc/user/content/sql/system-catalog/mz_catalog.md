@@ -35,6 +35,15 @@ Field           | Type                         | Meaning
 `user`          | [`text`]                     | The user who triggered the event, or `NULL` if triggered by the system.
 `occurred_at`   | [`timestamp with time zone`] | The time at which the event occurred.
 
+### `mz_aws_privatelink_connections`
+
+The `mz_aws_privatelink_connections` table contains a row for each AWS PrivateLink connection in the system.
+
+Field       | Type      | Meaning
+------------|-----------|--------
+`id`        | [`text`]  | The ID of the connection.
+`principal` | [`text`]  | The AWS Principal that Materialize will use to connect to the VPC endpoint.
+
 ### `mz_base_types`
 
 The `mz_base_types` table contains a row for each base type in the system.

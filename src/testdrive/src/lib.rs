@@ -42,7 +42,7 @@ pub async fn run_file(config: &Config, filename: &Path) -> Result<(), Error> {
     let mut contents = String::new();
     file.read_to_string(&mut contents)
         .with_context(|| format!("reading {}", filename.display()))?;
-    run_string(config, filename, &contents).await
+    run_string(config, Some(filename), &contents).await
 }
 
 /// Runs a testdrive script from the standard input.
@@ -51,7 +51,7 @@ pub async fn run_stdin(config: &Config) -> Result<(), Error> {
     io::stdin()
         .read_to_string(&mut contents)
         .context("reading <stdin>")?;
-    run_string(config, Path::new("<stdin>"), &contents).await
+    run_string(config, None, &contents).await
 }
 
 /// Runs a testdrive script stored in a string.
@@ -59,8 +59,14 @@ pub async fn run_stdin(config: &Config) -> Result<(), Error> {
 /// The script in `contents` is used verbatim. The provided `filename` is used
 /// only as output in error messages and such. No attempt is made to read
 /// `filename`.
-pub async fn run_string(config: &Config, filename: &Path, contents: &str) -> Result<(), Error> {
-    println!("--- {}", filename.display());
+pub async fn run_string(
+    config: &Config,
+    filename: Option<&Path>,
+    contents: &str,
+) -> Result<(), Error> {
+    if let Some(f) = filename {
+        println!("--- {}", f.display());
+    }
 
     let mut line_reader = LineReader::new(contents);
     run_line_reader(config, &mut line_reader)

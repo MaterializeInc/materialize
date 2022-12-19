@@ -442,10 +442,8 @@ async fn main() {
         }
     }
 
-    eprint!("+++ ");
-    if error_count == 0 {
-        eprintln!("testdrive completed successfully.");
-    } else {
+    if error_count > 0 {
+        eprint!("+++ ");
         eprintln!("!!! Error Report");
         eprintln!("{} errors were encountered during execution", error_count);
         if !error_files.is_empty() {

@@ -130,6 +130,7 @@ allow = [
     "ICU",
     "ISC",
     "MIT",
+    "MPL-2.0",
     "Zlib",
 ]
 copyleft = "deny"
@@ -145,6 +146,10 @@ license-files = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-git = [
+    # Waiting on https://github.com/tokio-rs/axum/pull/1598 to make it into a
+    # release.
+    "https://github.com/tokio-rs/axum.git",
+
     # Waiting for a new release of strip-ansi-escapes that avoids the indirect
     # dependency on arrayvec v0.5.2 via a dependency on vte v0.10.1.
     "https://github.com/alacritty/vte",
@@ -152,6 +157,10 @@ allow-git = [
     # Waiting for a new release that bumps to itoa v1.0.
     # See: https://github.com/BurntSushi/rust-csv/issues/271
     "https://github.com/BurntSushi/rust-csv.git",
+
+    # Waiting for https://github.com/chronotope/chrono/pull/906
+    # to be released in the v0.4.x series.
+    "https://github.com/chronotope/chrono.git",
 
     # Waiting on v0.18.
     # See: https://github.com/open-telemetry/opentelemetry-rust/pull/779
@@ -175,10 +184,6 @@ allow-git = [
     # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
     "https://github.com/MaterializeInc/serde-value.git",
 
-    # Waiting on https://github.com/snapview/tungstenite-rs/pull/299 to make
-    # it into a release.
-    "https://github.com/snapview/tungstenite-rs.git",
-
     # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
     "https://github.com/MaterializeInc/rust-rdkafka.git",
 
@@ -200,11 +205,6 @@ allow-git = [
     # Waiting on https://github.com/launchdarkly/rust-eventsource-client/pull/43
     # to make it into a release.
     "https://github.com/MaterializeInc/rust-eventsource-client.git",
-
-    # Waiting on
-    # https://github.com/launchdarkly/rust-server-sdk-evaluation/pull/1 to make
-    # it into a release.
-    "https://github.com/MaterializeInc/rust-server-sdk-evaluation",
 
     # Waiting on https://github.com/launchdarkly/rust-server-sdk/pull/20 to make
     # it into a release.

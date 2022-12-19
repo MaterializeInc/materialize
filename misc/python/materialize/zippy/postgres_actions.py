@@ -81,6 +81,8 @@ class CreatePostgresTable(Action):
         else:
             assert False
 
+        super().__init__(capabilities)
+
     def run(self, c: Composition) -> None:
         if self.new_postgres_table:
             primary_key = f"PRIMARY KEY" if self.postgres_table.has_pk else ""
@@ -112,6 +114,11 @@ class PostgresDML(Action):
     def __init__(self, capabilities: Capabilities) -> None:
         self.postgres_table = random.choice(capabilities.get(PostgresTableExists))
         self.delta = random.randint(1, PostgresDML.MAX_BATCH_SIZE)
+
+        super().__init__(capabilities)
+
+    def __str__(self) -> str:
+        return f"{Action.__str__(self)} {self.postgres_table.name}"
 
 
 class PostgresInsert(PostgresDML):

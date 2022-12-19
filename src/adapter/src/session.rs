@@ -257,6 +257,11 @@ impl<T: TimestampManipulation> Session<T> {
         &self.transaction
     }
 
+    /// Returns the session's transaction code.
+    pub fn transaction_code(&self) -> TransactionCode {
+        self.transaction().into()
+    }
+
     /// Adds operations to the current transaction. An error is produced if
     /// they cannot be merged (i.e., a timestamp-dependent read cannot be
     /// merged to an insert).
@@ -862,6 +867,46 @@ impl<T> Transaction<T> {
             | TransactionOps::None
             | TransactionOps::Subscribe
             | TransactionOps::Writes(_) => None,
+        }
+    }
+}
+
+/// A transaction's status code.
+#[derive(Debug, Clone, Copy)]
+pub enum TransactionCode {
+    /// Not currently in a transaction
+    Idle,
+    /// Currently in a transaction
+    InTransaction,
+    /// Currently in a transaction block which is failed
+    Failed,
+}
+
+impl From<TransactionCode> for u8 {
+    fn from(code: TransactionCode) -> Self {
+        match code {
+            TransactionCode::Idle => b'I',
+            TransactionCode::InTransaction => b'T',
+            TransactionCode::Failed => b'E',
+        }
+    }
+}
+
+impl From<TransactionCode> for String {
+    fn from(code: TransactionCode) -> Self {
+        char::from(u8::from(code)).to_string()
+    }
+}
+
+impl<T> From<&TransactionStatus<T>> for TransactionCode {
+    /// Convert from the Session's version
+    fn from(status: &TransactionStatus<T>) -> TransactionCode {
+        match status {
+            TransactionStatus::Default => TransactionCode::Idle,
+            TransactionStatus::Started(_) => TransactionCode::InTransaction,
+            TransactionStatus::InTransaction(_) => TransactionCode::InTransaction,
+            TransactionStatus::InTransactionImplicit(_) => TransactionCode::InTransaction,
+            TransactionStatus::Failed(_) => TransactionCode::Failed,
         }
     }
 }

@@ -51,6 +51,10 @@ pub mod critical;
 pub mod error;
 pub mod fetch;
 pub mod inspect;
+pub mod operators {
+    //! [timely] operators for reading and writing persist Shards.
+    pub mod shard_source;
+}
 pub mod read;
 pub mod usage;
 pub mod write;
@@ -496,7 +500,7 @@ impl PersistClient {
 
         let reader_id = LeasedReaderId::new();
         let heartbeat_ts = (self.cfg.now)();
-        let (_, read_cap) = machine
+        let reader_state = machine
             .register_leased_reader(
                 &reader_id,
                 purpose,
@@ -511,7 +515,7 @@ impl PersistClient {
             gc,
             Arc::clone(&self.blob),
             reader_id,
-            read_cap.since,
+            reader_state.since,
             heartbeat_ts,
         )
         .await;

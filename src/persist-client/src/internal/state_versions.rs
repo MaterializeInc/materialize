@@ -29,7 +29,7 @@ use crate::error::CodecMismatch;
 use crate::internal::machine::{retry_determinate, retry_external};
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
-use crate::internal::state::State;
+use crate::internal::state::{NoOpStateTransition, State};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
 
@@ -560,7 +560,9 @@ impl StateVersions {
                 state.add_and_remove_rollups((rollup_seqno, &rollup_key), &[])
             }) {
             Continue(x) => x,
-            Break(x) => match x {},
+            Break(NoOpStateTransition(_)) => {
+                panic!("initial state transition should not be a no-op")
+            }
         };
         assert!(
             applied,

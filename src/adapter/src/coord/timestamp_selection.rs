@@ -13,6 +13,7 @@ use std::fmt;
 
 use chrono::NaiveDateTime;
 use differential_dataflow::lattice::Lattice;
+use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{event, Level};
 
@@ -32,7 +33,7 @@ use crate::session::{vars, Session};
 use crate::AdapterError;
 
 /// The timeline and timestamp context of a read.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TimestampContext<T> {
     /// Read is executed in a specific timeline with a specific timestamp.
     TimelineTimestamp(Timeline, T),
@@ -149,9 +150,6 @@ impl<S: Append + 'static> Coordinator<S> {
             TimelineContext::TimestampDependent => Some(Timeline::EpochMilliseconds),
             TimelineContext::TimestampIndependent => None,
         };
-        let use_timestamp_oracle = isolation_level == &vars::IsolationLevel::StrictSerializable
-            && timeline.is_some()
-            && when.advance_to_global_ts();
 
         let upper = self.least_valid_write(id_bundle);
         let largest_not_in_advance_of_upper = self.largest_not_in_advance_of_upper(&upper);
@@ -161,14 +159,33 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.advance_by(since.borrow());
         }
 
-        if use_timestamp_oracle {
-            let timeline = timeline
-                .as_ref()
-                .expect("timeline is always present when using the timestamp oracle");
-            let timestamp_oracle = self.get_timestamp_oracle(timeline);
-            oracle_read_ts = Some(timestamp_oracle.read_ts());
-            candidate.join_assign(&oracle_read_ts.unwrap());
-        } else if when.advance_to_upper() {
+        // In order to use a timestamp oracle, we must be in the context of some timeline. In that
+        // context we would use the timestamp oracle in the following scenarios:
+        // - The isolation level is Strict Serializable and the `when` allows us to use the
+        //   the timestamp oracle (ex: queries with no AS OF).
+        // - The `when` requires us to use the timestamp oracle (ex: read-then-write queries).
+        if let Some(timeline) = &timeline {
+            if when.must_advance_to_timeline_ts()
+                || (when.can_advance_to_timeline_ts()
+                    && isolation_level == &vars::IsolationLevel::StrictSerializable)
+            {
+                let timestamp_oracle = self.get_timestamp_oracle(timeline);
+                oracle_read_ts = Some(timestamp_oracle.read_ts());
+                candidate.join_assign(&oracle_read_ts.unwrap());
+            }
+        }
+
+        // We advance to the upper in the following scenarios:
+        // - The isolation level is Serializable and the `when` allows us to advance to upper (ex:
+        //   queries with no AS OF). We avoid using the upper in Strict Serializable to prevent
+        //   reading source data that is being written to in the future.
+        // - The isolation level is Strict Serializable but there is no timelines and the `when`
+        //   allows us to advance to upper.
+        // - The `when` requires us to advance to the upper (ex: read-then-write queries).
+        if when.must_advance_to_upper()
+            || (when.can_advance_to_upper()
+                && (isolation_level == &vars::IsolationLevel::Serializable || timeline.is_none()))
+        {
             candidate.join_assign(&largest_not_in_advance_of_upper);
         }
 
@@ -396,6 +413,7 @@ impl<S: Append + 'static> Coordinator<S> {
 }
 
 /// Information used when determining the timestamp for a query.
+#[derive(Serialize, Deserialize)]
 pub struct TimestampDetermination<T> {
     /// The chosen timestamp context from `determine_timestamp`.
     pub timestamp_context: TimestampContext<T>,
@@ -419,6 +437,7 @@ impl<T: TimestampManipulation> TimestampDetermination<T> {
 }
 
 /// Information used when determining the timestamp for a query.
+#[derive(Serialize, Deserialize)]
 pub struct TimestampExplanation<T> {
     /// The chosen timestamp from `determine_timestamp`.
     pub determination: TimestampDetermination<T>,
@@ -426,6 +445,7 @@ pub struct TimestampExplanation<T> {
     pub sources: Vec<TimestampSource<T>>,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct TimestampSource<T> {
     pub name: String,
     pub read_frontier: Vec<T>,
@@ -440,17 +460,13 @@ pub trait DisplayableInTimeline {
 }
 
 impl DisplayableInTimeline for mz_repr::Timestamp {
-    // TODO(benesch): remove this once this function no longer makes use of
-    // potentially dangerous `as` conversions.
-    #[allow(clippy::as_conversions)]
     fn fmt(&self, timeline: Option<&Timeline>, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(Timeline::EpochMilliseconds) = timeline {
             let ts_ms: u64 = self.into();
-            let ts = ts_ms / 1000;
-            let nanos = ((ts_ms % 1000) as u32) * 1000000;
-            let ndt = NaiveDateTime::from_timestamp_opt(ts as i64, nanos);
-            if let Some(ndt) = ndt {
-                return write!(f, "{:13} ({})", self, ndt.format("%Y-%m-%d %H:%M:%S%.3f"));
+            if let Ok(ts_ms) = i64::try_from(ts_ms) {
+                if let Some(ndt) = NaiveDateTime::from_timestamp_millis(ts_ms) {
+                    return write!(f, "{:13} ({})", self, ndt.format("%Y-%m-%d %H:%M:%S%.3f"));
+                }
             }
         }
         write!(f, "{:13}", self)

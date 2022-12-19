@@ -38,7 +38,7 @@ SELECT id FROM mz_sources WHERE name = 'kafka_source'
 "<TIMESTAMP> UTC" ${source_id} starting <null> <null>
 "<TIMESTAMP> UTC" ${source_id} running <null> <null>
 
-> select * from mz_internal.mz_source_status where id = '${source_id}';
+> select * from mz_internal.mz_source_statuses where id = '${source_id}';
 "${source_id}" kafka_source kafka "<TIMESTAMP> UTC" running <null> <null>
 
 $ set-from-sql var=sink_id
@@ -70,14 +70,14 @@ $ kafka-verify-data format=avro sink=materialize.public.kafka_sink sort-messages
 "<TIMESTAMP> UTC" ${sink_id} starting <null> <null>
 "<TIMESTAMP> UTC" ${sink_id} running <null> <null>
 
-> select * from mz_internal.mz_sink_status where id = '${sink_id}';
+> select * from mz_internal.mz_sink_statuses where id = '${sink_id}';
 "${sink_id}" kafka_sink kafka "<TIMESTAMP> UTC" running <null> <null>
 
 > select * from mz_internal.mz_source_status_history where source_id = '${source_id}' order by occurred_at;
 "<TIMESTAMP> UTC" ${source_id} starting <null> <null>
 "<TIMESTAMP> UTC" ${source_id} running <null> <null>
 
-> select * from mz_internal.mz_source_status where id = '${source_id}';
+> select * from mz_internal.mz_source_statuses where id = '${source_id}';
 "${source_id}" kafka_source kafka "<TIMESTAMP> UTC" running <null> <null>
 
 ## Confirm that the tables report statuses for multiple sources and sinks.
@@ -105,10 +105,10 @@ SELECT id FROM mz_sinks WHERE name = 'kafka_sink_2'
 "<TIMESTAMP> UTC" ${source_id_2} starting <null> <null>
 "<TIMESTAMP> UTC" ${source_id_2} running <null> <null>
 
-> select * from mz_internal.mz_sink_status where id in ('${sink_id}', '${sink_id_2}') order by id;
+> select * from mz_internal.mz_sink_statuses where id in ('${sink_id}', '${sink_id_2}') order by id;
 "${sink_id}" kafka_sink kafka "<TIMESTAMP> UTC" running <null> <null>
 "${sink_id_2}" kafka_sink_2 kafka "<TIMESTAMP> UTC" running <null> <null>
 
-> select * from mz_internal.mz_source_status where id in ('${source_id}', '${source_id_2}') order by id;
+> select * from mz_internal.mz_source_statuses where id in ('${source_id}', '${source_id_2}') order by id;
 "${source_id}" kafka_source kafka "<TIMESTAMP> UTC" running <null> <null>
 "${source_id_2}" kafka_source_2 kafka "<TIMESTAMP> UTC" running <null> <null>

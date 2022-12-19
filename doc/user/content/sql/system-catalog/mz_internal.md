@@ -76,8 +76,7 @@ The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
 
 {{< warning >}}
 The values in this table may change at any time, and users should not rely on
-them for any kind of capacity planning. For a view that is potentially more useful,
-see [`mz_cluster_replica_utilization`](#mz_cluster_replica_utilization).
+them for any kind of capacity planning.
 {{< /warning >}}
 
 | Field            | Type      | Meaning                                                       |
@@ -87,21 +86,6 @@ see [`mz_cluster_replica_utilization`](#mz_cluster_replica_utilization).
 | `workers`        | [`uint8`] | The number of Timely Dataflow workers per process.            |
 | `cpu_nano_cores` | [`uint8`] | The CPU allocation per process, in billionths of a vCPU core. |
 | `memory_bytes`   | [`uint8`] | The RAM allocation per process, in billionths of a vCPU core. |
-
-### `mz_cluster_replica_utilization`
-
-The `mz_cluster_replica_utilization` table gives the last known CPU and RAM utilization statistics
-for all processes of all extant cluster replicas, as a percentage of the total allocation.
-
-At this time, we do not make any guarantees about the exactness or freshness of these numbers.
-
-| Field            | Type      | Meaning                                                    |
-|------------------|-----------|------------------------------------------------------------|
-| `replica_id`     | [`uint8`] | The ID of a cluster replica.                               |
-| `process_id`     | [`uint8`] | An identifier of a compute process within a replica.       |
-| `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
-| `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
-
 
 ### `mz_dataflows`
 
@@ -415,6 +399,63 @@ Field       | Type       | Meaning
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`mz_timestamp`] | The next timestamp at which the dataflow may change.
 
+### `mz_source_utilization`
+
+The `mz_source_utilization` table gives the last known CPU and RAM utilization
+statistics for all extant sources, as a percentage of the total allocation.
+
+At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+
+| Field            | Type      | Meaning                                                    |
+|------------------|-----------|------------------------------------------------------------|
+| `source_id`      | [`uint8`] | The ID of a source.                                        |
+| `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
+| `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
+
+### `mz_sink_utilization`
+
+The `mz_sink_utilization` table gives the last known CPU and RAM utilization
+statistics for all extant sinks, as a percentage of the total allocation.
+
+At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+
+| Field            | Type      | Meaning                                                    |
+|------------------|-----------|------------------------------------------------------------|
+| `sink_id`        | [`uint8`] | The ID of a sink.                                          |
+| `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
+| `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
+
+### `mz_storage_host_metrics`
+
+The `mz_storage_host_metrics` table gives the last known CPU and RAM utilization statistics
+for all processes of all extant storage replicas.
+
+At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+
+Field              | Type       | Meaning
+-------------------|------------|--------
+`id`               | [`text`]   | The ID of the storage object (source or sink).
+`process_id`       | [`bigint`] | An identifier of a process within a host.
+`cpu_nano_cores`   | [`bigint`] | Approximate CPU usage, in billionths of a vCPU core.
+`memory_bytes`     | [`bigint`] | Approximate RAM usage, in bytes.
+
+### `mz_storage_host_sizes`
+
+The `mz_storage_host_sizes` table contains a mapping of logical sizes
+(e.g. "xlarge") to physical sizes (number of workers, and CPU and memory allocations per process).
+
+{{< warning >}}
+The values in this table may change at any time, and users should not rely on
+them for any kind of capacity planning.
+{{< /warning >}}
+
+| Field            | Type      | Meaning                                                       |
+|------------------|-----------|---------------------------------------------------------------|
+| `size`           | [`text`]  | The human-readable size.                                      |
+| `workers`        | [`uint8`] | The number of Timely Dataflow workers per process.            |
+| `cpu_nano_cores` | [`uint8`] | The CPU allocation per process, in billionths of a vCPU core. |
+| `memory_bytes`   | [`uint8`] | The RAM allocation per process, in billionths of a vCPU core. |
+
 ### `mz_source_status`
 
 The `mz_source_status` view provides the current state for each source in the
@@ -444,6 +485,36 @@ Field         | Type                          | Meaning
 `status`      | [`text`]                      | The status of the source: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
 `error`       | [`text`]                      | If the source is in an error state, the error message.
 `details`     | [`jsonb`]                     | Additional metadata provided by the source.
+
+### `mz_sink_status`
+
+The `mz_sink_status` view provides the current state for each sink in the
+system, including potential error messages and additional metadata helpful for
+debugging.
+
+Field                   | Type                          | Meaning
+------------------------|-------------------------------|--------
+`id`                    | [`text`]                      | The ID of the sink. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).
+`name`                  | [`text`]                      | The name of the sink.
+`type`                  | [`text`]                      | The type of the sink.
+`last_status_change_at` | [`timestamp with time zone`]  | Wall-clock timestamp of the sink status change.
+`status`                | [`text`]                      | The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
+`error`                 | [`text`]                      | If the sink is in an error state, the error message.
+`details`               | [`jsonb`]                     | Additional metadata provided by the sink.
+
+### `mz_sink_status_history`
+
+The `mz_sink_status_history` table contains rows describing the
+history of changes to the status of each sink in the system, including potential error
+messages and additional metadata helpful for debugging.
+
+Field         | Type                          | Meaning
+--------------|-------------------------------|--------
+`occurred_at` | [`timestamp with time zone`]  | Wall-clock timestamp of the sink status change.
+`sink_id`     | [`text`]                      | The ID of the sink. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).
+`status`      | [`text`]                      | The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
+`error`       | [`text`]                      | If the sink is in an error state, the error message.
+`details`     | [`jsonb`]                     | Additional metadata provided by the sink.
 
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list

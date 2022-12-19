@@ -110,6 +110,7 @@ impl ColumnKnowledge {
                     }
                     Ok(body_knowledge)
                 }
+                MirRelationExpr::LetRec { .. } => Err(crate::TransformError::LetRecUnsupported)?,
                 MirRelationExpr::Project { input, outputs } => {
                     let input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
                     Ok(outputs

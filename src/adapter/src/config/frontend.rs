@@ -13,6 +13,8 @@ use derivative::Derivative;
 use launchdarkly_server_sdk as ld;
 use tokio::time;
 
+use mz_sql::catalog::{CloudProvider, EnvironmentId};
+
 use super::SynchronizedParameters;
 
 /// A frontend client for pulling [SynchronizedParameters] from LaunchDarkly.
@@ -22,8 +24,9 @@ pub struct SystemParameterFrontend {
     /// An SDK client to mediate interactions with the LaunchDarkly client.
     #[derivative(Debug = "ignore")]
     ld_client: ld::Client,
-    /// The user to use when quering LaunchDarkly using the SDK.
-    ld_user: ld::User,
+    /// The context to use when quering LaunchDarkly using the SDK.
+    /// This scopes down queries to a specific key.
+    ld_ctx: ld::Context,
     /// A map from parameter names to LaunchDarkly feature keys
     /// to use when populating the the [SynchronizedParameters]
     /// instance in [SystemParameterFrontend::pull].
@@ -33,17 +36,34 @@ pub struct SystemParameterFrontend {
 impl SystemParameterFrontend {
     /// Construct a new [SystemParameterFrontend] instance.
     pub fn new(
+        env_id: EnvironmentId,
         ld_sdk_key: &str,
-        ld_user_key: &str,
         ld_key_map: BTreeMap<String, String>,
     ) -> Result<Self, anyhow::Error> {
         let ld_config = ld::ConfigBuilder::new(ld_sdk_key).build();
         let ld_client = ld::Client::build(ld_config)?;
-        let ld_user = ld::User::with_key(ld_user_key).build();
+        let ld_ctx = if env_id.cloud_provider() != &CloudProvider::Local {
+            ld::ContextBuilder::new(env_id.to_string())
+                // TODO: uncomment one once the EAP for contexts is enabled in LD
+                // .kind("environment")
+                // .set_string("cloud_provider", env_id.cloud_provider())
+                // .set_string("cloud_provider_region", env_id.cloud_provider_region())
+                // .set_string("organization_id", env_id.organization_id().to_string())
+                // .set_string("ordinal", env_id.ordinal().to_string())
+                .build()
+                .map_err(|e| anyhow::anyhow!(e))?
+        } else {
+            // If cloud_provider is 'local', use an anonymous user with a custom
+            // email.
+            ld::ContextBuilder::new("anonymous-dev@materialize.com")
+                .anonymous(true)
+                .build()
+                .map_err(|e| anyhow::anyhow!(e))?
+        };
 
         Ok(Self {
             ld_client,
-            ld_user,
+            ld_ctx,
             ld_key_map,
         })
     }
@@ -84,7 +104,7 @@ impl SystemParameterFrontend {
 
             let flag_var =
                 self.ld_client
-                    .variation(&self.ld_user, flag_name, params.get(param_name));
+                    .variation(&self.ld_ctx, flag_name, params.get(param_name));
 
             let flag_str = match flag_var {
                 ld::FlagValue::Bool(v) => v.to_string(),
