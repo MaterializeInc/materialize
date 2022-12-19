@@ -1019,7 +1019,6 @@ where
 
                     match i {
                         IntrospectionType::ShardMapping => {
-                            self.truncate_managed_collection(id).await;
                             self.initialize_shard_mapping().await;
                         }
                         IntrospectionType::StorageHostMetrics => {
@@ -1043,7 +1042,7 @@ where
                             // we can change the scraper to reconcile its
                             // internal state with the current state of the
                             // output collection.
-                            self.truncate_managed_collection(id).await;
+                            self.reconcile_managed_collection(id, vec![]).await;
 
                             let metrics_fetcher = self.hosts.metrics_fetcher();
                             let scraper_token = metrics_scraper::spawn_metrics_scraper(
@@ -1728,32 +1727,61 @@ where
 
     Self: StorageController<Timestamp = T>,
 {
-    /// Effectively truncates the `data_shard` associated with `global_id`
-    /// effective as of the system time.
+    /// Reconciles the current state of the collection identified by `id` with
+    /// `updates`.
+    ///
+    /// To do this, for each row, we determine the sum of the diffs in updates
+    /// and the negative of the diffs in the current state. If any updates
+    /// remain, we append them to the identified collection.
+    ///
+    /// ## Notes
+    /// - Using this logic, it's possible to truncate a collection by
+    ///   reconciling its current state with an empty set of updates.
+    /// - As of this commit, an alternative to this approach is to issue a full
+    ///   retraction for tables' contents unioned with the desired values. If
+    ///   persist receives that in a single batch, it would have similar
+    ///   behavior as this. This comment's here to highlight that reconciliation
+    ///   is less important for persist than is writing all potentially
+    ///   reconciliable updates in a single batch.
     ///
     /// # Panics
     /// - If `id` does not belong to a collection or is not registered as a
     ///   managed collection.
-    async fn truncate_managed_collection(&mut self, id: GlobalId) {
-        let as_of = match self.state.collections[&id]
+    async fn reconcile_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+        let mut reconciled_updates = HashMap::<Row, Diff>::with_capacity(updates.len());
+
+        for (row, diff) in updates.into_iter() {
+            *reconciled_updates.entry(row).or_default() += diff;
+        }
+
+        match self.state.collections[&id]
             .write_frontier
             .elements()
             .iter()
             .min()
         {
-            Some(f) if f > &T::minimum() => f.step_back().unwrap(),
+            Some(f) if f > &T::minimum() => {
+                let as_of = f.step_back().unwrap();
+
+                let negate = self.snapshot(id, as_of).await.unwrap();
+
+                for (row, diff) in negate.into_iter() {
+                    *reconciled_updates.entry(row).or_default() -= diff;
+                }
+            }
             // If collection is closed or the frontier is the minimum, we cannot
             // or don't need to truncate (respectively).
-            _ => return,
-        };
-
-        let mut negate = self.snapshot(id, as_of).await.unwrap();
-
-        for (_, diff) in negate.iter_mut() {
-            *diff = -*diff;
+            _ => {}
         }
 
-        self.append_to_managed_collection(id, negate).await;
+        let updates: Vec<_> = reconciled_updates
+            .into_iter()
+            .filter(|(_, diff)| *diff != 0)
+            .collect();
+
+        if !updates.is_empty() {
+            self.append_to_managed_collection(id, updates).await;
+        }
     }
 
     /// Append `updates` to the `data_shard` associated with `global_id`
@@ -1796,7 +1824,7 @@ where
             updates.push((row_buf.clone(), 1));
         }
 
-        self.append_to_managed_collection(id, updates).await;
+        self.reconcile_managed_collection(id, updates).await;
     }
 
     /// Writes a new global ID, shard ID pair to the appropriate collection.
