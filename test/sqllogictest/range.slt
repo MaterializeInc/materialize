@@ -532,3 +532,60 @@ select '(,)'::int4range < '(,)'::int4range;
 
 query error operator does not exist: int4range <= int4range
 select '(,)'::int4range <= '(,)'::int4range;
+
+# Results from PG
+# (,) true true true
+# [0,1) false true false
+# [0,2) false true true
+# (,1) true true false
+# [1,) false false true
+# [-1,1) true true false
+# [-1,2) true true true
+# (,2) true true true
+# [2,) false false false
+# empty true false false false
+query TTTT
+SELECT DISTINCT
+    a::text, a @> -1 contains_neg_1, a @> 0 contains_0, a @> 1 contains_1
+FROM r ORDER BY a;
+----
+(,)
+true
+true
+true
+(,1)
+true
+true
+false
+(,2)
+true
+true
+true
+[-1,1)
+true
+true
+false
+[-1,2)
+true
+true
+true
+[0,1)
+false
+true
+false
+[0,2)
+false
+true
+true
+[1,)
+false
+false
+true
+[2,)
+false
+false
+false
+empty
+false
+false
+false

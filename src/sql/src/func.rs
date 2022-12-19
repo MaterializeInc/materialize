@@ -123,6 +123,7 @@ impl TypeCategory {
             | ParamType::MapAny
             | ParamType::MapAnyCompatible
             | ParamType::RecordAny => Self::Pseudo,
+            ParamType::RangeAnyCompatible | ParamType::RangeAny => Self::Range,
             ParamType::Plain(t) => Self::from_type(t),
         }
     }
@@ -713,6 +714,12 @@ pub enum ParamType {
     /// A polymorphic pseudotype permitting a `ScalarType::Record` of any type,
     /// but all records must be structurally equal.
     RecordAny,
+    /// An pseudotype permitting any range type, requiring other "Any"-type
+    /// parameters to be of the same type.
+    RangeAny,
+    /// A pseudotype permitting any range type, permitting other "Compatibility"-type
+    /// parameters to find the best common type.
+    RangeAnyCompatible,
 }
 
 impl ParamType {
@@ -726,6 +733,7 @@ impl ParamType {
             ArrayAny | ArrayAnyCompatible => matches!(t, Array(..) | Int2Vector),
             ListAny | ListAnyCompatible => matches!(t, List { .. }),
             MapAny | MapAnyCompatible => matches!(t, Map { .. }),
+            RangeAny | RangeAnyCompatible => matches!(t, Range { .. }),
             NonVecAny => !t.is_vec(),
             Plain(to) => typeconv::can_cast(ecx, CastContext::Implicit, t, to),
             RecordAny => matches!(t, Record { .. }),
@@ -777,7 +785,9 @@ impl ParamType {
             // In PG, RecordAny isn't polymorphic even though it offers
             // polymorphic behavior. For more detail, see
             // `PolymorphicCompatClass::StructuralEq`.
-            | RecordAny => true,
+            | RecordAny
+            | RangeAny
+            | RangeAnyCompatible => true,
             Any | Plain(_)  => false,
         }
     }
@@ -804,6 +814,8 @@ impl ParamType {
             ParamType::MapAnyCompatible => "anycompatiblemap",
             ParamType::NonVecAny => "anynonarray",
             ParamType::RecordAny => "record",
+            ParamType::RangeAny => "anyrange",
+            ParamType::RangeAnyCompatible => "anycompatiblerange",
         }
     }
 }
@@ -1381,8 +1393,12 @@ impl TryFrom<&ParamType> for PolymorphicCompatClass {
         use ParamType::*;
 
         Ok(match param {
-            AnyElement | ArrayAny | ListAny | MapAny | NonVecAny => PolymorphicCompatClass::Any,
-            ArrayAnyCompatible | AnyCompatible => PolymorphicCompatClass::BestCommonAny,
+            AnyElement | ArrayAny | ListAny | MapAny | NonVecAny | RangeAny => {
+                PolymorphicCompatClass::Any
+            }
+            ArrayAnyCompatible | AnyCompatible | RangeAnyCompatible => {
+                PolymorphicCompatClass::BestCommonAny
+            }
             ListAnyCompatible | ListElementAnyCompatible => PolymorphicCompatClass::BestCommonList,
             MapAnyCompatible => PolymorphicCompatClass::BestCommonMap,
             RecordAny => PolymorphicCompatClass::StructuralEq,
@@ -1454,6 +1470,7 @@ impl PolymorphicSolution {
             MapAny => seen.map(|array| array.unwrap_map_value_type().clone()),
             ListAny => seen.map(|array| array.unwrap_list_element_type().clone()),
             ArrayAny | ArrayAnyCompatible => seen.map(|array| array.unwrap_array_element_type().clone()),
+            RangeAny | RangeAnyCompatible => seen.map(|range| range.unwrap_range_element_type().clone()),
             ListElementAnyCompatible => seen.map(|el| ScalarType::List {
                 custom_id: None,
                 element_type: Box::new(el),
@@ -1584,6 +1601,9 @@ impl PolymorphicSolution {
                 value_type: Box::new(key.clone()),
                 custom_id: None,
             }),
+            RangeAny | RangeAnyCompatible => self.key.as_ref().map(|key| ScalarType::Range {
+                element_type: Box::new(key.clone()),
+            }),
             ListElementAnyCompatible => self
                 .key
                 .as_ref()
@@ -1620,7 +1640,7 @@ fn coerce_args_to_types(
                 }
                 _ => cexpr.type_as_any(ecx)?,
             },
-            p @ (ArrayAny | ListAny | MapAny) => {
+            p @ (ArrayAny | ListAny | MapAny | RangeAny) => {
                 let target = polymorphic_solution
                     .target_for_param_type(p)
                     .ok_or_else(|| {
@@ -3468,6 +3488,10 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
                       .call_binary(rhs, JsonbContainsJsonb))
             }), oid::OP_CONTAINS_STRING_JSONB_OID;
             params!(MapAnyCompatible, MapAnyCompatible) => MapContainsMap => Bool, oid::OP_CONTAINS_MAP_MAP_OID;
+            params!(RangeAny, AnyElement) => Operation::binary(|ecx, lhs, rhs| {
+                let elem_type = ecx.scalar_type(&lhs).unwrap_range_element_type().clone();
+                Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsElem { elem_type }))
+            }) => Bool, 3892;
         },
         "<@" => Scalar {
             params!(Jsonb, Jsonb) => Operation::binary(|_ecx, lhs, rhs| {

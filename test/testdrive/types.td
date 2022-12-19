@@ -54,8 +54,10 @@ anycompatiblearray
 anycompatiblelist
 anycompatiblemap
 anycompatiblenonarray
+anycompatiblerange
 anyelement
 anynonarray
+anyrange
 bool
 bpchar
 bytea
