@@ -681,17 +681,14 @@ where
         let new_reader_id = LeasedReaderId::new();
         let mut machine = self.machine.clone();
         let heartbeat_ts = (self.cfg.now)();
-        let reader_state = machine
-            .register_leased_reader(
+        let read_cap = machine
+            .clone_reader(
                 &new_reader_id,
                 purpose,
                 self.cfg.reader_lease_duration,
                 heartbeat_ts,
             )
             .await;
-        // The point of clone is that you're guaranteed to have the same (or
-        // greater) since capability, verify that.
-        assert!(PartialOrder::less_equal(&reader_state.since, &self.since));
         let new_reader = ReadHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
@@ -699,7 +696,7 @@ where
             self.gc.clone(),
             Arc::clone(&self.blob),
             new_reader_id,
-            reader_state.since,
+            read_cap.since,
             heartbeat_ts,
         )
         .await;
