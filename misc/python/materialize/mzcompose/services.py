@@ -489,6 +489,22 @@ class MySql(Service):
         self.mysql_root_password = mysql_root_password
 
 
+class Cockroach(Service):
+    def __init__(
+        self,
+        name: str = "cockroach",
+    ):
+        super().__init__(
+            name="cockroach",
+            config={
+                "image": "cockroachdb/cockroach:v22.1.2",
+                "ports": [26257],
+                "command": "start-single-node --insecure",
+                "volumes": ["/cockroach/cockroach-data"],
+            },
+        )
+
+
 class Postgres(Service):
     def __init__(
         self,
