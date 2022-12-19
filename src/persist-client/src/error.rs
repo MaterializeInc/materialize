@@ -50,7 +50,7 @@ impl Determinacy for ExternalError {
 
 /// An error resulting from invalid usage of the API.
 #[derive(Debug)]
-#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
+#[cfg_attr(test, derive(PartialEq))]
 pub enum InvalidUsage<T> {
     /// Append bounds were invalid
     InvalidBounds {
@@ -163,7 +163,7 @@ impl<T> Determinacy for InvalidUsage<T> {
 
 /// The requested codecs don't match the actual ones in durable storage.
 #[derive(Debug)]
-#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct CodecMismatch {
     /// The requested (K, V, T, D) codecs.
     pub(crate) requested: (String, String, String, String),

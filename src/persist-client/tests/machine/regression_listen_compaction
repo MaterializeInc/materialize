@@ -43,7 +43,7 @@ compare-and-append input=b1 writer_id=w11111111-1111-1111-1111-111111111111
 ----
 v6 [3]
 
-compact output=b0_1 inputs=(b0,b1)  lower=0 upper=3 since=0 writer_id=w11111111-1111-1111-1111-111111111111
+compact output=b0_1 inputs=(b0,b1)  lower=0 upper=3 since=0
 ----
 parts=1 len=2
 
@@ -62,7 +62,7 @@ compare-and-append input=b2 writer_id=w11111111-1111-1111-1111-111111111111
 v7 [4]
 
 # Now apply the merged batch.
-apply-merge-res input=b0_1 writer_id=w11111111-1111-1111-1111-111111111111
+apply-merge-res input=b0_1
 ----
 v8 true
 
