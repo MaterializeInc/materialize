@@ -9,8 +9,9 @@
 
 use std::{fmt::Display, fs::read_to_string};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use postgres_protocol::escape::{escape_identifier, escape_literal};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
@@ -20,22 +21,10 @@ use crate::{
 };
 
 #[derive(Debug, Subcommand)]
-#[clap(group = clap::ArgGroup::new("input").multiple(false))]
 pub enum SecretCommand {
-    /// Alter a secret
-    Alter {
-        /// The name of the secret to create
-        #[clap(short, long)]
-        name: String,
-
-        #[clap(flatten)]
-        contents: Contents,
-    },
-
     /// Create a new secret
     Create {
         /// The name of the secret to create
-        #[clap(short, long)]
         name: String,
 
         #[clap(flatten)]
@@ -45,12 +34,20 @@ pub enum SecretCommand {
     /// Delete a secret
     Delete {
         /// The name of the secret to create
-        #[clap(short, long)]
         name: String,
     },
 
     // List all secrets
     List,
+
+    /// Update a secret
+    Update {
+        /// The name of the secret to update
+        name: String,
+
+        #[clap(flatten)]
+        contents: Contents,
+    },
 }
 
 impl SecretCommand {
@@ -61,20 +58,12 @@ impl SecretCommand {
         client: Client,
     ) -> Result<()> {
         match self {
-            SecretCommand::Alter { name, contents } => {
-                let contents = contents.get()?;
-                let sql = Sql {
-                    query: format!("alter secret {name} as '{contents}';"),
-                };
-
-                execute_query(&client, &profile, region, sql)
-                    .await
-                    .context("failed to create secret")
-            }
             SecretCommand::Create { name, contents } => {
+                let name = escape_identifier(name);
                 let contents = contents.get()?;
+                let contents = escape_literal(&contents);
                 let sql = Sql {
-                    query: format!("create secret {name} as '{contents}';"),
+                    query: format!("create secret {name} as {contents};"),
                 };
 
                 execute_query(&client, &profile, region, sql)
@@ -82,6 +71,7 @@ impl SecretCommand {
                     .context("failed to create secret")
             }
             SecretCommand::Delete { name } => {
+                let name = escape_identifier(name);
                 let sql = Sql {
                     query: format!("drop secret {name};"),
                 };
@@ -99,6 +89,18 @@ impl SecretCommand {
                     .await
                     .context("failed to list secrets")
             }
+            SecretCommand::Update { name, contents } => {
+                let name = escape_identifier(name);
+                let contents = contents.get()?;
+                let contents = escape_literal(&contents);
+                let sql = Sql {
+                    query: format!("alter secret {name} as {contents};"),
+                };
+
+                execute_query(&client, &profile, region, sql)
+                    .await
+                    .context("failed to update secret")
+            }
         }
     }
 }
@@ -106,13 +108,13 @@ impl SecretCommand {
 #[derive(Parser, Debug)]
 #[clap(group = clap::ArgGroup::new("input").multiple(false))]
 pub struct Contents {
-    /// The value of a secret. This flag cannot be
+    /// The value of a secret. This cannot be
     /// specified if --file is also set.
-    #[clap(short, long, group = "input")]
+    #[clap(group = "input")]
     value: Option<String>,
 
     /// A file containing the value of a secret. This flag
-    /// cannot be specified if --value is also set.
+    /// cannot be specified if a literal value is provided.
     #[clap(short, long, group = "input")]
     file: Option<String>,
 }
@@ -128,7 +130,7 @@ impl Contents {
                 .with_context(|| format!("failed to read contents from file {}", path));
         }
 
-        bail!("must specify either --value or --file")
+        rpassword::prompt_password("secret>").context("failed to read secret")
     }
 }
 

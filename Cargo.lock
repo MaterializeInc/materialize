@@ -3284,6 +3284,7 @@ dependencies = [
  "mz-ore",
  "once_cell",
  "open",
+ "postgres-protocol",
  "reqwest",
  "rpassword",
  "serde",
