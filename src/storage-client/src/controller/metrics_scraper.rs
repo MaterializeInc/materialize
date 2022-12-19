@@ -93,10 +93,7 @@ pub(super) fn spawn_metrics_scraper(
                                 }
                             }
                             Err(err) => {
-                                tracing::warn!(
-                                    "error fetching metrics for {service_id}: {:?}",
-                                    err
-                                );
+                                tracing::warn!("error fetching metrics for {service_id}: {err}");
                             }
                         }
                     }
