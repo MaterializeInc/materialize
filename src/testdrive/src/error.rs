@@ -53,13 +53,17 @@ impl Error {
                 let mut color_spec = ColorSpec::new();
                 color_spec.set_bold(true);
                 stderr.set_color(&color_spec)?;
-                write!(
-                    &mut stderr,
-                    "{}:{}:{}: ",
-                    location.filename.display(),
-                    location.line,
-                    location.col
-                )?;
+                if let Some(filename) = &location.filename {
+                    write!(
+                        &mut stderr,
+                        "{}:{}:{}: ",
+                        filename.display(),
+                        location.line,
+                        location.col
+                    )?;
+                } else {
+                    write!(&mut stderr, "{}:{}: ", location.line, location.col)?;
+                }
                 write_error_heading(&mut stderr, &color_spec)?;
                 writeln!(&mut stderr, "{:#}", self.source)?;
                 color_spec.set_bold(false);
@@ -99,14 +103,19 @@ impl From<anyhow::Error> for Error {
 }
 
 pub(crate) struct ErrorLocation {
-    filename: PathBuf,
+    filename: Option<PathBuf>,
     snippet: String,
     line: usize,
     col: usize,
 }
 
 impl ErrorLocation {
-    pub(crate) fn new(filename: &Path, contents: &str, line: usize, col: usize) -> ErrorLocation {
+    pub(crate) fn new(
+        filename: Option<&Path>,
+        contents: &str,
+        line: usize,
+        col: usize,
+    ) -> ErrorLocation {
         let mut snippet = String::new();
         writeln!(&mut snippet, "     |").unwrap();
         for (i, l) in contents.lines().enumerate() {
@@ -119,7 +128,7 @@ impl ErrorLocation {
         write!(&mut snippet, "     | ").unwrap();
 
         ErrorLocation {
-            filename: filename.to_path_buf(),
+            filename: filename.map(|f| f.to_path_buf()),
             snippet,
             line,
             col,

@@ -82,6 +82,7 @@ class CreateView(Action):
 
     def __init__(self, capabilities: Capabilities, view: ViewExists) -> None:
         self.view = view
+        super().__init__(capabilities)
 
     def run(self, c: Composition) -> None:
         first_input = self.view.inputs[0]
@@ -91,14 +92,14 @@ class CreateView(Action):
             f"> CREATE DEFAULT INDEX ON {self.view.name}" if self.view.has_index else ""
         )
 
-        aggregates = [f"COUNT({first_input.name}.f1) AS c1"]
+        aggregates = [f"COUNT({first_input.name}.f1) AS count_all"]
 
         if self.view.expensive_aggregates:
             aggregates.extend(
                 [
-                    f"COUNT(DISTINCT {first_input.name}.f1) AS c2",
-                    f"MIN({first_input.name}.f1)",
-                    f"MAX({first_input.name}.f1)",
+                    f"COUNT(DISTINCT {first_input.name}.f1) AS count_distinct",
+                    f"MIN({first_input.name}.f1) AS min_value",
+                    f"MAX({first_input.name}.f1) AS max_value",
                 ]
             )
 
@@ -129,6 +130,7 @@ class ValidateView(Action):
 
     def __init__(self, capabilities: Capabilities) -> None:
         self.view = random.choice(capabilities.get(ViewExists))
+        super().__init__(capabilities)
 
     def run(self, c: Composition) -> None:
         watermarks = self.view.get_watermarks()
@@ -139,14 +141,14 @@ class ValidateView(Action):
             c.testdrive(
                 dedent(
                     f"""
-                    > SELECT * FROM {self.view.name} /* {(view_max-view_min)+1} {(view_max-view_min)+1} {view_min} {view_max} */ ;
+                    > SELECT count_all, count_distinct, min_value, max_value FROM {self.view.name} /* expecting count_all = {(view_max-view_min)+1} count_distinct = {(view_max-view_min)+1} min_value = {view_min} max_value = {view_max} */ ;
                     {(view_max-view_min)+1} {(view_max-view_min)+1} {view_min} {view_max}
                 """
                 )
                 if self.view.expensive_aggregates
                 else dedent(
                     f"""
-                    > SELECT * FROM {self.view.name} /* {(view_max-view_min)+1} */ ;
+                    > SELECT count_all FROM {self.view.name} /* expecting count_all = {(view_max-view_min)+1} */ ;
                     {(view_max-view_min)+1}
                 """
                 )
