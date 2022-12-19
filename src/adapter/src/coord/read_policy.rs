@@ -317,13 +317,10 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
                 .storage_read_capabilities
                 .get_mut(&id)
                 .expect("coord out of sync");
-            capability
-                .base_policy = base_policy;
+            capability.base_policy = base_policy;
             policies.push((id, capability.policy()))
         }
-        self.controller
-            .storage
-            .set_read_policy(policies)
+        self.controller.storage.set_read_policy(policies)
     }
 
     pub(crate) fn update_compute_base_read_policy(
