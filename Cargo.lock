@@ -6458,9 +6458,9 @@ dependencies = [
 
 [[package]]
 name = "sentry-tracing"
-version = "0.29.0"
+version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "073a872ab639da1bee23354025ddc9c1b9e5d70eabfe8cd6f10a81914cf6563d"
+checksum = "63fc83ec2cf38726bd18cb1943ff11555b07fd5034cb68b10958ab32e2863a1f"
 dependencies = [
  "sentry-core",
  "tracing-core",
