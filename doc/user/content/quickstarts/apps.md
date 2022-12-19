@@ -1,10 +1,11 @@
 ---
-title: "Data applications"
-description: "  "
+title: "Data Applications"
+description: "Data Applications"
 menu:
-    main:
-        parent: quickstarts
-weight: 20
+  main:
+    parent: 'quickstarts'
+    weight: 30
+    name: 'Data Applications'
 aliases:
   - /demos/data-applications
 ---
