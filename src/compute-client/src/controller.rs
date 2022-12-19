@@ -549,9 +549,9 @@ where
         replica_id: ReplicaId,
         config: ComputeReplicaConfig,
     ) -> Result<(), ReplicaCreationError> {
-        let (enable_logging, interval_ns) = match config.logging.interval {
-            Some(interval) => (true, interval.as_nanos()),
-            None => (false, 1_000_000_000),
+        let (enable_logging, interval) = match config.logging.interval {
+            Some(interval) => (true, interval),
+            None => (false, Duration::from_secs(1)),
         };
 
         let mut sink_logs = BTreeMap::new();
@@ -566,7 +566,7 @@ where
         }
 
         let logging_config = LoggingConfig {
-            interval_ns,
+            interval,
             enable_logging,
             log_logging: config.logging.log_logging,
             index_logs: Default::default(),

@@ -307,7 +307,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         use crate::logging::BatchLogger;
         use timely::dataflow::operators::capture::event::link::EventLink;
 
-        let interval = std::cmp::max(1, logging.interval_ns / 1_000_000)
+        let interval = std::cmp::max(1, logging.interval.as_millis())
             .try_into()
             .expect("must fit");
 

@@ -51,19 +51,13 @@ pub fn construct<A: Allocate>(
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
     activator: RcActivator,
 ) -> HashMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
-    let interval_ms = std::cmp::max(1, config.interval_ns / 1_000_000);
+    let interval_ms = std::cmp::max(1, config.interval.as_millis());
     let peers = worker.peers();
 
     // A dataflow for multiple log-derived arrangements.
-    // TODO(benesch): avoid dangerous `as` conversion.
-    #[allow(clippy::as_conversions)]
     let traces = worker.dataflow_named("Dataflow: timely logging", move |scope| {
-        let (mut logs, token) = Some(linked).mz_replay(
-            scope,
-            "timely logs",
-            Duration::from_nanos(config.interval_ns as u64),
-            activator,
-        );
+        let (mut logs, token) =
+            Some(linked).mz_replay(scope, "timely logs", config.interval, activator);
 
         // If logging is disabled, we still need to install the indexes, but we can leave them
         // empty. We do so by immediately filtering all logs events.
@@ -311,9 +305,9 @@ pub fn construct<A: Allocate>(
                                         // pair, which should consume 1KiB on 64-bit arch per entry.
                                         let (count, duration) = &mut schedules_data
                                             .entry(key)
-                                            .or_insert_with(|| vec![(0, 0); 64])
-                                            [elapsed_ns.next_power_of_two().trailing_zeros()
-                                                as usize];
+                                            .or_insert_with(|| vec![(0, 0); 64])[usize::cast_from(
+                                            elapsed_ns.next_power_of_two().trailing_zeros(),
+                                        )];
                                         *count += 1;
                                         let elapsed_ns_diff = Diff::try_from(elapsed_ns).unwrap();
                                         *duration += elapsed_ns_diff;

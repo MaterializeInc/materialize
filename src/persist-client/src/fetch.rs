@@ -269,7 +269,7 @@ where
         // Drop the encoded representation as soon as we can to reclaim memory.
         drop(value);
         read_metrics.part_goodbytes.inc_by(u64::cast_from(
-            part.updates.iter().map(|x| x.goodbytes()).sum(),
+            part.updates.iter().map(|x| x.goodbytes()).sum::<usize>(),
         ));
 
         EncodedPart::new(key, registered_desc.clone(), part)

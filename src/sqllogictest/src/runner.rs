@@ -500,18 +500,16 @@ fn read_value<'a, T>(type_: &PgType, buf: &mut &'a [u8]) -> Result<T, Box<dyn Er
 where
     T: FromSql<'a>,
 {
-    let len = read_be_i32(buf)?;
-    // TODO(benesch): rewrite to avoid `as`.
-    #[allow(clippy::as_conversions)]
-    let value = if len < 0 {
-        None
-    } else {
-        if len as usize > buf.len() {
-            return Err("invalid buffer size".into());
+    let value = match usize::try_from(read_be_i32(buf)?) {
+        Err(_) => None,
+        Ok(len) => {
+            if len > buf.len() {
+                return Err("invalid buffer size".into());
+            }
+            let (head, tail) = buf.split_at(len);
+            *buf = tail;
+            Some(head)
         }
-        let (head, tail) = buf.split_at(len as usize);
-        *buf = tail;
-        Some(head)
     };
     T::from_sql_nullable(type_, value)
 }

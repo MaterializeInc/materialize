@@ -96,17 +96,11 @@ pub fn construct<A: Allocate>(
     compute: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, ComputeEvent)>>,
     activator: RcActivator,
 ) -> HashMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
-    let interval_ms = std::cmp::max(1, config.interval_ns / 1_000_000);
+    let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
     let traces = worker.dataflow_named("Dataflow: compute logging", move |scope| {
-        // TODO(benesch): avoid dangerous `as` conversion.
-        #[allow(clippy::as_conversions)]
-        let (mut compute_logs, token) = Some(compute).mz_replay(
-            scope,
-            "compute logs",
-            Duration::from_nanos(config.interval_ns as u64),
-            activator.clone(),
-        );
+        let (mut compute_logs, token) =
+            Some(compute).mz_replay(scope, "compute logs", config.interval, activator.clone());
 
         // If logging is disabled, we still need to install the indexes, but we can leave them
         // empty. We do so by immediately filtering all logs events.

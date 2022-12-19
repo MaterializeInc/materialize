@@ -718,9 +718,7 @@ impl PostgresTaskInfo {
                 // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
                 let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
 
-                // TODO(benesch): rewrite to avoid `as`.
-                #[allow(clippy::as_conversions)]
-                let mut raw_values = parser.iter_raw(info.desc.columns.len() as i32);
+                let mut raw_values = parser.iter_raw(info.desc.columns.len());
                 while let Some(raw_value) = raw_values.next() {
                     match try_definite!(raw_value) {
                         Some(value) => {

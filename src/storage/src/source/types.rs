@@ -474,14 +474,12 @@ impl SourceMetrics {
 
             metric.messages_ingested.inc_by(count);
 
-            // TODO(benesch): rewrite to avoid `as`.
-            #[allow(clippy::as_conversions)]
             metric.record_offset(
                 &self.source_name,
                 self.source_id,
                 &partition,
                 offset.offset,
-                u64::from(timestamp) as i64,
+                i64::try_from(timestamp).expect("materialize exists after 250M AD"),
             );
         }
     }

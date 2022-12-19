@@ -315,7 +315,7 @@ impl<'a> CopyTextFormatParser<'a> {
         }
     }
 
-    pub fn iter_raw(self, num_columns: i32) -> RawIterator<'a> {
+    pub fn iter_raw(self, num_columns: usize) -> RawIterator<'a> {
         RawIterator {
             parser: self,
             current_column: 0,
@@ -326,8 +326,8 @@ impl<'a> CopyTextFormatParser<'a> {
 
 pub struct RawIterator<'a> {
     parser: CopyTextFormatParser<'a>,
-    current_column: i32,
-    num_columns: i32,
+    current_column: usize,
+    num_columns: usize,
 }
 
 impl<'a> RawIterator<'a> {

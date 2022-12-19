@@ -664,9 +664,13 @@ mod tests {
         persist_clients: &Arc<Mutex<PersistClientCache>>,
     ) -> Healthchecker {
         let start = tokio::time::Instant::now();
-        // TODO(benesch): rewrite to avoid dangerous use of `as`.
-        #[allow(clippy::as_conversions)]
-        let now_fn = NowFn::from(move || start.elapsed().as_millis() as u64);
+        let now_fn = NowFn::from(move || {
+            start
+                .elapsed()
+                .as_millis()
+                .try_into()
+                .expect("materialize exists after 500M AD")
+        });
 
         let storage_metadata = CollectionMetadata {
             persist_location: (*PERSIST_LOCATION).clone(),

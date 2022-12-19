@@ -10,6 +10,7 @@
 //! Compute layer logging configuration.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -32,8 +33,8 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 /// TODO(teskje): Clean this up once we remove the arranged introspection sources.
 #[derive(Arbitrary, Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingConfig {
-    /// The logging interval in nanoseconds
-    pub interval_ns: u128,
+    /// The logging interval
+    pub interval: Duration,
     /// Whether logging is enabled
     pub enable_logging: bool,
     /// Whether we should report logs for the log-processing dataflows
@@ -56,7 +57,7 @@ impl LoggingConfig {
 impl RustType<ProtoLoggingConfig> for LoggingConfig {
     fn into_proto(&self) -> ProtoLoggingConfig {
         ProtoLoggingConfig {
-            interval_ns: Some(self.interval_ns.into_proto()),
+            interval: Some(self.interval.into_proto()),
             enable_logging: self.enable_logging,
             log_logging: self.log_logging,
             index_logs: self.index_logs.into_proto(),
@@ -66,9 +67,9 @@ impl RustType<ProtoLoggingConfig> for LoggingConfig {
 
     fn from_proto(proto: ProtoLoggingConfig) -> Result<Self, TryFromProtoError> {
         Ok(LoggingConfig {
-            interval_ns: proto
-                .interval_ns
-                .into_rust_if_some("ProtoLoggingConfig::interval_ns")?,
+            interval: proto
+                .interval
+                .into_rust_if_some("ProtoLoggingConfig::interval")?,
             enable_logging: proto.enable_logging,
             log_logging: proto.log_logging,
             index_logs: proto.index_logs.into_rust()?,
