@@ -16,9 +16,9 @@
 //! 1. Each expression is normalized to have all `Let` nodes at the root
 //! of the expression, in order of identifier.
 //! 2. Each expression assigns a contiguous block of identifiers.
-
+//!
 //! The transform may remove some `Let` and `Get` operators, and does not
-//! introduce any new operators. It is idempotent.
+//! introduce any new operators.
 //!
 //! The module also publishes the function `renumber_bindings` which can
 //! be used to renumber bindings in an expression starting from a provided
@@ -88,13 +88,16 @@ impl NormalizeLets {
         Ok(())
     }
 
-    /// Normalize `Let` bindings in `relation`.
+    /// Normalize `Let` and `LetRec` bindings in `relation`.
     ///
     /// Mechanically, `action` first renumbers all bindings, erroring if any shadowing is encountered.
-    /// It then promotes all `LetRec` expressions to the root, and considers inlining bindings.
-    /// Finally, it refreshes the types of each `Get` operator, and performs a final renumbering.
+    /// It then promotes all `Let` and `LetRec` expressions to the roots of their expressions, fusing
+    /// `Let` bindings into containing `LetRec` bindings, but leaving `LetRec` bindings unfused to each
+    /// other (for reasons of correctness). It then considers potential inlining in each `LetRec` scope.
+    /// Lastly, it refreshes the types of each `Get` operator, erroring if any scalar types have changed
+    /// but updating nullability and keys.
     ///
-    /// The method takes time linear in the size of `relation` for each `LetRec`.
+    /// We then perform a final renumbering.
     pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         // Rename all bindings to be distinct. Start at zero.
         let mut id_gen = IdGen::default();
@@ -114,8 +117,9 @@ impl NormalizeLets {
         let mut id_gen = IdGen::default();
         renumbering::renumber_bindings(relation, &mut id_gen)?;
 
-        // Disassemble `LetRec` into `Let` stack if possible.
+        // Disassemble `LetRec` into a `Let` stack if possible.
         // If a `LetRec` remains, return the would-be `Let` bindings to it.
+        // This is to maintain `LetRec`-freedom for `LetRec`-free expressions.
         let mut bindings = let_motion::harvest_non_recursive(relation);
         if let MirRelationExpr::LetRec {
             ids,
@@ -150,6 +154,7 @@ mod support {
 
     use mz_expr::{Id, LocalId, MirRelationExpr};
 
+    /// Logic mapped across each use of a `LocalId`.
     pub(super) fn for_local_id<F>(expr: &MirRelationExpr, mut logic: F)
     where
         F: FnMut(LocalId),
@@ -164,20 +169,12 @@ mod support {
         });
     }
 
-    // This is pretty simple, but it is used in multiple locations and seemed clearer as a named method.
     /// Populates `counts` with the number of uses of each local identifier in `expr`.
     pub(super) fn count_local_id_uses(
         expr: &MirRelationExpr,
         counts: &mut std::collections::BTreeMap<LocalId, usize>,
     ) {
-        expr.visit_pre(|expr| {
-            if let MirRelationExpr::Get {
-                id: Id::Local(i), ..
-            } = expr
-            {
-                *counts.entry(*i).or_insert(0) += 1;
-            }
-        });
+        for_local_id(expr, |i| *counts.entry(i).or_insert(0) += 1)
     }
 
     /// Visit `LetRec` stages and determine and update type information for `Get` nodes.
@@ -186,7 +183,7 @@ mod support {
     /// It only refreshes the nullability and unique key information. As this information can regress,
     /// we do not error if the type weakens, even though that may be something we want to look into.
     pub(super) fn refresh_types(expr: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
-        // TODO: This is not as complete as a post-order traversal would be, refreshing as it goes.
+        // TODO: consider a different visitation order, or iterating, to propagate types further.
         let mut types = BTreeMap::new();
         let mut worklist = vec![&mut *expr];
         while let Some(expr) = worklist.pop() {
@@ -210,7 +207,7 @@ mod support {
             } = expr
             {
                 if let Some(new_type) = types.get(id) {
-                    // Something bad has happened if the type *weakens*.
+                    // Assert that the column length and types have not changed.
                     assert!(
                         new_type.column_types.len() == typ.column_types.len(),
                         "column lengths do not match: {:?} v {:?}",
@@ -227,7 +224,6 @@ mod support {
                         new_type.column_types,
                         typ.column_types
                     );
-                    // assert!(new_type.subtypes(typ), "{:?} does not subtype {:?}", new_type, typ);
                     typ.clone_from(new_type);
                 }
             }
@@ -244,7 +240,10 @@ mod let_motion {
 
     use mz_expr::{LocalId, MirRelationExpr};
 
-    /// Normalizes the `LetRec` structure in an expression by promoting and potentially fusing all `LetRec` nodes.
+    /// Promotes all `Let` and `LetRec` nodes to the roots of their expressions.
+    ///
+    /// We cannot (without further reasoning) fuse stacked `LetRec` stages, and instead we just promote
+    /// `LetRec` to the roots of their expressions (e.g. as children of another `LetRec` stage).
     pub(crate) fn promote_let_rec(expr: &mut MirRelationExpr) {
         // First, promote all `LetRec` nodes above all other nodes.
         let mut worklist = vec![&mut *expr];
@@ -261,10 +260,22 @@ mod let_motion {
                 worklist.extend(values.iter_mut().rev());
             }
         }
+        // Harvest any potential `Let` nodes, via a post-order traversal.
+        post_order_harvest_lets(expr);
+    }
 
+    /// Performs a post-order traversal of the `LetRec` nodes at the root of an expression.
+    ///
+    /// The traversal is only of the `LetRec` nodes, for which fear of stack exhaustion is nominal.
+    fn post_order_harvest_lets(expr: &mut MirRelationExpr) {
         // Second, attempt to fuse non-recursive `LetRec` bindings.
-        // Ideally do a post-order traversal of only `LetRec` nodes, but for now just once.
+        // TODO: Ideally do a post-order traversal of only `LetRec` nodes, but for now just once.
         if let MirRelationExpr::LetRec { ids, values, body } = expr {
+            // Only recursively descend through `LetRec` stages.
+            for value in values.iter_mut() {
+                post_order_harvest_lets(value);
+            }
+
             let mut bindings = BTreeMap::new();
             for (id, mut value) in ids.drain(..).zip(values.drain(..)) {
                 bindings.extend(harvest_non_recursive(&mut value));
@@ -284,15 +295,13 @@ mod let_motion {
     /// along each path from the root. Each of `values` and `body` may need further processing to promote
     /// all bindings to their respective roots.
     ///
-    /// If `expr` is anything but a `LetRec` node, then it contains no further `Let` or `LetRec` nodes.
-    ///
-    /// This method is idempotent.
+    /// If the resulting `expr` is not a `LetRec` node, then it contains no further `Let` or `LetRec` nodes.
     fn digest_lets(expr: &mut MirRelationExpr) {
         let mut worklist = Vec::new();
         let mut bindings = BTreeMap::new();
-        digest_lets_helper(expr, &mut worklist);
+        digest_lets_helper(expr, &mut worklist, &mut bindings);
         while let Some((id, mut value)) = worklist.pop() {
-            digest_lets_helper(&mut value, &mut worklist);
+            digest_lets_helper(&mut value, &mut worklist, &mut bindings);
             bindings.insert(id, value);
         }
         if !bindings.is_empty() {
@@ -308,22 +317,25 @@ mod let_motion {
     /// Extracts all `Let` and `LetRec` bindings from `expr` through its first `LetRec`.
     ///
     /// The bindings themselves may not be `Let`-free, and should be further processed to ensure this.
-    /// We stop at the first `LetRec` as we cannot be certain that subsequent bindings can be lifted
-    /// to a shared `LetRec` scope atop `expr`.
+    /// Bindings are extracted either into `worklist` if they should be further processed (e.g. from a `Let`),
+    /// or into `bindings` if they should not be further processed (e.g. from a `LetRec`).
     fn digest_lets_helper(
         expr: &mut MirRelationExpr,
-        bindings: &mut Vec<(LocalId, MirRelationExpr)>,
+        worklist: &mut Vec<(LocalId, MirRelationExpr)>,
+        bindings: &mut BTreeMap<LocalId, MirRelationExpr>,
     ) {
         let mut to_visit = vec![expr];
         while let Some(expr) = to_visit.pop() {
             match expr {
                 MirRelationExpr::Let { id, value, body } => {
-                    bindings.push((*id, value.take_dangerous()));
+                    // push binding into `worklist` as it can be further processed.
+                    worklist.push((*id, value.take_dangerous()));
                     *expr = body.take_dangerous();
                     // Continue through `Let` nodes as they are certainly non-recursive.
                     to_visit.push(expr);
                 }
                 MirRelationExpr::LetRec { ids, values, body } => {
+                    // push bindings into `bindings` as they should not be further processed.
                     bindings.extend(ids.drain(..).zip(values.drain(..)));
                     *expr = body.take_dangerous();
                     // Stop at `LetRec` nodes as we cannot always lift `Let` nodes out of them.
@@ -337,9 +349,12 @@ mod let_motion {
 
     /// Harvest any safe-to-lift non-recursive bindings from a `LetRec` expression.
     ///
-    /// A binding is safe to lift if it
-    /// 1. references no other non-lifted binding here, and
-    /// 2. is referenced by no prior non-lifted binding here.
+    /// At the moment, we reason that a binding can be lifted without changing the output if both
+    /// 1. it references no other non-lifted binding here, and
+    /// 2. it is referenced by no prior non-lifted binding here.
+    /// The rationale is that (1.) ensures that the binding's value does not change across iterations,
+    /// and that (2.) ensures that all observations of the binding are after it assumes its first value,
+    /// rather than when it could be empty.
     pub(crate) fn harvest_non_recursive(
         expr: &mut MirRelationExpr,
     ) -> BTreeMap<LocalId, MirRelationExpr> {

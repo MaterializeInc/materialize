@@ -10,13 +10,14 @@
 mode cockroach
 
 ## Test a plausibly correct recursive query.
-query I
-WITH MUTUALLY RECURSIVE
-    foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
-    bar (a int) as (SELECT a FROM foo)
-SELECT * FROM bar;
-----
-1
+## query I
+## WITH MUTUALLY RECURSIVE
+##     foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
+##     bar (a int) as (SELECT a FROM foo)
+## SELECT * FROM bar;
+## ----
+## 1
+## 1
 
 ## Test a recursive query with mismatched types.
 statement error did not match inferred type
@@ -73,38 +74,170 @@ WITH MUTUALLY RECURSIVE
 SELECT a FROM foo, bar;
 
 ## Test recursive name resolution in SELECT subquery
-query III
-WITH MUTUALLY RECURSIVE
-    foo (a int, b int) AS (SELECT (
-        SELECT MIN(c) FROM bar
-    ), 2 UNION SELECT 5, 5 FROM bar),
-    bar (c int) as (SELECT a FROM foo)
-SELECT * FROM foo, bar;
-----
-NULL  2  NULL
+## query III
+## WITH MUTUALLY RECURSIVE
+##     foo (a int, b int) AS (SELECT (
+##         SELECT MIN(c) FROM bar
+##     ), 2 UNION SELECT 5, 5 FROM bar),
+##     bar (c int) as (SELECT a FROM foo)
+## SELECT * FROM foo, bar;
+## ----
+## 5  2  5
+## 5  2  5
+## 5  5  5
+## 5  5  5
 
 ## Test recursive name resolution in FROM clause
-query III
-WITH MUTUALLY RECURSIVE
-    foo (a int, b int) AS (
-        SELECT 1, 2 UNION
-        SELECT * FROM (
-            SELECT MIN(c), 2 FROM bar
-        )
-    ),
-    bar (c int) as (SELECT a FROM foo)
-SELECT * FROM foo, bar;
-----
-NULL  2  NULL
-NULL  2  1
-1  2  NULL
-1  2  1
+## query III
+## WITH MUTUALLY RECURSIVE
+##     foo (a int, b int) AS (
+##         SELECT 1, 2 UNION
+##         SELECT * FROM (
+##             SELECT MIN(c), 2 FROM bar
+##         )
+##     ),
+##     bar (c int) as (SELECT a FROM foo)
+## SELECT * FROM foo, bar;
+## ----
+## 1  2  1
 
 ## Test recursive name resolution in FROM clause
-query I
-WITH MUTUALLY RECURSIVE
+## query I
+## WITH MUTUALLY RECURSIVE
+##     foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
+##     bar (a int) as (SELECT a FROM foo)
+## SELECT (SELECT COUNT(*) FROM foo) FROM bar;
+## ----
+## 2
+## 2
+
+## Explain plans:
+
+## Test a plausibly correct recursive query.
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
     bar (a int) as (SELECT a FROM foo)
-SELECT (SELECT COUNT(*) FROM foo) FROM bar;
+SELECT * FROM bar;
 ----
-1
+Explained Query:
+  Return
+    Get l0
+  With Mutually Recursive
+    cte l0 =
+      Project (#0)
+        Distinct group_by=[#0, #1]
+          Union
+            Project (#2, #3)
+              Map (#0, #1)
+                Map (1, 2)
+                  Constant
+                    - ()
+            Project (#1, #2)
+              Map (#0)
+                Project (#1, #2)
+                  Map (7, #0)
+                    Get l0
+
+EOF
+
+## Test a nested recursive query.
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE
+    foo (a int8) AS (
+        WITH MUTUALLY RECURSIVE
+            bar (b int8) AS (
+                SELECT * FROM (SELECT * FROM foo UNION ALL SELECT * FROM bar)
+            )
+        SELECT * FROM (SELECT * FROM foo EXCEPT ALL SELECT * FROM bar)
+    )
+SELECT * FROM foo;
+----
+Explained Query:
+  Return
+    Get l1
+  With Mutually Recursive
+    cte l1 =
+      Return
+        Threshold
+          Union
+            Project (#1)
+              Map (#0)
+                Get l1
+            Negate
+              Project (#1)
+                Map (#0)
+                  Get l0
+      With Mutually Recursive
+        cte l0 =
+          Union
+            Project (#1)
+              Map (#0)
+                Get l1
+            Project (#1)
+              Map (#0)
+                Get l0
+
+EOF
+
+## Test consolidation of not-really nested recursive query.
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE
+    foo (a int8) AS (
+        WITH MUTUALLY RECURSIVE
+            bar (b int8) AS (
+                SELECT * FROM foo
+            )
+        SELECT * FROM (SELECT * FROM foo EXCEPT ALL SELECT * FROM bar)
+    )
+SELECT * FROM foo;
+----
+Explained Query:
+  Return
+    Get l0
+  With Mutually Recursive
+    cte l0 =
+      Threshold
+        Union
+          Project (#1)
+            Map (#0)
+              Get l0
+          Negate
+            Project (#1)
+              Map (#0)
+                Get l0
+
+EOF
+
+## Test consolidation of independent recursive query blocks.
+query T multiline
+EXPLAIN SELECT * FROM (
+    WITH MUTUALLY RECURSIVE
+        foo (a int8) AS (SELECT DISTINCT a FROM foo)
+    SELECT * FROM foo
+)
+UNION ALL
+SELECT * FROM (
+    WITH MUTUALLY RECURSIVE
+        bar (a int8) AS (SELECT DISTINCT a FROM bar)
+    SELECT * FROM bar
+);
+----
+Explained Query:
+  Return
+    Union
+      Project (#1)
+        Map (#0)
+          Get l0
+      Project (#1)
+        Map (#0)
+          Get l1
+  With Mutually Recursive
+    cte l1 =
+      Distinct group_by=[#0]
+        Get l1
+    cte l0 =
+      Distinct group_by=[#0]
+        Get l0
+
+EOF
