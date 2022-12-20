@@ -11,10 +11,15 @@ use std::any::type_name;
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fmt::{self, Debug, Display};
+use std::hash::{Hash, Hasher};
 
 use bitflags::bitflags;
+use mz_lowertest::MzReflect;
+use num_traits::CheckedAdd;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
-use crate::row::DatumNested;
+use crate::scalar::DatumKind;
 use crate::Datum;
 
 bitflags! {
@@ -27,29 +32,134 @@ bitflags! {
     }
 }
 
-/// A continuous set of domain values.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct Range<'a> {
-    /// None value represents empty range
-    pub inner: Option<RangeInner<'a>>,
+/// A range of values along the domain `D`.
+///
+/// `D` is generic to facilitate interoperating over multiple representation,
+/// e.g. `Datum` and `mz_pgrepr::Value`. Because of the latter, we have to
+/// "manually derive" traits over `Range`.
+///
+/// Also notable, is that `Datum`s themselves store ranges as
+/// `Range<DatumNested<'a>>`, which lets us avoid unnecessary boxing of the
+/// range's finite bounds, which are most often expressed as `Datum`.
+pub struct Range<D> {
+    pub inner: Option<RangeInner<D>>,
 }
 
-impl<'a> Display for Range<'a> {
+impl<D: Display> Display for Range<D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.inner {
+        match &self.inner {
             None => f.write_str("empty"),
-            Some(i) => Display::fmt(&i, f),
+            Some(i) => i.fmt(f),
         }
     }
 }
 
-/// Trait alias for traits required for generic range function implementations.
-pub trait RangeOps<'a>: Debug + Ord + PartialOrd + Eq + PartialEq + TryFrom<Datum<'a>> {}
-impl<'a, T: Debug + Ord + PartialOrd + Eq + PartialEq + TryFrom<Datum<'a>>> RangeOps<'a> for T {}
+impl<D: Debug> Debug for Range<D> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Range").field("inner", &self.inner).finish()
+    }
+}
 
-impl<'a> Range<'a> {
-    #[allow(dead_code)]
-    fn contains<T: RangeOps<'a>>(&self, elem: &T) -> bool {
+impl<D: Clone> Clone for Range<D> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<D: Copy> Copy for Range<D> {}
+
+impl<D: PartialEq> PartialEq for Range<D> {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+impl<D: Eq> Eq for Range<D> {}
+
+impl<D: Ord + PartialOrd> PartialOrd for Range<D> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<D: Ord> Ord for Range<D> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.inner.cmp(&other.inner)
+    }
+}
+
+impl<D: Hash> Hash for Range<D> {
+    fn hash<H: Hasher>(&self, hasher: &mut H) {
+        self.inner.hash(hasher)
+    }
+}
+
+/// Trait alias for traits required for generic range function implementations.
+pub trait RangeOps<'a>:
+    Debug + Ord + PartialOrd + Eq + PartialEq + CheckedAdd + TryFrom<Datum<'a>> + Into<Datum<'a>>
+where
+    <Self as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
+{
+    fn step() -> Option<Self>;
+
+    fn unwrap_datum(d: Datum<'a>) -> Self {
+        <Self>::try_from(d)
+            .unwrap_or_else(|_| panic!("cannot take {} to {}", d, type_name::<Self>()))
+    }
+}
+
+impl<'a> RangeOps<'a> for i32 {
+    fn step() -> Option<i32> {
+        Some(1)
+    }
+}
+
+// Totally generic range implementations.
+impl<D> Range<D> {
+    pub fn new(inner: Option<(RangeLowerBound<D>, RangeUpperBound<D>)>) -> Range<D> {
+        Range {
+            inner: inner.map(|(lower, upper)| RangeInner { lower, upper }),
+        }
+    }
+
+    /// Converts `self` from having bounds of type `D` to type `O`, converting
+    /// the current bounds using `conv`.
+    // clippy's suggestion for avoiding redundant closures on `conv` moves `F`,
+    // which does not (and in most cases cannot) implement Copy.
+    #[allow(clippy::redundant_closure)]
+    pub fn into_bounds<F, O>(self, conv: F) -> Range<O>
+    where
+        F: Fn(D) -> O,
+    {
+        Range {
+            inner: self
+                .inner
+                .map(|RangeInner::<D> { lower, upper }| RangeInner::<O> {
+                    lower: RangeLowerBound {
+                        inclusive: lower.inclusive,
+                        bound: lower.bound.map(|d| conv(d)),
+                    },
+                    upper: RangeUpperBound {
+                        inclusive: upper.inclusive,
+                        bound: upper.bound.map(|d| conv(d)),
+                    },
+                }),
+        }
+    }
+}
+
+// Range implementations meant to work with `Range<Datum>` and
+// `Range<DatumNested>`.
+impl<'a, B: Copy> Range<B>
+where
+    Datum<'a>: From<B>,
+{
+    pub fn contains<T: RangeOps<'a>>(&self, elem: &T) -> bool
+    where
+        <T as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
+    {
         match self.inner {
             None => false,
             Some(inner) => inner.lower.satisfied_by(elem) && inner.upper.satisfied_by(elem),
@@ -57,24 +167,72 @@ impl<'a> Range<'a> {
     }
 }
 
-/// Holds the upper and lower `DatumRangeBound`s for non-empty ranges.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub struct RangeInner<'a> {
-    pub lower: RangeLowerBound<'a>,
-    pub upper: RangeUpperBound<'a>,
+impl<'a> Range<Datum<'a>> {
+    /// Canonicalize the range by PG's heuristics, which are:
+    /// - Infinite bounds are always exclusive
+    /// - If type has step:
+    ///  - Exclusive lower bounds are rewritten as inclusive += step
+    ///  - Inclusive lower bounds are rewritten as exclusive += step
+    /// - Ranges are empty if lower >= upper after prev. step unless range type
+    ///   does not have step and both bounds are inclusive
+    ///
+    /// # Panics
+    /// - If the upper and lower bound finite and of different types.
+    pub fn canonicalize(&mut self) -> Result<(), InvalidRangeError> {
+        let (lower, upper) = match &mut self.inner {
+            Some(inner) => (&mut inner.lower, &mut inner.upper),
+            None => return Ok(()),
+        };
+
+        match (lower.bound, upper.bound) {
+            (Some(l), Some(u)) => {
+                assert_eq!(
+                    DatumKind::from(l),
+                    DatumKind::from(u),
+                    "finite bounds must be of same type"
+                );
+                if l > u {
+                    return Err(InvalidRangeError::MisorderedRangeBounds);
+                }
+            }
+            _ => {}
+        };
+
+        lower.canonicalize();
+        upper.canonicalize();
+
+        // If (x,x], range is empty
+        if !(lower.inclusive && upper.inclusive)
+            && lower.bound >= upper.bound
+            // None is less than any Some, so only need to check this condition.
+            && upper.bound.is_some()
+        {
+            // emtpy range
+            self.inner = None
+        }
+
+        Ok(())
+    }
 }
 
-impl<'a> Display for RangeInner<'a> {
+/// Holds the upper and lower bounds for non-empty ranges.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub struct RangeInner<B> {
+    pub lower: RangeLowerBound<B>,
+    pub upper: RangeUpperBound<B>,
+}
+
+impl<B: Display> Display for RangeInner<B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(if self.lower.inclusive { "[" } else { "(" })?;
-        Display::fmt(&self.lower, f)?;
+        self.lower.fmt(f)?;
         f.write_str(",")?;
         Display::fmt(&self.upper, f)?;
         f.write_str(if self.upper.inclusive { "]" } else { ")" })
     }
 }
 
-impl<'a> Ord for RangeInner<'a> {
+impl<B: Ord> Ord for RangeInner<B> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.lower
             .cmp(&other.lower)
@@ -82,7 +240,7 @@ impl<'a> Ord for RangeInner<'a> {
     }
 }
 
-impl<'a> PartialOrd for RangeInner<'a> {
+impl<B: PartialOrd + Ord> PartialOrd for RangeInner<B> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
@@ -90,65 +248,74 @@ impl<'a> PartialOrd for RangeInner<'a> {
 
 /// Represents a terminal point of a range.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub struct RangeBound<'a, const UPPER: bool = false> {
+pub struct RangeBound<B, const UPPER: bool = false> {
     pub inclusive: bool,
     /// None value represents an infinite bound.
-    pub bound: Option<DatumNested<'a>>,
+    pub bound: Option<B>,
 }
 
-impl<'a, const UPPER: bool> Display for RangeBound<'a, UPPER> {
+impl<const UPPER: bool, D: Display> Display for RangeBound<D, UPPER> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.bound {
+        match &self.bound {
             None => Ok(()),
-            Some(bound) => Display::fmt(&bound.datum(), f),
+            Some(bound) => bound.fmt(f),
         }
     }
 }
 
-impl<'a, const UPPER: bool> Ord for RangeBound<'a, UPPER> {
+impl<const UPPER: bool, D: Ord> Ord for RangeBound<D, UPPER> {
     fn cmp(&self, other: &Self) -> Ordering {
-        let ordering = match self.bound.cmp(&other.bound) {
-            Ordering::Equal => {
-                if self.inclusive == other.inclusive {
-                    Ordering::Equal
-                } else if self.inclusive {
-                    Ordering::Less
-                } else {
-                    Ordering::Greater
-                }
-            }
-            o => o,
-        };
-        if UPPER {
-            ordering.reverse()
-        } else {
-            ordering
+        // 1. Sort by bounds
+        let mut cmp = self.bound.cmp(&other.bound);
+        // 2. Infinite bounds vs. finite bounds are reversed for uppers.
+        if UPPER && other.bound.is_none() ^ self.bound.is_none() {
+            cmp = cmp.reverse();
         }
+        // 3. Tie break by sorting by inclusivity, which is inverted between
+        //    lowers and uppers.
+        cmp.then(if self.inclusive == other.inclusive {
+            Ordering::Equal
+        } else if self.inclusive {
+            if UPPER {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            }
+        } else if UPPER {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        })
     }
 }
 
-impl<'a, const UPPER: bool> PartialOrd for RangeBound<'a, UPPER> {
+impl<const UPPER: bool, D: PartialOrd + Ord> PartialOrd for RangeBound<D, UPPER> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 /// A `RangeBound` that sorts correctly for use as a lower bound.
-pub type RangeLowerBound<'a> = RangeBound<'a, false>;
+pub type RangeLowerBound<B> = RangeBound<B, false>;
 
 /// A `RangeBound` that sorts correctly for use as an upper bound.
-pub type RangeUpperBound<'a> = RangeBound<'a, true>;
+pub type RangeUpperBound<B> = RangeBound<B, true>;
 
-impl<'a, const UPPER: bool> RangeBound<'a, UPPER> {
+// Generic RangeBound implementations meant to work over `RangeBound<Datum,..>`
+// and `RangeBound<DatumNested,..>`.
+impl<'a, const UPPER: bool, B: Copy> RangeBound<B, UPPER>
+where
+    Datum<'a>: From<B>,
+{
     /// Determines where `elem` lies in relation to the range bound.
     ///
     /// # Panics
     /// - If `self.bound.datum()` is not convertible to `T`.
-    fn elem_cmp<T: RangeOps<'a>>(&self, elem: &T) -> Ordering {
-        match self.bound.map(|bound| {
-            <T>::try_from(bound.datum())
-                .unwrap_or_else(|_| panic!("cannot take {} to {}", bound.datum(), type_name::<T>()))
-        }) {
+    fn elem_cmp<T: RangeOps<'a>>(&self, elem: &T) -> Ordering
+    where
+        <T as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
+    {
+        match self.bound.map(|bound| <T>::unwrap_datum(bound.into())) {
             None if UPPER => Ordering::Greater,
             None => Ordering::Less,
             Some(bound) => bound.cmp(elem),
@@ -156,7 +323,10 @@ impl<'a, const UPPER: bool> RangeBound<'a, UPPER> {
     }
 
     /// Does `elem` satisfy this bound?
-    fn satisfied_by<T: RangeOps<'a>>(&self, elem: &T) -> bool {
+    fn satisfied_by<T: RangeOps<'a>>(&self, elem: &T) -> bool
+    where
+        <T as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
+    {
         match self.elem_cmp(elem) {
             // Inclusive always satisfied with equality, regardless of upper or
             // lower.
@@ -169,197 +339,75 @@ impl<'a, const UPPER: bool> RangeBound<'a, UPPER> {
     }
 }
 
-/// Describes the value passed in via `RangeBoundDesc`s.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd)]
-pub enum RangeBoundDescValue<D> {
-    Finite { value: D },
-    Infinite,
-}
-
-impl<'a> From<Datum<'a>> for RangeBoundDescValue<Datum<'a>> {
-    /// Treats `Datum::Null` as an infinite bound (appropriate for PG
-    /// semantics), and all other `Datum`s as finite values.
-    fn from(d: Datum<'a>) -> Self {
-        match d {
-            Datum::Null => RangeBoundDescValue::Infinite,
-            value => RangeBoundDescValue::Finite { value },
-        }
-    }
-}
-
-/// Structures arguments for functions that construct ranges.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd)]
-pub struct RangeBoundDesc<D> {
-    pub inclusive: bool,
-    pub value: RangeBoundDescValue<D>,
-}
-
-impl<'a> RangeBoundDesc<Datum<'a>> {
-    /// Create a new `RangeBoundDesc` whose value is infinite if `d ==
-    /// Datum::Null`, otherwise finite.
-    pub fn new(d: Datum<'a>, inclusive: bool) -> RangeBoundDesc<Datum<'a>> {
-        RangeBoundDesc {
+impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
+    /// Create a new `RangeBound` whose value is "infinite" (i.e. None) if `d ==
+    /// Datum::Null`, otherwise finite (i.e. Some).
+    ///
+    /// There is not a corresponding generic implementation of this because
+    /// genericizing how to express infinite bounds is less clear.
+    pub fn new(d: Datum<'a>, inclusive: bool) -> RangeBound<Datum<'a>, UPPER> {
+        RangeBound {
             inclusive,
-            value: d.into(),
+            bound: match d {
+                Datum::Null => None,
+                o => Some(o),
+            },
+        }
+    }
+
+    fn canonicalize(&mut self) {
+        match self.bound {
+            None => {
+                self.inclusive = false;
+            }
+            Some(value) => match value {
+                d @ Datum::Int32(_) => self.canonicalize_inner::<i32>(d),
+                d => unreachable!("{d:?} not yet supported in ranges"),
+            },
+        }
+    }
+
+    fn canonicalize_inner<T: RangeOps<'a>>(&mut self, d: Datum<'a>)
+    where
+        <T as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
+    {
+        if let Some(step) = T::step() {
+            // Upper bounds must be exclusive, lower bounds inclusive
+            if UPPER == self.inclusive {
+                let cur = <T>::unwrap_datum(d);
+                self.bound = cur.checked_add(&step).map(|t| t.into());
+                self.inclusive = !UPPER;
+            }
         }
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub enum RangeError {
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub enum InvalidRangeError {
     MisorderedRangeBounds,
 }
 
-impl Display for RangeError {
+impl Display for InvalidRangeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            RangeError::MisorderedRangeBounds => {
+            InvalidRangeError::MisorderedRangeBounds => {
                 f.write_str("range lower bound must be less than or equal to range upper bound")
             }
         }
     }
 }
 
-impl Error for RangeError {
+impl Error for InvalidRangeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         None
     }
 }
 
 // Required due to Proto decoding using string as its error type
-impl From<RangeError> for String {
-    fn from(e: RangeError) -> Self {
+impl From<InvalidRangeError> for String {
+    fn from(e: InvalidRangeError) -> Self {
         e.to_string()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::Range;
-    use crate::adt::range::RangeBoundDesc;
-    use crate::{Datum, RowArena};
-
-    // TODO: Once SQL supports this, the test can be moved into SLT.
-    #[test]
-    fn test_range_contains() {
-        fn test_range_contains_inner(
-            range: Range,
-            contains: Option<i32>,
-            does_not_contain: Option<i32>,
-        ) {
-            if let Some(el) = contains {
-                assert!(range.contains(&el), "el {:?}, range {}", el, range);
-            }
-
-            if let Some(el) = does_not_contain {
-                assert!(!range.contains(&el), "el {:?}, range {:?}", el, range);
-            }
-        }
-
-        let arena = RowArena::new();
-        for (lower, lower_inclusive, upper, upper_inclusive, contains, does_not_contain) in [
-            (
-                Datum::Null,
-                true,
-                Datum::Int32(1),
-                false,
-                Some(i32::MIN),
-                Some(1),
-            ),
-            (Datum::Null, true, Datum::Int32(1), true, Some(1), Some(2)),
-            (Datum::Null, true, Datum::Null, false, Some(i32::MAX), None),
-            (Datum::Null, true, Datum::Null, true, Some(i32::MAX), None),
-            (
-                Datum::Null,
-                false,
-                Datum::Int32(1),
-                false,
-                Some(i32::MIN),
-                Some(1),
-            ),
-            (Datum::Null, false, Datum::Int32(1), true, Some(1), Some(2)),
-            (Datum::Null, false, Datum::Null, false, Some(i32::MAX), None),
-            (Datum::Null, false, Datum::Null, true, Some(i32::MAX), None),
-            (
-                Datum::Int32(-1),
-                true,
-                Datum::Int32(1),
-                false,
-                Some(-1),
-                Some(1),
-            ),
-            (
-                Datum::Int32(-1),
-                true,
-                Datum::Int32(1),
-                true,
-                Some(1),
-                Some(-2),
-            ),
-            (
-                Datum::Int32(-1),
-                false,
-                Datum::Int32(1),
-                false,
-                Some(0),
-                Some(-1),
-            ),
-            (
-                Datum::Int32(-1),
-                false,
-                Datum::Int32(1),
-                true,
-                Some(1),
-                Some(-1),
-            ),
-            (Datum::Int32(1), true, Datum::Null, false, Some(1), Some(-1)),
-            (
-                Datum::Int32(1),
-                true,
-                Datum::Null,
-                true,
-                Some(i32::MAX),
-                Some(-1),
-            ),
-            (Datum::Int32(1), false, Datum::Null, false, Some(2), Some(1)),
-            (
-                Datum::Int32(1),
-                false,
-                Datum::Null,
-                true,
-                Some(i32::MAX),
-                Some(1),
-            ),
-        ] {
-            let range = arena.make_datum(|packer| {
-                packer
-                    .push_range(
-                        RangeBoundDesc::new(lower, lower_inclusive),
-                        RangeBoundDesc::new(upper, upper_inclusive),
-                    )
-                    .unwrap();
-            });
-
-            let range = match range {
-                Datum::Range(inner) => inner,
-                _ => unreachable!(),
-            };
-
-            test_range_contains_inner(range, contains, does_not_contain);
-        }
-
-        let range = arena.make_datum(|packer| {
-            packer.push_empty_range();
-        });
-
-        let range = match range {
-            Datum::Range(inner) => inner,
-            _ => unreachable!(),
-        };
-
-        for el in i16::MIN..i16::MAX {
-            test_range_contains_inner(range, None, Some(el.into()));
-        }
     }
 }
