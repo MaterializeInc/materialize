@@ -86,7 +86,7 @@ pub use crate::catalog::config::{
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
-use crate::config::SynchronizedParameters;
+use crate::config::{SynchronizedParameters, SystemParameterFrontend};
 use crate::coord::DEFAULT_LOGICAL_COMPACTION_WINDOW;
 use crate::session::vars::{SystemVars, Var, CONFIG_HAS_SYNCED_ONCE};
 use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
@@ -2302,15 +2302,12 @@ impl<S: Append> Catalog<S> {
             );
         }
 
-        let system_config = catalog.storage().await.load_system_configuration().await?;
-        for (name, value) in &config.bootstrap_system_parameters {
-            if !system_config.contains_key(name) {
-                catalog.state.insert_system_configuration(name, value)?;
-            }
-        }
-        for (name, value) in system_config {
-            catalog.state.insert_system_configuration(&name, &value)?;
-        }
+        catalog
+            .load_system_configuration(
+                config.bootstrap_system_parameters,
+                config.system_parameter_frontend,
+            )
+            .await?;
 
         catalog.load_builtin_types().await?;
 
@@ -2574,76 +2571,6 @@ impl<S: Append> Catalog<S> {
             .set_system_object_mapping(new_system_id_mappings)
             .await?;
 
-        if let Some(system_parameter_frontend) = config.system_parameter_frontend {
-            if !catalog.state.system_config().config_has_synced_once() {
-                tracing::info!("parameter sync on boot: start sync");
-
-                // We intentionally block initial startup, potentially forever,
-                // on initializing LaunchDarkly. This may seem scary, but the
-                // alternative is even scarier. Over time, we expect that the
-                // compiled-in default values for the system parameters will
-                // drift substantially from the defaults configured in
-                // LaunchDarkly, to the point that starting an environment
-                // without loading the latest values from LaunchDarkly will
-                // result in running an untested configuration.
-                //
-                // Note this only applies during initial startup. Restarting
-                // after we've synced once doesn't block on LaunchDarkly, as it
-                // seems reasonable to assume that the last-synced configuration
-                // was valid enough.
-                //
-                // This philosophy appears to provide a good balance between not
-                // running untested configurations in production while also not
-                // making LaunchDarkly a "tier 1" dependency for existing
-                // environments.
-                //
-                // If this proves to be an issue, we could seek to address the
-                // configuration drift in a different way--for example, by
-                // writing a script that runs in CI nightly and checks for
-                // deviation between the compiled Rust code and LaunchDarkly.
-                //
-                // If it is absolutely necessary to bring up a new environment
-                // while LaunchDarkly is down, the following manual mitigation
-                // can be performed:
-                //
-                //    1. Edit the environmentd startup parameters to omit the
-                //       LaunchDarkly configuration.
-                //    2. Boot environmentd.
-                //    3. Run `ALTER SYSTEM config_has_synced_once = true`.
-                //    4. Adjust any other parameters as necessary to avoid
-                //       running a nonstandard configuration in production.
-                //    5. Edit the environmentd startup parameters to restore the
-                //       LaunchDarkly configuration, for when LaunchDarkly comes
-                //       back online.
-                //    6. Reboot environmentd.
-                system_parameter_frontend.ensure_initialized().await;
-
-                let mut params = SynchronizedParameters::new(catalog.state.system_config().clone());
-                system_parameter_frontend.pull(&mut params);
-                let ops = params
-                    .modified()
-                    .into_iter()
-                    .map(|param| {
-                        let name = param.name;
-                        let value = param.value;
-                        tracing::debug!(name, value, "sync parameter");
-                        Op::UpdateSystemConfiguration { name, value }
-                    })
-                    .chain(std::iter::once({
-                        let name = CONFIG_HAS_SYNCED_ONCE.name().to_string();
-                        let value = true.to_string();
-                        tracing::debug!(name, value, "sync parameter");
-                        Op::UpdateSystemConfiguration { name, value }
-                    }))
-                    .collect::<Vec<_>>();
-
-                catalog.transact(None, ops, |_| Ok(())).await.unwrap();
-                tracing::info!("parameter sync on boot: end sync");
-            } else {
-                tracing::info!("parameter sync on boot: skipping sync as config has synced once");
-            }
-        }
-
         let last_seen_version = catalog
             .storage()
             .await
@@ -2773,6 +2700,110 @@ impl<S: Append> Catalog<S> {
             builtin_table_updates,
             last_seen_version,
         ))
+    }
+
+    /// Loads the system configuration from the various locations in which its
+    /// values and value overrides can reside.
+    ///
+    /// This method should _always_ be called during catalog creation _before_
+    /// any other operations that depend on system configuration values.
+    ///
+    /// Configuration is loaded in the following order:
+    ///
+    /// 1. Load parameters from the configuration persisted in the catalog
+    ///    storage backend.
+    /// 2. Overwrite without persisting selected parameter values from the
+    ///    configuration passed in the provided `bootstrap_system_parameters`
+    ///    map.
+    /// 3. Overwrite and persist selected parameter values from the
+    ///    configuration that can be pulled from the provided
+    ///    `system_parameter_frontend` (if present).
+    ///
+    /// # Errors
+    async fn load_system_configuration(
+        &mut self,
+        bootstrap_system_parameters: BTreeMap<String, String>,
+        system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
+    ) -> Result<(), AdapterError> {
+        let system_config = self.storage().await.load_system_configuration().await?;
+        for (name, value) in &bootstrap_system_parameters {
+            if !system_config.contains_key(name) {
+                self.state.insert_system_configuration(name, value)?;
+            }
+        }
+        for (name, value) in system_config {
+            self.state.insert_system_configuration(&name, &value)?;
+        }
+        if let Some(system_parameter_frontend) = system_parameter_frontend {
+            if !self.state.system_config().config_has_synced_once() {
+                tracing::info!("parameter sync on boot: start sync");
+
+                // We intentionally block initial startup, potentially forever,
+                // on initializing LaunchDarkly. This may seem scary, but the
+                // alternative is even scarier. Over time, we expect that the
+                // compiled-in default values for the system parameters will
+                // drift substantially from the defaults configured in
+                // LaunchDarkly, to the point that starting an environment
+                // without loading the latest values from LaunchDarkly will
+                // result in running an untested configuration.
+                //
+                // Note this only applies during initial startup. Restarting
+                // after we've synced once doesn't block on LaunchDarkly, as it
+                // seems reasonable to assume that the last-synced configuration
+                // was valid enough.
+                //
+                // This philosophy appears to provide a good balance between not
+                // running untested configurations in production while also not
+                // making LaunchDarkly a "tier 1" dependency for existing
+                // environments.
+                //
+                // If this proves to be an issue, we could seek to address the
+                // configuration drift in a different way--for example, by
+                // writing a script that runs in CI nightly and checks for
+                // deviation between the compiled Rust code and LaunchDarkly.
+                //
+                // If it is absolutely necessary to bring up a new environment
+                // while LaunchDarkly is down, the following manual mitigation
+                // can be performed:
+                //
+                //    1. Edit the environmentd startup parameters to omit the
+                //       LaunchDarkly configuration.
+                //    2. Boot environmentd.
+                //    3. Run `ALTER SYSTEM config_has_synced_once = true`.
+                //    4. Adjust any other parameters as necessary to avoid
+                //       running a nonstandard configuration in production.
+                //    5. Edit the environmentd startup parameters to restore the
+                //       LaunchDarkly configuration, for when LaunchDarkly comes
+                //       back online.
+                //    6. Reboot environmentd.
+                system_parameter_frontend.ensure_initialized().await;
+
+                let mut params = SynchronizedParameters::new(self.state.system_config().clone());
+                system_parameter_frontend.pull(&mut params);
+                let ops = params
+                    .modified()
+                    .into_iter()
+                    .map(|param| {
+                        let name = param.name;
+                        let value = param.value;
+                        tracing::debug!(name, value, "sync parameter");
+                        Op::UpdateSystemConfiguration { name, value }
+                    })
+                    .chain(std::iter::once({
+                        let name = CONFIG_HAS_SYNCED_ONCE.name().to_string();
+                        let value = true.to_string();
+                        tracing::debug!(name, value, "sync parameter");
+                        Op::UpdateSystemConfiguration { name, value }
+                    }))
+                    .collect::<Vec<_>>();
+
+                self.transact(None, ops, |_| Ok(())).await.unwrap();
+                tracing::info!("parameter sync on boot: end sync");
+            } else {
+                tracing::info!("parameter sync on boot: skipping sync as config has synced once");
+            }
+        }
+        Ok(())
     }
 
     /// Loads built-in system types into the catalog.
