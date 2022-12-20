@@ -571,16 +571,6 @@ class Composition:
                 service["command"] = []
             self._write_compose()
 
-        if "materialized" in services:
-            # Work around https://github.com/MaterializeInc/materialize/issues/15725
-            # by cleaning up Process Orchestrator metadata on restart
-            self.run(
-                "materialized",
-                "-c",
-                "rm -rf /mzdata/*.pid /mzdata/*.ports",
-                entrypoint="bash",
-            )
-
         self.invoke("up", *(["--detach"] if detach else []), *services)
 
         if persistent:
@@ -862,6 +852,9 @@ class ServiceConfig(TypedDict, total=False):
 
     depends_on: List[str]
     """The list of other services that must be started before this one."""
+
+    tmpfs: List[str]
+    """Paths at which to mount temporary file systems inside the container."""
 
     volumes: List[str]
     """Volumes to attach to the service."""
