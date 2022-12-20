@@ -113,9 +113,13 @@ with several additional columns that describe the nature of the update:
 </tbody>
 </table>
 
+### `UP TO`
+
+The `UP TO` clause allows specifying a timestamp at which the `SUBSCRIBE` will cease running. If `UP TO` is specified, no rows whose timestamp is greater than or equal to the specified timestamp will be returned.
+
 ### Duration
 
-`SUBSCRIBE` will continue to run until canceled, session ends, or until all updates have been presented. The latter case typically occurs when
+`SUBSCRIBE` will continue to run until canceled, session ends, the `UP TO` timestamp is reached, or all updates have been presented. The latter case typically occurs when
 tailing constant views (e.g. `CREATE VIEW v AS SELECT 1`).
 
 {{< warning >}}
