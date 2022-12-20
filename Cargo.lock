@@ -3542,6 +3542,7 @@ dependencies = [
  "columnation",
  "differential-dataflow",
  "futures",
+ "itertools",
  "mz-build-info",
  "mz-expr",
  "mz-orchestrator",

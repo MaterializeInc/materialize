@@ -265,6 +265,10 @@ mz_arrangement_sizes_3
 VIEW
 materialize
 mz_internal
+mz_cluster_replica_frontiers
+BASE TABLE
+materialize
+mz_internal
 mz_cluster_replica_heartbeats
 BASE TABLE
 materialize

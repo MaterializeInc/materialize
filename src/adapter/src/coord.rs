@@ -280,6 +280,8 @@ pub struct ReplicaMetadata {
     pub last_heartbeat: Option<DateTime<Utc>>,
     /// The last known CPU and memory metrics
     pub metrics: Option<Vec<ServiceProcessMetrics>>,
+    /// Write frontiers of that replica.
+    pub write_frontiers: Vec<(GlobalId, mz_repr::Timestamp)>,
 }
 
 /// Metadata about an active connection.
