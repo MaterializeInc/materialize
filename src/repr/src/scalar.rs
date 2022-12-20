@@ -35,13 +35,12 @@ use crate::adt::date::Date;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
-use crate::adt::range::Range;
+use crate::adt::range::{Range, RangeLowerBound, RangeUpperBound};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::timestamp::{CheckedTimestamp, TimestampError};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
-use crate::GlobalId;
-use crate::{ColumnName, ColumnType, DatumList, DatumMap};
-use crate::{Row, RowArena};
+use crate::row::DatumNested;
+use crate::{ColumnName, ColumnType, DatumList, DatumMap, GlobalId, Row, RowArena};
 
 pub use crate::relation_and_scalar::proto_scalar_type::ProtoRecordField;
 pub use crate::relation_and_scalar::ProtoScalarType;
@@ -150,7 +149,7 @@ pub enum Datum<'a> {
     /// An unknown value.
     Null,
     /// A range of values, e.g. [-1, 1).
-    Range(Range<'a>),
+    Range(Range<DatumNested<'a>>),
 }
 
 impl TryFrom<Datum<'_>> for bool {
@@ -684,6 +683,24 @@ impl<'a> Datum<'a> {
         match self {
             Datum::MzTimestamp(t) => *t,
             _ => panic!("Datum::unwrap_mz_timestamp called on {:?}", self),
+        }
+    }
+
+    /// Unwraps the range value within this datum.
+    ///
+    /// Note that the return type is a range generic over `Datum`, which is
+    /// convenient to work with. However, the type stored in the datum is
+    /// generic over `DatumNested`, which is necessary to avoid needless boxing
+    /// of the inner `Datum`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::Range`].
+    #[track_caller]
+    pub fn unwrap_range(&self) -> Range<Datum<'a>> {
+        match self {
+            Datum::Range(range) => range.into_bounds(|b| b.datum()),
+            _ => panic!("Datum::unwrap_range called on {:?}", self),
         }
     }
 
@@ -1508,7 +1525,7 @@ impl<'a, E> DatumType<'a, E> for DatumMap<'a> {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Range<'a> {
+impl<'a, E> DatumType<'a, E> for Range<DatumNested<'a>> {
     fn nullable() -> bool {
         false
     }
@@ -2525,6 +2542,9 @@ impl<'a> ScalarType {
                 value_type: todo!(),
                 custom_id: todo!(),
             },
+            ScalarType::Range {
+                element_type: todo!(),
+            }
             */
         ]
     }
@@ -2608,7 +2628,7 @@ impl Arbitrary for ScalarType {
                         (fields_strat, any::<Option<GlobalId>>()).prop_map(|(fields, custom_id)| {
                             ScalarType::Record { fields, custom_id }
                         })
-                    }
+                    },
                 ]
             },
         )
@@ -2664,6 +2684,7 @@ pub enum PropDatum {
     Array(PropArray),
     List(PropList),
     Map(PropDict),
+    Range(PropRange),
 
     JsonNull,
     Uuid(Uuid),
@@ -2758,6 +2779,121 @@ fn arb_list(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropLis
 }
 
 #[derive(Debug, PartialEq, Clone)]
+pub struct PropRange(
+    Row,
+    Option<(
+        (Option<Box<PropDatum>>, bool),
+        (Option<Box<PropDatum>>, bool),
+    )>,
+);
+
+fn arb_range_data() -> BoxedStrategy<(PropDatum, PropDatum)> {
+    prop_oneof![(
+        any::<i32>().prop_map(PropDatum::Int32),
+        any::<i32>().prop_map(PropDatum::Int32),
+    ),]
+    .boxed()
+}
+
+#[allow(dead_code)]
+fn arb_range() -> BoxedStrategy<PropRange> {
+    // ???: any way to enforce ordering on these?
+    (
+        any::<u16>(),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+        arb_range_data(),
+    )
+        .prop_map(
+            |(split, lower_inf, lower_inc, upper_inf, upper_inc, (a, b))| {
+                let mut row = Row::default();
+                let mut packer = row.packer();
+                let r = if split % 32 == 0 {
+                    packer
+                        .push_range(Range::new(None))
+                        .expect("pushing empty ranges never fails");
+                    None
+                } else {
+                    let b_is_lower = Datum::from(&b) < Datum::from(&a);
+
+                    let (lower, upper) = if b_is_lower { (b, a) } else { (a, b) };
+                    let mut range = Range::new(Some((
+                        RangeLowerBound {
+                            inclusive: lower_inc,
+                            bound: if lower_inf {
+                                None
+                            } else {
+                                Some(Datum::from(&lower))
+                            },
+                        },
+                        RangeUpperBound {
+                            inclusive: upper_inc,
+                            bound: if upper_inf {
+                                None
+                            } else {
+                                Some(Datum::from(&upper))
+                            },
+                        },
+                    )));
+
+                    range.canonicalize().unwrap();
+
+                    // Extract canonicalized state; we bail and pretend the
+                    // range was empty if the bounds are rewritten.
+                    let (empty, lower_inf, lower_inc, upper_inf, upper_inc) = match range.inner {
+                        None => (true, false, false, false, false),
+                        Some(inner) => (
+                            false
+                                || match inner.lower.bound {
+                                    Some(b) => b != Datum::from(&lower),
+                                    None => false,
+                                }
+                                || match inner.upper.bound {
+                                    Some(b) => b != Datum::from(&lower),
+                                    None => false,
+                                },
+                            inner.lower.bound.is_none(),
+                            inner.lower.inclusive,
+                            inner.upper.bound.is_none(),
+                            inner.upper.inclusive,
+                        ),
+                    };
+
+                    if empty {
+                        packer.push_range(Range { inner: None }).unwrap();
+                        None
+                    } else {
+                        packer.push_range(range).unwrap();
+                        Some((
+                            (
+                                if lower_inf {
+                                    None
+                                } else {
+                                    Some(Box::new(lower))
+                                },
+                                lower_inc,
+                            ),
+                            (
+                                if upper_inf {
+                                    None
+                                } else {
+                                    Some(Box::new(upper))
+                                },
+                                upper_inc,
+                            ),
+                        ))
+                    }
+                };
+
+                PropRange(row, r)
+            },
+        )
+        .boxed()
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub struct PropDict(Row, Vec<(String, PropDatum)>);
 
 fn arb_dict(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropDict> {
@@ -2842,6 +2978,11 @@ impl<'a> From<&'a PropDatum> for Datum<'a> {
                 let map = row.unpack_first().unwrap_map();
                 Datum::Map(map)
             }
+            Range(PropRange(row, _)) => {
+                let d = row.unpack_first();
+                assert!(matches!(d, Datum::Range(_)));
+                d
+            }
             JsonNull => Datum::JsonNull,
             Uuid(u) => Datum::from(*u),
             Dummy => Datum::Dummy,
@@ -2924,6 +3065,33 @@ mod tests {
             let row = Row::pack(&datums);
             let unpacked = row.unpack();
             assert_eq!(datums, unpacked);
+        }
+
+        #[test]
+        fn range_packing_unpacks_correctly(range in arb_range()) {
+            let PropRange(row, prop_range) = range;
+            let row = row.unpack_first();
+            let d = row.unwrap_range();
+
+            let (((prop_lower, prop_lower_inc), (prop_upper, prop_upper_inc)), crate::adt::range::RangeInner {lower, upper}) = match (prop_range, d.inner) {
+                (Some(prop_values), Some(inner_range)) => (prop_values, inner_range),
+                (None, None) => return Ok(()),
+                _ => panic!("inequivalent row packing"),
+            };
+
+            for (prop_bound, prop_bound_inc, inner_bound, inner_bound_inc) in [
+                (prop_lower, prop_lower_inc, lower.bound, lower.inclusive),
+                (prop_upper, prop_upper_inc, upper.bound, upper.inclusive),
+            ] {
+                assert_eq!(prop_bound_inc, inner_bound_inc);
+                match (prop_bound, inner_bound) {
+                    (None, None) => continue,
+                    (Some(p), Some(b)) => {
+                        assert_eq!(Datum::from(&*p), b);
+                    }
+                    _ => panic!("inequivalent row packing"),
+                }
+            }
         }
     }
 }
