@@ -1920,6 +1920,30 @@ mod tests {
             .expect("task should shutdown cleanly");
     }
 
+    /// Regression test for 16743, where the nightly tests found that calling
+    /// maybe_heartbeat_writer or maybe_heartbeat_reader on a "tombstone" shard
+    /// would panic.
+    #[tokio::test]
+    async fn regression_16743_heartbeat_tombstone() {
+        const EMPTY: &[(((), ()), u64, i64)] = &[];
+        let (mut write, mut read) = new_test_client()
+            .await
+            .expect_open::<(), (), u64, i64>(ShardId::new())
+            .await;
+        // Create a tombstone by advancing both the upper and since to [].
+        let () = read.downgrade_since(&Antichain::new()).await;
+        let () = write
+            .compare_and_append(EMPTY, Antichain::from_elem(0), Antichain::new())
+            .await
+            .expect("usage should be valid")
+            .expect("upper should match");
+        // Verify that heartbeating doesn't panic.
+        read.last_heartbeat = 0;
+        read.maybe_heartbeat_reader().await;
+        write.last_heartbeat = 0;
+        write.maybe_heartbeat_writer().await;
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
