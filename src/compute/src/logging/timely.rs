@@ -279,7 +279,7 @@ pub fn construct<A: Allocate>(
                                     messages_received_data
                                         .entry((event.channel, event.target))
                                         .or_insert_with(|| vec![0; peers])[event.source] += length;
-                                    let d = ((event.channel, event.target), event.source);
+                                    let d = ((event.channel, event.source), event.target);
                                     messages_received_session.give(&cap, (d, time_ms, length));
                                 }
                             }
