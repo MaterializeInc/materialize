@@ -145,6 +145,11 @@ pub enum Type {
     Int2Vector,
     /// A Materialize timestamp.
     MzTimestamp,
+    /// A range of values of the inner type
+    Range {
+        /// The domain type
+        element_type: Box<Type>,
+    },
 }
 
 /// An unpacked [`typmod`](Type::typmod) for a [`Type`].
@@ -551,6 +556,42 @@ impl Type {
             postgres_types::Type::REGTYPE_ARRAY => Type::Array(Box::new(Type::RegType)),
             postgres_types::Type::INT2_VECTOR => Type::Int2Vector,
             postgres_types::Type::INT2_VECTOR_ARRAY => Type::Array(Box::new(Type::Int2Vector)),
+            postgres_types::Type::INT4_RANGE => Type::Range {
+                element_type: Box::new(Type::Int4),
+            },
+            postgres_types::Type::INT4_RANGE_ARRAY => Type::Array(Box::new(Type::Range {
+                element_type: Box::new(Type::Int4),
+            })),
+            postgres_types::Type::INT8_RANGE => Type::Range {
+                element_type: Box::new(Type::Int8),
+            },
+            postgres_types::Type::INT8_RANGE_ARRAY => Type::Array(Box::new(Type::Range {
+                element_type: Box::new(Type::Int8),
+            })),
+            postgres_types::Type::NUM_RANGE => Type::Range {
+                element_type: Box::new(Type::Numeric { constraints: None }),
+            },
+            postgres_types::Type::NUM_RANGE_ARRAY => Type::Array(Box::new(Type::Range {
+                element_type: Box::new(Type::Numeric { constraints: None }),
+            })),
+            postgres_types::Type::TS_RANGE => Type::Range {
+                element_type: Box::new(Type::Timestamp { precision: None }),
+            },
+            postgres_types::Type::TS_RANGE_ARRAY => Type::Array(Box::new(Type::Range {
+                element_type: Box::new(Type::Timestamp { precision: None }),
+            })),
+            postgres_types::Type::TSTZ_RANGE => Type::Range {
+                element_type: Box::new(Type::TimestampTz { precision: None }),
+            },
+            postgres_types::Type::TSTZ_RANGE_ARRAY => Type::Array(Box::new(Type::Range {
+                element_type: Box::new(Type::TimestampTz { precision: None }),
+            })),
+            postgres_types::Type::DATE_RANGE => Type::Range {
+                element_type: Box::new(Type::Date),
+            },
+            postgres_types::Type::DATE_RANGE_ARRAY => Type::Array(Box::new(Type::Range {
+                element_type: Box::new(Type::Date),
+            })),
             _ => return Err(TypeFromOidError::UnknownOid(oid)),
         };
 
@@ -634,6 +675,14 @@ impl Type {
                 Type::RegType => &postgres_types::Type::REGTYPE_ARRAY,
                 Type::Int2Vector => &postgres_types::Type::INT2_VECTOR_ARRAY,
                 Type::MzTimestamp => &MZ_TIMESTAMP_ARRAY,
+                Type::Range { element_type } => match **element_type {
+                    Type::Int4 => &postgres_types::Type::INT4_RANGE_ARRAY,
+                    Type::Numeric { .. } => &postgres_types::Type::NUM_RANGE_ARRAY,
+                    Type::Timestamp { .. } => &postgres_types::Type::TS_RANGE_ARRAY,
+                    Type::TimestampTz { .. } => &postgres_types::Type::TSTZ_RANGE_ARRAY,
+                    Type::Date => &postgres_types::Type::DATE_RANGE_ARRAY,
+                    _ => unreachable!(),
+                },
             },
             Type::Bool => &postgres_types::Type::BOOL,
             Type::Bytea => &postgres_types::Type::BYTEA,
@@ -668,6 +717,14 @@ impl Type {
             Type::RegType => &postgres_types::Type::REGTYPE,
             Type::Int2Vector => &postgres_types::Type::INT2_VECTOR,
             Type::MzTimestamp => &MZ_TIMESTAMP,
+            Type::Range { element_type } => match **element_type {
+                Type::Int4 => &postgres_types::Type::INT4_RANGE,
+                Type::Numeric { .. } => &postgres_types::Type::NUM_RANGE,
+                Type::Timestamp { .. } => &postgres_types::Type::TS_RANGE,
+                Type::TimestampTz { .. } => &postgres_types::Type::TSTZ_RANGE,
+                Type::Date => &postgres_types::Type::DATE_RANGE,
+                _ => unreachable!(),
+            },
         }
     }
 
@@ -786,7 +843,8 @@ impl Type {
             | Type::TimestampTz { precision: None }
             | Type::Uuid
             | Type::MzTimestamp
-            | Type::VarChar { max_length: None } => None,
+            | Type::VarChar { max_length: None }
+            | Type::Range { .. } => None,
         }
     }
 
@@ -832,6 +890,7 @@ impl Type {
             Type::MzTimestamp => size_of::<mz_repr::Timestamp>()
                 .try_into()
                 .expect("must fit"),
+            Type::Range { .. } => -1,
         }
     }
 
@@ -950,6 +1009,9 @@ impl TryFrom<&Type> for ScalarType {
             Type::RegType => Ok(ScalarType::RegType),
             Type::Int2Vector => Ok(ScalarType::Int2Vector),
             Type::MzTimestamp => Ok(ScalarType::MzTimestamp),
+            Type::Range { element_type } => Ok(ScalarType::Range {
+                element_type: Box::new(TryFrom::try_from(&**element_type)?),
+            }),
         }
     }
 }
@@ -1098,6 +1160,9 @@ impl From<&ScalarType> for Type {
             ScalarType::RegType => Type::RegType,
             ScalarType::Int2Vector => Type::Int2Vector,
             ScalarType::MzTimestamp => Type::MzTimestamp,
+            ScalarType::Range { element_type } => Type::Range {
+                element_type: Box::new(From::from(&**element_type)),
+            },
         }
     }
 }

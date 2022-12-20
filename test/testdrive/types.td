@@ -65,6 +65,7 @@ float8
 int2
 int2vector
 int4
+int4range
 int8
 uint2
 uint4

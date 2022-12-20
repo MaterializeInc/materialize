@@ -3279,6 +3279,13 @@ mod tests {
                                 ty.name
                             )
                         }
+                        CatalogType::Range => {
+                            assert_eq!(
+                                pg_ty.ty, "r",
+                                "type {} is not a range type as expected",
+                                ty.name
+                            )
+                        }
                         _ => {
                             assert_eq!(
                                 pg_ty.ty, "b",
@@ -3449,7 +3456,8 @@ mod tests {
                     | ScalarType::RegProc
                     | ScalarType::RegType
                     | ScalarType::RegClass
-                    | ScalarType::Int2Vector => {}
+                    | ScalarType::Int2Vector
+                    | ScalarType::Range { .. } => {}
                 }
             }
         }

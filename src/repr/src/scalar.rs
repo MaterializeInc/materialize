@@ -804,9 +804,21 @@ impl<'a> Datum<'a> {
                     (Datum::Numeric(_), _) => false,
                     (Datum::MzTimestamp(_), ScalarType::MzTimestamp) => true,
                     (Datum::MzTimestamp(_), _) => false,
-                    (Datum::Range(_), _) => {
-                        unreachable!("ranges not available in dataflows or types")
+                    (Datum::Range(Range { inner }), ScalarType::Range { element_type }) => {
+                        match inner {
+                            None => true,
+                            Some(inner) => {
+                                true && match inner.lower.bound {
+                                    None => true,
+                                    Some(b) => is_instance_of_scalar(b.datum(), element_type),
+                                } && match inner.upper.bound {
+                                    None => true,
+                                    Some(b) => is_instance_of_scalar(b.datum(), element_type),
+                                }
+                            }
+                        }
                     }
+                    (Datum::Range(_), _) => false,
                 }
             }
         }
@@ -1117,7 +1129,9 @@ pub enum ScalarType {
     /// scale specifies the number of digits after the decimal point.
     ///
     /// [`NUMERIC_DATUM_MAX_PRECISION`]: crate::adt::numeric::NUMERIC_DATUM_MAX_PRECISION
-    Numeric { max_scale: Option<NumericMaxScale> },
+    Numeric {
+        max_scale: Option<NumericMaxScale>,
+    },
     /// The type of [`Datum::Date`].
     Date,
     /// The type of [`Datum::Time`].
@@ -1142,7 +1156,9 @@ pub enum ScalarType {
     ///
     /// Note that a `length` of `None` is used in special cases, such as
     /// creating lists.
-    Char { length: Option<CharLength> },
+    Char {
+        length: Option<CharLength>,
+    },
     /// Stored as [`Datum::String`], but can optionally express a limit on the
     /// string's length.
     VarChar {
@@ -1205,6 +1221,9 @@ pub enum ScalarType {
     Int2Vector,
     /// A Materialize timestamp.
     MzTimestamp,
+    Range {
+        element_type: Box<ScalarType>,
+    },
 }
 
 impl RustType<ProtoRecordField> for (ColumnName, ColumnType) {
@@ -1287,6 +1306,7 @@ impl RustType<ProtoScalarType> for ScalarType {
                     custom_id: custom_id.map(|id| id.into_proto()),
                 })),
                 ScalarType::MzTimestamp => MzTimestamp(()),
+                ScalarType::Range { element_type: _ } => todo!(),
             }),
         }
     }
@@ -1359,6 +1379,13 @@ impl RustType<ProtoScalarType> for ScalarType {
                 custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
             }),
             MzTimestamp(()) => Ok(ScalarType::MzTimestamp),
+            // Range(x) => Ok(ScalarType::Range {
+            //     element_type: Box::new(
+            //         x.element_type
+            //             .map(|x| *x)
+            //             .into_rust_if_some("ProtoRange::element_type")?,
+            //     ),
+            // }),
         }
     }
 }
@@ -2007,6 +2034,9 @@ impl<'a> ScalarType {
             // to support Char values of different lengths in e.g. lists.
             Char { .. } => Char { length: None },
             VarChar { .. } => VarChar { max_length: None },
+            Range { element_type } => Range {
+                element_type: Box::new(element_type.without_modifiers()),
+            },
             v => v.clone(),
         }
     }
@@ -2079,6 +2109,18 @@ impl<'a> ScalarType {
         match self {
             ScalarType::VarChar { max_length, .. } => *max_length,
             _ => panic!("ScalarType::unwrap_varchar_max_length called on {:?}", self),
+        }
+    }
+
+    /// Returns the [`ScalarType`] of elements in a [`ScalarType::Range`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ScalarType::Map`].
+    pub fn unwrap_range_element_type(&self) -> &ScalarType {
+        match self {
+            ScalarType::Range { element_type } => &**element_type,
+            _ => panic!("ScalarType::unwrap_range_element_type called on {:?}", self),
         }
     }
 
@@ -2202,7 +2244,9 @@ impl<'a> ScalarType {
                     custom_id: oid_r,
                 },
             ) => l.eq_inner(r, structure_only) && (oid_l == oid_r || structure_only),
-            (Array(a), Array(b)) => a.eq_inner(b, structure_only),
+            (Array(a), Array(b)) | (Range { element_type: a }, Range { element_type: b }) => {
+                a.eq_inner(b, structure_only)
+            }
             (
                 Record {
                     fields: fields_a,
@@ -2450,6 +2494,7 @@ impl<'a> ScalarType {
                 Datum::MzTimestamp(crate::Timestamp::MAX),
             ])
         });
+        static RANGE: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
 
         match self {
             ScalarType::Bool => (*BOOL).iter(),
@@ -2484,6 +2529,7 @@ impl<'a> ScalarType {
             ScalarType::RegClass => (*REGCLASS).iter(),
             ScalarType::Int2Vector => (*INT2VECTOR).iter(),
             ScalarType::MzTimestamp => (*MZTIMESTAMP).iter(),
+            ScalarType::Range { .. } => (*RANGE).iter(),
         }
     }
 
@@ -2609,6 +2655,10 @@ impl Arbitrary for ScalarType {
                             custom_id: id,
                         }
                     }),
+                    // Range
+                    inner.clone().prop_map(|x| ScalarType::Range {
+                        element_type: Box::new(x),
+                    }),
                     // Record
                     {
                         // Now we have to use `inner` to create a Record type. First we
@@ -2717,6 +2767,7 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         ".*".prop_map(PropDatum::String),
         Just(PropDatum::JsonNull),
         Just(PropDatum::Uuid(Uuid::nil())),
+        arb_range().prop_map(PropDatum::Range),
         Just(PropDatum::Dummy)
     ];
     leaf.prop_recursive(3, 8, 16, |inner| {
@@ -2795,9 +2846,7 @@ fn arb_range_data() -> BoxedStrategy<(PropDatum, PropDatum)> {
     .boxed()
 }
 
-#[allow(dead_code)]
 fn arb_range() -> BoxedStrategy<PropRange> {
-    // ???: any way to enforce ordering on these?
     (
         any::<u16>(),
         any::<bool>(),
@@ -2840,19 +2889,19 @@ fn arb_range() -> BoxedStrategy<PropRange> {
 
                     range.canonicalize().unwrap();
 
-                    // Extract canonicalized state; we bail and pretend the
-                    // range was empty if the bounds are rewritten.
+                    // Extract canonicalized state; pretend the range was empty
+                    // if the bounds are rewritten.
                     let (empty, lower_inf, lower_inc, upper_inf, upper_inc) = match range.inner {
                         None => (true, false, false, false, false),
                         Some(inner) => (
                             false
                                 || match inner.lower.bound {
                                     Some(b) => b != Datum::from(&lower),
-                                    None => false,
+                                    None => !lower_inf,
                                 }
                                 || match inner.upper.bound {
-                                    Some(b) => b != Datum::from(&lower),
-                                    None => false,
+                                    Some(b) => b != Datum::from(&upper),
+                                    None => !upper_inf,
                                 },
                             inner.lower.bound.is_none(),
                             inner.lower.inclusive,

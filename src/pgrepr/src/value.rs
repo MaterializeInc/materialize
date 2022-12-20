@@ -14,15 +14,16 @@ use std::str;
 
 use bytes::{Buf, BufMut, BytesMut};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
-use mz_repr::adt::date::Date;
-use mz_repr::adt::timestamp::CheckedTimestamp;
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use uuid::Uuid;
 
 use mz_ore::cast::ReinterpretCast;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
+use mz_repr::adt::date::Date;
 use mz_repr::adt::jsonb::JsonbRef;
+use mz_repr::adt::range::Range;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv::{self, Nestable};
 use mz_repr::{Datum, RelationType, Row, RowArena, ScalarType};
 
@@ -102,6 +103,8 @@ pub enum Value {
     },
     /// A Materialize timestamp.
     MzTimestamp(mz_repr::Timestamp),
+    /// A contiguous range of values along a domain.
+    Range(Range<Box<Value>>),
 }
 
 impl Value {
@@ -185,6 +188,15 @@ impl Value {
                     .collect();
                 Some(Value::Map(entries))
             }
+            (Datum::Range(range), ScalarType::Range { element_type }) => {
+                let value_range = range.into_bounds(|b| {
+                    Box::new(
+                        Value::from_datum(b.datum(), element_type)
+                            .expect("RangeBounds never contain Datum::Null"),
+                    )
+                });
+                Some(Value::Range(value_range))
+            }
             _ => panic!("can't serialize {}::{:?}", datum, typ),
         }
     }
@@ -261,6 +273,15 @@ impl Value {
             Value::Uuid(u) => Datum::Uuid(u),
             Value::Numeric(n) => Datum::Numeric(n.0),
             Value::MzTimestamp(t) => Datum::MzTimestamp(t),
+            Value::Range(range) => {
+                let elem_pg_type = match typ {
+                    Type::Range { element_type } => &*element_type,
+                    _ => panic!("Value::Range should have type Type::Range. Found {:?}", typ),
+                };
+                let range = range.into_bounds(|elem| elem.into_datum(buf, elem_pg_type));
+
+                buf.make_datum(|packer| packer.push_range(range).unwrap())
+            }
         }
     }
 
@@ -336,6 +357,11 @@ impl Value {
             Value::Uuid(u) => strconv::format_uuid(buf, *u),
             Value::Numeric(d) => strconv::format_numeric(buf, &d.0),
             Value::MzTimestamp(t) => strconv::format_mz_timestamp(buf, *t),
+            Value::Range(range) => strconv::format_range(buf, range, |buf, elem| match elem {
+                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+                None => Ok::<_, ()>(buf.write_null()),
+            })
+            .expect("provided closure never fails"),
         }
     }
 
@@ -451,6 +477,7 @@ impl Value {
             Value::Uuid(u) => u.to_sql(&PgType::UUID, buf),
             Value::Numeric(a) => a.to_sql(&PgType::NUMERIC, buf),
             Value::MzTimestamp(t) => t.to_string().to_sql(&PgType::TEXT, buf),
+            Value::Range(_) => Err("binary encodings of range types not yet implemented".into()),
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {
@@ -474,7 +501,10 @@ impl Value {
 
     /// Deserializes a value of type `ty` from `raw` using the [text encoding
     /// format](Format::Text).
-    pub fn decode_text(ty: &Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
+    pub fn decode_text<'a>(
+        ty: &'a Type,
+        raw: &'a [u8],
+    ) -> Result<Value, Box<dyn Error + Sync + Send>> {
         let s = str::from_utf8(raw)?;
         Ok(match ty {
             Type::Array(elem_type) => {
@@ -540,6 +570,9 @@ impl Value {
             Type::TimestampTz { .. } => Value::TimestampTz(strconv::parse_timestamptz(s)?),
             Type::Uuid => Value::Uuid(Uuid::parse_str(s)?),
             Type::MzTimestamp => Value::MzTimestamp(strconv::parse_mz_timestamp(s)?),
+            Type::Range { element_type } => Value::Range(strconv::parse_range(s, |elem_text| {
+                Value::decode_text(element_type, elem_text.as_bytes()).map(Box::new)
+            })?),
         })
     }
 
@@ -615,6 +648,7 @@ impl Value {
                 let t: mz_repr::Timestamp = s.parse()?;
                 Ok(Value::MzTimestamp(t))
             }
+            Type::Range { .. } => Err("binary decoding of range types is not implemented".into()),
         }
     }
 }
