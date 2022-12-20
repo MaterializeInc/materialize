@@ -2496,7 +2496,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .map(|expr| coord.evaluate_when(expr, session))
                 .transpose()?
                 .map(Antichain::from_elem)
-                .unwrap_or(Antichain::default());
+                .unwrap_or_default();
             Ok::<_, AdapterError>(ComputeSinkDesc {
                 from,
                 from_desc,
