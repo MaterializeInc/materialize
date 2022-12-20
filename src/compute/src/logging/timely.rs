@@ -404,7 +404,7 @@ pub fn construct<A: Allocate>(
                 Exchange::new(|((((_, w), _), ()), _, _)| u64::cast_from(*w)),
                 "PreArrange Timely messages received",
             )
-            .as_collection(move |((channel, source), target), ()| {
+            .as_collection(move |((channel, target), source), ()| {
                 Row::pack_slice(&[
                     Datum::UInt64(u64::cast_from(*channel)),
                     Datum::UInt64(u64::cast_from(*source)),
