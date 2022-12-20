@@ -331,7 +331,11 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
     ) -> Result<mz_repr::Timestamp, AdapterError> {
         let temp_storage = RowArena::new();
-        prep_scalar_expr(self.catalog.state(), &mut timestamp, ExprPrepStyle::AsOfUntil)?;
+        prep_scalar_expr(
+            self.catalog.state(),
+            &mut timestamp,
+            ExprPrepStyle::AsOfUntil,
+        )?;
         let evaled = timestamp.eval(&[], &temp_storage)?;
         if evaled.is_null() {
             coord_bail!("can't use {} as a mz_timestamp for AS OF or UNTIL", evaled);

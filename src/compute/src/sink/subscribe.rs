@@ -114,7 +114,8 @@ fn subscribe<G>(
                 finished = true;
                 // We are done; indicate this by sending a batch at the
                 // empty frontier.
-                if let Some(subscribe_protocol) = subscribe_protocol_handle.borrow_mut().deref_mut() {
+                if let Some(subscribe_protocol) = subscribe_protocol_handle.borrow_mut().deref_mut()
+                {
                     subscribe_protocol.send_batch(Antichain::default(), &mut Vec::new());
                 }
             }
