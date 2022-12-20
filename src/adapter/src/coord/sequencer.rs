@@ -2458,6 +2458,7 @@ impl<S: Append + 'static> Coordinator<S> {
             when,
             copy_to,
             emit_progress,
+            until,
         } = plan;
 
         let compute_instance = self.catalog.active_compute_instance(session)?;

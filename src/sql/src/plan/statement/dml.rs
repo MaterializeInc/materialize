@@ -32,7 +32,7 @@ use crate::ast::{
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{self, Aug, ResolvedObjectName};
-use crate::plan::query::QueryLifetime;
+use crate::plan::query::{plan_until, QueryLifetime};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
@@ -467,12 +467,15 @@ pub fn plan_subscribe(
     };
 
     let when = query::plan_as_of(scx, as_of)?;
+    let until = until.map(|until| plan_until(scx, until)).transpose()?;
+
     let SubscribeOptionExtracted {
         progress, snapshot, ..
     } = options.try_into()?;
     Ok(Plan::Subscribe(SubscribePlan {
         from,
         when,
+        until,
         with_snapshot: snapshot.unwrap_or(true),
         copy_to,
         emit_progress: progress.unwrap_or(false),
