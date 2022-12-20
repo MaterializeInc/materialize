@@ -96,26 +96,6 @@ pub struct StateArgs {
     pub(crate) blob_uri: String,
 }
 
-/// Arguments for viewing a blob
-#[derive(Debug, Clone, clap::Parser)]
-pub struct BlobArgs {
-    /// Shard to view
-    #[clap(long)]
-    shard_id: String,
-
-    /// Blob key (without shard)
-    #[clap(long)]
-    key: String,
-
-    /// Blob to use
-    ///
-    /// When connecting to a deployed environment's blob, the necessary connection glue must be in
-    /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
-    /// URI scoped to the environment's bucket prefix.
-    #[clap(long)]
-    blob_uri: String,
-}
-
 /// Arguments for viewing contents of a batch part
 #[derive(Debug, Clone, clap::Parser)]
 pub struct BlobBatchPartArgs {
