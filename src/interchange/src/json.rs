@@ -210,6 +210,12 @@ impl ToJson for TypedDatum<'_> {
                     serde_json::Value::Object(elements)
                 }
                 ScalarType::MzTimestamp => json!(datum.unwrap_mz_timestamp().to_string()),
+                ScalarType::Range { .. } => {
+                    // Ranges' interiors are not expected to be types whose
+                    // string representations are misleading/wrong, e.g.
+                    // records.
+                    json!(datum.unwrap_range().to_string())
+                }
             }
         }
     }
@@ -324,6 +330,8 @@ fn build_row_schema_field(
             })
         }
         ScalarType::MzTimestamp => json!("string"),
+        // https://debezium.io/documentation/reference/stable/connectors/postgresql.html
+        ScalarType::Range { .. } => json!("string"),
     };
     if typ.nullable {
         field_type = json!(["null", field_type]);

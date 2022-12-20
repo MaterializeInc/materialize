@@ -1854,7 +1854,6 @@ impl Default for RowArena {
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
-    use itertools::Itertools;
 
     use super::*;
 

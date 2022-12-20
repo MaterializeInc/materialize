@@ -5466,6 +5466,10 @@ where
             stringify_datum(buf.nonnull_buffer(), d, &ScalarType::Int16)
         }),
         MzTimestamp { .. } => Ok(strconv::format_mz_timestamp(buf, d.unwrap_mz_timestamp())),
+        Range { element_type } => strconv::format_range(buf, &d.unwrap_range(), |buf, d| match d {
+            Some(d) => stringify_datum(buf.nonnull_buffer(), *d, element_type),
+            None => Ok::<_, EvalError>(buf.write_null()),
+        }),
     }
 }
 

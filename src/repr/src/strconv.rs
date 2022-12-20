@@ -56,6 +56,7 @@ use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
+use crate::adt::range::{Range, RangeBound, RangeInner};
 use crate::adt::timestamp::CheckedTimestamp;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.strconv.rs"));
@@ -1179,6 +1180,167 @@ where
     }
     buf.write_char('}');
     Ok(Nestable::Yes)
+}
+
+pub fn parse_range<'a, V, E>(
+    s: &'a str,
+    gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
+) -> Result<Range<V>, ParseError>
+where
+    E: fmt::Display,
+{
+    Ok(Range {
+        inner: parse_range_inner(s, gen_elem).map_err(|details| {
+            ParseError::invalid_input_syntax("range", s).with_details(details)
+        })?,
+    })
+}
+
+fn parse_range_inner<'a, V, E>(
+    s: &'a str,
+    mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
+) -> Result<Option<RangeInner<V>>, String>
+where
+    E: fmt::Display,
+{
+    let buf = &mut LexBuf::new(s);
+
+    if buf.consume_str("empty") {
+        if buf.next().is_none() {
+            return Ok(None);
+        } else {
+            bail!("Junk after \"empty\" key word.")
+        }
+    }
+
+    let lower_inclusive = match buf.next() {
+        Some('[') => true,
+        Some('(') => false,
+        _ => bail!("Missing left parenthesis or bracket."),
+    };
+
+    buf.take_while(|ch| ch.is_ascii_whitespace());
+
+    let lower_bound = match buf.peek() {
+        Some(',') => None,
+        Some(_) => {
+            let v = buf.take_while(|c| !matches!(c, ','));
+            let v = gen_elem(Cow::from(v)).map_err_to_string()?;
+            Some(v)
+        }
+        None => bail!("Unexpected end of input."),
+    };
+
+    if buf.next() != Some(',') {
+        bail!("Missing comma after lower bound.")
+    }
+
+    buf.take_while(|ch| ch.is_ascii_whitespace());
+
+    let upper_bound = match buf.peek() {
+        Some(']' | ')') => None,
+        Some(_) => {
+            let v = buf.take_while(|c| !matches!(c, ')' | ']'));
+            let v = gen_elem(Cow::from(v)).map_err_to_string()?;
+            Some(v)
+        }
+        None => bail!("Unexpected end of input."),
+    };
+
+    let upper_inclusive = match buf.next() {
+        Some(']') => true,
+        Some(')') => false,
+        _ => bail!("Missing left parenthesis or bracket."),
+    };
+
+    buf.take_while(|ch| ch.is_ascii_whitespace());
+
+    if buf.next().is_some() {
+        bail!("Junk after right parenthesis or bracket.")
+    }
+
+    let range = Some(RangeInner {
+        lower: RangeBound {
+            inclusive: lower_inclusive,
+            bound: lower_bound,
+        },
+        upper: RangeBound {
+            inclusive: upper_inclusive,
+            bound: upper_bound,
+        },
+    });
+
+    Ok(range)
+}
+
+/// Writes a [`Range`] to `buf`.
+pub fn format_range<F, V, E>(
+    buf: &mut F,
+    r: &Range<V>,
+    mut format_elem: impl FnMut(RangeElementWriter<F>, Option<&V>) -> Result<Nestable, E>,
+) -> Result<Nestable, E>
+where
+    F: FormatBuffer,
+{
+    let range = match &r.inner {
+        None => {
+            buf.write_str("empty");
+            return Ok(Nestable::Yes);
+        }
+        Some(i) => i,
+    };
+
+    if range.lower.inclusive {
+        buf.write_char('[');
+    } else {
+        buf.write_char('(');
+    }
+
+    let start = buf.len();
+    if let Nestable::MayNeedEscaping =
+        format_elem(RangeElementWriter(buf), range.lower.bound.as_ref())?
+    {
+        escape_elem::<_, ListElementEscaper>(buf, start);
+    }
+
+    buf.write_char(',');
+
+    let start = buf.len();
+    if let Nestable::MayNeedEscaping =
+        format_elem(RangeElementWriter(buf), range.upper.bound.as_ref())?
+    {
+        escape_elem::<_, ListElementEscaper>(buf, start);
+    }
+
+    if range.upper.inclusive {
+        buf.write_char(']');
+    } else {
+        buf.write_char(')');
+    }
+
+    Ok(Nestable::Yes)
+}
+
+/// A helper for `format_range` that formats a single record element.
+#[derive(Debug)]
+pub struct RangeElementWriter<'a, F>(&'a mut F);
+
+impl<'a, F> RangeElementWriter<'a, F>
+where
+    F: FormatBuffer,
+{
+    /// Marks this record element as null.
+    pub fn write_null(self) -> Nestable {
+        // In ranges these "null" values represent infinite bounds, which are
+        // not represented as values, but rather the absence of a value.
+        Nestable::Yes
+    }
+
+    /// Returns a [`FormatBuffer`] into which a non-null element can be
+    /// written.
+    pub fn nonnull_buffer(self) -> &'a mut F {
+        self.0
+    }
 }
 
 pub fn format_array<F, T, E>(
