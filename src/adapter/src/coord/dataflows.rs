@@ -16,6 +16,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use differential_dataflow::lattice::Lattice;
 use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::warn;
@@ -101,7 +102,17 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
         for dataflow in dataflows.into_iter() {
             output_ids.extend(dataflow.export_ids());
-            dataflow_plans.push(self.finalize_dataflow(dataflow, instance));
+            let mut plan = self.finalize_dataflow(dataflow, instance);
+            // If the only outputs of the dataflow are sinks, we might
+            // be able to turn off the computation early, if they all
+            // have non-trivial `up_to`s.
+            if plan.index_exports.is_empty() {
+                plan.until = Antichain::from_elem(Timestamp::MIN);
+                for (_, sink) in &plan.sink_exports {
+                    plan.until.join_assign(&sink.until);
+                }
+            }
+            dataflow_plans.push(plan);
         }
         self.controller
             .active_compute()
