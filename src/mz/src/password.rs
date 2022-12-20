@@ -33,7 +33,7 @@ pub(crate) async fn list_passwords(
     body.insert("description", &"App password for the CLI");
 
     client
-        .get(valid_profile.profile.endpoint().api_token_auth_url())
+        .get(valid_profile.profile.endpoint().api_token_url())
         .headers(headers)
         .json(&body)
         .send()
