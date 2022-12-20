@@ -21,6 +21,7 @@ use crate::internal::paths::PartialBatchKey;
 use crate::internal::state::{HollowBatch, HollowBatchPart};
 
 /// A [datadriven::TestCase] wrapper with helpers for parsing.
+#[derive(Debug)]
 pub struct DirectiveArgs<'a> {
     pub args: &'a HashMap<String, Vec<String>>,
     pub input: &'a str,
