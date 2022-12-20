@@ -2492,6 +2492,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 .timestamp_context
                 .antichain();
 
+            let until = until
+                .map(|expr| coord.evaluate_when(expr, session))
+                .transpose()?
+                .map(Antichain::from_elem)
+                .unwrap_or(Antichain::default());
             Ok::<_, AdapterError>(ComputeSinkDesc {
                 from,
                 from_desc,
@@ -2500,6 +2505,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     frontier,
                     strict: !with_snapshot,
                 },
+                until,
             })
         };
 

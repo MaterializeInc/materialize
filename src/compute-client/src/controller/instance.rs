@@ -594,6 +594,7 @@ where
                     from_desc: se.from_desc,
                     connection,
                     as_of: se.as_of,
+                    until: se.until,
                 };
                 sink_exports.insert(id, desc);
             }

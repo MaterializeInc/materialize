@@ -67,8 +67,8 @@ pub enum ExprPrepStyle<'a> {
         logical_time: Option<mz_repr::Timestamp>,
         session: &'a Session,
     },
-    /// The expression is being prepared for evaluation in an AS OF clause.
-    AsOf,
+    /// The expression is being prepared for evaluation in an AS OF or UNTIL clause.
+    AsOfUntil,
 }
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -410,6 +410,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                 frontier: as_of,
                 strict: false,
             },
+            until: Antichain::default(),
         };
         self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
 
@@ -541,7 +542,7 @@ pub fn prep_relation_expr(
                 }
             })
         }
-        ExprPrepStyle::OneShot { .. } | ExprPrepStyle::AsOf => expr
+        ExprPrepStyle::OneShot { .. } | ExprPrepStyle::AsOfUntil => expr
             .0
             .try_visit_scalars_mut(&mut |s| prep_scalar_expr(catalog, s, style)),
     }
@@ -572,7 +573,7 @@ pub fn prep_scalar_expr(
         }),
 
         // Reject the query if it contains any unmaterializable function calls.
-        ExprPrepStyle::Index | ExprPrepStyle::AsOf => {
+        ExprPrepStyle::Index | ExprPrepStyle::AsOfUntil => {
             let mut last_observed_unmaterializable_func = None;
             expr.visit_mut_post(&mut |e| {
                 if let MirScalarExpr::CallUnmaterializable(f) = e {
@@ -583,9 +584,9 @@ pub fn prep_scalar_expr(
             if let Some(f) = last_observed_unmaterializable_func {
                 let err = match style {
                     ExprPrepStyle::Index => AdapterError::UnmaterializableFunction(f),
-                    ExprPrepStyle::AsOf => AdapterError::UncallableFunction {
+                    ExprPrepStyle::AsOfUntil => AdapterError::UncallableFunction {
                         func: f,
-                        context: "AS OF",
+                        context: "AS OF or UNTIL",
                     },
                     _ => unreachable!(),
                 };
