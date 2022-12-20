@@ -5341,6 +5341,15 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse `UNTIL`, if present
+    fn parse_optional_until(&mut self) -> Result<Option<Expr<Raw>>, ParserError> {
+        if self.parse_keyword(UNTIL) {
+            self.parse_expr().map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Parse a comma-delimited list of projections after SELECT
     fn parse_select_item(&mut self) -> Result<SelectItem<Raw>, ParserError> {
         if self.consume_token(&Token::Star) {
@@ -5488,10 +5497,12 @@ impl<'a> Parser<'a> {
             vec![]
         };
         let as_of = self.parse_optional_as_of()?;
+        let until = self.parse_optional_until()?;
         Ok(Statement::Subscribe(SubscribeStatement {
             relation,
             options,
             as_of,
+            until,
         }))
     }
 

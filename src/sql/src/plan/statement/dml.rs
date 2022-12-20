@@ -422,6 +422,7 @@ pub fn plan_subscribe(
         relation,
         options,
         as_of,
+        until,
     }: SubscribeStatement<Aug>,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, PlanError> {
