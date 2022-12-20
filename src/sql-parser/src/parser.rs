@@ -5341,9 +5341,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse `UNTIL`, if present
-    fn parse_optional_until(&mut self) -> Result<Option<Expr<Raw>>, ParserError> {
-        if self.parse_keyword(UNTIL) {
+    /// Parse `UP TO`, if present
+    fn parse_optional_up_to(&mut self) -> Result<Option<Expr<Raw>>, ParserError> {
+        if self.parse_keyword(UP) {
+            self.expect_keyword(TO)?;
             self.parse_expr().map(Some)
         } else {
             Ok(None)
@@ -5497,12 +5498,12 @@ impl<'a> Parser<'a> {
             vec![]
         };
         let as_of = self.parse_optional_as_of()?;
-        let until = self.parse_optional_until()?;
+        let up_to = self.parse_optional_up_to()?;
         Ok(Statement::Subscribe(SubscribeStatement {
             relation,
             options,
             as_of,
-            until,
+            up_to,
         }))
     }
 

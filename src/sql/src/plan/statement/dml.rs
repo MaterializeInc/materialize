@@ -32,7 +32,7 @@ use crate::ast::{
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{self, Aug, ResolvedObjectName};
-use crate::plan::query::{plan_until, QueryLifetime};
+use crate::plan::query::{plan_up_to, QueryLifetime};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
@@ -422,7 +422,7 @@ pub fn plan_subscribe(
         relation,
         options,
         as_of,
-        until,
+        up_to,
     }: SubscribeStatement<Aug>,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, PlanError> {
@@ -467,7 +467,7 @@ pub fn plan_subscribe(
     };
 
     let when = query::plan_as_of(scx, as_of)?;
-    let until = until.map(|until| plan_until(scx, until)).transpose()?;
+    let up_to = up_to.map(|up_to| plan_up_to(scx, up_to)).transpose()?;
 
     let SubscribeOptionExtracted {
         progress, snapshot, ..
@@ -475,7 +475,7 @@ pub fn plan_subscribe(
     Ok(Plan::Subscribe(SubscribePlan {
         from,
         when,
-        until,
+        up_to,
         with_snapshot: snapshot.unwrap_or(true),
         copy_to,
         emit_progress: progress.unwrap_or(false),

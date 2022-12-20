@@ -60,7 +60,7 @@ where
             sinked_collection,
             sink_id,
             sink.as_of.clone(),
-            sink.until.clone(),
+            sink.up_to.clone(),
             subscribe_protocol_handle,
         );
 
@@ -79,7 +79,7 @@ fn subscribe<G>(
     sinked_collection: Collection<G, Row, Diff>,
     sink_id: GlobalId,
     as_of: SinkAsOf,
-    until: Antichain<G::Timestamp>,
+    up_to: Antichain<G::Timestamp>,
     subscribe_protocol_handle: Rc<RefCell<Option<SubscribeProtocol>>>,
 ) where
     G: Scope<Timestamp = Timestamp>,
@@ -99,7 +99,7 @@ fn subscribe<G>(
                     } else {
                         as_of.frontier.less_equal(time)
                     };
-                    let should_emit = should_emit_as_of && !until.less_equal(time);
+                    let should_emit = should_emit_as_of && !up_to.less_equal(time);
                     if should_emit {
                         results.push((*time, row.clone(), *diff));
                     }
@@ -110,7 +110,7 @@ fn subscribe<G>(
                 subscribe_protocol.send_batch(input.frontier().frontier().to_owned(), &mut results);
             }
 
-            if PartialOrder::less_equal(&until.borrow(), &input.frontier().frontier()) {
+            if PartialOrder::less_equal(&up_to.borrow(), &input.frontier().frontier()) {
                 finished = true;
                 // We are done; indicate this by sending a batch at the
                 // empty frontier.

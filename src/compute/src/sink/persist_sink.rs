@@ -59,9 +59,9 @@ where
         G: Scope<Timestamp = Timestamp>,
     {
         let desired_collection = sinked_collection.map(Ok).concat(&err_collection.map(Err));
-        if sink.until != Antichain::default() {
+        if sink.up_to != Antichain::default() {
             unimplemented!(
-                "UNTIL is not supported for persist sinks yet, and shouldn't have been accepted during parsing/planning"
+                "UP TO is not supported for persist sinks yet, and shouldn't have been accepted during parsing/planning"
             )
         }
 

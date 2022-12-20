@@ -2458,7 +2458,7 @@ impl<S: Append + 'static> Coordinator<S> {
             when,
             copy_to,
             emit_progress,
-            until,
+            up_to,
         } = plan;
 
         let compute_instance = self.catalog.active_compute_instance(session)?;
@@ -2492,7 +2492,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .timestamp_context
                 .antichain();
 
-            let until = until
+            let up_to = up_to
                 .map(|expr| coord.evaluate_when(expr, session))
                 .transpose()?
                 .map(Antichain::from_elem)
@@ -2505,7 +2505,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     frontier,
                     strict: !with_snapshot,
                 },
-                until,
+                up_to,
             })
         };
 

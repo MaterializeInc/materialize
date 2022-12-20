@@ -543,19 +543,19 @@ fn test_subscribe_basic() {
         }
     }
 
-    // Check that a subscription with `UNTIL` is cut off at the proper point
+    // Check that a subscription with `UP TO` is cut off at the proper point
     let begin = events[0].0;
     for (ts, _) in &events {
         client_reads
             .batch_execute(&*format!(
                 "COMMIT; BEGIN;
-            DECLARE c CURSOR FOR SUBSCRIBE t AS OF {begin} UNTIL {}",
+            DECLARE c CURSOR FOR SUBSCRIBE t AS OF {begin} UP TO {}",
                 ts
             ))
             .unwrap();
         for (expected_ts, expected_data) in events.iter() {
             if expected_ts >= ts {
-                // We hit the `UNTIL`; we should be done.
+                // We hit the `UP TO`; we should be done.
                 break;
             }
 
@@ -563,7 +563,7 @@ fn test_subscribe_basic() {
             assert_eq!(actual.get::<_, String>("data"), *expected_data);
             assert_eq!(actual.get::<_, MzTimestamp>("mz_timestamp").0, *expected_ts);
         }
-        // Make sure no rows from after or equal to the `UNTIL` show up.
+        // Make sure no rows from after or equal to the `UP TO` show up.
         // This also checks that the subscribe has been dropped, since
         // we don't specify a timeout.
         let should_be_empty = client_reads.query("FETCH c", &[]).unwrap();

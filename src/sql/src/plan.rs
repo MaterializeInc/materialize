@@ -456,7 +456,7 @@ pub struct SubscribePlan {
     pub from: SubscribeFrom,
     pub with_snapshot: bool,
     pub when: QueryWhen,
-    pub until: Option<MirScalarExpr>,
+    pub up_to: Option<MirScalarExpr>,
     pub copy_to: Option<CopyFormat>,
     pub emit_progress: bool,
 }

@@ -2084,7 +2084,7 @@ pub struct SubscribeStatement<T: AstInfo> {
     pub relation: SubscribeRelation<T>,
     pub options: Vec<SubscribeOption<T>>,
     pub as_of: Option<AsOf<T>>,
-    pub until: Option<Expr<T>>,
+    pub up_to: Option<Expr<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for SubscribeStatement<T> {
