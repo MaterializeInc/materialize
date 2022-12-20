@@ -163,14 +163,18 @@ impl<T> Trace<T> {
         ret
     }
 
-    pub fn encoded_batch_size(&self) -> usize {
-        let mut ret = 0;
+    pub fn batch_size_metrics(&self) -> (usize, usize) {
+        let mut largest_batch_size = 0;
+        let mut encoded_batch_size = 0;
         self.map_batches(|b| {
+            let mut this_batch_size = 0;
             for part in b.parts.iter() {
-                ret += part.encoded_size_bytes;
+                this_batch_size += part.encoded_size_bytes;
             }
+            largest_batch_size = std::cmp::max(largest_batch_size, this_batch_size);
+            encoded_batch_size += this_batch_size;
         });
-        ret
+        (largest_batch_size, encoded_batch_size)
     }
 }
 

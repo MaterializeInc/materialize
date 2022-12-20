@@ -951,8 +951,8 @@ where
         self.collections.trace.num_updates()
     }
 
-    pub fn encoded_batch_size(&self) -> usize {
-        self.collections.trace.encoded_batch_size()
+    pub fn batch_size_metrics(&self) -> (usize, usize) {
+        self.collections.trace.batch_size_metrics()
     }
 
     pub fn latest_rollup(&self) -> (&SeqNo, &PartialRollupKey) {
