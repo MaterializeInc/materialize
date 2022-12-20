@@ -143,7 +143,7 @@ SELECT * FROM counter;
 
 ### Creating an auction load generator
 
-To create the load generator source and its associated subsources:
+To create a load generator source that simulates an auction house and emits new data every second:
 
 ```sql
 CREATE SOURCE auction_house
