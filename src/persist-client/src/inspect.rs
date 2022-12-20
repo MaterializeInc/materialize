@@ -10,11 +10,13 @@
 //! CLI introspection tools for persist
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
+use differential_dataflow::trace::Description;
 use prost::Message;
 
 use mz_build_info::BuildInfo;
@@ -22,9 +24,11 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
+use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 
+use crate::fetch::EncodedPart;
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey,
 };
@@ -213,6 +217,71 @@ pub async fn fetch_state_diffs(
     }
 
     Ok(live_states)
+}
+
+#[derive(Debug, serde::Serialize)]
+struct BatchPartOutput {
+    desc: Description<u64>,
+    updates: Vec<BatchPartUpdate>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct BatchPartUpdate {
+    k: String,
+    v: String,
+    t: u64,
+    d: i64,
+}
+
+#[derive(PartialOrd, Ord, PartialEq, Eq)]
+struct PrettyBytes<'a>(&'a [u8]);
+
+impl fmt::Debug for PrettyBytes<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match std::str::from_utf8(self.0) {
+            Ok(x) => fmt::Debug::fmt(x, f),
+            Err(_) => fmt::Debug::fmt(self.0, f),
+        }
+    }
+}
+
+/// Fetches the updates in a blob batch part
+pub async fn blob_batch_part(
+    blob_uri: &str,
+    shard_id: ShardId,
+    partial_key: String,
+    limit: usize,
+) -> Result<impl serde::Serialize, anyhow::Error> {
+    let blob = BlobConfig::try_from(blob_uri).await?;
+    let blob = blob.clone().open().await?;
+
+    let key = PartialBatchKey(partial_key).complete(&shard_id);
+    let part = blob
+        .get(&*key)
+        .await
+        .expect("blob exists")
+        .expect("part exists");
+    let part = BlobTraceBatchPart::<u64>::decode(&part).expect("decodable");
+    let desc = part.desc.clone();
+
+    let mut encoded_part = EncodedPart::new(&*key, part.desc.clone(), part);
+    let mut out = BatchPartOutput {
+        desc,
+        updates: Vec::new(),
+    };
+    while let Some((k, v, t, d)) = encoded_part.next() {
+        if out.updates.len() > limit {
+            break;
+        }
+        out.updates.push(BatchPartUpdate {
+            k: format!("{:?}", PrettyBytes(k)),
+            v: format!("{:?}", PrettyBytes(v)),
+            t,
+            d: i64::from_le_bytes(d),
+        })
+    }
+
+    Ok(out)
 }
 
 #[derive(Debug, Default, serde::Serialize)]

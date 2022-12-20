@@ -36,6 +36,9 @@ pub(crate) enum Command {
     /// Prints the count and size of blobs in an environment
     BlobCount(BlobCountArgs),
 
+    /// Prints blob batch part contents
+    BlobBatchPart(BlobBatchPartArgs),
+
     /// Prints the unreferenced blobs across all shards
     UnreferencedBlobs(StateArgs),
 
@@ -91,6 +94,30 @@ pub struct StateArgs {
     /// URI scoped to the environment's bucket prefix.
     #[clap(long, env = "BLOB_URI")]
     pub(crate) blob_uri: String,
+}
+
+/// Arguments for viewing contents of a batch part
+#[derive(Debug, Clone, clap::Parser)]
+pub struct BlobBatchPartArgs {
+    /// Shard to view
+    #[clap(long)]
+    shard_id: String,
+
+    /// Blob key (without shard)
+    #[clap(long)]
+    key: String,
+
+    /// Blob to use
+    ///
+    /// When connecting to a deployed environment's blob, the necessary connection glue must be in
+    /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
+    /// URI scoped to the environment's bucket prefix.
+    #[clap(long)]
+    blob_uri: String,
+
+    /// Number of updates to output. Default is unbounded.
+    #[clap(long, default_value = "18446744073709551615")]
+    limit: usize,
 }
 
 /// Arguments for viewing the blobs of a given shard
@@ -167,6 +194,17 @@ pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
         Command::BlobCount(args) => {
             let blob_counts = mz_persist_client::inspect::blob_counts(&args.blob_uri).await?;
             println!("{}", json!(blob_counts));
+        }
+        Command::BlobBatchPart(args) => {
+            let shard_id = ShardId::from_str(&args.shard_id).expect("invalid shard id");
+            let updates = mz_persist_client::inspect::blob_batch_part(
+                &args.blob_uri,
+                shard_id,
+                args.key,
+                args.limit,
+            )
+            .await?;
+            println!("{}", json!(updates));
         }
         Command::UnreferencedBlobs(args) => {
             let shard_id = ShardId::from_str(&args.shard_id).expect("invalid shard id");
