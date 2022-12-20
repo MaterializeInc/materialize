@@ -108,6 +108,10 @@ pub enum IntrospectionType {
     SourceStatusHistory,
     ShardMapping,
     StorageHostMetrics,
+
+    // Note that this single-shard introspection source will be changed to per-replica,
+    // once storage and compute are merged
+    StorageSourceStatistics,
 }
 
 /// Describes how data is written to the collection.
@@ -1022,6 +1026,9 @@ where
                             // Make sure this is dropped when the controller is
                             // dropped, so that the internal task will stop.
                             self.state.introspection_tokens.insert(id, scraper_token);
+                        }
+                        IntrospectionType::StorageSourceStatistics => {
+                            self.reconcile_managed_collection(id, vec![]).await;
                         }
                         IntrospectionType::SourceStatusHistory
                         | IntrospectionType::SinkStatusHistory => {
