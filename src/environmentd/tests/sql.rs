@@ -543,6 +543,33 @@ fn test_subscribe_basic() {
         }
     }
 
+    // Check that a subscription with `UNTIL` is cut off at the proper point
+    let begin = events[0].0;
+    for (ts, _) in &events {
+        client_reads
+            .batch_execute(&*format!(
+                "COMMIT; BEGIN;
+            DECLARE c CURSOR FOR SUBSCRIBE t AS OF {begin} UNTIL {}",
+                ts
+            ))
+            .unwrap();
+        for (expected_ts, expected_data) in events.iter() {
+            if expected_ts >= ts {
+                // We hit the `UNTIL`; we should be done.
+                break;
+            }
+
+            let actual = client_reads.query_one("FETCH c", &[]).unwrap();
+            assert_eq!(actual.get::<_, String>("data"), *expected_data);
+            assert_eq!(actual.get::<_, MzTimestamp>("mz_timestamp").0, *expected_ts);
+        }
+        // Make sure no rows from after or equal to the `UNTIL` show up.
+        // This also checks that the subscribe has been dropped, since
+        // we don't specify a timeout.
+        let should_be_empty = client_reads.query("FETCH c", &[]).unwrap();
+        assert!(should_be_empty.is_empty())
+    }
+
     // Aggressively compact the data in the index, then subscribe an unmaterialized
     // view derived from the index. This previously selected an invalid
     // `AS OF` timestamp (#5391).
