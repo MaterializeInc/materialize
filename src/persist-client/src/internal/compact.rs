@@ -73,7 +73,7 @@ pub struct CompactRes<T> {
 /// This will possibly be called over RPC in the future. Physical compaction is
 /// merging adjacent batches. Logical compaction is advancing timestamps to a
 /// new since and consolidating the resulting updates.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Compactor<K, V, T, D> {
     cfg: PersistConfig,
     metrics: Arc<Metrics>,
@@ -84,6 +84,17 @@ pub struct Compactor<K, V, T, D> {
         oneshot::Sender<Result<ApplyMergeResult, anyhow::Error>>,
     )>,
     _phantom: PhantomData<fn() -> D>,
+}
+
+impl<K, V, T, D> Clone for Compactor<K, V, T, D> {
+    fn clone(&self) -> Self {
+        Compactor {
+            cfg: self.cfg.clone(),
+            metrics: Arc::clone(&self.metrics),
+            sender: self.sender.clone(),
+            _phantom: Default::default(),
+        }
+    }
 }
 
 impl<K, V, T, D> Compactor<K, V, T, D>
