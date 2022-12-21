@@ -615,46 +615,6 @@ where
         (seqno, existed, maintenance)
     }
 
-    pub async fn start_reader_heartbeat_task(self, reader_id: LeasedReaderId) -> JoinHandle<()> {
-        let mut machine = self;
-        spawn(|| "persist::heartbeat_read", async move {
-            let sleep_duration = machine.cfg.reader_lease_duration / 2;
-            loop {
-                let before_sleep = Instant::now();
-                tokio::time::sleep(sleep_duration).await;
-
-                let elapsed_since_before_sleeping = before_sleep.elapsed();
-                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
-                    warn!(
-                        "reader ({}) of shard ({}) went {}s between heartbeats",
-                        reader_id,
-                        machine.shard_id(),
-                        elapsed_since_before_sleeping.as_secs_f64()
-                    );
-                }
-
-                let before_heartbeat = Instant::now();
-                let (_seqno, existed, _maintenance) = machine
-                    .heartbeat_leased_reader(&reader_id, (machine.cfg.now)())
-                    .await;
-
-                let elapsed_since_heartbeat = before_heartbeat.elapsed();
-                if elapsed_since_heartbeat > Duration::from_secs(60) {
-                    warn!(
-                        "reader ({}) of shard ({}) heartbeat call took {}s",
-                        reader_id,
-                        machine.shard_id(),
-                        elapsed_since_heartbeat.as_secs_f64(),
-                    );
-                }
-
-                if !existed {
-                    return;
-                }
-            }
-        })
-    }
-
     pub async fn heartbeat_writer(
         &mut self,
         writer_id: &WriterId,
@@ -667,46 +627,6 @@ where
             })
             .await;
         (seqno, existed, maintenance)
-    }
-
-    pub async fn start_writer_heartbeat_task(self, writer_id: WriterId) -> JoinHandle<()> {
-        let mut machine = self;
-        spawn(|| "persist::heartbeat_write", async move {
-            let sleep_duration = machine.cfg.writer_lease_duration / 4;
-            loop {
-                let before_sleep = Instant::now();
-                tokio::time::sleep(sleep_duration).await;
-
-                let elapsed_since_before_sleeping = before_sleep.elapsed();
-                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
-                    warn!(
-                        "writer ({}) of shard ({}) went {}s between heartbeats",
-                        writer_id,
-                        machine.shard_id(),
-                        elapsed_since_before_sleeping.as_secs_f64()
-                    );
-                }
-
-                let before_heartbeat = Instant::now();
-                let (_seqno, existed, _maintenance) = machine
-                    .heartbeat_writer(&writer_id, (machine.cfg.now)())
-                    .await;
-
-                let elapsed_since_heartbeat = before_heartbeat.elapsed();
-                if elapsed_since_heartbeat > Duration::from_secs(60) {
-                    warn!(
-                        "writer ({}) of shard ({}) heartbeat call took {}s",
-                        writer_id,
-                        machine.shard_id(),
-                        elapsed_since_heartbeat.as_secs_f64(),
-                    );
-                }
-
-                if !existed {
-                    return;
-                }
-            }
-        })
     }
 
     pub async fn expire_leased_reader(&mut self, reader_id: &LeasedReaderId) -> SeqNo {
@@ -1082,6 +1002,94 @@ where
             seqno_before,
             self.state.seqno
         );
+    }
+}
+
+impl<K, V, T, D> Machine<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64,
+{
+    pub async fn start_reader_heartbeat_task(self, reader_id: LeasedReaderId) -> JoinHandle<()> {
+        let mut machine = self;
+        spawn(|| "persist::heartbeat_read", async move {
+            let sleep_duration = machine.cfg.reader_lease_duration / 2;
+            loop {
+                let before_sleep = Instant::now();
+                tokio::time::sleep(sleep_duration).await;
+
+                let elapsed_since_before_sleeping = before_sleep.elapsed();
+                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
+                    warn!(
+                        "reader ({}) of shard ({}) went {}s between heartbeats",
+                        reader_id,
+                        machine.shard_id(),
+                        elapsed_since_before_sleeping.as_secs_f64()
+                    );
+                }
+
+                let before_heartbeat = Instant::now();
+                let (_seqno, existed, _maintenance) = machine
+                    .heartbeat_leased_reader(&reader_id, (machine.cfg.now)())
+                    .await;
+
+                let elapsed_since_heartbeat = before_heartbeat.elapsed();
+                if elapsed_since_heartbeat > Duration::from_secs(60) {
+                    warn!(
+                        "reader ({}) of shard ({}) heartbeat call took {}s",
+                        reader_id,
+                        machine.shard_id(),
+                        elapsed_since_heartbeat.as_secs_f64(),
+                    );
+                }
+
+                if !existed {
+                    return;
+                }
+            }
+        })
+    }
+
+    pub async fn start_writer_heartbeat_task(self, writer_id: WriterId) -> JoinHandle<()> {
+        let mut machine = self;
+        spawn(|| "persist::heartbeat_write", async move {
+            let sleep_duration = machine.cfg.writer_lease_duration / 4;
+            loop {
+                let before_sleep = Instant::now();
+                tokio::time::sleep(sleep_duration).await;
+
+                let elapsed_since_before_sleeping = before_sleep.elapsed();
+                if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
+                    warn!(
+                        "writer ({}) of shard ({}) went {}s between heartbeats",
+                        writer_id,
+                        machine.shard_id(),
+                        elapsed_since_before_sleeping.as_secs_f64()
+                    );
+                }
+
+                let before_heartbeat = Instant::now();
+                let (_seqno, existed, _maintenance) = machine
+                    .heartbeat_writer(&writer_id, (machine.cfg.now)())
+                    .await;
+
+                let elapsed_since_heartbeat = before_heartbeat.elapsed();
+                if elapsed_since_heartbeat > Duration::from_secs(60) {
+                    warn!(
+                        "writer ({}) of shard ({}) heartbeat call took {}s",
+                        writer_id,
+                        machine.shard_id(),
+                        elapsed_since_heartbeat.as_secs_f64(),
+                    );
+                }
+
+                if !existed {
+                    return;
+                }
+            }
+        })
     }
 }
 
