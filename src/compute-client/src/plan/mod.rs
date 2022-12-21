@@ -212,6 +212,21 @@ pub enum Plan<T = mz_repr::Timestamp> {
         /// that reference `Id::Local(id)`.
         body: Box<Plan<T>>,
     },
+    /// Binds `values` to `ids`, evaluates them potentially recursively, and returns `body`.
+    ///
+    /// All bindings are available to all bindings, and to `body`.
+    /// The contents of each binding are initially empty, and then updated through a sequence
+    /// of iterations in which each binding is updated in sequence, from the most recent values
+    /// of all bindings.
+    LetRec {
+        /// The local identifiers to be used, available to `body` as `Id::Local(id)`.
+        ids: Vec<LocalId>,
+        /// The collection that should be bound to `id`.
+        values: Vec<Plan<T>>,
+        /// The collection that results, which is allowed to contain `Get` stages
+        /// that reference `Id::Local(id)`.
+        body: Box<Plan<T>>,
+    },
     /// Map, Filter, and Project operators.
     ///
     /// This stage contains work that we would ideally like to fuse to other plan
@@ -349,6 +364,7 @@ impl<T> Plan<T> {
         let mut first = None;
         let mut second = None;
         let mut rest = None;
+        let mut last = None;
 
         use Plan::*;
         match self {
@@ -356,6 +372,10 @@ impl<T> Plan<T> {
             Let { value, body, .. } => {
                 first = Some(&mut **value);
                 second = Some(&mut **body);
+            }
+            LetRec { values, body, .. } => {
+                rest = Some(values);
+                last = Some(&mut **body);
             }
             Mfp { input, .. }
             | FlatMap { input, .. }
@@ -375,6 +395,7 @@ impl<T> Plan<T> {
             .into_iter()
             .chain(second)
             .chain(rest.into_iter().flatten())
+            .chain(last)
     }
 }
 
@@ -562,6 +583,14 @@ impl RustType<ProtoPlan> for Plan {
                     body: Some(body.into_proto()),
                 }
                 .into()),
+                Plan::LetRec { ids, values, body } => LetRec(
+                    ProtoPlanLetRec {
+                        ids: ids.into_proto(),
+                        values: values.into_proto(),
+                        body: Some(body.into_proto()),
+                    }
+                    .into(),
+                ),
                 Plan::Mfp {
                     input,
                     mfp,
@@ -692,6 +721,11 @@ impl RustType<ProtoPlan> for Plan {
                 id: proto.id.into_rust_if_some("ProtoPlanLet::id")?,
                 value: proto.value.into_rust_if_some("ProtoPlanLet::value")?,
                 body: proto.body.into_rust_if_some("ProtoPlanLet::body")?,
+            },
+            LetRec(proto) => Plan::LetRec {
+                ids: proto.ids.into_rust()?,
+                values: proto.values.into_rust()?,
+                body: proto.body.into_rust_if_some("ProtoPlanLetRec::body")?,
             },
             Mfp(proto) => Plan::Mfp {
                 input: proto.input.into_rust_if_some("ProtoPlanMfp::input")?,
@@ -911,14 +945,9 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
         debug_info: LirDebugInfo<'_>,
     ) -> Result<(Self, AvailableCollections), ()> {
-        // TODO: This block should be removed once we can lower `MirRelationExpr::LetRec`.
-        let mut non_recursive = expr.clone();
-        non_recursive.make_nonrecursive();
-        assert!(!non_recursive.is_recursive());
-
         // We don't want to trace recursive calls, which is why the public `from_mir`
-        // is annotated and delecates the work to a private (recursive) from_mir_inner.
-        Plan::from_mir_inner(&non_recursive, arrangements, debug_info)
+        // is annotated and delegates the work to a private (recursive) from_mir_inner.
+        Plan::from_mir_inner(expr, arrangements, debug_info)
     }
 
     fn from_mir_inner(
@@ -962,11 +991,6 @@ impl<T: timely::progress::Timestamp> Plan<T> {
             }
             MirRelationExpr::Project { .. } => {
                 panic!("This operator should have been extracted");
-            }
-            MirRelationExpr::LetRec { .. } => {
-                panic!(
-                    "We must extract potentially recursive objects into dataflow objects to build"
-                );
             }
             // These operators may not have been extracted, and need to result in a `Plan`.
             MirRelationExpr::Constant { rows, typ: _ } => {
@@ -1059,6 +1083,34 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     Plan::Let {
                         id: id.clone(),
                         value: Box::new(value),
+                        body: Box::new(body),
+                    },
+                    b_keys,
+                )
+            }
+            MirRelationExpr::LetRec { ids, values, body } => {
+                // Plan the values using only the available arrangements, but
+                // introduce any resulting arrangements bound to each `id`.
+                // Arrangements made available cannot be used by prior bindings,
+                // as we cannot circulate an arrangement through a `Variable` yet.
+                let mut lir_values = Vec::with_capacity(values.len());
+                for (id, value) in ids.iter().zip(values) {
+                    let (value, v_keys) = Plan::from_mir_inner(value, arrangements, debug_info)?;
+                    let pre_existing = arrangements.insert(Id::Local(*id), v_keys);
+                    assert!(pre_existing.is_none());
+                    lir_values.push(value);
+                }
+                // Plan the body using initial and `value` arrangements,
+                // and then remove reference to the value arrangements.
+                let (body, b_keys) = Plan::from_mir_inner(body, arrangements, debug_info)?;
+                for id in ids.iter() {
+                    arrangements.remove(&Id::Local(*id));
+                }
+                // Return the plan, and any `body` arrangements.
+                (
+                    Plan::LetRec {
+                        ids: ids.clone(),
+                        values: lir_values,
                         body: Box::new(body),
                     },
                     b_keys,
@@ -1673,6 +1725,24 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         })
                         .collect()
                 }
+                Plan::LetRec { ids, values, body } => {
+                    let mut values_parts: Vec<Vec<Self>> = Vec::with_capacity(parts);
+                    for value in values.into_iter() {
+                        for (index, part) in value.partition_among(parts).into_iter().enumerate() {
+                            values_parts[index].push(part);
+                        }
+                    }
+                    let body_parts = body.partition_among(parts);
+                    values_parts
+                        .into_iter()
+                        .zip(body_parts)
+                        .map(|(values, body)| Plan::LetRec {
+                            values,
+                            body: Box::new(body),
+                            ids: ids.clone(),
+                        })
+                        .collect()
+                }
                 Plan::Mfp {
                     input,
                     input_key_val,
@@ -1811,6 +1881,16 @@ impl<T> CollectionPlan for Plan<T> {
             },
             Plan::Let { id: _, value, body } => {
                 value.depends_on_into(out);
+                body.depends_on_into(out);
+            }
+            Plan::LetRec {
+                ids: _,
+                values,
+                body,
+            } => {
+                for value in values.iter() {
+                    value.depends_on_into(out);
+                }
                 body.depends_on_into(out);
             }
             Plan::Join { inputs, plan: _ } | Plan::Union { inputs } => {

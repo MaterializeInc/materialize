@@ -295,21 +295,38 @@ impl MirRelationExpr {
         #[allow(deprecated)]
         self.visit_pre_post_nolimit(
             &mut |e: &MirRelationExpr| -> Option<Vec<&MirRelationExpr>> {
-                if let MirRelationExpr::Let { body, .. } = &e {
-                    // Do not traverse the value sub-graph, since it's not relevant for
-                    // determining the relation type of Let operators.
-                    Some(vec![&*body])
-                } else {
-                    None
+                match &e {
+                    MirRelationExpr::Let { body, .. } => {
+                        // Do not traverse the value sub-graph, since it's not relevant for
+                        // determining the relation type of Let operators.
+                        Some(vec![&*body])
+                    }
+                    MirRelationExpr::LetRec { body, .. } => {
+                        // Do not traverse the value sub-graph, since it's not relevant for
+                        // determining the relation type of Let operators.
+                        Some(vec![&*body])
+                    }
+                    _ => None,
                 }
             },
             &mut |e: &MirRelationExpr| {
-                if let MirRelationExpr::Let { .. } = &e {
-                    let body_typ = type_stack.pop().unwrap();
-                    // Insert a dummy relation type for the value, since `typ_with_input_types`
-                    // won't look at it, but expects the relation type of the body to be second.
-                    type_stack.push(RelationType::empty());
-                    type_stack.push(body_typ);
+                match e {
+                    MirRelationExpr::Let { .. } => {
+                        let body_typ = type_stack.pop().unwrap();
+                        // Insert a dummy relation type for the value, since `typ_with_input_types`
+                        // won't look at it, but expects the relation type of the body to be second.
+                        type_stack.push(RelationType::empty());
+                        type_stack.push(body_typ);
+                    }
+                    MirRelationExpr::LetRec { values, .. } => {
+                        let body_typ = type_stack.pop().unwrap();
+                        // Insert dummy relation types for the values, since `typ_with_input_types`
+                        // won't look at them, but expects the relation type of the body to be last.
+                        type_stack
+                            .extend(std::iter::repeat(RelationType::empty()).take(values.len()));
+                        type_stack.push(body_typ);
+                    }
+                    _ => {}
                 }
                 let num_inputs = e.num_inputs();
                 let relation_type =
@@ -430,15 +447,12 @@ impl MirRelationExpr {
                 input_types.next().unwrap().clone()
             }
             Let { .. } => {
-                // skip over the unique keys for value
-                input_types.next();
-                input_types.next().unwrap().clone()
+                // skip over the input types for `value`.
+                input_types.nth(1).unwrap().clone()
             }
             LetRec { values, .. } => {
-                for _ in 0..values.len() {
-                    input_types.next();
-                }
-                input_types.next().unwrap().clone()
+                // skip over the input types for `values`.
+                input_types.nth(values.len()).unwrap().clone()
             }
             Union { .. } => {
                 let mut result = input_types.next().unwrap().clone();
@@ -520,14 +534,11 @@ impl MirRelationExpr {
             Threshold { .. } | ArrangeBy { .. } => input_keys.next().unwrap().clone(),
             Let { .. } => {
                 // skip over the unique keys for value
-                input_keys.next();
-                input_keys.next().unwrap().clone()
+                input_keys.nth(1).unwrap().clone()
             }
             LetRec { values, .. } => {
-                for _ in 0..values.len() {
-                    input_keys.next();
-                }
-                input_keys.next().unwrap().clone()
+                // skip over the unique keys for value
+                input_keys.nth(values.len()).unwrap().clone()
             }
             Project { outputs, .. } => {
                 let input = input_keys.next().unwrap();
@@ -836,19 +847,33 @@ impl MirRelationExpr {
         #[allow(deprecated)]
         self.visit_pre_post_nolimit(
             &mut |e: &MirRelationExpr| -> Option<Vec<&MirRelationExpr>> {
-                if let MirRelationExpr::Let { body, .. } = &e {
-                    // Do not traverse the value sub-graph, since it's not relevant for
-                    // determining the arity of Let operators.
-                    Some(vec![&*body])
-                } else {
-                    None
+                match &e {
+                    MirRelationExpr::Let { body, .. } => {
+                        // Do not traverse the value sub-graph, since it's not relevant for
+                        // determining the arity of Let operators.
+                        Some(vec![&*body])
+                    }
+                    MirRelationExpr::LetRec { body, .. } => {
+                        // Do not traverse the value sub-graph, since it's not relevant for
+                        // determining the arity of Let operators.
+                        Some(vec![&*body])
+                    }
+                    _ => None,
                 }
             },
             &mut |e: &MirRelationExpr| {
-                if let MirRelationExpr::Let { .. } = &e {
-                    let body_arity = arity_stack.pop().unwrap();
-                    arity_stack.push(0);
-                    arity_stack.push(body_arity);
+                match &e {
+                    MirRelationExpr::Let { .. } => {
+                        let body_arity = arity_stack.pop().unwrap();
+                        arity_stack.push(0);
+                        arity_stack.push(body_arity);
+                    }
+                    MirRelationExpr::LetRec { values, .. } => {
+                        let body_arity = arity_stack.pop().unwrap();
+                        arity_stack.extend(std::iter::repeat(0).take(values.len()));
+                        arity_stack.push(body_arity);
+                    }
+                    _ => {}
                 }
                 let num_inputs = e.num_inputs();
                 let arity = e

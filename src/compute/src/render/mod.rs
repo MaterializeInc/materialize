@@ -696,6 +696,9 @@ where
                 self.remove_id(Id::Local(id));
                 body
             }
+            Plan::LetRec { .. } => {
+                unimplemented!("Not yet implemented; sorry!");
+            }
             Plan::Mfp {
                 input,
                 mfp,

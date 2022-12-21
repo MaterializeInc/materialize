@@ -73,6 +73,12 @@ message ProtoPlan {
         ProtoPlan body  = 3;
    }
 
+   message ProtoPlanLetRec {
+        repeated mz_expr.id.ProtoLocalId ids = 1;
+        repeated ProtoPlan values = 2;
+        ProtoPlan body  = 3;
+   }
+
    message ProtoPlanInputKeyVal {
         repeated mz_expr.scalar.ProtoMirScalarExpr key = 1;
         mz_repr.row.ProtoRow val = 2;
@@ -142,5 +148,6 @@ message ProtoPlan {
         ProtoPlanThreshold threshold = 10;
         ProtoPlanUnion union = 11;
         ProtoPlanArrangeBy arrange_by = 12;
+        ProtoPlanLetRec let_rec = 13;
    }
 }
