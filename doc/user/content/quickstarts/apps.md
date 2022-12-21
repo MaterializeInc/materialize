@@ -201,8 +201,9 @@ package main
 
 import (
 	"context"
+	"fmt"
+
 	"github.com/jackc/pgx/v4"
-	"log"
 )
 
 func main() {
@@ -212,9 +213,33 @@ func main() {
 
 	conn, err := pgx.Connect(ctx, connStr)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println(err)
+	} else {
+		fmt.Println("Connected to Materialize!")
 	}
-	defer conn.Close()
+
+	rows, err := conn.Query(ctx, "SELECT * FROM shop.best_sellers")
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	type result struct {
+		Category string
+		Name string
+        Purchases int
+	}
+
+	for rows.Next() {
+		var r result
+		err = rows.Scan(&r.Category, &r.Name, &r.Purchases)
+		if err != nil {
+			fmt.Println(err)
+		}
+		// operate on result
+		fmt.Printf("%s %s %s\n", r.Category, r.Name, r.Purchases)
+	}
+
+	defer conn.Close(context.Background())
 }
 ```
 
@@ -226,38 +251,53 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.Properties;
+import java.sql.ResultSet;
+import java.sql.Statement;
 
-public class App {
+class App {
 
-    private final String url = "jdbc:postgresql://MATERIALIZE_HOST:6875/materialize";
-    private final String user = "MATERIALIZE_USERNAME";
-    private final String password = "MATERIALIZE_PASSWORD";
+    private final String url = "jdbc:postgresql://4eylxydzhfj2ef3sblalf5h32.us-east-1.aws.materialize.cloud:6875/materialize?sslmode=require";
+    private final String user = "joaquin@materialize.com";
+    private final String password = "mzp_80ed506798cd45b0b6637681dd9d90df97539a9c374a4245a4221b8796e88e2a";
 
     /**
      * Connect to Materialize
      *
      * @return a Connection object
      */
-    public Connection connect() {
+    public Connection connect() throws SQLException {
         Properties props = new Properties();
         props.setProperty("user", user);
         props.setProperty("password", password);
         props.setProperty("ssl","true");
-        Connection conn = null;
-        try {
-            conn = DriverManager.getConnection(url, props);
-            System.out.println("Connected to Materialize successfully!");
-        } catch (SQLException e) {
-            System.out.println(e.getMessage());
+
+        return DriverManager.getConnection(url, props);
+
+    }
+
+    public void query() {
+
+        String SQL = "SELECT * FROM shop.best_sellers";
+
+        try (Connection conn = connect();
+            Statement stmt = conn.createStatement();
+            ResultSet rs = stmt.executeQuery(SQL)) {
+            while (rs.next()) {
+                System.out.println("Name: " + rs.getString("name"));
+                System.out.println("Category: " + rs.getString("category"));
+                System.out.println("Purchases: " + rs.getString("purchases"));
+            }
+        } catch (SQLException ex) {
+            System.out.println(ex.getMessage());
         }
-
-        return conn;
     }
+}
 
-    public static void main(String[] args) {
-        App app = new App();
-        app.connect();
-    }
+class Main {
+  public static void main(String[] args) {
+    App app = new App();
+    app.query();
+  }
 }
 ```
 
@@ -266,19 +306,21 @@ public class App {
 
 ```javascript
 const { Client } = require('pg');
+
 const client = new Client({
-    user: MATERIALIZE_USERNAME,
-    password: MATERIALIZE_PASSWORD,
-    host: MATERIALIZE_HOST,
-    port: 6875,
-    database: 'materialize',
-    ssl: true
+  user: MATERIALIZE_USERNAME,
+  password: MATERIALIZE_PASSWORD,
+  host: MATERIALIZE_HOST,
+  port: 6875,
+  database: 'materialize',
+  ssl: true
 });
 
 async function main() {
-    await client.connect();
-    /* Work with Materialize */
-}
+  await client.connect();
+  const res = await client.query('SELECT * FROM shop.best_sellers');
+  console.log(res.rows);
+};
 
 main();
 ```
@@ -307,6 +349,13 @@ function connect(string $host, int $port, string $db, string $user, string $pass
 }
 
 $connection = connect('MATERIALIZE_HOST', 6875, 'materialize', 'MATERIALIZE_USERNAME', 'MATERIALIZE_PASSWORD');
+
+$sql = 'SELECT * FROM shop.best_sellers';
+$statement = $connection->query($sql);
+
+while (($row = $statement->fetch(PDO::FETCH_ASSOC)) !== false) {
+    var_dump($row);
+}
 ```
 
 {{< /tab >}}
@@ -320,6 +369,11 @@ import sys
 
 dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg2.connect(dsn)
+
+with conn.cursor() as cur:
+    cur.execute("SELECT * FROM shop.best_sellers;")
+    for row in cur:
+        print(row)
 ```
 
 {{< /tab >}}
@@ -330,6 +384,12 @@ conn = psycopg2.connect(dsn)
 require 'pg'
 
 conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
+
+res  = conn.exec('SELECT * FROM shop.best_sellers;')
+
+res.each do |row|
+  puts row
+end
 ```
 
 {{< /tab >}}
