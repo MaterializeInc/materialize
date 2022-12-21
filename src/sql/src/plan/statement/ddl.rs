@@ -1607,7 +1607,7 @@ pub fn plan_view(
         mut expr,
         mut desc,
         finishing,
-    } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
+    } = query::plan_root_query(scx, query, QueryLifetime::Static)?;
 
     expr.bind_parameters(params)?;
     //TODO: materialize#724 - persist finishing information with the view?
@@ -1704,7 +1704,7 @@ pub fn plan_create_materialized_view(
         mut expr,
         mut desc,
         finishing,
-    } = query::plan_root_query(scx, stmt.query, QueryLifetime::Static)?;
+    } = query::plan_root_query(scx, &mut stmt.query, QueryLifetime::Static)?;
 
     expr.bind_parameters(params)?;
     expr.finish(finishing);

@@ -15,7 +15,6 @@
 
 use uuid::Uuid;
 
-use crate::names::Aug;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
@@ -23,6 +22,7 @@ use mz_sql_parser::ast::{
     TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, Value,
 };
 
+use crate::names::Aug;
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
 

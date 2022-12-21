@@ -157,10 +157,10 @@ pub fn plan_read_then_write(
 
 pub fn describe_select(
     scx: &StatementContext,
-    stmt: SelectStatement<Aug>,
+    mut stmt: SelectStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let query::PlannedQuery { desc, .. } =
-        query::plan_root_query(scx, stmt.query, QueryLifetime::OneShot(scx.pcx()?))?;
+        query::plan_root_query(scx, &mut stmt.query, QueryLifetime::OneShot(scx.pcx()?))?;
     Ok(StatementDesc::new(Some(desc)))
 }
 
@@ -255,7 +255,7 @@ pub fn plan_explain(
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let is_view = matches!(explainee, Explainee::View(_));
-    let (explainee, query) = match explainee {
+    let (explainee, mut query) = match explainee {
         Explainee::View(name) => {
             let view = scx.get_item_by_resolved_name(&name)?;
             let item_type = view.item_type();
@@ -321,7 +321,7 @@ pub fn plan_explain(
         mut expr,
         desc,
         finishing,
-    } = query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
+    } = query::plan_root_query(scx, &mut query, QueryLifetime::OneShot(scx.pcx()?))?;
     let finishing = if is_view {
         // views don't use a separate finishing
         expr.finish(finishing);
@@ -359,7 +359,7 @@ pub fn plan_explain(
 /// an `mz_expr::MirRelationExpr`, which cannot include correlated expressions.
 pub fn plan_query(
     scx: &StatementContext,
-    query: Query<Aug>,
+    mut query: Query<Aug>,
     params: &Params,
     lifetime: QueryLifetime,
 ) -> Result<query::PlannedQuery<MirRelationExpr>, PlanError> {
@@ -367,7 +367,7 @@ pub fn plan_query(
         mut expr,
         desc,
         finishing,
-    } = query::plan_root_query(scx, query, lifetime)?;
+    } = query::plan_root_query(scx, &mut query, lifetime)?;
     expr.bind_parameters(params)?;
     Ok(query::PlannedQuery {
         expr: expr.optimize_and_lower(&scx.into())?,
@@ -388,9 +388,9 @@ pub fn describe_subscribe(
             item.desc(&scx.catalog.resolve_full_name(item.name()))?
                 .into_owned()
         }
-        SubscribeRelation::Query(query) => {
+        SubscribeRelation::Query(mut query) => {
             let query::PlannedQuery { desc, .. } =
-                query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
+                query::plan_root_query(scx, &mut query, QueryLifetime::OneShot(scx.pcx()?))?;
             desc
         }
     };

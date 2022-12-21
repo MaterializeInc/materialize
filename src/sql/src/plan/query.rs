@@ -35,7 +35,6 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
-
 use std::iter;
 use std::mem;
 
@@ -105,12 +104,12 @@ pub struct PlannedQuery<E> {
 #[tracing::instrument(target = "compiler", level = "trace", name = "ast_to_hir", skip_all)]
 pub fn plan_root_query(
     scx: &StatementContext,
-    mut query: Query<Aug>,
+    query: &mut Query<Aug>,
     lifetime: QueryLifetime,
 ) -> Result<PlannedQuery<HirRelationExpr>, PlanError> {
-    transform_ast::transform_query(scx, &mut query)?;
+    transform_ast::transform_query(scx, query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
-    let (mut expr, scope, mut finishing) = plan_query(&mut qcx, &query)?;
+    let (mut expr, scope, mut finishing) = plan_query(&mut qcx, query)?;
 
     // Attempt to push the finishing's ordering past its projection. This allows
     // data to be projected down on the workers rather than the coordinator. It
@@ -1030,7 +1029,7 @@ fn plan_query_inner(
 
     let (mut result, scope, finishing) = match &q.body {
         SetExpr::Select(s) => {
-            let plan = plan_view_select(qcx, *s.clone(), q.order_by.clone())?;
+            let plan = plan_view_select(qcx, s, &q.order_by)?;
             let finishing = RowSetFinishing {
                 order_by: plan.order_by,
                 project: plan.project,
@@ -1225,7 +1224,7 @@ fn plan_set_expr(
     match q {
         SetExpr::Select(select) => {
             let order_by_exprs = Vec::new();
-            let plan = plan_view_select(qcx, *select.clone(), order_by_exprs)?;
+            let plan = plan_view_select(qcx, select, &order_by_exprs)?;
             // We didn't provide any `order_by_exprs`, so `plan_view_select`
             // should not have planned any ordering.
             assert!(plan.order_by.is_empty());
@@ -1378,36 +1377,36 @@ fn plan_set_expr(
                 Ok((expr, scope))
             }
 
-            match stmt.clone() {
+            match stmt {
                 ShowStatement::ShowColumns(stmt) => {
                     show::show_columns(qcx.scx, stmt)?.plan_hir(qcx)
                 }
                 ShowStatement::ShowCreateConnection(stmt) => to_hirscope(
-                    show::plan_show_create_connection(qcx.scx, stmt.clone())?,
+                    show::plan_show_create_connection(qcx.scx, stmt)?,
                     show::describe_show_create_connection(qcx.scx, stmt)?,
                 ),
                 ShowStatement::ShowCreateIndex(stmt) => to_hirscope(
-                    show::plan_show_create_index(qcx.scx, stmt.clone())?,
+                    show::plan_show_create_index(qcx.scx, stmt)?,
                     show::describe_show_create_index(qcx.scx, stmt)?,
                 ),
                 ShowStatement::ShowCreateSink(stmt) => to_hirscope(
-                    show::plan_show_create_sink(qcx.scx, stmt.clone())?,
+                    show::plan_show_create_sink(qcx.scx, stmt)?,
                     show::describe_show_create_sink(qcx.scx, stmt)?,
                 ),
                 ShowStatement::ShowCreateSource(stmt) => to_hirscope(
-                    show::plan_show_create_source(qcx.scx, stmt.clone())?,
+                    show::plan_show_create_source(qcx.scx, stmt)?,
                     show::describe_show_create_source(qcx.scx, stmt)?,
                 ),
                 ShowStatement::ShowCreateTable(stmt) => to_hirscope(
-                    show::plan_show_create_table(qcx.scx, stmt.clone())?,
+                    show::plan_show_create_table(qcx.scx, stmt)?,
                     show::describe_show_create_table(qcx.scx, stmt)?,
                 ),
                 ShowStatement::ShowCreateView(stmt) => to_hirscope(
-                    show::plan_show_create_view(qcx.scx, stmt.clone())?,
+                    show::plan_show_create_view(qcx.scx, stmt)?,
                     show::describe_show_create_view(qcx.scx, stmt)?,
                 ),
                 ShowStatement::ShowCreateMaterializedView(stmt) => to_hirscope(
-                    show::plan_show_create_materialized_view(qcx.scx, stmt.clone())?,
+                    show::plan_show_create_materialized_view(qcx.scx, stmt)?,
                     show::describe_show_create_materialized_view(qcx.scx, stmt)?,
                 ),
                 ShowStatement::ShowDatabases(stmt) => {
@@ -1609,14 +1608,13 @@ generate_extracted_config!(SelectOption, (ExpectedGroupSize, u64));
 /// and output columns.
 fn plan_view_select(
     qcx: &QueryContext,
-    mut s: Select<Aug>,
-    mut order_by_exprs: Vec<OrderByExpr<Aug>>,
+    s: &Select<Aug>,
+    order_by_exprs: &Vec<OrderByExpr<Aug>>,
 ) -> Result<SelectPlan, PlanError> {
-    // TODO: Both `s` and `order_by_exprs` are not references because the
-    // AggregateTableFuncVisitor needs to be able to rewrite the expressions for
-    // table function support (the UUID mapping). Attempt to change this so callers
-    // don't need to clone the Select.
-
+    // TODO(jkosh44) Figure out how to remove these clones
+    // TODO(jkosh44) Remove all clones impl from statements
+    let mut s = s.clone();
+    let mut order_by_exprs = order_by_exprs.clone();
     // Extract query options.
     let SelectOptionExtracted {
         expected_group_size,
@@ -1627,6 +1625,7 @@ fn plan_view_select(
     let (mut relation_expr, mut from_scope) =
         s.from.iter().fold(Ok(plan_join_identity()), |l, twj| {
             let (left, left_scope) = l?;
+            // TODO(jkosh44) rewrite so expressions aren't cloned
             plan_join(
                 qcx,
                 left,
@@ -1660,6 +1659,10 @@ fn plan_view_select(
 
     // Step 3. Gather aggregates and table functions.
     let (aggregates, table_funcs) = {
+        // TODO: Both `s` and `order_by_exprs` are not references because the
+        // AggregateTableFuncVisitor needs to be able to rewrite the expressions for
+        // table function support (the UUID mapping). Attempt to change this so callers
+        // don't need to clone the Select.
         let mut visitor = AggregateTableFuncVisitor::new(qcx.scx);
         visitor.visit_select_mut(&mut s);
         for o in order_by_exprs.iter_mut() {
@@ -1815,7 +1818,7 @@ fn plan_view_select(
     };
 
     // Step 6. Handle HAVING clause.
-    if let Some(having) = s.having {
+    if let Some(having) = &s.having {
         let ecx = &ExprContext {
             qcx,
             name: "HAVING clause",
@@ -1825,7 +1828,7 @@ fn plan_view_select(
             allow_subqueries: true,
             allow_windows: false,
         };
-        let expr = plan_expr(ecx, &having)
+        let expr = plan_expr(ecx, having)
             .map_err(check_ungrouped_col)?
             .type_as(ecx, &ScalarType::Bool)?;
         relation_expr = relation_expr.filter(vec![expr]);
@@ -1900,7 +1903,7 @@ fn plan_view_select(
         )
         .map_err(check_ungrouped_col)?;
 
-        match s.distinct {
+        match &s.distinct {
             None => relation_expr = relation_expr.map(map_exprs),
             Some(Distinct::EntireRow) => {
                 if relation_type.arity() == 0 {
@@ -1933,7 +1936,7 @@ fn plan_view_select(
                 };
 
                 let mut distinct_exprs = vec![];
-                for expr in &exprs {
+                for expr in exprs {
                     let expr = plan_order_by_or_distinct_expr(ecx, expr, &output_columns)
                         .map_err(check_ungrouped_col)?;
                     distinct_exprs.push(expr);
@@ -3114,14 +3117,7 @@ fn plan_expr_inner<'a>(
         Expr::HomogenizingFunction { function, exprs } => {
             plan_homogenizing_function(ecx, function, exprs)
         }
-        Expr::NullIf { l_expr, r_expr } => Ok(plan_case(
-            ecx,
-            &None,
-            &[l_expr.clone().equals(*r_expr.clone())],
-            &[Expr::null()],
-            &Some(Box::new(*l_expr.clone())),
-        )?
-        .into()),
+        Expr::NullIf { .. } => unreachable!("Expr::NullIf not rewritten"),
         Expr::FieldAccess { expr, field } => plan_field_access(ecx, expr, field),
         Expr::WildcardAccess(expr) => plan_expr(ecx, expr),
         Expr::Subscript { expr, positions } => plan_subscript(ecx, expr, positions),
@@ -3140,7 +3136,6 @@ fn plan_expr_inner<'a>(
             *negated,
         )?
         .into()),
-
         Expr::InList {
             expr,
             list,
@@ -3254,14 +3249,15 @@ fn plan_in_list(
     negated: &bool,
 ) -> Result<CoercibleScalarExpr, PlanError> {
     let ecx = ecx.with_name("IN list");
-    let or = HirScalarExpr::variadic_or(
-        list.into_iter()
-            .map(|e| {
-                let eq = lhs.clone().equals(e.clone());
-                plan_expr(&ecx, &eq)?.type_as(&ecx, &ScalarType::Bool)
-            })
-            .collect::<Result<Vec<HirScalarExpr>, PlanError>>()?,
-    );
+    let lhs = plan_expr(&ecx, lhs)?.type_as_any(&ecx)?;
+    let eqs = list
+        .into_iter()
+        .map(|expr| {
+            let expr = plan_expr(&ecx, expr)?.type_as_any(&ecx)?;
+            Ok(lhs.clone().call_binary(expr, BinaryFunc::Eq))
+        })
+        .collect::<Result<Vec<HirScalarExpr>, PlanError>>()?;
+    let or = HirScalarExpr::variadic_or(eqs);
     Ok(if *negated {
         or.call_unary(UnaryFunc::Not(expr_func::Not))
     } else {
@@ -4053,7 +4049,7 @@ fn plan_aggregate(
     // user-defined aggregates, including user-defined aggregates that take no
     // parameters.
     let (args, order_by) = match &args {
-        FunctionArgs::Star => (vec![], vec![]),
+        FunctionArgs::Star => (vec![], Cow::Owned(vec![])),
         FunctionArgs::Args { args, order_by } => {
             if args.is_empty() {
                 sql_bail!(
@@ -4062,11 +4058,11 @@ fn plan_aggregate(
                 );
             }
             let args = plan_exprs(ecx, args)?;
-            (args, order_by.clone())
+            (args, Cow::Borrowed(order_by))
         }
     };
 
-    let (order_by_exprs, col_orders) = plan_function_order_by(ecx, &order_by)?;
+    let (order_by_exprs, col_orders) = plan_function_order_by(ecx, order_by.as_ref())?;
 
     let (mut expr, func) = func::select_impl(ecx, FuncSpec::Func(&name), impls, args, col_orders)?;
     if let Some(filter) = &filter {
@@ -4443,12 +4439,18 @@ fn plan_case<'a>(
 ) -> Result<HirScalarExpr, PlanError> {
     let mut cond_exprs = Vec::new();
     let mut result_exprs = Vec::new();
+    let operand = match operand {
+        Some(operand) => Some(plan_expr(ecx, operand)?.type_as_any(ecx)?),
+        None => None,
+    };
     for (c, r) in conditions.iter().zip(results) {
-        let c = match operand {
-            Some(operand) => operand.clone().equals(c.clone()),
-            None => c.clone(),
+        let c = plan_expr(ecx, c)?;
+        let cexpr = match &operand {
+            Some(operand) => operand
+                .clone()
+                .call_binary(c.type_as_any(ecx)?, BinaryFunc::Eq),
+            None => c.type_as(ecx, &ScalarType::Bool)?,
         };
-        let cexpr = plan_expr(ecx, &c)?.type_as(ecx, &ScalarType::Bool)?;
         cond_exprs.push(cexpr);
         result_exprs.push(r);
     }

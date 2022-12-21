@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
 
 use mz_expr_test_util::generate_explanation;
 use mz_lowertest::*;
@@ -61,10 +62,10 @@ fn convert_input_to_model(input: &str, catalog: &TestCatalog) -> Result<Model, S
                 Ok((stmt, _)) => stmt,
                 Err(e) => return Err(format!("unable to resolve statement {}", e)),
             };
-            if let mz_sql_parser::ast::Statement::Select(query) = stmt {
+            if let mz_sql_parser::ast::Statement::Select(mut query) = stmt {
                 let planned_query = match crate::plan::query::plan_root_query(
                     scx,
-                    query.query,
+                    &mut query.query,
                     QueryLifetime::Static,
                 ) {
                     Ok(planned_query) => planned_query,

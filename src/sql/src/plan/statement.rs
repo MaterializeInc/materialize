@@ -144,37 +144,37 @@ pub fn describe(
 
         // `SHOW` statements.
         Statement::Show(ShowStatement::ShowColumns(stmt)) => {
-            show::show_columns(&scx, stmt)?.describe()?
+            show::show_columns(&scx, &stmt)?.describe()?
         }
         Statement::Show(ShowStatement::ShowCreateConnection(stmt)) => {
-            show::describe_show_create_connection(&scx, stmt)?
+            show::describe_show_create_connection(&scx, &stmt)?
         }
         Statement::Show(ShowStatement::ShowCreateIndex(stmt)) => {
-            show::describe_show_create_index(&scx, stmt)?
+            show::describe_show_create_index(&scx, &stmt)?
         }
         Statement::Show(ShowStatement::ShowCreateSink(stmt)) => {
-            show::describe_show_create_sink(&scx, stmt)?
+            show::describe_show_create_sink(&scx, &stmt)?
         }
         Statement::Show(ShowStatement::ShowCreateSource(stmt)) => {
-            show::describe_show_create_source(&scx, stmt)?
+            show::describe_show_create_source(&scx, &stmt)?
         }
         Statement::Show(ShowStatement::ShowCreateTable(stmt)) => {
-            show::describe_show_create_table(&scx, stmt)?
+            show::describe_show_create_table(&scx, &stmt)?
         }
         Statement::Show(ShowStatement::ShowCreateView(stmt)) => {
-            show::describe_show_create_view(&scx, stmt)?
+            show::describe_show_create_view(&scx, &stmt)?
         }
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
-            show::describe_show_create_materialized_view(&scx, stmt)?
+            show::describe_show_create_materialized_view(&scx, &stmt)?
         }
         Statement::Show(ShowStatement::ShowDatabases(stmt)) => {
-            show::show_databases(&scx, stmt)?.describe()?
+            show::show_databases(&scx, &stmt)?.describe()?
         }
         Statement::Show(ShowStatement::ShowObjects(stmt)) => {
-            show::show_objects(&scx, stmt)?.describe()?
+            show::show_objects(&scx, &stmt)?.describe()?
         }
         Statement::Show(ShowStatement::ShowSchemas(stmt)) => {
-            show::show_schemas(&scx, stmt)?.describe()?
+            show::show_schemas(&scx, &stmt)?.describe()?
         }
 
         // SCL statements.
@@ -290,33 +290,33 @@ pub fn plan(
         Statement::Update(stmt) => dml::plan_update(scx, stmt, params),
 
         // `SHOW` statements.
-        Statement::Show(ShowStatement::ShowColumns(stmt)) => show::show_columns(scx, stmt)?.plan(),
+        Statement::Show(ShowStatement::ShowColumns(stmt)) => show::show_columns(scx, &stmt)?.plan(),
         Statement::Show(ShowStatement::ShowCreateConnection(stmt)) => {
-            show::plan_show_create_connection(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_connection(scx, &stmt).map(Plan::SendRows)
         }
         Statement::Show(ShowStatement::ShowCreateIndex(stmt)) => {
-            show::plan_show_create_index(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_index(scx, &stmt).map(Plan::SendRows)
         }
         Statement::Show(ShowStatement::ShowCreateSink(stmt)) => {
-            show::plan_show_create_sink(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_sink(scx, &stmt).map(Plan::SendRows)
         }
         Statement::Show(ShowStatement::ShowCreateSource(stmt)) => {
-            show::plan_show_create_source(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_source(scx, &stmt).map(Plan::SendRows)
         }
         Statement::Show(ShowStatement::ShowCreateTable(stmt)) => {
-            show::plan_show_create_table(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_table(scx, &stmt).map(Plan::SendRows)
         }
         Statement::Show(ShowStatement::ShowCreateView(stmt)) => {
-            show::plan_show_create_view(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_view(scx, &stmt).map(Plan::SendRows)
         }
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
-            show::plan_show_create_materialized_view(scx, stmt).map(Plan::SendRows)
+            show::plan_show_create_materialized_view(scx, &stmt).map(Plan::SendRows)
         }
         Statement::Show(ShowStatement::ShowDatabases(stmt)) => {
-            show::show_databases(scx, stmt)?.plan()
+            show::show_databases(scx, &stmt)?.plan()
         }
-        Statement::Show(ShowStatement::ShowObjects(stmt)) => show::show_objects(scx, stmt)?.plan(),
-        Statement::Show(ShowStatement::ShowSchemas(stmt)) => show::show_schemas(scx, stmt)?.plan(),
+        Statement::Show(ShowStatement::ShowObjects(stmt)) => show::show_objects(scx, &stmt)?.plan(),
+        Statement::Show(ShowStatement::ShowSchemas(stmt)) => show::show_schemas(scx, &stmt)?.plan(),
 
         // SCL statements.
         Statement::Close(stmt) => scl::plan_close(scx, stmt),
