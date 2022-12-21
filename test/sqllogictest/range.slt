@@ -515,23 +515,35 @@ SELECT ('{"(,)","empty","[-1,1]"}'::_int4range)::text;
 
 # Test builtin functions
 
-query error operator does not exist: int4range = int4range
+query B
 select '(,)'::int4range = '(,)'::int4range;
+----
+true
 
-query error operator does not exist: int4range <> int4range
-select '(,)'::int4range != '(,)'::int4range;
+query B
+select '(,)'::int4range != 'empty'::int4range;
+----
+false
 
-query error operator does not exist: int4range > int4range
-select '(,)'::int4range > '(,)'::int4range;
+query B
+select '(,)'::int4range > 'empty'::int4range;
+----
+false
 
-query error operator does not exist: int4range >= int4range
-select '(,)'::int4range >= '(,)'::int4range;
+query B
+select '(,)'::int4range >= 'empty'::int4range;
+----
+false
 
-query error operator does not exist: int4range < int4range
-select '(,)'::int4range < '(,)'::int4range;
+query B
+select '(,)'::int4range < 'empty'::int4range;
+----
+false
 
-query error operator does not exist: int4range <= int4range
-select '(,)'::int4range <= '(,)'::int4range;
+query B
+select '(,)'::int4range <= 'empty'::int4range;
+----
+false
 
 # Results from PG
 # (,) true true true
