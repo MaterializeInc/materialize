@@ -126,6 +126,16 @@ impl<'a> RangeOps<'a> for i32 {
     }
 }
 
+impl<'a> RangeOps<'a> for i64 {
+    fn step() -> Option<i64> {
+        Some(1)
+    }
+
+    fn err_type_name() -> &'static str {
+        "bigint"
+    }
+}
+
 // Totally generic range implementations.
 impl<D> Range<D> {
     pub fn new(inner: Option<(RangeLowerBound<D>, RangeUpperBound<D>)>) -> Range<D> {
@@ -373,6 +383,7 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
             }
             Some(value) => match value {
                 d @ Datum::Int32(_) => self.canonicalize_inner::<i32>(d)?,
+                d @ Datum::Int64(_) => self.canonicalize_inner::<i64>(d)?,
                 d => unreachable!("{d:?} not yet supported in ranges"),
             },
         })

@@ -1059,6 +1059,30 @@ pub const TYPE_INT4_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
+pub const TYPE_INT8_RANGE: BuiltinType<NameReference> = BuiltinType {
+    name: "int8range",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_INT8RANGE_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Range {
+            element_reference: TYPE_INT8.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_INT8_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_int8range",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_INT8RANGE_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_INT8_RANGE.name,
+        },
+        array_id: None,
+    },
+};
+
 pub const MZ_DATAFLOW_OPERATORS: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operators",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2938,6 +2962,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_MZ_TIMESTAMP_ARRAY),
         Builtin::Type(&TYPE_INT4_RANGE),
         Builtin::Type(&TYPE_INT4_RANGE_ARRAY),
+        Builtin::Type(&TYPE_INT8_RANGE),
+        Builtin::Type(&TYPE_INT8_RANGE_ARRAY),
     ];
     for (schema, funcs) in &[
         (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),

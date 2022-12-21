@@ -442,10 +442,10 @@ query error invalid input syntax for type range
 SELECT '[1,1]  }'::int4range;
 
 statement ok
-CREATE TABLE r (a int4range);
+CREATE TABLE int4range_values (a int4range);
 
 statement ok
-INSERT INTO r VALUES
+INSERT INTO int4range_values VALUES
     ('[,1)'::int4range),
     ('[,1]'::int4range),
     ('[,)'::int4range),
@@ -468,7 +468,7 @@ INSERT INTO r VALUES
     ('(1,]'::int4range);
 
 query T
-SELECT a::text AS t FROM r ORDER BY a;
+SELECT a::text AS t FROM int4range_values ORDER BY a;
 ----
 empty
 empty
@@ -559,7 +559,574 @@ false
 query TTTT
 SELECT DISTINCT
     a::text, a @> -1 contains_neg_1, a @> 0 contains_0, a @> 1 contains_1
-FROM r ORDER BY a;
+FROM int4range_values ORDER BY a;
+----
+(,)
+true
+true
+true
+(,1)
+true
+true
+false
+(,2)
+true
+true
+true
+[-1,1)
+true
+true
+false
+[-1,2)
+true
+true
+true
+[0,1)
+false
+true
+false
+[0,2)
+false
+true
+true
+[1,)
+false
+false
+true
+[2,)
+false
+false
+false
+empty
+false
+false
+false
+
+query T
+select '[0,100)'::int8range::text;
+----
+[0,100)
+
+query T
+select pg_typeof('[0,100)'::int8range);
+----
+int8range
+
+query T
+select 'empty'::int8range::text;
+----
+empty
+
+query T
+select pg_typeof('empty'::int8range);
+----
+int8range
+
+query T
+select null::int8range::text
+----
+NULL
+
+query error bigint out of range
+SELECT '[2,9223372036854775807]'::int8range::text;
+
+query error bigint out of range
+SELECT '(9223372036854775807,9223372036854775807]'::int8range::text;
+
+# Parameterized input on
+#   xjoin(["(","["],
+#       xjoin([null,-1,0,1],
+#           xjoin(
+#               [null,-1,0,1],
+#               ["),"]"]
+#           )
+#       )
+#   )
+
+query T
+SELECT '(,)'::int8range::text;
+----
+(,)
+
+query T
+SELECT '(,-1)'::int8range::text;
+----
+(,-1)
+
+query T
+SELECT '(,0)'::int8range::text;
+----
+(,0)
+
+query T
+SELECT '(,1)'::int8range::text;
+----
+(,1)
+
+query T
+SELECT '(,]'::int8range::text;
+----
+(,)
+
+query T
+SELECT '(,-1]'::int8range::text;
+----
+(,0)
+
+query T
+SELECT '(,0]'::int8range::text;
+----
+(,1)
+
+query T
+SELECT '(,1]'::int8range::text;
+----
+(,2)
+
+query T
+SELECT '(-1,)'::int8range::text;
+----
+[0,)
+
+query T
+SELECT '(-1,-1)'::int8range::text;
+----
+empty
+
+query T
+SELECT '(-1,0)'::int8range::text;
+----
+empty
+
+query T
+SELECT '(-1,1)'::int8range::text;
+----
+[0,1)
+
+query T
+SELECT '(-1,]'::int8range::text;
+----
+[0,)
+
+query T
+SELECT '(-1,-1]'::int8range::text;
+----
+empty
+
+query T
+SELECT '(-1,0]'::int8range::text;
+----
+[0,1)
+
+query T
+SELECT '(-1,1]'::int8range::text;
+----
+[0,2)
+
+query T
+SELECT '(0,)'::int8range::text;
+----
+[1,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(0,-1)'::int8range::text;
+
+query T
+SELECT '(0,0)'::int8range::text;
+----
+empty
+
+query T
+SELECT '(0,1)'::int8range::text;
+----
+empty
+
+query T
+SELECT '(0,]'::int8range::text;
+----
+[1,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(0,-1]'::int8range::text;
+
+query T
+SELECT '(0,0]'::int8range::text;
+----
+empty
+
+query T
+SELECT '(0,1]'::int8range::text;
+----
+[1,2)
+
+query T
+SELECT '(1,)'::int8range::text;
+----
+[2,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(1,-1)'::int8range::text;
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(1,0)'::int8range::text;
+
+query T
+SELECT '(1,1)'::int8range::text;
+----
+empty
+
+query T
+SELECT '(1,]'::int8range::text;
+----
+[2,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(1,-1]'::int8range::text;
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(1,0]'::int8range::text;
+
+query T
+SELECT '(1,1]'::int8range::text;
+----
+empty
+
+query T
+SELECT '[,)'::int8range::text;
+----
+(,)
+
+query T
+SELECT '[,-1)'::int8range::text;
+----
+(,-1)
+
+query T
+SELECT '[,0)'::int8range::text;
+----
+(,0)
+
+query T
+SELECT '[,1)'::int8range::text;
+----
+(,1)
+
+query T
+SELECT '[,]'::int8range::text;
+----
+(,)
+
+query T
+SELECT '[,-1]'::int8range::text;
+----
+(,0)
+
+query T
+SELECT '[,0]'::int8range::text;
+----
+(,1)
+
+query T
+SELECT '[,1]'::int8range::text;
+----
+(,2)
+
+query T
+SELECT '[-1,)'::int8range::text;
+----
+[-1,)
+
+query T
+SELECT '[-1,-1)'::int8range::text;
+----
+empty
+
+query T
+SELECT '[-1,0)'::int8range::text;
+----
+[-1,0)
+
+query T
+SELECT '[-1,1)'::int8range::text;
+----
+[-1,1)
+
+query T
+SELECT '[-1,]'::int8range::text;
+----
+[-1,)
+
+query T
+SELECT '[-1,-1]'::int8range::text;
+----
+[-1,0)
+
+query T
+SELECT '[-1,0]'::int8range::text;
+----
+[-1,1)
+
+query T
+SELECT '[-1,1]'::int8range::text;
+----
+[-1,2)
+
+query T
+SELECT '[0,)'::int8range::text;
+----
+[0,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[0,-1)'::int8range::text;
+
+query T
+SELECT '[0,0)'::int8range::text;
+----
+empty
+
+query T
+SELECT '[0,1)'::int8range::text;
+----
+[0,1)
+
+query T
+SELECT '[0,]'::int8range::text;
+----
+[0,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[0,-1]'::int8range::text;
+
+query T
+SELECT '[0,0]'::int8range::text;
+----
+[0,1)
+
+query T
+SELECT '[0,1]'::int8range::text;
+----
+[0,2)
+
+query T
+SELECT '[1,)'::int8range::text;
+----
+[1,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[1,-1)'::int8range::text;
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[1,0)'::int8range::text;
+
+query T
+SELECT '[1,1)'::int8range::text;
+----
+empty
+
+query T
+SELECT '[1,]'::int8range::text;
+----
+[1,)
+
+# Range bound errors
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[1,-1]'::int8range::text;
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[1,0]'::int8range::text;
+
+# Input errors
+query error invalid input syntax for type range
+SELECT '[1,  )'::int8range
+
+query error invalid input syntax for type range
+SELECT '(  ,1)'::int8range
+
+query error invalid input syntax for type range
+SELECT '(  ,  )'::int8range
+
+query error invalid input syntax for type range
+SELECT 'emptyy'::int8range;
+
+query error invalid input syntax for type range
+SELECT ''::int8range;
+
+query error invalid input syntax for type range
+SELECT '1'::int8range;
+
+query error invalid input syntax for type range
+SELECT 'd'::int8range;
+
+query error invalid input syntax for type range
+SELECT ','::int8range;
+
+query error invalid input syntax for type range
+SELECT ')'::int8range;
+
+query error invalid input syntax for type range
+SELECT '{'::int8range;
+
+query error invalid input syntax for type range
+SELECT '('::int8range;
+
+query error invalid input syntax for type range
+SELECT '['::int8range;
+
+query error invalid input syntax for type range
+SELECT '(1)'::int8range;
+
+query error invalid input syntax for type range
+SELECT '[1]'::int8range;
+
+query error invalid input syntax for type range
+SELECT '(1,'::int8range;
+
+query error invalid input syntax for type range
+SELECT '[1,'::int8range;
+
+query error invalid input syntax for type range
+SELECT '(1,1'::int8range;
+
+query error invalid input syntax for type range
+SELECT '[1,1'::int8range;
+
+query error invalid input syntax for type range
+SELECT '(1,1]1'::int8range;
+
+query error invalid input syntax for type range
+SELECT '[1,1]a'::int8range;
+
+query error invalid input syntax for type range
+SELECT '(1,1]]'::int8range;
+
+query error invalid input syntax for type range
+SELECT '[1,1]}'::int8range;
+
+query error invalid input syntax for type range
+SELECT '(1,1]  ]'::int8range;
+
+query error invalid input syntax for type range
+SELECT '[1,1]  }'::int8range;
+
+statement ok
+CREATE TABLE int8range_values (a int8range);
+
+statement ok
+INSERT INTO int8range_values VALUES
+    ('[,1)'::int8range),
+    ('[,1]'::int8range),
+    ('[,)'::int8range),
+    ('[,]'::int8range),
+    ('(,1)'::int8range),
+    ('(,1]'::int8range),
+    ('(,)'::int8range),
+    ('(,]'::int8range),
+    ('[-1,1)'::int8range),
+    ('[-1,1]'::int8range),
+    ('(-1,1)'::int8range),
+    ('(-1,1]'::int8range),
+    ('[0,0)'::int8range),
+    ('[0,0]'::int8range),
+    ('(0,0)'::int8range),
+    ('(0,0]'::int8range),
+    ('[1,)'::int8range),
+    ('[1,]'::int8range),
+    ('(1,)'::int8range),
+    ('(1,]'::int8range);
+
+query T
+SELECT a::text AS t FROM int8range_values ORDER BY a;
+----
+empty
+empty
+empty
+(,1)
+(,1)
+(,2)
+(,2)
+(,)
+(,)
+(,)
+(,)
+[-1,1)
+[-1,2)
+[0,1)
+[0,1)
+[0,2)
+[1,)
+[1,)
+[2,)
+[2,)
+
+# Test range in list
+query T
+SELECT (LIST['(,)', 'empty', '[-1,1]']::int8range list)::text;
+----
+{(,),empty,[-1,2)}
+
+query T
+SELECT ('{"(,)","empty","[-1,1]"}'::int8range list)::text;
+----
+{(,),empty,[-1,2)}
+
+# Test range in array
+query T
+SELECT (ARRAY['(,)', 'empty', '[-1,1]']::_int8range)::text;
+----
+{(,),empty,[-1,2)}
+
+query T
+SELECT ('{"(,)","empty","[-1,1]"}'::_int8range)::text;
+----
+{(,),empty,[-1,2)}
+
+# Test builtin functions
+
+query B
+select '(,)'::int8range = '(,)'::int8range;
+----
+true
+
+query B
+select '(,)'::int8range != 'empty'::int8range;
+----
+false
+
+query B
+select '(,)'::int8range > 'empty'::int8range;
+----
+false
+
+query B
+select '(,)'::int8range >= 'empty'::int8range;
+----
+false
+
+query B
+select '(,)'::int8range < 'empty'::int8range;
+----
+false
+
+query B
+select '(,)'::int8range <= 'empty'::int8range;
+----
+false
+
+# Results from PG
+# (,) true true true
+# [0,1) false true false
+# [0,2) false true true
+# (,1) true true false
+# [1,) false false true
+# [-1,1) true true false
+# [-1,2) true true true
+# (,2) true true true
+# [2,) false false false
+# empty true false false false
+query TTTT
+SELECT DISTINCT
+    a::text, a @> -1 contains_neg_1, a @> 0 contains_0, a @> 1 contains_1
+FROM int8range_values ORDER BY a;
 ----
 (,)
 true

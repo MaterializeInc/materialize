@@ -2203,6 +2203,7 @@ impl BinaryFunc {
             BinaryFunc::GetByte => eager!(get_byte),
             BinaryFunc::RangeContainsElem { elem_type } => Ok(match elem_type {
                 ScalarType::Int32 => eager!(contains_range_elem::<i32>),
+                ScalarType::Int64 => eager!(contains_range_elem::<i64>),
                 _ => unreachable!(),
             }),
         }

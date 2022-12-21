@@ -2841,10 +2841,16 @@ pub struct PropRange(
 );
 
 fn arb_range_data() -> BoxedStrategy<(PropDatum, PropDatum)> {
-    prop_oneof![(
-        any::<i32>().prop_map(PropDatum::Int32),
-        any::<i32>().prop_map(PropDatum::Int32),
-    ),]
+    prop_oneof![
+        (
+            any::<i32>().prop_map(PropDatum::Int32),
+            any::<i32>().prop_map(PropDatum::Int32),
+        ),
+        (
+            any::<i64>().prop_map(PropDatum::Int64),
+            any::<i64>().prop_map(PropDatum::Int64),
+        ),
+    ]
     .boxed()
 }
 
