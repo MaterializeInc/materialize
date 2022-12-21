@@ -25,6 +25,7 @@ use timely::progress::frontier::Antichain;
 use timely::progress::reachability::logging::TrackerEvent;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
+use tracing::{error, span, Level};
 use uuid::Uuid;
 
 use mz_compute_client::command::{ComputeCommand, ComputeCommandHistory, ComputeParameter, Peek};
@@ -41,7 +42,7 @@ use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::operator::CollectionExt;
-use tracing::{error, span, Level};
+use mz_timely_util::probe;
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
@@ -65,6 +66,12 @@ pub struct ComputeState {
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
+    /// Probe handles for regulating the output of dataflow sources.
+    ///
+    /// Keys are IDs of indexes that are (transitively) fed by a flow-controlled source. New
+    /// dataflows that depend on these indexes are expected to report their output frontiers
+    /// through the corresponding probe handles.
+    pub flow_control_probes: HashMap<GlobalId, Vec<probe::Handle<Timestamp>>>,
     /// Peek commands that are awaiting fulfillment.
     pub pending_peeks: HashMap<Uuid, PendingPeek>,
     /// Tracks the frontier information that has been sent over `response_tx`.
@@ -218,6 +225,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 self.compute_state.sink_tokens.remove(&id);
                 // Index-specific work:
                 self.compute_state.traces.del_trace(&id);
+                self.compute_state.flow_control_probes.remove(&id);
 
                 // Work common to sinks and indexes (removing frontier tracking and cleaning up logging).
                 let prev_frontier = self

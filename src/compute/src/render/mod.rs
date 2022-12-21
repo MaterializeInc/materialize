@@ -124,7 +124,9 @@ use mz_expr::Id;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
+use mz_storage_client::source::persist_source::FlowControl;
 use mz_storage_client::types::errors::DataflowError;
+use mz_timely_util::probe::{self, ProbeNotify};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
@@ -176,6 +178,10 @@ pub fn build_compute_dataflow<A: Allocate>(
 
     let worker_logging = timely_worker.log_register().get("timely");
 
+    // Probe providing feedback to `persist_source` flow control.
+    // Only set if the dataflow instantiates any `persist_source`s.
+    let mut flow_control_probe: Option<probe::Handle<_>> = None;
+
     let name = format!("Dataflow: {}", &dataflow.debug_name);
     let input_name = format!("InputRegion: {}", &dataflow.debug_name);
     let build_name = format!("BuildRegion: {}", &dataflow.debug_name);
@@ -195,6 +201,19 @@ pub fn build_compute_dataflow<A: Allocate>(
                         .expect("Linear operators should always be valid")
                 });
 
+                let probe = flow_control_probe.get_or_insert_with(Default::default);
+                let flow_control_input = probe::source(
+                    region.clone(),
+                    format!("flow_control_input({source_id})"),
+                    probe.clone(),
+                );
+                let flow_control = FlowControl {
+                    progress_stream: flow_control_input,
+                    // TODO: Enable flow control with a sensible limit value. This is currently
+                    // blocked by a bug in `persist_source` (#16995).
+                    max_inflight_bytes: usize::MAX,
+                };
+
                 // Note: For correctness, we require that sources only emit times advanced by
                 // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
                 let (mut ok_stream, err_stream, token) = persist_source::persist_source(
@@ -205,7 +224,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     dataflow.as_of.clone(),
                     dataflow.until.clone(),
                     mfp.as_mut(),
-                    None,
+                    Some(flow_control),
                     // Copy the logic in DeltaJoin/Get/Join to start.
                     |_timer, count| count > 1_000_000,
                 );
@@ -239,6 +258,15 @@ pub fn build_compute_dataflow<A: Allocate>(
                 tokens.insert(*source_id, token);
             }
         });
+
+        // Collect flow control probes for this dataflow.
+        let index_ids = dataflow.index_imports.keys();
+        let output_probes: Vec<_> = index_ids
+            .flat_map(|id| compute_state.flow_control_probes.get(id))
+            .flatten()
+            .cloned()
+            .chain(flow_control_probe)
+            .collect();
 
         if recursive {
             scope.clone().iterative::<usize, _, _>(|region| {
@@ -311,12 +339,20 @@ pub fn build_compute_dataflow<A: Allocate>(
                         imports,
                         idx_id,
                         &idx,
+                        output_probes.clone(),
                     );
                 }
 
                 // Export declared sinks.
                 for (sink_id, imports, sink) in sinks {
-                    context.export_sink(compute_state, &mut tokens, imports, sink_id, &sink);
+                    context.export_sink(
+                        compute_state,
+                        &mut tokens,
+                        imports,
+                        sink_id,
+                        &sink,
+                        output_probes.clone(),
+                    );
                 }
             });
         } else {
@@ -345,12 +381,26 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Export declared indexes.
                 for (idx_id, imports, idx) in indexes {
-                    context.export_index(compute_state, &mut tokens, imports, idx_id, &idx);
+                    context.export_index(
+                        compute_state,
+                        &mut tokens,
+                        imports,
+                        idx_id,
+                        &idx,
+                        output_probes.clone(),
+                    );
                 }
 
                 // Export declared sinks.
                 for (sink_id, imports, sink) in sinks {
-                    context.export_sink(compute_state, &mut tokens, imports, sink_id, &sink);
+                    context.export_sink(
+                        compute_state,
+                        &mut tokens,
+                        imports,
+                        sink_id,
+                        &sink,
+                        output_probes.clone(),
+                    );
                 }
             });
         }
@@ -479,6 +529,7 @@ where
         import_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        mut probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -493,7 +544,20 @@ where
                 Id::Global(idx_id)
             )
         });
-        match bundle.arrangement(&idx.key) {
+        let arrangement = bundle.arrangement(&idx.key);
+
+        // Set up probes to notify on index frontier advancement.
+        if let Some(arr) = &arrangement {
+            let (collection, _) = arr.as_collection();
+            let stream = collection.inner;
+            for handle in probes.iter_mut() {
+                stream.probe_notify_with(handle);
+            }
+        }
+
+        compute_state.flow_control_probes.insert(idx_id, probes);
+
+        match arrangement {
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 compute_state.traces.set(
                     idx_id,
@@ -536,6 +600,7 @@ where
         import_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        mut probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -550,7 +615,20 @@ where
                 Id::Global(idx_id)
             )
         });
-        match bundle.arrangement(&idx.key) {
+        let arrangement = bundle.arrangement(&idx.key);
+
+        // Set up probes to notify on index frontier advancement.
+        if let Some(arr) = &arrangement {
+            let (collection, _) = arr.as_collection();
+            let stream = collection.leave().inner;
+            for handle in probes.iter_mut() {
+                stream.probe_notify_with(handle);
+            }
+        }
+
+        compute_state.flow_control_probes.insert(idx_id, probes);
+
+        match arrangement {
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 use differential_dataflow::operators::arrange::Arrange;
                 let oks = oks
