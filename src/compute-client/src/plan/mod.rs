@@ -1095,10 +1095,30 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 // as we cannot circulate an arrangement through a `Variable` yet.
                 let mut lir_values = Vec::with_capacity(values.len());
                 for (id, value) in ids.iter().zip(values) {
-                    let (value, v_keys) = Plan::from_mir_inner(value, arrangements, debug_info)?;
+                    let (mut lir_value, mut v_keys) =
+                        Plan::from_mir_inner(value, arrangements, debug_info)?;
+                    // If `v_keys` does not contain an unarranged collection, we must form it.
+                    if !v_keys.raw {
+                        // Choose an "arbitrary" arrangement; TODO: prefer a specific one.
+                        let (input_key, permutation, thinning) =
+                            v_keys.arbitrary_arrangement().unwrap();
+                        let mut input_mfp = MapFilterProject::new(value.arity());
+                        input_mfp.permute(permutation.clone(), thinning.len() + input_key.len());
+                        let input_key = Some(input_key.clone());
+
+                        let forms = AvailableCollections::new_raw();
+
+                        lir_value = Plan::ArrangeBy {
+                            input: Box::new(lir_value),
+                            forms,
+                            input_key,
+                            input_mfp,
+                        };
+                        v_keys.raw = true;
+                    }
                     let pre_existing = arrangements.insert(Id::Local(*id), v_keys);
                     assert!(pre_existing.is_none());
-                    lir_values.push(value);
+                    lir_values.push(lir_value);
                 }
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
