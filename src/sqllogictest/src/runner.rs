@@ -1600,11 +1600,15 @@ impl<'a> RewriteBuffer<'a> {
         query: &str,
     ) {
         // Output everything before this error message.
+        // TODO(benesch): is it possible to rewrite this to avoid `as`?
+        #[allow(clippy::as_conversions)]
         let err_offset = old_err.as_ptr() as usize - input.as_ptr() as usize;
         self.flush_to(err_offset);
         self.append(new_err);
         self.append("\n");
         self.append(query);
+        // TODO(benesch): is it possible to rewrite this to avoid `as`?
+        #[allow(clippy::as_conversions)]
         self.skip_to(query.as_ptr() as usize - input.as_ptr() as usize + query.len())
     }
 
