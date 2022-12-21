@@ -30,6 +30,8 @@ use super::persist_handles;
 
 #[derive(Debug, Clone)]
 pub struct CollectionManager {
+    // TODO(guswynn): this should be a sync mutex, as it protects
+    // normal data.
     collections: Arc<Mutex<HashSet<GlobalId>>>,
     tx: mpsc::Sender<(GlobalId, Vec<(Row, Diff)>)>,
 }

@@ -70,11 +70,25 @@ message ProtoStorageCommand {
 }
 
 message ProtoStorageResponse {
+    message ProtoSourceStatisticsUpdate {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        uint64 worker_id = 2;
+        bool snapshot_committed = 3;
+        uint64 messages_received = 4;
+        uint64 updates_staged = 5;
+        uint64 updates_committed = 6;
+        uint64 bytes_received = 7;
+    }
+    message ProtoStatisticsUpdates {
+        repeated ProtoSourceStatisticsUpdate source_updates = 1;
+    }
+
     message ProtoDroppedIds {
         repeated mz_repr.global_id.ProtoGlobalId ids = 1;
     }
     oneof kind {
         ProtoFrontierUppersKind frontier_uppers = 1;
         ProtoDroppedIds dropped_ids = 2;
+        ProtoStatisticsUpdates stats = 3;
     }
 }

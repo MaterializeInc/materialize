@@ -93,6 +93,12 @@ where
         current_upper.borrow_mut().clear();
     }
 
+    let source_statistics = storage_state
+        .source_statistics
+        .get(&src_id)
+        .expect("statistics initialized")
+        .clone();
+
     let persist_clients = Arc::clone(&storage_state.persist_clients);
     let button = persist_op.build(move |_capabilities| async move {
         let mut buffer = Vec::new();
@@ -120,7 +126,11 @@ where
             // shared upper. All other workers have already cleared this
             // upper above.
             current_upper.borrow_mut().clone_from(write.upper());
+
+            source_statistics.initialize_snapshot_committed(write.upper());
         } else {
+            // The non-active workers report that they are done snapshotting.
+            source_statistics.initialize_snapshot_committed(&Antichain::<Timestamp>::new());
             return;
         }
 
@@ -150,6 +160,8 @@ where
                                 .add(&SourceData(row), &(), &ts, &diff)
                                 .await
                                 .expect("invalid usage");
+
+                            source_statistics.inc_updates_staged_by(1);
 
                             // Note that we assume `diff` is either +1 or -1 here, being anything
                             // else is a logic bug we can't handle at the metric layer. We also
@@ -193,6 +205,8 @@ where
                                 .progress
                                 .set(mz_persist_client::metrics::encode_ts_metric(&input_upper));
 
+                            source_statistics.update_snapshot_committed(&input_upper);
+
                             // advance our stashed frontier
                             *current_upper.borrow_mut() = input_upper.clone();
                             // wait for more data or a new input frontier
@@ -233,6 +247,11 @@ where
                                 .await
                                 .expect("cannot append updates")
                                 .expect("invalid/outdated upper");
+
+                            source_statistics.inc_updates_committed_by(
+                                batch_builder.inserts + batch_builder.retractions,
+                            );
+                            source_statistics.update_snapshot_committed(&new_upper);
 
                             metrics.processed_batches.inc();
                             metrics.row_inserts.inc_by(batch_builder.inserts);

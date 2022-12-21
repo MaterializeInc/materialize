@@ -20,7 +20,7 @@ use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, Duration, Instant};
 
 use mz_ore::halt;
 use mz_ore::now::NowFn;
@@ -37,6 +37,7 @@ use mz_storage_client::types::sources::{IngestionDescription, SourceData};
 use crate::decode::metrics::DecodeMetrics;
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
+use crate::source::statistics::SourceStatistics;
 
 type CommandReceiver = crossbeam_channel::Receiver<StorageCommand>;
 type ResponseSender = mpsc::UnboundedSender<StorageResponse>;
@@ -99,6 +100,9 @@ pub struct StorageState {
     pub sink_handles: HashMap<GlobalId, SinkHandle>,
     /// Collection ids that have been dropped but not yet reported as dropped
     pub dropped_ids: Vec<GlobalId>,
+    /// Stats objects shared with operators to allow them to update the metrics
+    /// we report in `StatisticsUpdates` responses.
+    pub source_statistics: HashMap<GlobalId, SourceStatistics>,
 }
 
 /// This maintains an additional read hold on the source data for a sink, alongside
@@ -204,6 +208,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
         self.reconcile(&command_rx);
 
         let mut disconnected = false;
+
+        let mut last_stats_time: Option<Instant> = None;
+
         while !disconnected {
             // Ask Timely to execute a unit of work.
             //
@@ -229,6 +236,23 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
 
             self.report_frontier_progress(&response_tx);
+
+            // Note: this interval configures the level of granularity we expect statistics
+            // (at least with this implementation) to have. We expect a statistic in the
+            // system tables to be only accurate to within this interval + whatever
+            // skew the `CollectionManager` adds. The stats task in the controller will
+            // be reporting, for each worker, on some interval,
+            // the statistics reported by the most recent call here. This is known to be
+            // somewhat inaccurate, but people mostly care about either rates, or the
+            // values to within 1 minute.
+            //
+            // TODO(guswynn): Should this be configurable? Maybe via LaunchDarkly?
+            if last_stats_time.is_none()
+                || last_stats_time.as_ref().unwrap().elapsed() >= Duration::from_secs(10)
+            {
+                self.report_source_statistics(&response_tx);
+                last_stats_time = Some(Instant::now());
+            }
 
             // Handle any received commands.
             let mut cmds = vec![];
@@ -263,6 +287,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                     // Initialize shared frontier tracking.
                     for export_id in ingestion.description.source_exports.keys() {
+                        self.storage_state.source_statistics.insert(
+                            *export_id,
+                            SourceStatistics::new(
+                                *export_id,
+                                self.storage_state.timely_worker_index,
+                            ),
+                        );
+
                         self.storage_state.source_uppers.insert(
                             *export_id,
                             Rc::new(RefCell::new(Antichain::from_elem(
@@ -388,6 +420,21 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 }
             }
             self.send_storage_response(response_tx, StorageResponse::FrontierUppers(new_uppers));
+        }
+    }
+
+    /// Report source statistics back to the controller.
+    pub fn report_source_statistics(&mut self, response_tx: &ResponseSender) {
+        // Check if any observed frontier should advance the reported frontiers.
+        let mut to_send = vec![];
+        for (_, stats) in self.storage_state.source_statistics.iter() {
+            if let Some(snapshot) = stats.snapshot() {
+                to_send.push(snapshot);
+            }
+        }
+
+        if !to_send.is_empty() {
+            self.send_storage_response(response_tx, StorageResponse::StatisticsUpdates(to_send));
         }
     }
 

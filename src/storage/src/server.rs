@@ -105,6 +105,7 @@ pub fn serve(
                 sink_write_frontiers: HashMap::new(),
                 sink_handles: HashMap::new(),
                 dropped_ids: Vec::new(),
+                source_statistics: HashMap::new(),
             },
         }
         .run()
