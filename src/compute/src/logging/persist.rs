@@ -28,8 +28,14 @@ pub(crate) fn persist_sink<G>(
     let desired_collection = log_collection.map(Ok);
     let as_of = Antichain::from_elem(Timestamp::minimum());
 
-    let token =
-        crate::sink::persist_sink(target_id, target, desired_collection, as_of, compute_state);
+    let token = crate::sink::persist_sink(
+        target_id,
+        target,
+        desired_collection,
+        as_of,
+        compute_state,
+        Vec::new(),
+    );
 
     compute_state.sink_tokens.insert(
         target_id,

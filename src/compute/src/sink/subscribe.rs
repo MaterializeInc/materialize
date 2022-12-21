@@ -9,14 +9,16 @@
 
 use std::any::Any;
 use std::cell::RefCell;
+use std::convert::Infallible;
 use std::ops::DerefMut;
 use std::rc::Rc;
 
 use differential_dataflow::Collection;
 
+use mz_timely_util::probe::{self, ProbeNotify};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, Stream};
 use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -42,6 +44,7 @@ where
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
         _err_collection: Collection<G, DataflowError, Diff>,
+        probes: Vec<probe::Handle<Timestamp>>,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
@@ -62,6 +65,7 @@ where
             sink.as_of.clone(),
             sink.up_to.clone(),
             subscribe_protocol_handle,
+            probes,
         );
 
         // Inform the coordinator that we have been dropped,
@@ -81,50 +85,66 @@ fn subscribe<G>(
     as_of: SinkAsOf,
     up_to: Antichain<G::Timestamp>,
     subscribe_protocol_handle: Rc<RefCell<Option<SubscribeProtocol>>>,
+    mut probes: Vec<probe::Handle<Timestamp>>,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
+    // Let the subscribe sink emit a progress stream, so we can attach the flow control probes.
+    // The `Infallible` type signals that this steam never transports data updates.
+    // TODO: Replace `Infallible` with `!` once the latter is stabilized.
+    let progress_stream: Stream<G, Infallible>;
+
     let mut results = Vec::new();
     let mut finished = false;
     let mut rows = Default::default();
-    sinked_collection
-        .inner
-        .sink(Pipeline, &format!("subscribe-{}", sink_id), move |input| {
-            if finished {
-                // Drain the input, to avoid the
-                // operator being constantly rescheduled
-                input.for_each(|_, _| {});
-                return;
-            }
-            input.for_each(|_, data| {
-                data.swap(&mut rows);
-                for (row, time, diff) in rows.drain(..) {
-                    let should_emit_as_of = if as_of.strict {
-                        as_of.frontier.less_than(&time)
-                    } else {
-                        as_of.frontier.less_equal(&time)
-                    };
-                    let should_emit = should_emit_as_of && !up_to.less_equal(&time);
-                    if should_emit {
-                        results.push((time, row, diff));
-                    }
+    progress_stream = sinked_collection.inner.unary_frontier(
+        Pipeline,
+        &format!("subscribe-{}", sink_id),
+        move |_cap, _info| {
+            move |input, _output| {
+                if finished {
+                    // Drain the input, to avoid the operator being constantly rescheduled
+                    input.for_each(|_, _| {});
+                    return;
                 }
-            });
+                input.for_each(|_, data| {
+                    data.swap(&mut rows);
+                    for (row, time, diff) in rows.drain(..) {
+                        let should_emit_as_of = if as_of.strict {
+                            as_of.frontier.less_than(&time)
+                        } else {
+                            as_of.frontier.less_equal(&time)
+                        };
+                        let should_emit = should_emit_as_of && !up_to.less_equal(&time);
+                        if should_emit {
+                            results.push((time, row, diff));
+                        }
+                    }
+                });
 
-            if let Some(subscribe_protocol) = subscribe_protocol_handle.borrow_mut().deref_mut() {
-                subscribe_protocol.send_batch(input.frontier().frontier().to_owned(), &mut results);
-            }
-
-            if PartialOrder::less_equal(&up_to.borrow(), &input.frontier().frontier()) {
-                finished = true;
-                // We are done; indicate this by sending a batch at the
-                // empty frontier.
                 if let Some(subscribe_protocol) = subscribe_protocol_handle.borrow_mut().deref_mut()
                 {
-                    subscribe_protocol.send_batch(Antichain::default(), &mut Vec::new());
+                    subscribe_protocol
+                        .send_batch(input.frontier().frontier().to_owned(), &mut results);
+                }
+
+                if PartialOrder::less_equal(&up_to.borrow(), &input.frontier().frontier()) {
+                    finished = true;
+                    // We are done; indicate this by sending a batch at the
+                    // empty frontier.
+                    if let Some(subscribe_protocol) =
+                        subscribe_protocol_handle.borrow_mut().deref_mut()
+                    {
+                        subscribe_protocol.send_batch(Antichain::default(), &mut Vec::new());
+                    }
                 }
             }
-        })
+        },
+    );
+
+    for handle in &mut probes {
+        progress_stream.probe_notify_with(handle);
+    }
 }
 
 /// A type that guides the transmission of rows back to the coordinator.

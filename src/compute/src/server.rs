@@ -603,6 +603,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         std::cell::RefCell::new(Vec::new()),
                     ),
                     sink_write_frontiers: HashMap::new(),
+                    flow_control_probes: HashMap::new(),
                     pending_peeks: HashMap::new(),
                     reported_frontiers: HashMap::new(),
                     dropped_collections: Vec::new(),
