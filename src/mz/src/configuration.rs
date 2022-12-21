@@ -115,6 +115,7 @@ impl fmt::Display for Endpoint {
 struct Profile0 {
     email: String,
     #[serde(rename(serialize = "app-password", deserialize = "app-password"))]
+    #[serde(default, skip_serializing_if = "Token::is_default")]
     app_password: Token,
     region: Option<CloudProviderRegion>,
     #[serde(default, skip_serializing_if = "Endpoint::is_default")]

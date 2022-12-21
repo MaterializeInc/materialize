@@ -53,6 +53,7 @@ wrappers = [
     # TODO(guswynn): switch to tracing in rdkafka
     "rdkafka",
     "reqwest",
+    "secret-service",
     "tokio-postgres",
     "tokio-tungstenite",
     "tokio-util",
@@ -100,6 +101,7 @@ wrappers = [
   "prost-build",
   "rayon-core",
   "reqwest",
+  "secret-service",
   "schannel",
   "sharded-slab",
   "tracing-core",
