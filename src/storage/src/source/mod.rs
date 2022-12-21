@@ -47,6 +47,7 @@ mod reclock;
 mod resumption;
 mod s3;
 mod source_reader_pipeline;
+pub mod statistics;
 // Public for integration testing.
 #[doc(hidden)]
 pub mod testscript;

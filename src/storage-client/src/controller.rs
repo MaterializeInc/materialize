@@ -55,7 +55,7 @@ use mz_stash::{self, PostgresFactory, StashError, TypedCollection};
 
 use crate::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
-    StorageCommand, StorageResponse, Update,
+    SourceStatisticsUpdate, StorageCommand, StorageResponse, Update,
 };
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
 use crate::healthcheck;
@@ -72,6 +72,7 @@ mod metrics_scraper;
 mod persist_handles;
 mod rehydration;
 mod remap_migration;
+mod statistics;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
 
@@ -110,7 +111,7 @@ pub enum IntrospectionType {
     StorageHostMetrics,
 
     // Note that this single-shard introspection source will be changed to per-replica,
-    // once storage and compute are merged
+    // once we allow multiplexing multiple sources/sinks on a single cluster.
     StorageSourceStatistics,
 }
 
@@ -609,6 +610,11 @@ pub struct StorageControllerState<
     now: NowFn,
     /// The fencing token for this instance of the controller.
     envd_epoch: NonZeroI64,
+
+    /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
+    /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
+    source_statistics:
+        Arc<std::sync::Mutex<HashMap<GlobalId, HashMap<usize, SourceStatisticsUpdate>>>>,
 }
 
 /// A storage controller for a storage instance.
@@ -754,6 +760,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             introspection_tokens: HashMap::new(),
             now,
             envd_epoch,
+            source_statistics: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 }
@@ -1028,7 +1035,19 @@ where
                             self.state.introspection_tokens.insert(id, scraper_token);
                         }
                         IntrospectionType::StorageSourceStatistics => {
+                            // Set the collection to empty.
                             self.reconcile_managed_collection(id, vec![]).await;
+
+                            let scraper_token = statistics::spawn_statistics_scraper(
+                                id.clone(),
+                                // These do a shallow copy.
+                                self.state.collection_manager.clone(),
+                                Arc::clone(&self.state.source_statistics),
+                            );
+
+                            // Make sure this is dropped when the controller is
+                            // dropped, so that the internal task will stop.
+                            self.state.introspection_tokens.insert(id, scraper_token);
                         }
                         IntrospectionType::SourceStatusHistory
                         | IntrospectionType::SinkStatusHistory => {
@@ -1429,6 +1448,17 @@ where
             Some(StorageResponse::DroppedIds(_ids)) => {
                 // TODO(petrosagg): It looks like the storage controller never cleans up GlobalIds
                 // from its state. It should probably be done as a reaction to this response.
+            }
+            Some(StorageResponse::StatisticsUpdates(source_stats)) => {
+                // Note we only hold the lock while moving some plain-old-data around here.
+                let mut shared_stats = self.state.source_statistics.lock().expect("poisoned");
+
+                for stat in source_stats {
+                    let shared_stats = shared_stats.entry(stat.id).or_default();
+                    // We just write the whole object, as the update from storage represents the
+                    // current values.
+                    shared_stats.insert(stat.worker_id, stat);
+                }
             }
         }
 

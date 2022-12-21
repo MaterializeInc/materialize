@@ -352,6 +352,10 @@ where
                 }
                 Some(StorageResponse::DroppedIds(dropped_ids))
             }
+            StorageResponse::StatisticsUpdates(stats) => {
+                // Just forward it along.
+                Some(StorageResponse::StatisticsUpdates(stats))
+            }
         }
     }
 }

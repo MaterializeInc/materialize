@@ -729,6 +729,10 @@ mz_sink_utilization
 VIEW
 materialize
 mz_internal
+mz_source_statistics
+SOURCE
+materialize
+mz_internal
 mz_source_status_history
 SOURCE
 materialize
