@@ -34,13 +34,13 @@ Note that a failure of the compute controller will result in unavailability and 
 
 ## Core Components in Source Code
 
-### In [`src/compute-client/src`](../../../../src/compute-client/src/)
+### In [`src/compute-client/src`](/src/compute-client/src/)
 
-- [`controller.rs`](../../../../src/compute-client/src/controller.rs): Management of addition / removal of instances as well as core interaction with the ADAPTER layer through the `process` function. Otherwise, all command handling is forwarded to `Instance`s.
-- [`controller/instance.rs`](../../../../src/compute-client/src/controller/instance.rs): Here you find the heart of the replication scheme. The code is very delicate to edit due to the heavy use of asynchrony in `ActiveInstance`; however, a style is used in which nested asynchrony is avoided and each function gets a chance to make a consistent change to the instance's state. Two important data structures are the `Instance`'s `collections` metadata in the form of a map of `CollectionState` and the `Instance`'s compute command `history`. Most API calls will trigger execution of some of the functions `update_write_frontiers`, `remove_write_frontiers`, and `update_read_capabilities` to transition the state of the read and write frontiers kept per collection and replica in response to external triggering of `ActiveInstance` operations. More details about read and write frontiers are described in [Read and Write Frontier Management for Compute Collections](read-write-frontier-management.md).
-- [`controller/replica.rs`](../../../../src/compute-client/src/controller/replica.rs): Lower-level communication code to send commands to and receive responses from replicas.
+- [`controller.rs`](/src/compute-client/src/controller.rs): Management of addition / removal of instances as well as core interaction with the ADAPTER layer through the `process` function. Otherwise, all command handling is forwarded to `Instance`s.
+- [`controller/instance.rs`](/src/compute-client/src/controller/instance.rs): Here you find the heart of the replication scheme. The code is very delicate to edit due to the heavy use of asynchrony in `ActiveInstance`; however, a style is used in which nested asynchrony is avoided and each function gets a chance to make a consistent change to the instance's state. Two important data structures are the `Instance`'s `collections` metadata in the form of a map of `CollectionState` and the `Instance`'s compute command `history`. Most API calls will trigger execution of some of the functions `update_write_frontiers`, `remove_write_frontiers`, and `update_read_capabilities` to transition the state of the read and write frontiers kept per collection and replica in response to external triggering of `ActiveInstance` operations. More details about read and write frontiers are described in [Read and Write Frontier Management for Compute Collections](read-write-frontier-management.md).
+- [`controller/replica.rs`](/src/compute-client/src/controller/replica.rs): Lower-level communication code to send commands to and receive responses from replicas.
 
-### In [`src/compute/src`](../../../../src/compute/src/)
+### In [`src/compute/src`](/src/compute/src/)
 
-- [`server.rs`](../../../../src/compute/src/server.rs): Main command processing loop and reconciliation code.
-- [`compute_state.rs`](../../../../src/compute/src/compute_state.rs): Handling of commands by a single replica along with management of compute command history for that replica.
+- [`server.rs`](/src/compute/src/server.rs): Main command processing loop and reconciliation code.
+- [`compute_state.rs`](/src/compute/src/compute_state.rs): Handling of commands by a single replica along with management of compute command history for that replica.
