@@ -4,7 +4,7 @@ The COMPUTE layer employs active replication within clusters, henceforth called 
 
 Three secondary goals of active replication are: (a) to support the ability to upsize or downsize an instance dynamically, (b) to mask networking issues that either partition away or slow down access to a strict subset of an instance's replicas, and (c) to mask processing issues that increase response latency by again a strict subset of an instance's replicas. For secondary goal (a), upsizing can be achieved, e.g., by adding a larger replica and removing a smaller one, while downsizing, e.g., by adding a smaller replica and removing a larger one. This capability allows customers to adjust their compute costs to their needs over time. For secondary goals (b) and (c), since compute commands are processed deterministically by all replicas, it is only necessary to receive responses from a single replica to make progress. So customers can leverage replication to privilege latency in the presence of certain classes of [gray failures](https://www.microsoft.com/en-us/research/wp-content/uploads/2017/06/paper-1.pdf).
 
-High availability is not in scope of the mechanism, so single points of failure may exist. 
+High availability is not in scope of the mechanism, so single points of failure may exist.
 
 ## Overview of the Mechanism
 
