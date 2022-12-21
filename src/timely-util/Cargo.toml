@@ -16,6 +16,4 @@ serde = { version = "1.0.147", features = ["derive"] }
 mz-ore = { path = "../ore", features = ["tracing_"] }
 polonius-the-crab = "0.3.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
-
-[dev-dependencies]
 tokio = { version = "1.23.0", features = ["macros", "rt-multi-thread", "time"] }

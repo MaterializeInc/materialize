@@ -21,5 +21,6 @@ pub mod event;
 pub mod operator;
 pub mod order;
 pub mod panic;
+pub mod probe;
 pub mod progress;
 pub mod replay;
