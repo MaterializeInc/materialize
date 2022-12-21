@@ -158,31 +158,34 @@ impl ClusterClient<PartitionedClient> {
 
         let (builders, other) = initialize_networking(&comm_config, epoch).await?;
 
-        let workers = comm_config.workers;
-        let worker_guards = execute_from(
-            builders,
-            other,
-            WorkerConfig::default(),
-            move |timely_worker| {
-                let timely_worker_index = timely_worker.index();
-                let _tokio_guard = tokio_executor.enter();
-                let client_rx = client_rxs.lock().unwrap()[timely_worker_index % workers]
-                    .take()
-                    .unwrap();
-                let _trace_metrics = trace_metrics.clone();
-                let _compute_metrics = compute_metrics.clone();
-                let persist_clients = Arc::clone(&persist_clients);
-                Worker {
-                    timely_worker,
-                    client_rx,
-                    compute_state: None,
-                    trace_metrics: trace_metrics.clone(),
-                    compute_metrics: compute_metrics.clone(),
-                    persist_clients,
-                }
-                .run()
+        let mut worker_config = WorkerConfig::default();
+        differential_dataflow::configure(
+            &mut worker_config,
+            &differential_dataflow::Config {
+                idle_merge_effort: Some(1000),
             },
-        )
+        );
+
+        let workers = comm_config.workers;
+        let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
+            let timely_worker_index = timely_worker.index();
+            let _tokio_guard = tokio_executor.enter();
+            let client_rx = client_rxs.lock().unwrap()[timely_worker_index % workers]
+                .take()
+                .unwrap();
+            let _trace_metrics = trace_metrics.clone();
+            let _compute_metrics = compute_metrics.clone();
+            let persist_clients = Arc::clone(&persist_clients);
+            Worker {
+                timely_worker,
+                client_rx,
+                compute_state: None,
+                trace_metrics: trace_metrics.clone(),
+                compute_metrics: compute_metrics.clone(),
+                persist_clients,
+            }
+            .run()
+        })
         .map_err(|e| anyhow!("{e}"))?;
 
         Ok(TimelyContainer {
