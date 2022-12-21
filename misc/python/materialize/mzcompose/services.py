@@ -167,6 +167,7 @@ class Materialized(Service):
                 "environment": environment,
                 "volumes": volumes,
                 "allow_host_ports": allow_host_ports,
+                "tmpfs": ["/tmp"],
             }
         )
 
