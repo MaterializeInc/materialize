@@ -717,10 +717,6 @@ mz_show_materialized_views
 VIEW
 materialize
 mz_internal
-mz_sink_status
-VIEW
-materialize
-mz_internal
 mz_sink_status_history
 SOURCE
 materialize
@@ -730,10 +726,6 @@ VIEW
 materialize
 mz_internal
 mz_sink_utilization
-VIEW
-materialize
-mz_internal
-mz_source_status
 VIEW
 materialize
 mz_internal
