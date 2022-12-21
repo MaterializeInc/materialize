@@ -5,6 +5,7 @@ menu:
     main:
         parent: quickstarts
 weight: 20
+draft: true
 aliases:
   - /demos/abandoned-cart
 ---
