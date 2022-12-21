@@ -70,6 +70,7 @@ impl Token {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 mod keychain {
     use crate::configuration::FronteggAPIToken;
 
@@ -85,6 +86,48 @@ mod keychain {
         // Fall back to inline credential management.
         let password = api_token.to_string();
         Ok(Token::Inline(password))
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod keychain {
+    use anyhow::{anyhow, Context, Result};
+    use security_framework::base::Error;
+    use security_framework::passwords::{get_generic_password, set_generic_password};
+
+    use crate::configuration::FronteggAPIToken;
+
+    use super::Token;
+
+    pub fn get_app_password(profile: &str, email: &str) -> Result<String> {
+        let service = service_name(profile);
+        let password = get_generic_password(&service, email).map_err(error_handler)?;
+        String::from_utf8(password.to_vec()).context("failed to decode app password")
+    }
+
+    pub fn set_app_password(
+        profile: &str,
+        email: &str,
+        api_token: FronteggAPIToken,
+    ) -> Result<Token> {
+        let service = service_name(profile);
+        set_generic_password(&service, email, api_token.to_string().as_bytes())
+            .map_err(error_handler)
+            .map(|_| Token::Keychain)
+    }
+
+    /// The MacOS error codes used here are from:
+    /// https://opensource.apple.com/source/libsecurity_keychain/libsecurity_keychain-78/lib/SecBase.h.auto.html
+    fn error_handler(error: Error) -> anyhow::Error {
+        if error.code() == -25300 {
+            anyhow!("no credentials found in local keychain. reauthenticate with mz login.")
+        } else {
+            anyhow::Error::new(error).context("failed to access keychain storage")
+        }
+    }
+
+    fn service_name(profile: &str) -> String {
+        format!("Materialize CLI - Profile[{profile}]")
     }
 }
 

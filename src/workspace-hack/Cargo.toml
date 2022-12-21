@@ -230,11 +230,11 @@ tikv-jemalloc-sys = { version = "0.4.3+5.2.1-patched.2", features = ["background
 [target.x86_64-apple-darwin.dependencies]
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["alloc", "race", "std", "unstable"] }
-security-framework = { version = "2.0.0", features = ["OSX_10_9", "alpn"] }
+security-framework = { version = "2.7.0", features = ["OSX_10_9", "alpn"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["alloc", "race", "std", "unstable"] }
-security-framework = { version = "2.0.0", features = ["OSX_10_9", "alpn"] }
+security-framework = { version = "2.7.0", features = ["OSX_10_9", "alpn"] }
 
 ### END HAKARI SECTION
