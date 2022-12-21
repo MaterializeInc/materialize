@@ -17,8 +17,9 @@ use axum::{extract::Query, response::IntoResponse, routing::get, Router};
 use reqwest::Client;
 use tokio::sync::broadcast::{channel, Sender};
 
-use crate::configuration::{Configuration, Endpoint, FronteggAPIToken, FronteggAuth};
+use crate::configuration::{Endpoint, FronteggAPIToken, FronteggAuth};
 use crate::utils::{trim_newline, RequestBuilderExt};
+
 use crate::BrowserAPIToken;
 
 /// Request handler for the server waiting the browser API token creation
@@ -44,10 +45,9 @@ async fn request(
 
 /// Log the user using the browser, generates an API token and saves the new profile data.
 pub(crate) async fn login_with_browser(
-    endpoint: Endpoint,
+    endpoint: &Endpoint,
     profile_name: &str,
-    config: &mut Configuration,
-) -> Result<()> {
+) -> Result<(String, FronteggAPIToken)> {
     // Open the browser to login user.
     let url = endpoint.web_login_url(profile_name).to_string();
     if let Err(err) = open::that(&url) {
@@ -68,17 +68,11 @@ pub(crate) async fn login_with_browser(
             .await
     });
 
-    match result
+    result
         .recv()
         .await
         .context("failed to retrive new profile")?
-    {
-        Some((email, api_token)) => {
-            config.create_or_update_profile(endpoint, profile_name.to_string(), email, api_token);
-            Ok(())
-        }
-        None => bail!("failed to login via browser"),
-    }
+        .context("failed to login via browser")
 }
 
 /// Generates an API token using an access token
@@ -130,12 +124,11 @@ async fn authenticate_user(
 }
 
 /// Log the user using the console, generates an API token and saves the new profile data.
+
 pub(crate) async fn login_with_console(
-    endpoint: Endpoint,
+    endpoint: &Endpoint,
     client: &Client,
-    profile_name: &String,
-    config: &mut Configuration,
-) -> Result<()> {
+) -> Result<(String, FronteggAPIToken)> {
     // Handle interactive user input
     let mut email = String::new();
 
@@ -148,18 +141,14 @@ pub(crate) async fn login_with_console(
     let _ = std::io::stdout().flush();
     let password = rpassword::read_password().unwrap();
 
-    // Check if there is a secret somewhere.
-    // If there is none save the api token someone on the root folder.
-    let auth_user = authenticate_user(&endpoint, client, &email, &password).await?;
+    let auth_user = authenticate_user(endpoint, client, &email, &password).await?;
     let api_token = generate_api_token(
-        &endpoint,
+        endpoint,
         client,
         auth_user,
         &String::from("App password for the CLI"),
     )
     .await?;
 
-    config.create_or_update_profile(endpoint, profile_name.to_string(), email, api_token);
-
-    Ok(())
+    Ok((email, api_token))
 }
