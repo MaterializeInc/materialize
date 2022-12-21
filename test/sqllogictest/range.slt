@@ -491,6 +491,58 @@ empty
 [2,)
 [2,)
 
+query T
+SELECT a::text AS t FROM int4range_values EXCEPT SELECT column1::text FROM (VALUES
+    (int4range(null,1)),
+    (int4range(null,1, '[]')),
+    (int4range(null,null)),
+    (int4range(null,null, '[]')),
+    (int4range(null,1, '()')),
+    (int4range(null,1, '(]')),
+    (int4range(null,null, '()')),
+    (int4range(null,null,'(]')),
+    (int4range(-1,1)),
+    (int4range(-1,1, '[]')),
+    (int4range(-1,1, '()')),
+    (int4range(-1,1,'(]')),
+    (int4range(0,0)),
+    (int4range(0,0, '[]')),
+    (int4range(0,0,'()')),
+    (int4range(0,0,'(]')),
+    (int4range(1,null)),
+    (int4range(1,null, '[]')),
+    (int4range(1,null,'()')),
+    (int4range(1,null,'(]'))
+) t;
+----
+
+query error invalid range bound flags
+SELECT int4range(null,null,' (]');
+
+query error invalid range bound flags
+SELECT int4range(null,null,'(] ');
+
+query error invalid range bound flags
+SELECT int4range(null,null,'( ]');
+
+query error invalid range bound flags
+SELECT int4range(null,null,'(,]');
+
+query error invalid range bound flags
+SELECT int4range(null,null,'a()');
+
+query error invalid range bound flags
+SELECT int4range(null,null,'(a)');
+
+query error invalid range bound flags
+SELECT int4range(null,null,'()a');
+
+query error invalid range bound flags
+SELECT int4range(null,null,'(()');
+
+query error invalid range bound flags
+SELECT int4range(null,null,'())');
+
 # Test range in list
 query T
 SELECT (LIST['(,)', 'empty', '[-1,1]']::int4range list)::text;
@@ -1057,6 +1109,33 @@ empty
 [1,)
 [2,)
 [2,)
+
+query T
+SELECT a::text AS t FROM int8range_values EXCEPT SELECT column1::text FROM (VALUES
+    (int8range(null,1)),
+    (int8range(null,1, '[]')),
+    (int8range(null,null)),
+    (int8range(null,null, '[]')),
+    (int8range(null,1, '()')),
+    (int8range(null,1, '(]')),
+    (int8range(null,null, '()')),
+    (int8range(null,null,'(]')),
+    (int8range(-1,1)),
+    (int8range(-1,1, '[]')),
+    (int8range(-1,1, '()')),
+    (int8range(-1,1,'(]')),
+    (int8range(0,0)),
+    (int8range(0,0, '[]')),
+    (int8range(0,0,'()')),
+    (int8range(0,0,'(]')),
+    (int8range(1,null)),
+    (int8range(1,null, '[]')),
+    (int8range(1,null,'()')),
+    (int8range(1,null,'(]'))
+) t;
+----
+
+
 
 # Test range in list
 query T

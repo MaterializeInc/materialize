@@ -17,5 +17,6 @@ message ProtoInvalidRangeError {
     oneof kind {
         google.protobuf.Empty misordered_range_bounds = 1;
         string canonicalization_overflow = 2;
+        google.protobuf.Empty invalid_range_bound_flags = 3;
     }
 }

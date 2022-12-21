@@ -22,7 +22,6 @@ use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
-use mz_repr::adt::range::RangeOps;
 use num::traits::CheckedNeg;
 use proptest::{prelude::*, strategy::*};
 use proptest_derive::Arbitrary;
@@ -44,6 +43,7 @@ use mz_repr::adt::datetime::Timezone;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
+use mz_repr::adt::range::{self, Range, RangeBound, RangeOps};
 use mz_repr::adt::regex::any_regex;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::chrono::any_naive_datetime;
@@ -5645,6 +5645,25 @@ fn list_slice_linear<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Da
     })
 }
 
+fn create_range<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let (lower_inclusive, upper_inclusive) =
+        range::parse_range_bound_flags(datums[2].unwrap_str())?;
+
+    let mut range = Range::new(Some((
+        RangeBound::new(datums[0], lower_inclusive),
+        RangeBound::new(datums[1], upper_inclusive),
+    )));
+
+    range.canonicalize()?;
+
+    Ok(temp_storage.make_datum(|row| {
+        row.push_range(range).expect("errors already handled");
+    }))
+}
+
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
@@ -6155,6 +6174,9 @@ pub enum VariadicFunc {
     DateBinTimestampTz,
     And,
     Or,
+    RangeCreate {
+        elem_type: ScalarType,
+    },
 }
 
 impl VariadicFunc {
@@ -6218,6 +6240,7 @@ impl VariadicFunc {
             )),
             VariadicFunc::And => and(datums, temp_storage, exprs),
             VariadicFunc::Or => or(datums, temp_storage, exprs),
+            VariadicFunc::RangeCreate { .. } => eager!(create_range, temp_storage),
         }
     }
 
@@ -6249,7 +6272,8 @@ impl VariadicFunc {
             | VariadicFunc::HmacBytes
             | VariadicFunc::ErrorIfNull
             | VariadicFunc::DateBinTimestamp
-            | VariadicFunc::DateBinTimestampTz => false,
+            | VariadicFunc::DateBinTimestampTz
+            | VariadicFunc::RangeCreate { .. } => false,
         }
     }
 
@@ -6318,6 +6342,10 @@ impl VariadicFunc {
             DateBinTimestamp => ScalarType::Timestamp.nullable(true),
             DateBinTimestampTz => ScalarType::TimestampTz.nullable(true),
             And | Or => ScalarType::Bool.nullable(in_nullable),
+            RangeCreate { elem_type } => ScalarType::Range {
+                element_type: Box::new(elem_type.clone()),
+            }
+            .nullable(in_nullable),
         }
     }
 
@@ -6340,6 +6368,7 @@ impl VariadicFunc {
                 | VariadicFunc::ArrayCreate { .. }
                 | VariadicFunc::ArrayToString { .. }
                 | VariadicFunc::ErrorIfNull
+                | VariadicFunc::RangeCreate { .. }
         )
     }
 
@@ -6427,6 +6456,13 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::DateBinTimestampTz => f.write_str("timestamptz_bin"),
             VariadicFunc::And => f.write_str("AND"),
             VariadicFunc::Or => f.write_str("OR"),
+            VariadicFunc::RangeCreate {
+                elem_type: element_type,
+            } => f.write_str(match element_type {
+                ScalarType::Int32 => "int4range",
+                ScalarType::Int64 => "int8range",
+                _ => unreachable!(),
+            }),
         }
     }
 }
@@ -6471,6 +6507,8 @@ impl Arbitrary for VariadicFunc {
             Just(VariadicFunc::DateBinTimestampTz),
             Just(VariadicFunc::And),
             Just(VariadicFunc::Or),
+            prop_oneof![Just(ScalarType::Int32), Just(ScalarType::Int64)]
+                .prop_map(|elem_type| VariadicFunc::RangeCreate { elem_type })
         ]
     }
 }
@@ -6508,6 +6546,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::DateBinTimestampTz => DateBinTimestampTz(()),
             VariadicFunc::And => And(()),
             VariadicFunc::Or => Or(()),
+            VariadicFunc::RangeCreate { elem_type } => RangeCreate(elem_type.into_proto()),
         };
         ProtoVariadicFunc { kind: Some(kind) }
     }
@@ -6553,6 +6592,9 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                 DateBinTimestampTz(()) => Ok(VariadicFunc::DateBinTimestampTz),
                 And(()) => Ok(VariadicFunc::And),
                 Or(()) => Ok(VariadicFunc::Or),
+                RangeCreate(elem_type) => Ok(VariadicFunc::RangeCreate {
+                    elem_type: elem_type.into_rust()?,
+                }),
             }
         } else {
             Err(TryFromProtoError::missing_field(

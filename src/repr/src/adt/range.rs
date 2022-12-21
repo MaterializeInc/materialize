@@ -138,6 +138,11 @@ impl<'a> RangeOps<'a> for i64 {
 
 // Totally generic range implementations.
 impl<D> Range<D> {
+    /// Create a new range.
+    ///
+    /// Note that when constructing `Range<Datum<'a>>`, the range must still be
+    /// canonicalized. If this becomes a common operation, we should consider
+    /// addinga `new_canonical` function that performs both steps.
     pub fn new(inner: Option<(RangeLowerBound<D>, RangeUpperBound<D>)>) -> Range<D> {
         Range {
             inner: inner.map(|(lower, upper)| RangeInner { lower, upper }),
@@ -420,6 +425,7 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
 pub enum InvalidRangeError {
     MisorderedRangeBounds,
     CanonicalizationOverflow(String),
+    InvalidRangeBoundFlags,
 }
 
 impl Display for InvalidRangeError {
@@ -431,6 +437,7 @@ impl Display for InvalidRangeError {
             InvalidRangeError::CanonicalizationOverflow(t) => {
                 write!(f, "{} out of range", t)
             }
+            InvalidRangeError::InvalidRangeBoundFlags => f.write_str("invalid range bound flags"),
         }
     }
 }
@@ -455,6 +462,7 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
         let kind = match self {
             InvalidRangeError::MisorderedRangeBounds => MisorderedRangeBounds(()),
             InvalidRangeError::CanonicalizationOverflow(s) => CanonicalizationOverflow(s.clone()),
+            InvalidRangeError::InvalidRangeBoundFlags => InvalidRangeBoundFlags(()),
         };
         ProtoInvalidRangeError { kind: Some(kind) }
     }
@@ -462,13 +470,35 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
     fn from_proto(proto: ProtoInvalidRangeError) -> Result<Self, TryFromProtoError> {
         use proto_invalid_range_error::Kind::*;
         match proto.kind {
-            Some(kind) => match kind {
-                MisorderedRangeBounds(()) => Ok(InvalidRangeError::MisorderedRangeBounds),
-                CanonicalizationOverflow(s) => Ok(InvalidRangeError::CanonicalizationOverflow(s)),
-            },
+            Some(kind) => Ok(match kind {
+                MisorderedRangeBounds(()) => InvalidRangeError::MisorderedRangeBounds,
+                CanonicalizationOverflow(s) => InvalidRangeError::CanonicalizationOverflow(s),
+                InvalidRangeBoundFlags(()) => InvalidRangeError::InvalidRangeBoundFlags,
+            }),
             None => Err(TryFromProtoError::missing_field(
                 "`ProtoInvalidRangeError::kind`",
             )),
         }
+    }
+}
+
+pub fn parse_range_bound_flags<'a>(flags: &'a str) -> Result<(bool, bool), InvalidRangeError> {
+    let mut flags = flags.chars();
+
+    let lower = match flags.next() {
+        Some('(') => false,
+        Some('[') => true,
+        _ => return Err(InvalidRangeError::InvalidRangeBoundFlags),
+    };
+
+    let upper = match flags.next() {
+        Some(')') => false,
+        Some(']') => true,
+        _ => return Err(InvalidRangeError::InvalidRangeBoundFlags),
+    };
+
+    match flags.next() {
+        Some(_) => Err(InvalidRangeError::InvalidRangeBoundFlags),
+        None => Ok((lower, upper)),
     }
 }

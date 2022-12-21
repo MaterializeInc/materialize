@@ -2015,6 +2015,36 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(String, String, String) => VariadicFunc::HmacString, 44156;
             params!(Bytes, Bytes, String) => VariadicFunc::HmacBytes, 44157;
         },
+        "int4range" => Scalar {
+            params!(Int32, Int32) => Operation::variadic(|_ecx, mut exprs| {
+                exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Int32 },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Int32)}, 3840;
+            params!(Int32, Int32, String) => Operation::variadic(|_ecx, exprs| {
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Int32 },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Int32)}, 3841;
+        },
+        "int8range" => Scalar {
+            params!(Int64, Int64) => Operation::variadic(|_ecx, mut exprs| {
+                exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Int64 },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Int64)}, 3945;
+            params!(Int64, Int64, String) => Operation::variadic(|_ecx, exprs| {
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Int64 },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Int64)}, 3946;
+        },
         "jsonb_array_length" => Scalar {
             params!(Jsonb) => UnaryFunc::JsonbArrayLength(func::JsonbArrayLength) => Int32, 3207;
         },
