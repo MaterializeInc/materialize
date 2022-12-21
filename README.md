@@ -12,7 +12,7 @@ We are rolling out Early Access to the new, cloud-native version of Materialize.
 
 ## About
 
-Materialize is designed to help you interactively explore your streaming data, perform analytics against live relational data, or increase your dashboard freshness while reducing the load of your dashboard and monitoring tasks. The moment you need a refreshed answer, you can get it in milliseconds.
+Materialize is designed to help you interactively explore your streaming data, perform analytics against live relational data, or increase data freshness while reducing the load of your dashboard and monitoring tasks. The moment you need a refreshed answer, you can get it in milliseconds.
 
 It focuses on providing correct and [consistent](https://materialize.com/docs/overview/isolation-level/) answers with minimal latency, and does not ask you to accept either approximate answers or eventual consistency. Whenever Materialize answers a query, that answer is the correct result on some specific (and recent) version of your data. Materialize does all of this by recasting your SQL queries as *dataflows*, which can react efficiently to changes in your data as they happen.
 
