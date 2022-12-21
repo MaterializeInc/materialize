@@ -1,6 +1,6 @@
 ---
 title: "Abandoned Cart"
-description: "  "
+description: "Abandoned Cart Demo"
 menu:
     main:
         parent: quickstarts
@@ -20,19 +20,46 @@ The key concepts present in this quickstart will also apply to many other real-t
 * [Temporal filters](/sql/temporal-filters/)
 
 ### Prepare the environment
-[This could be replaced]
 
 1. Set up a [Materialize account.](/register)
 
-1. Install [`psql`](/integrations/sql-clients/#installation-instructions-for-psql)
+1. Install [`psql`](/integrations/sql-clients/#installation-instructions-for-psql).
 
 1. Open a terminal window and connect to Materialize.
 
 ### Create the sources
 
+Materialize provides public Kafka topics and a Confluent Schema Registry for its users. The Kafka topics contain data from a fictional eCommerce store and receive updates every second.
+
 Sources are the first step in most Materialize projects. For this quickstart, you will use our public Kafka topics. They contain data from a fictional eCommerce and receive updates every second.
 
-1. In your `psql` terminal, create the sources:
+1. In your `psql` terminal, create the connection to the Confluent Schema Registry:
+
+    ```sql
+    CREATE SECRET IF NOT EXISTS csr_username AS '<TBD>';
+    CREATE SECRET IF NOT EXISTS csr_password AS '<TBD>';
+
+    CREATE CONNECTION schema_registry
+        FOR CONFLUENT SCHEMA REGISTRY
+        URL '<TBD>',
+        USERNAME = SECRET csr_username,
+        PASSWORD = SECRET csr_password;
+    ```
+
+1. Create the connection to the Kafka broker:
+
+    ```sql
+    CREATE SECRET kafka_password AS '<TBD>';
+
+    CREATE CONNECTION ecommerce_kafka_connection TO KAFKA (
+        BROKER 'TBD',
+        SASL MECHANISMS = 'SCRAM-SHA-256',
+        SASL USERNAME = 'TBD',
+        SASL PASSWORD = SECRET kafka_password
+    );
+    ```
+
+1. Create the sources:
 
     ```sql
     CREATE SOURCE purchases
@@ -59,7 +86,7 @@ Sources are the first step in most Materialize projects. For this quickstart, yo
         WITH (SIZE = '3xsmall');
     ```
 
-    Now if you run SHOW SOURCES; in the CLI, you should see the four sources we created:
+    Now if you run `SHOW SOURCES;`, you should see the four sources we created:
 
     ```sql
     materialize=> SHOW SOURCES;
@@ -193,8 +220,8 @@ Materialize is wire-compatible with PostgreSQL, so you can use any PostgreSQL cl
     ```javascript
     const TelegramBot = require('node-telegram-bot-api');
 
-    const token = 'YOUR_TELEGRAM_BOT_TOKEN';
-    const chatId = 'YOUR_CHAT_ID';
+    const token = '<YOUR_TELEGRAM_BOT_TOKEN>';
+    const chatId = '<YOUR_CHAT_ID>';
 
     const bot = new TelegramBot(token, {polling: true});
 
@@ -214,8 +241,8 @@ Materialize is wire-compatible with PostgreSQL, so you can use any PostgreSQL cl
     const { Client } = require('pg');
 
     // Define your Telegram bot token and chat ID
-    const token = 'YOUR_TELEGRAM_BOT_TOKEN';
-    const chatId = 'YOUR_CHAT_ID';
+    const token = '<YOUR_TELEGRAM_BOT_TOKEN>';
+    const chatId = '<YOUR_CHAT_ID>';
 
     // Define your Materialize connection details
     const client = new Client({
