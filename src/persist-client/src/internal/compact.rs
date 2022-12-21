@@ -77,7 +77,12 @@ pub struct CompactRes<T> {
 pub struct Compactor<K, V, T, D> {
     cfg: PersistConfig,
     metrics: Arc<Metrics>,
-    sender: Sender<(CompactReq<T>, Machine<K, V, T, D>, oneshot::Sender<()>)>,
+    sender: Sender<(
+        Instant,
+        CompactReq<T>,
+        Machine<K, V, T, D>,
+        oneshot::Sender<Result<ApplyMergeResult, anyhow::Error>>,
+    )>,
     _phantom: PhantomData<fn() -> D>,
 }
 
@@ -94,25 +99,25 @@ where
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         writer_id: WriterId,
     ) -> Self {
-        let (compact_req_sender, mut compact_req_receiver) =
-            mpsc::channel::<(CompactReq<T>, Machine<K, V, T, D>, oneshot::Sender<()>)>(
-                cfg.compaction_queue_size,
-            );
+        let (compact_req_sender, mut compact_req_receiver) = mpsc::channel::<(
+            Instant,
+            CompactReq<T>,
+            Machine<K, V, T, D>,
+            oneshot::Sender<Result<ApplyMergeResult, anyhow::Error>>,
+        )>(cfg.compaction_queue_size);
         let concurrency_limit = Arc::new(tokio::sync::Semaphore::new(
             cfg.compaction_concurrency_limit,
         ));
 
         // spin off a single task responsible for executing compaction requests.
         // work is enqueued into the task through a channel
-        let _worker_handle = mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
-            while let Some((req, mut machine, completer)) = compact_req_receiver.recv().await {
+        let _worker_handle = mz_ore::task::spawn(|| "PersistCompactionScheduler", async move {
+            while let Some((enqueued, req, mut machine, completer)) =
+                compact_req_receiver.recv().await
+            {
                 assert_eq!(req.shard_id, machine.shard_id());
-
-                let cfg = machine.cfg.clone();
-                let blob = Arc::clone(&machine.state_versions.blob);
                 let metrics = Arc::clone(&machine.metrics);
-                let cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
-                let writer_id = writer_id.clone();
+
                 let permit = {
                     let inner = Arc::clone(&concurrency_limit);
                     // perform a non-blocking attempt to acquire a permit so we can
@@ -134,120 +139,39 @@ where
                         }
                     }
                 };
+                metrics
+                    .compaction
+                    .queued_seconds
+                    .inc_by(enqueued.elapsed().as_secs_f64());
+
+                let cfg = machine.cfg.clone();
+                let blob = Arc::clone(&machine.state_versions.blob);
+                let cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
+                let writer_id = writer_id.clone();
 
                 let compact_span =
                     debug_span!(parent: None, "compact::apply", shard_id=%machine.shard_id());
                 compact_span.follows_from(&Span::current());
-                async move {
-                    metrics.compaction.started.inc();
-                    let start = Instant::now();
-
-                    // pick a timeout for our compaction request proportional to the amount
-                    // of data that must be read (with a minimum set by PersistConfig)
-                    let total_input_bytes = req
-                        .inputs
-                        .iter()
-                        .flat_map(|batch| batch.parts.iter())
-                        .map(|parts| parts.encoded_size_bytes)
-                        .sum::<usize>();
-                    let timeout = Duration::max(
-                        // either our minimum timeout
-                        cfg.compaction_minimum_timeout,
-                        // or 1s per MB of input data
-                        Duration::from_secs(u64::cast_from(total_input_bytes / MB)),
-                    );
-
-                    trace!(
-                        "compaction request for {}MBs ({} bytes), with timeout of {}s.",
-                        total_input_bytes / MB,
-                        total_input_bytes,
-                        timeout.as_secs_f64()
-                    );
-
-                    let compact_span = debug_span!("compact::consolidate");
-                    let res = tokio::time::timeout(
-                        timeout,
-                        // Compaction is cpu intensive, so be polite and spawn it on the CPU heavy runtime.
-                        cpu_heavy_runtime
-                            .spawn_named(
-                                || "persist::compact::consolidate",
-                                Self::compact(
-                                    cfg.clone(),
-                                    Arc::clone(&blob),
-                                    Arc::clone(&metrics),
-                                    Arc::clone(&cpu_heavy_runtime),
-                                    req,
-                                    writer_id,
-                                )
-                                .instrument(compact_span),
-                            )
-                            .map_err(|e| anyhow!(e)),
+                let _ = mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
+                    let res = Self::compact_and_apply(
+                        cfg,
+                        blob,
+                        metrics,
+                        cpu_heavy_runtime,
+                        req,
+                        writer_id,
+                        &mut machine,
                     )
+                    .instrument(compact_span)
                     .await;
 
-                    let res = match res {
-                        Ok(res) => res,
-                        Err(err) => {
-                            metrics.compaction.timed_out.inc();
-                            Err(anyhow!(err))
-                        }
-                    };
-
-                    metrics
-                        .compaction
-                        .seconds
-                        .inc_by(start.elapsed().as_secs_f64());
-
-                    match res {
-                        Ok(Ok(res)) => {
-                            let res = FueledMergeRes { output: res.output };
-                            let apply_merge_result = machine.merge_res(&res).await;
-                            match &apply_merge_result {
-                                ApplyMergeResult::AppliedExact => {
-                                    metrics.compaction.applied.inc();
-                                    metrics.compaction.applied_exact_match.inc();
-                                    machine.shard_metrics.compaction_applied.inc();
-                                }
-                                ApplyMergeResult::AppliedSubset => {
-                                    metrics.compaction.applied.inc();
-                                    metrics.compaction.applied_subset_match.inc();
-                                    machine.shard_metrics.compaction_applied.inc();
-                                }
-                                ApplyMergeResult::NotAppliedNoMatch
-                                | ApplyMergeResult::NotAppliedInvalidSince
-                                | ApplyMergeResult::NotAppliedTooManyUpdates => {
-                                    if let ApplyMergeResult::NotAppliedTooManyUpdates =
-                                        &apply_merge_result
-                                    {
-                                        metrics.compaction.not_applied_too_many_updates.inc();
-                                    }
-                                    metrics.compaction.noop.inc();
-                                    for part in res.output.parts {
-                                        let key = part.key.complete(&machine.shard_id());
-                                        retry_external(
-                                            &metrics.retries.external.compaction_noop_delete,
-                                            || blob.delete(&key),
-                                        )
-                                        .await;
-                                    }
-                                }
-                            }
-                        }
-                        Ok(Err(err)) | Err(err) => {
-                            metrics.compaction.failed.inc();
-                            debug!("compaction for {} failed: {:#}", machine.shard_id(), err);
-                        }
-                    };
+                    // we can safely ignore errors here, it's possible the caller
+                    // wasn't interested in waiting and dropped their receiver
+                    let _ = completer.send(res);
 
                     // moves `permit` into async scope so it can be dropped upon completion
                     drop(permit);
-                }
-                .instrument(compact_span)
-                .await;
-
-                // we can safely ignore errors here, it's possible the caller
-                // wasn't interested in waiting and dropped their receiver
-                let _ = completer.send(());
+                });
             }
         });
 
@@ -267,7 +191,7 @@ where
         &self,
         req: CompactReq<T>,
         machine: &Machine<K, V, T, D>,
-    ) -> Option<oneshot::Receiver<()>> {
+    ) -> Option<oneshot::Receiver<Result<ApplyMergeResult, anyhow::Error>>> {
         // Run some initial heuristics to ignore some requests for compaction.
         // We don't gain much from e.g. compacting two very small batches that
         // were just written, but it does result in non-trivial blob traffic
@@ -292,14 +216,130 @@ where
         // spine structure that generated the request, so it has a much better chance of
         // merging and committing the result than a machine kept up-to-date through state
         // diffs, which may have a different spine structure less amendable to merging.
-        let send =
-            new_compaction_sender.try_send((req, machine.clone(), compaction_completed_sender));
+        let send = new_compaction_sender.try_send((
+            Instant::now(),
+            req,
+            machine.clone(),
+            compaction_completed_sender,
+        ));
         if let Err(_) = send {
             self.metrics.compaction.dropped.inc();
             return None;
         }
 
         Some(compaction_completed_receiver)
+    }
+
+    async fn compact_and_apply(
+        cfg: PersistConfig,
+        blob: Arc<dyn Blob + Send + Sync>,
+        metrics: Arc<Metrics>,
+        cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+        req: CompactReq<T>,
+        writer_id: WriterId,
+        machine: &mut Machine<K, V, T, D>,
+    ) -> Result<ApplyMergeResult, anyhow::Error> {
+        metrics.compaction.started.inc();
+        let start = Instant::now();
+
+        // pick a timeout for our compaction request proportional to the amount
+        // of data that must be read (with a minimum set by PersistConfig)
+        let total_input_bytes = req
+            .inputs
+            .iter()
+            .flat_map(|batch| batch.parts.iter())
+            .map(|parts| parts.encoded_size_bytes)
+            .sum::<usize>();
+        let timeout = Duration::max(
+            // either our minimum timeout
+            cfg.compaction_minimum_timeout,
+            // or 1s per MB of input data
+            Duration::from_secs(u64::cast_from(total_input_bytes / MB)),
+        );
+
+        trace!(
+            "compaction request for {}MBs ({} bytes), with timeout of {}s.",
+            total_input_bytes / MB,
+            total_input_bytes,
+            timeout.as_secs_f64()
+        );
+
+        let compact_span = debug_span!("compact::consolidate");
+        let res = tokio::time::timeout(
+            timeout,
+            // Compaction is cpu intensive, so be polite and spawn it on the CPU heavy runtime.
+            cpu_heavy_runtime
+                .spawn_named(
+                    || "persist::compact::consolidate",
+                    Self::compact(
+                        cfg.clone(),
+                        Arc::clone(&blob),
+                        Arc::clone(&metrics),
+                        Arc::clone(&cpu_heavy_runtime),
+                        req,
+                        writer_id,
+                    )
+                    .instrument(compact_span),
+                )
+                .map_err(|e| anyhow!(e)),
+        )
+        .await;
+
+        let res = match res {
+            Ok(res) => res,
+            Err(err) => {
+                metrics.compaction.timed_out.inc();
+                Err(anyhow!(err))
+            }
+        };
+
+        metrics
+            .compaction
+            .seconds
+            .inc_by(start.elapsed().as_secs_f64());
+
+        match res {
+            Ok(Ok(res)) => {
+                let res = FueledMergeRes { output: res.output };
+                let apply_merge_result = machine.merge_res(&res).await;
+                match &apply_merge_result {
+                    ApplyMergeResult::AppliedExact => {
+                        metrics.compaction.applied.inc();
+                        metrics.compaction.applied_exact_match.inc();
+                        machine.shard_metrics.compaction_applied.inc();
+                        Ok(apply_merge_result)
+                    }
+                    ApplyMergeResult::AppliedSubset => {
+                        metrics.compaction.applied.inc();
+                        metrics.compaction.applied_subset_match.inc();
+                        machine.shard_metrics.compaction_applied.inc();
+                        Ok(apply_merge_result)
+                    }
+                    ApplyMergeResult::NotAppliedNoMatch
+                    | ApplyMergeResult::NotAppliedInvalidSince
+                    | ApplyMergeResult::NotAppliedTooManyUpdates => {
+                        if let ApplyMergeResult::NotAppliedTooManyUpdates = &apply_merge_result {
+                            metrics.compaction.not_applied_too_many_updates.inc();
+                        }
+                        metrics.compaction.noop.inc();
+                        for part in res.output.parts {
+                            let key = part.key.complete(&machine.shard_id());
+                            retry_external(
+                                &metrics.retries.external.compaction_noop_delete,
+                                || blob.delete(&key),
+                            )
+                            .await;
+                        }
+                        Ok(apply_merge_result)
+                    }
+                }
+            }
+            Ok(Err(err)) | Err(err) => {
+                metrics.compaction.failed.inc();
+                debug!("compaction for {} failed: {:#}", machine.shard_id(), err);
+                Err(err)
+            }
+        }
     }
 
     /// Compacts input batches in bounded memory.
