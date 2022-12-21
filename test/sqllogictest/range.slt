@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+
+#
+# int4range
+
 query T
 select '[0,100)'::int4range::text;
 ----
@@ -607,11 +611,23 @@ false
 # [-1,2) true true true
 # (,2) true true true
 # [2,) false false false
-# empty true false false false
+# empty false false false
+# Note that the predicate also ensures equality between @> and <@
 query TTTT
-SELECT DISTINCT
-    a::text, a @> -1 contains_neg_1, a @> 0 contains_0, a @> 1 contains_1
-FROM int4range_values ORDER BY a;
+SELECT
+	DISTINCT
+	a::STRING,
+	a @> -1 AS contains_neg_1,
+	a @> 0 AS contains_0,
+	a @> 1 AS contains_1
+FROM
+	int4range_values
+WHERE
+	(a @> -1 = -1 <@ a)
+	AND (a @> 0 = 0 <@ a)
+	AND (a @> 1 = 1 <@ a)
+ORDER BY
+	a;
 ----
 (,)
 true
@@ -653,6 +669,9 @@ empty
 false
 false
 false
+
+#
+# int8range
 
 query T
 select '[0,100)'::int8range::text;
@@ -1136,7 +1155,6 @@ SELECT a::text AS t FROM int8range_values EXCEPT SELECT column1::text FROM (VALU
 ----
 
 
-
 # Test range in list
 query T
 SELECT (LIST['(,)', 'empty', '[-1,1]']::int8range list)::text;
@@ -1201,11 +1219,23 @@ false
 # [-1,2) true true true
 # (,2) true true true
 # [2,) false false false
-# empty true false false false
+# empty false false false
+# Note that the predicate also ensures equality between @> and <@
 query TTTT
-SELECT DISTINCT
-    a::text, a @> -1 contains_neg_1, a @> 0 contains_0, a @> 1 contains_1
-FROM int8range_values ORDER BY a;
+SELECT
+	DISTINCT
+	a::STRING,
+	-1 <@ a AS contains_neg_1,
+	a @> 0 AS contains_0,
+	a @> 1 AS contains_1
+FROM
+	int8range_values
+WHERE
+	(a @> -1 = -1 <@ a)
+	AND (a @> 0 = 0 <@ a)
+	AND (a @> 1 = 1 <@ a)
+ORDER BY
+	a;
 ----
 (,)
 true

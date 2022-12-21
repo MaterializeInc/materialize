@@ -407,6 +407,11 @@ message ProtoUnaryFunc {
 }
 
 message ProtoBinaryFunc {
+    message ProtoRangeContainsElemInner {
+        mz_repr.relation_and_scalar.ProtoScalarType elem_type = 1;
+        bool rev = 2;
+    }
+
     oneof kind {
         google.protobuf.Empty add_int16 = 46;
         google.protobuf.Empty add_int32 = 11;
@@ -576,7 +581,7 @@ message ProtoBinaryFunc {
         google.protobuf.Empty mod_uint16 = 169;
         google.protobuf.Empty mod_uint32 = 170;
         google.protobuf.Empty mod_uint64 = 171;
-        mz_repr.relation_and_scalar.ProtoScalarType range_contains_elem = 172;
+        ProtoRangeContainsElemInner range_contains_elem = 172;
     }
 }
 

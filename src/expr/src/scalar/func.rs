@@ -1903,7 +1903,7 @@ pub enum BinaryFunc {
     Power,
     PowerNumeric,
     GetByte,
-    RangeContainsElem { elem_type: ScalarType },
+    RangeContainsElem { elem_type: ScalarType, rev: bool },
 }
 
 impl BinaryFunc {
@@ -2201,7 +2201,7 @@ impl BinaryFunc {
             BinaryFunc::PowerNumeric => eager!(power_numeric),
             BinaryFunc::RepeatString => eager!(repeat_string, temp_storage),
             BinaryFunc::GetByte => eager!(get_byte),
-            BinaryFunc::RangeContainsElem { elem_type } => Ok(match elem_type {
+            BinaryFunc::RangeContainsElem { elem_type, rev: _ } => Ok(match elem_type {
                 ScalarType::Int32 => eager!(contains_range_elem::<i32>),
                 ScalarType::Int64 => eager!(contains_range_elem::<i64>),
                 _ => unreachable!(),
@@ -2869,7 +2869,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::PowerNumeric => f.write_str("power_numeric"),
             BinaryFunc::RepeatString => f.write_str("repeat"),
             BinaryFunc::GetByte => f.write_str("get_byte"),
-            BinaryFunc::RangeContainsElem { .. } => f.write_str("@>"),
+            BinaryFunc::RangeContainsElem { rev, .. } => {
+                f.write_str(if *rev { "<@" } else { "@>" })
+            }
         }
     }
 }
@@ -3056,7 +3058,8 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::LogNumeric),
             Just(BinaryFunc::Power),
             Just(BinaryFunc::PowerNumeric),
-            any::<ScalarType>().prop_map(|elem_type| BinaryFunc::RangeContainsElem { elem_type })
+            (bool::arbitrary(), mz_repr::arb_range_type())
+                .prop_map(|(rev, elem_type)| BinaryFunc::RangeContainsElem { elem_type, rev })
         ]
     }
 }
@@ -3233,9 +3236,12 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::Power => Power(()),
             BinaryFunc::PowerNumeric => PowerNumeric(()),
             BinaryFunc::GetByte => GetByte(()),
-            BinaryFunc::RangeContainsElem { elem_type } => {
-                RangeContainsElem(elem_type.into_proto())
-            }
+            BinaryFunc::RangeContainsElem { elem_type, rev } => RangeContainsElem(
+                crate::scalar::proto_binary_func::ProtoRangeContainsElemInner {
+                    elem_type: Some(elem_type.into_proto()),
+                    rev: *rev,
+                },
+            ),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -3418,8 +3424,11 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 Power(()) => Ok(BinaryFunc::Power),
                 PowerNumeric(()) => Ok(BinaryFunc::PowerNumeric),
                 GetByte(()) => Ok(BinaryFunc::GetByte),
-                RangeContainsElem(elem_type) => Ok(BinaryFunc::RangeContainsElem {
-                    elem_type: elem_type.into_rust()?,
+                RangeContainsElem(inner) => Ok(BinaryFunc::RangeContainsElem {
+                    elem_type: inner
+                        .elem_type
+                        .into_rust_if_some("ProtoRangeContainsElemInner::elem_type")?,
+                    rev: inner.rev,
                 }),
             }
         } else {
@@ -6507,8 +6516,7 @@ impl Arbitrary for VariadicFunc {
             Just(VariadicFunc::DateBinTimestampTz),
             Just(VariadicFunc::And),
             Just(VariadicFunc::Or),
-            prop_oneof![Just(ScalarType::Int32), Just(ScalarType::Int64)]
-                .prop_map(|elem_type| VariadicFunc::RangeCreate { elem_type })
+            mz_repr::arb_range_type().prop_map(|elem_type| VariadicFunc::RangeCreate { elem_type })
         ]
     }
 }

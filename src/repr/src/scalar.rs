@@ -2840,6 +2840,10 @@ pub struct PropRange(
     )>,
 );
 
+pub fn arb_range_type() -> BoxedStrategy<ScalarType> {
+    prop_oneof![Just(ScalarType::Int32), Just(ScalarType::Int64)].boxed()
+}
+
 fn arb_range_data() -> BoxedStrategy<(PropDatum, PropDatum)> {
     prop_oneof![
         (
