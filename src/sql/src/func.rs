@@ -3551,6 +3551,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(ArrayAny, ArrayAny) => BinaryFunc::Lt => Bool, 1072;
             params!(RecordAny, RecordAny) => BinaryFunc::Lt => Bool, 2990;
             params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Lt =>Bool, oid::FUNC_MZ_TIMESTAMP_LT_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3884;
         },
         "<=" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Lte, 1755;
@@ -3578,6 +3579,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(ArrayAny, ArrayAny) => BinaryFunc::Lte => Bool, 1074;
             params!(RecordAny, RecordAny) => BinaryFunc::Lte => Bool, 2992;
             params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Lte =>Bool, oid::FUNC_MZ_TIMESTAMP_LTE_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3885;
         },
         ">" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Gt, 1756;
@@ -3605,6 +3607,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(ArrayAny, ArrayAny) => BinaryFunc::Gt => Bool, 1073;
             params!(RecordAny, RecordAny) => BinaryFunc::Gt => Bool, 2991;
             params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gt =>Bool, oid::FUNC_MZ_TIMESTAMP_GT_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3887;
         },
         ">=" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Gte, 1757;
@@ -3632,6 +3635,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(ArrayAny, ArrayAny) => BinaryFunc::Gte => Bool, 1075;
             params!(RecordAny, RecordAny) => BinaryFunc::Gte => Bool, 2993;
             params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gte =>Bool, oid::FUNC_MZ_TIMESTAMP_GTE_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3886;
         },
         // Warning!
         // - If you are writing functions here that do not simply use
@@ -3669,6 +3673,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(ArrayAny, ArrayAny) => BinaryFunc::Eq => Bool, 1070;
             params!(RecordAny, RecordAny) => BinaryFunc::Eq => Bool, 2988;
             params!(MzTimestamp, MzTimestamp) => BinaryFunc::Eq => Bool, oid::FUNC_MZ_TIMESTAMP_EQ_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3882;
         },
         "<>" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::NotEq, 1753;
@@ -3696,6 +3701,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(ArrayAny, ArrayAny) => BinaryFunc::NotEq => Bool, 1071;
             params!(RecordAny, RecordAny) => BinaryFunc::NotEq => Bool, 2989;
             params!(MzTimestamp, MzTimestamp) => BinaryFunc::NotEq=>Bool, oid::FUNC_MZ_TIMESTAMP_NOT_EQ_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3883;
         }
     }
 });
