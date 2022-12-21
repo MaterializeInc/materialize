@@ -164,7 +164,7 @@ where
             cfg,
             metrics,
             machine: machine.clone(),
-            gc,
+            gc: gc.clone(),
             compact,
             blob,
             cpu_heavy_runtime,
@@ -172,7 +172,7 @@ where
             upper,
             last_heartbeat,
             explicitly_expired: false,
-            heartbeat_task: Some(machine.start_writer_heartbeat_task(writer_id).await),
+            heartbeat_task: Some(machine.start_writer_heartbeat_task(writer_id, gc).await),
         }
     }
 

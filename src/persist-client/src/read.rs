@@ -478,14 +478,14 @@ where
             cfg,
             metrics,
             machine: machine.clone(),
-            gc,
+            gc: gc.clone(),
             blob,
             reader_id: reader_id.clone(),
             since,
             last_heartbeat,
             explicitly_expired: false,
             leased_seqnos: BTreeMap::new(),
-            heartbeat_task: Some(machine.start_reader_heartbeat_task(reader_id).await),
+            heartbeat_task: Some(machine.start_reader_heartbeat_task(reader_id, gc).await),
         }
     }
 
