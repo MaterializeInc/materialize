@@ -611,6 +611,7 @@ message ProtoVariadicFunc {
         google.protobuf.Empty date_bin_timestamp_tz = 24;
         google.protobuf.Empty and = 25;
         google.protobuf.Empty or = 26;
+        mz_repr.relation_and_scalar.ProtoScalarType range_create = 27;
     }
 }
 
