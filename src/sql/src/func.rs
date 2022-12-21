@@ -3488,7 +3488,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
                       .call_binary(rhs, JsonbContainsJsonb))
             }), oid::OP_CONTAINS_STRING_JSONB_OID;
             params!(MapAnyCompatible, MapAnyCompatible) => MapContainsMap => Bool, oid::OP_CONTAINS_MAP_MAP_OID;
-            params!(RangeAny, AnyElement) => Operation::binary(|ecx, lhs, rhs| {
+            params!(RangeAnyCompatible, AnyCompatible) => Operation::binary(|ecx, lhs, rhs| {
                 let elem_type = ecx.scalar_type(&lhs).unwrap_range_element_type().clone();
                 Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsElem { elem_type }))
             }) => Bool, 3892;

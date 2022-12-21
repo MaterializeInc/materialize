@@ -29,6 +29,7 @@ _int2vector
 _int4
 _int4range
 _int8
+_int8range
 _uint2
 _uint4
 _uint8
@@ -70,6 +71,7 @@ int2vector
 int4
 int4range
 int8
+int8range
 uint2
 uint4
 uint8
