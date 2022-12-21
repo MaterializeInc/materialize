@@ -92,14 +92,23 @@ impl NormalizeLets {
     ///
     /// Mechanically, `action` first renumbers all bindings, erroring if any shadowing is encountered.
     /// It then promotes all `Let` and `LetRec` expressions to the roots of their expressions, fusing
-    /// `Let` bindings into containing `LetRec` bindings, but leaving `LetRec` bindings unfused to each
+    /// `Let` bindings into containing `LetRec` bindings, but leaving stacked `LetRec` bindings unfused to each
     /// other (for reasons of correctness). It then considers potential inlining in each `LetRec` scope.
     /// Lastly, it refreshes the types of each `Get` operator, erroring if any scalar types have changed
     /// but updating nullability and keys.
     ///
     /// We then perform a final renumbering.
     pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
-        // Rename all bindings to be distinct. Start at zero.
+        // Record whether the relation was initially recursive, to confirm that we do not introduce
+        // recursion to a non-recursive expression.
+        let was_recursive = relation.is_recursive();
+
+        // Renumber all bindings to ensure that identifier order matches binding order.
+        // In particular, as we use `BTreeMap` for binding order, we want to ensure that
+        // 1. Bindings within a `LetRec` are assigned increasing identifiers, and
+        // 2. Bindings across `LetRec`s are assigned identifiers in "visibility order", corresponding to an
+        // in-order traversal.
+        // TODO: More can and perhaps should be said about "visibility order" and how let promotion is correct.
         let mut id_gen = IdGen::default();
         renumbering::renumber_bindings(relation, &mut id_gen)?;
 
@@ -139,6 +148,12 @@ impl NormalizeLets {
                     body: Box::new(relation.take_dangerous()),
                 };
             }
+        }
+
+        if !was_recursive && relation.is_recursive() {
+            Err(crate::TransformError::Internal(
+                "NormalizeLets introduced LetRec to a LetRec-free expression".to_string(),
+            ))?;
         }
 
         Ok(())
@@ -183,53 +198,85 @@ mod support {
     /// It only refreshes the nullability and unique key information. As this information can regress,
     /// we do not error if the type weakens, even though that may be something we want to look into.
     pub(super) fn refresh_types(expr: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
-        // TODO: consider a different visitation order, or iterating, to propagate types further.
         let mut types = BTreeMap::new();
-        let mut worklist = vec![&mut *expr];
-        while let Some(expr) = worklist.pop() {
-            if let MirRelationExpr::LetRec {
-                ids,
-                values,
-                body: _,
-            } = expr
-            {
-                for (id, value) in ids.iter().zip(values.iter()) {
-                    types.insert(*id, value.typ());
-                }
+        refresh_types_helper(expr, &mut types)
+    }
+
+    /// Provided some existing type refreshment information, continue
+    fn refresh_types_helper(
+        expr: &mut MirRelationExpr,
+        types: &mut BTreeMap<LocalId, mz_repr::RelationType>,
+    ) -> Result<(), crate::TransformError> {
+        if let MirRelationExpr::LetRec { ids, values, body } = expr {
+            for (id, value) in ids.iter().zip(values.iter_mut()) {
+                refresh_types_helper(value, types)?;
+                let typ = value.typ();
+                let prior = types.insert(*id, typ);
+                assert!(prior.is_none());
             }
-            worklist.extend(expr.children_mut().rev());
+            refresh_types_helper(body, types)?;
+            // Not strictly necessary, but good hygiene.
+            for id in ids.iter() {
+                types.remove(id);
+            }
+            Ok(())
+        } else {
+            refresh_types_effector(expr, types)
         }
+    }
+
+    /// Applies `types` to all `Get` nodes in `expr`.
+    ///
+    /// This no longer considers new bindings, and will error if applied to `Let` and `LetRec`-free expressions.
+    fn refresh_types_effector(
+        expr: &mut MirRelationExpr,
+        types: &BTreeMap<LocalId, mz_repr::RelationType>,
+    ) -> Result<(), crate::TransformError> {
         let mut worklist = vec![&mut *expr];
         while let Some(expr) = worklist.pop() {
-            if let MirRelationExpr::Get {
-                id: Id::Local(id),
-                typ,
-            } = expr
-            {
-                if let Some(new_type) = types.get(id) {
-                    // Assert that the column length and types have not changed.
-                    assert!(
-                        new_type.column_types.len() == typ.column_types.len(),
-                        "column lengths do not match: {:?} v {:?}",
-                        new_type.column_types,
-                        typ.column_types
-                    );
-                    assert!(
-                        new_type
+            match expr {
+                MirRelationExpr::Let { .. } => {
+                    Err(crate::TransformError::Internal(
+                        "Unexpected Let encountered".to_string(),
+                    ))?;
+                }
+                MirRelationExpr::LetRec { .. } => {
+                    Err(crate::TransformError::Internal(
+                        "Unexpected LetRec encountered".to_string(),
+                    ))?;
+                }
+                MirRelationExpr::Get {
+                    id: Id::Local(id),
+                    typ,
+                } => {
+                    if let Some(new_type) = types.get(id) {
+                        // Assert that the column length has not changed.
+                        if !new_type.column_types.len() == typ.column_types.len() {
+                            Err(crate::TransformError::Internal(format!(
+                                "column lengths do not match: {:?} v {:?}",
+                                new_type.column_types, typ.column_types
+                            )))?;
+                        }
+                        // Assert that the column types have not changed.
+                        if !new_type
                             .column_types
                             .iter()
                             .zip(typ.column_types.iter())
-                            .all(|(t1, t2)| t1.scalar_type == t2.scalar_type),
-                        "scalar types do not match: {:?} v {:?}",
-                        new_type.column_types,
-                        typ.column_types
-                    );
-                    typ.clone_from(new_type);
+                            .all(|(t1, t2)| t1.scalar_type == t2.scalar_type)
+                        {
+                            Err(crate::TransformError::Internal(format!(
+                                "scalar types do not match: {:?} v {:?}",
+                                new_type.column_types, typ.column_types
+                            )))?;
+                        }
+
+                        typ.clone_from(new_type);
+                    }
                 }
+                _ => {}
             }
             worklist.extend(expr.children_mut().rev());
         }
-
         Ok(())
     }
 }
@@ -268,8 +315,6 @@ mod let_motion {
     ///
     /// The traversal is only of the `LetRec` nodes, for which fear of stack exhaustion is nominal.
     fn post_order_harvest_lets(expr: &mut MirRelationExpr) {
-        // Second, attempt to fuse non-recursive `LetRec` bindings.
-        // TODO: Ideally do a post-order traversal of only `LetRec` nodes, but for now just once.
         if let MirRelationExpr::LetRec { ids, values, body } = expr {
             // Only recursively descend through `LetRec` stages.
             for value in values.iter_mut() {
@@ -396,7 +441,7 @@ mod inlining {
     /// Considers inlining actions to perform for a sequence of bindings and a following body.
     ///
     /// A let binding may be inlined only in subsequent bindings or in the body; other bindings should
-    /// not "immediately" osberve the binding, and it would be a change to the semantics of `LetRec`.
+    /// not "immediately" observe the binding, and it would be a change to the semantics of `LetRec`.
     /// For example, it would not be correct to replace `C` with `A` in the definition of `B` here:
     /// ```ignore
     /// let A = ...;
@@ -410,8 +455,8 @@ mod inlining {
     ///  1. It has a single reference across all bindings and the body.
     ///  2. It is a "sufficient simple" `Get`, determined in part by the `inline_mfp` argument.
     /// The case of `Constant` binding could also apply, but is better handled by `FoldConstants`. Although
-    /// a bit weird, constants should also not be inlined into prior bindings as this does change the bemavion
-    /// from one where the collection is initially empty to one where it is always the contant.
+    /// a bit weird, constants should also not be inlined into prior bindings as this does change the behavior
+    /// from one where the collection is initially empty to one where it is always the constant.
     ///
     /// Having inlined bindings, many of them may now be dead (with no transitive references from `body`).
     /// These can now be removed. They may not be exactly those bindings that were inlineable, as we may not always
@@ -438,7 +483,7 @@ mod inlining {
             // It is important that we do the substitution in-order and before reasoning
             // about the inlineability of each binding, to ensure that our conclusion about
             // the inlineability of a binding stays put. Specifically,
-            //   1. by going in order no substitition will increase the `Get`-count of an
+            //   1. by going in order no substitution will increase the `Get`-count of an
             //      identifier beyond one, as all in values with strictly greater identifiers.
             //   2. by performing the substitution before reasoning, the structure of the value
             //      as it would be substituted is fixed.
@@ -475,8 +520,8 @@ mod inlining {
             // Complete the inlining in the base relation.
             inline_lets_helper(body, &mut inline_offer)?;
 
-            // We may now be able to discard some of `inline_offer` based on the remaning pattern of `Get` expressions.
-            // Storting from `body` and working backwards, we can activate bindings that are still required because we
+            // We may now be able to discard some of `inline_offer` based on the remaining pattern of `Get` expressions.
+            // Starting from `body` and working backwards, we can activate bindings that are still required because we
             // observe `Get` expressions referencing them. Any bindings not so identified can be dropped (including any
             // that may be part of a cycle not reachable from `body`).
             let mut let_bindings = BTreeMap::new();
@@ -571,6 +616,9 @@ mod renumbering {
     use mz_ore::id_gen::IdGen;
 
     /// Re-assign an identifier to each `Let`.
+    ///
+    /// Under the assumption that `id_gen` produces identifiers in order, this process
+    /// maintains in-orderness of `LetRec` identifiers.
     pub fn renumber_bindings(
         relation: &mut MirRelationExpr,
         id_gen: &mut IdGen,

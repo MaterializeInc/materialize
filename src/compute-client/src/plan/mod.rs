@@ -725,7 +725,7 @@ impl RustType<ProtoPlan> for Plan {
             LetRec(proto) => Plan::LetRec {
                 ids: proto.ids.into_rust()?,
                 values: proto.values.into_rust()?,
-                body: proto.body.into_rust_if_some("ProtoPlanLet::body")?,
+                body: proto.body.into_rust_if_some("ProtoPlanLetRec::body")?,
             },
             Mfp(proto) => Plan::Mfp {
                 input: proto.input.into_rust_if_some("ProtoPlanMfp::input")?,
@@ -946,7 +946,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         debug_info: LirDebugInfo<'_>,
     ) -> Result<(Self, AvailableCollections), ()> {
         // We don't want to trace recursive calls, which is why the public `from_mir`
-        // is annotated and delecates the work to a private (recursive) from_mir_inner.
+        // is annotated and delegates the work to a private (recursive) from_mir_inner.
         Plan::from_mir_inner(expr, arrangements, debug_info)
     }
 
@@ -1089,8 +1089,10 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 )
             }
             MirRelationExpr::LetRec { ids, values, body } => {
-                // Plan the value using only the initial arrangements, but
-                // introduce any resulting arrangements bound to `id`.
+                // Plan the values using only the available arrangements, but
+                // introduce any resulting arrangements bound to each `id`.
+                // Arrangements made available cannot be used by prior bindings,
+                // as we cannot circulate an arrangement through a `Variable` yet.
                 let mut lir_values = Vec::with_capacity(values.len());
                 for (id, value) in ids.iter().zip(values) {
                     let (value, v_keys) = Plan::from_mir_inner(value, arrangements, debug_info)?;

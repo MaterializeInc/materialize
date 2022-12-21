@@ -447,11 +447,11 @@ impl MirRelationExpr {
                 input_types.next().unwrap().clone()
             }
             Let { .. } => {
-                // skip over the unique keys for value
+                // skip over the input types for `value`.
                 input_types.nth(1).unwrap().clone()
             }
             LetRec { values, .. } => {
-                // skip over the unique keys for value
+                // skip over the input types for `values`.
                 input_types.nth(values.len()).unwrap().clone()
             }
             Union { .. } => {
