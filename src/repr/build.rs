@@ -17,6 +17,7 @@ fn main() {
             &[
                 "repr/src/antichain.proto",
                 "repr/src/chrono.proto",
+                "repr/src/error.proto",
                 "repr/src/global_id.proto",
                 "repr/src/row.proto",
                 "repr/src/strconv.proto",
@@ -29,6 +30,7 @@ fn main() {
                 "repr/src/adt/interval.proto",
                 "repr/src/adt/numeric.proto",
                 "repr/src/adt/regex.proto",
+                "repr/src/adt/timestamp.proto",
                 "repr/src/adt/varchar.proto",
             ],
             &[".."],

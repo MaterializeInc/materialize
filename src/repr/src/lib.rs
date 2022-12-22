@@ -33,6 +33,7 @@ mod timestamp;
 pub mod adt;
 pub mod antichain;
 pub mod chrono;
+pub mod error;
 pub mod explain_new;
 pub mod global_id;
 pub mod strconv;

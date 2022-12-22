@@ -22,6 +22,7 @@ import "repr/src/adt/numeric.proto";
 import "repr/src/adt/regex.proto";
 import "repr/src/adt/varchar.proto";
 import "repr/src/chrono.proto";
+import "repr/src/error.proto";
 import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
 import "repr/src/strconv.proto";
@@ -721,5 +722,6 @@ message ProtoEvalError {
         google.protobuf.Empty mz_timestamp_out_of_range = 59;
         google.protobuf.Empty mz_timestamp_step_overflow = 60;
         google.protobuf.Empty timestamp_cannot_be_nan = 61;
+        mz_repr.error.ProtoAdtError adt = 62;
     }
 }

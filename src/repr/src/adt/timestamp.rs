@@ -15,9 +15,11 @@ use std::ops::Sub;
 use ::chrono::{DateTime, Duration, NaiveDateTime, NaiveTime, Utc};
 use ::chrono::{Datelike, NaiveDate};
 use once_cell::sync::Lazy;
-use serde::{Serialize, Serializer};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
 
+use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_proto::{RustType, TryFromProtoError};
 
@@ -26,7 +28,7 @@ use crate::Datum;
 
 use super::numeric::DecimalLike;
 
-include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.date.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.timestamp.rs"));
 
 /// Common set of methods for time component.
 pub trait TimeLike: chrono::Timelike {
@@ -439,10 +441,43 @@ impl TimestampLike for chrono::DateTime<chrono::Utc> {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
+    Error,
+)]
 pub enum TimestampError {
     #[error("timestamp out of range")]
     OutOfRange,
+}
+
+impl RustType<ProtoTimestampError> for TimestampError {
+    fn into_proto(&self) -> ProtoTimestampError {
+        use proto_timestamp_error::Kind::*;
+        let kind = match self {
+            TimestampError::OutOfRange => OutOfRange(()),
+        };
+        ProtoTimestampError { kind: Some(kind) }
+    }
+
+    fn from_proto(proto: ProtoTimestampError) -> Result<Self, TryFromProtoError> {
+        use proto_timestamp_error::Kind::*;
+        match proto.kind {
+            Some(kind) => match kind {
+                OutOfRange(()) => Ok(TimestampError::OutOfRange),
+            },
+            None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

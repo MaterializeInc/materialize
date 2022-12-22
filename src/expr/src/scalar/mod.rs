@@ -10,6 +10,7 @@
 use itertools::Itertools;
 use mz_repr::adt::date::DateError;
 use mz_repr::adt::timestamp::TimestampError;
+use mz_repr::error::AdtError;
 use std::collections::HashSet;
 use std::fmt;
 use std::mem;
@@ -2248,6 +2249,7 @@ pub enum EvalError {
         dims: Option<(usize, usize)>,
     },
     TypeFromOid(String),
+    Adt(AdtError),
 }
 
 impl fmt::Display for EvalError {
@@ -2398,6 +2400,7 @@ impl fmt::Display for EvalError {
                 write!(f, "cannot concatenate incompatible arrays")
             }
             EvalError::TypeFromOid(msg) => write!(f, "{msg}"),
+            EvalError::Adt(e) => e.fmt(f),
         }
     }
 }
@@ -2592,6 +2595,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 })
             }
             EvalError::TypeFromOid(v) => TypeFromOid(v.clone()),
+            EvalError::Adt(e) => Adt(e.into_proto()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2687,6 +2691,7 @@ impl RustType<ProtoEvalError> for EvalError {
                     dims: v.dims.into_rust()?,
                 }),
                 TypeFromOid(v) => Ok(EvalError::TypeFromOid(v)),
+                Adt(e) => Ok(EvalError::Adt(e.into_rust()?)),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }
