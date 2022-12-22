@@ -1178,7 +1178,7 @@ dependencies = [
 [[package]]
 name = "console-api"
 version = "0.4.0"
-source = "git+https://github.com/MaterializeInc/console.git#bac69ecb570b7e466b2a254a9f9bf28ac0f3d95b"
+source = "git+https://github.com/MaterializeInc/tokio-console.git#bac69ecb570b7e466b2a254a9f9bf28ac0f3d95b"
 dependencies = [
  "prost",
  "prost-types",
@@ -1189,7 +1189,7 @@ dependencies = [
 [[package]]
 name = "console-subscriber"
 version = "0.1.8"
-source = "git+https://github.com/MaterializeInc/console.git#bac69ecb570b7e466b2a254a9f9bf28ac0f3d95b"
+source = "git+https://github.com/MaterializeInc/tokio-console.git#bac69ecb570b7e466b2a254a9f9bf28ac0f3d95b"
 dependencies = [
  "console-api",
  "crossbeam-channel",
