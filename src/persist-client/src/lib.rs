@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_build_info::BuildInfo;
+use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig, ConsensusKnobs};
@@ -43,14 +43,17 @@ use crate::internal::state_versions::StateVersions;
 use crate::read::{LeasedReaderId, ReadHandle};
 use crate::write::{WriteHandle, WriterId};
 
-pub mod admin;
 pub mod async_runtime;
 pub mod batch;
 pub mod cache;
+pub mod cli {
+    //! Persist command-line utilities
+    pub mod admin;
+    pub mod inspect;
+}
 pub mod critical;
 pub mod error;
 pub mod fetch;
-pub mod inspect;
 pub mod operators {
     //! [timely] operators for reading and writing persist Shards.
     pub mod shard_source;
@@ -89,6 +92,8 @@ pub mod metrics {
     pub use crate::internal::metrics::encode_ts_metric;
     pub use crate::internal::metrics::Metrics;
 }
+
+const BUILD_INFO: BuildInfo = build_info!();
 
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
 /// by persist.

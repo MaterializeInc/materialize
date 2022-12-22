@@ -23,8 +23,6 @@ use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle;
 use tracing::{info_span, Instrument};
 
-pub mod admin;
-pub mod inspect;
 pub mod maelstrom;
 pub mod open_loop;
 pub mod source_example;
@@ -46,8 +44,8 @@ enum Command {
     Maelstrom(crate::maelstrom::Args),
     OpenLoop(crate::open_loop::Args),
     SourceExample(crate::source_example::Args),
-    Inspect(crate::inspect::InspectArgs),
-    Admin(crate::admin::AdminArgs),
+    Inspect(mz_persist_client::cli::inspect::InspectArgs),
+    Admin(mz_persist_client::cli::admin::AdminArgs),
 }
 
 fn main() {
@@ -96,10 +94,10 @@ fn main() {
             runtime.block_on(crate::source_example::run(args).instrument(root_span))
         }
         Command::Inspect(command) => {
-            runtime.block_on(crate::inspect::run(command).instrument(root_span))
+            runtime.block_on(mz_persist_client::cli::inspect::run(command).instrument(root_span))
         }
         Command::Admin(command) => {
-            runtime.block_on(crate::admin::run(command).instrument(root_span))
+            runtime.block_on(mz_persist_client::cli::admin::run(command).instrument(root_span))
         }
     };
 
