@@ -69,6 +69,7 @@ pub enum PlanError {
     SubqueriesDisallowed {
         context: String,
     },
+    SubqueryOverflow,
     UnknownParameter(usize),
     RecursionLimit(RecursionLimitError),
     StrconvParse(strconv::ParseError),
@@ -289,6 +290,9 @@ impl fmt::Display for PlanError {
             }
             Self::SubqueriesDisallowed { context } => {
                 write!(f, "{} does not allow subqueries", context)
+            }
+            Self::SubqueryOverflow => {
+                write!(f, "too many subqueries in statement")
             }
             Self::UnknownParameter(n) => write!(f, "there is no parameter ${}", n),
             Self::RecursionLimit(e) => write!(f, "{}", e),

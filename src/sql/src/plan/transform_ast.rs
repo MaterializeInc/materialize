@@ -13,6 +13,7 @@
 //! are much easier to perform in SQL. Someday, we'll want our own SQL IR,
 //! but for now we just use the parser's AST directly.
 
+use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::names::Aug;
@@ -51,7 +52,14 @@ where
 
     let mut desugarer = Desugarer::new();
     f(&mut desugarer, ast);
-    desugarer.status
+    desugarer.status?;
+
+    let mut alias_collector = AliasCollector::new();
+    f(&mut alias_collector, ast);
+    let mut subquery_aliaser = SubqueryAliaser::new(alias_collector.aliases);
+    f(&mut subquery_aliaser, ast);
+    subquery_aliaser.status?;
+    Ok(())
 }
 
 // Transforms various functions to forms that are more easily handled by the
@@ -554,6 +562,79 @@ impl Desugarer {
 
         visit_mut::visit_expr_mut(self, expr);
         Ok(())
+    }
+}
+
+/// TODO(jkosh44)
+struct AliasCollector {
+    aliases: HashSet<Ident>,
+}
+
+impl AliasCollector {
+    fn new() -> AliasCollector {
+        AliasCollector {
+            aliases: HashSet::new(),
+        }
+    }
+}
+
+impl<'ast> VisitMut<'ast, Aug> for AliasCollector {
+    fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Aug>) {
+        if let Some(alias) = table_factor.alias() {
+            self.aliases.insert(alias.name.clone());
+        }
+        visit_mut::visit_table_factor_mut(self, table_factor);
+    }
+}
+
+struct SubqueryAliaser {
+    aliases: HashSet<Ident>,
+    idx: u64,
+    status: Result<(), PlanError>,
+}
+
+impl SubqueryAliaser {
+    fn new(aliases: HashSet<Ident>) -> SubqueryAliaser {
+        SubqueryAliaser {
+            aliases,
+            idx: 0,
+            status: Ok(()),
+        }
+    }
+
+    fn unique_alias(&mut self) -> Result<Ident, PlanError> {
+        const ANONYMOUS_ALIAS_NAME: &str = "unamed_subquery";
+        let mut alias = Ident::new(ANONYMOUS_ALIAS_NAME);
+        while self.aliases.contains(&alias) {
+            self.idx = self.idx.checked_add(1).ok_or(PlanError::SubqueryOverflow)?;
+            alias = Ident::new(format!("{ANONYMOUS_ALIAS_NAME}_{}", self.idx));
+        }
+        self.aliases.insert(alias.clone());
+        Ok(alias)
+    }
+}
+
+impl<'ast> VisitMut<'ast, Aug> for SubqueryAliaser {
+    fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Aug>) {
+        match table_factor {
+            TableFactor::Derived { alias, .. } if alias.is_none() => match self.unique_alias() {
+                Ok(unique_alias) => {
+                    *alias = Some(TableAlias {
+                        name: unique_alias,
+                        columns: Vec::new(),
+                        strict: false,
+                    });
+                }
+                Err(e) => self.status = Err(e),
+            },
+            TableFactor::Table { .. }
+            | TableFactor::Function { .. }
+            | TableFactor::RowsFrom { .. }
+            | TableFactor::Derived { .. }
+            | TableFactor::NestedJoin { .. } => {}
+        }
+
+        visit_mut::visit_table_factor_mut(self, table_factor);
     }
 }
 

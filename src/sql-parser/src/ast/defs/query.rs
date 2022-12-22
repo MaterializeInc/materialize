@@ -512,6 +512,18 @@ pub enum TableFactor<T: AstInfo> {
     },
 }
 
+impl<T: AstInfo> TableFactor<T> {
+    pub fn alias(&self) -> &Option<TableAlias> {
+        match self {
+            TableFactor::Table { alias, .. }
+            | TableFactor::Function { alias, .. }
+            | TableFactor::RowsFrom { alias, .. }
+            | TableFactor::Derived { alias, .. }
+            | TableFactor::NestedJoin { alias, .. } => alias,
+        }
+    }
+}
+
 impl<T: AstInfo> AstDisplay for TableFactor<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
