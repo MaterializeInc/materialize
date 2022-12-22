@@ -94,19 +94,32 @@ impl<T: Timestamp + Lattice + Codec64> PersistReadWorker<T> {
 
                     futs.push(async move {
                         let epoch = since_handle.opaque().clone();
-                        let result = since_handle
-                            .maybe_compare_and_downgrade_since(&epoch, (&epoch, &since))
-                            .instrument(span)
-                            .await;
+
+                        // We want to make sure that advancement to the empty frontier ([]) is
+                        // guaranteed, which we don't get when doing maybe_compare_and_downgrade
+                        let result = if since.is_empty() {
+                            Some(
+                                since_handle
+                                    .compare_and_downgrade_since(&epoch, (&epoch, &since))
+                                    .instrument(span)
+                                    .await,
+                            )
+                        } else {
+                            since_handle
+                                .maybe_compare_and_downgrade_since(&epoch, (&epoch, &since))
+                                .instrument(span)
+                                .await
+                        };
+
                         if let Some(Err(other_epoch)) = result {
                             mz_ore::halt!("fenced by envd @ {other_epoch:?}. ours = {epoch:?}");
                         }
 
-                        // If we're not done we put the handle back
-                        if !since.is_empty() {
-                            Some((id, (since_handle)))
-                        } else {
+                        if since.is_empty() && result.is_some() {
                             None
+                        } else {
+                            // If we're not done we put the handle back
+                            Some((id, (since_handle)))
                         }
                     });
                 }
@@ -160,7 +173,7 @@ where
 enum PersistWriteWorkerCmd<T: Timestamp + Lattice + Codec64> {
     Register(GlobalId, WriteHandle<SourceData, (), T, Diff>),
     Append(
-        Vec<(GlobalId, Vec<Update<T>>, T)>,
+        Vec<(GlobalId, Vec<Update<T>>, Antichain<T>)>,
         tokio::sync::oneshot::Sender<Result<(), StorageError>>,
     ),
     /// Appends `Vec<TimelessUpdate>` to `GlobalId` at, essentially,
@@ -245,7 +258,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                                 old_span.follows_from(span.id());
                                             }
                                             updates.extend(update);
-                                            old_upper.join_assign(&Antichain::from_elem(upper));
+                                            old_upper.join_assign(&upper);
                                         }
                                         all_responses.push((ids, response));
                                     }
@@ -253,12 +266,6 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                         let mut updates_outer = Vec::with_capacity(updates.len());
                                         for (id, update, at_least) in updates {
                                             let current_upper = write_handles[&id].upper().clone();
-                                            if update.is_empty() && current_upper.is_empty() {
-                                                // Ignore timestamp advancement for
-                                                // closed collections. TODO? Make this a
-                                                // correctable error
-                                                continue;
-                                            }
 
                                             let lower = if current_upper.less_than(&at_least) {
                                                 at_least
@@ -281,7 +288,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                                 })
                                                 .collect::<Vec<_>>();
 
-                                            updates_outer.push((id, update, upper));
+                                            updates_outer.push((id, update, Antichain::from_elem(upper)));
                                         }
                                         commands.push_front((
                                             span,
@@ -319,6 +326,12 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                 for (id, write) in write_handles.iter_mut() {
                                     if let Some((span, updates, new_upper)) = commands.remove(id) {
                                         let persist_upper = write.upper().clone();
+                                        if updates.is_empty() && persist_upper.is_empty() {
+                                            // Ignore timestamp advancement for
+                                            // closed collections. TODO? Make this a
+                                            // correctable error
+                                            continue;
+                                        }
                                         let updates = updates
                                             .into_iter()
                                             .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
@@ -404,7 +417,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
 
     pub(crate) fn append(
         &self,
-        updates: Vec<(GlobalId, Vec<Update<T>>, T)>,
+        updates: Vec<(GlobalId, Vec<Update<T>>, Antichain<T>)>,
     ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         if updates.is_empty() {
