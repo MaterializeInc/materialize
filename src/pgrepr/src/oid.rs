@@ -76,6 +76,8 @@ pub const TYPE_ANYRANGE_OID: u32 = 3831;
 pub const TYPE_ANYCOMPATIBLERANGE_OID: u32 = 5080;
 pub const TYPE_INT8RANGE_OID: u32 = 3926;
 pub const TYPE_INT8RANGE_ARRAY_OID: u32 = 3927;
+pub const TYPE_DATERANGE_OID: u32 = 3912;
+pub const TYPE_DATERANGE_ARRAY_OID: u32 = 3913;
 
 /// The first OID in PostgreSQL's system catalog that is not pinned during
 /// bootstrapping.

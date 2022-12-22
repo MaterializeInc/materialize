@@ -1757,7 +1757,7 @@ macro_rules! builtins {
         $(
             let impls = vec![$(impl_def!($params, $op $(,$return_type)?, $oid)),+];
             let old = builtins.insert($name, Func::$ty(impls));
-            assert!(old.is_none(), "duplicate entry in builtins list");
+            assert!(old.is_none(), "duplicate entry in builtins list {:?}", old);
         )+
         builtins
     }};
@@ -1983,6 +1983,21 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(String, Timestamp) => BinaryFunc::DateTruncTimestamp, 2020;
             params!(String, TimestampTz) => BinaryFunc::DateTruncTimestampTz, 1217;
             params!(String, Interval) => BinaryFunc::DateTruncInterval, 1218;
+        },
+        "daterange" => Scalar {
+            params!(Date, Date) => Operation::variadic(|_ecx, mut exprs| {
+                exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Date },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Date)}, 3941;
+            params!(Date, Date, String) => Operation::variadic(|_ecx, exprs| {
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Date },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Date)}, 3942;
         },
         "degrees" => Scalar {
             params!(Float64) => UnaryFunc::Degrees(func::Degrees), 1608;

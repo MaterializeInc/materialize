@@ -39,6 +39,7 @@ use mz_ore::result::ResultExt;
 use mz_pgrepr::Type;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::Timezone;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
@@ -2204,6 +2205,7 @@ impl BinaryFunc {
             BinaryFunc::RangeContainsElem { elem_type, rev: _ } => Ok(match elem_type {
                 ScalarType::Int32 => eager!(contains_range_elem::<i32>),
                 ScalarType::Int64 => eager!(contains_range_elem::<i64>),
+                ScalarType::Date => eager!(contains_range_elem::<Date>),
                 _ => unreachable!(),
             }),
         }
@@ -6470,6 +6472,7 @@ impl fmt::Display for VariadicFunc {
             } => f.write_str(match element_type {
                 ScalarType::Int32 => "int4range",
                 ScalarType::Int64 => "int8range",
+                ScalarType::Date => "daterange",
                 _ => unreachable!(),
             }),
         }

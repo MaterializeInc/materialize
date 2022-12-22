@@ -17,12 +17,13 @@ use bitflags::bitflags;
 use mz_lowertest::MzReflect;
 use mz_ore::soft_assert;
 use mz_proto::{RustType, TryFromProtoError};
-use num_traits::CheckedAdd;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::DatumKind;
 use crate::Datum;
+
+use super::date::Date;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.range.rs"));
 
@@ -103,7 +104,7 @@ impl<D: Hash> Hash for Range<D> {
 
 /// Trait alias for traits required for generic range function implementations.
 pub trait RangeOps<'a>:
-    Debug + Ord + PartialOrd + Eq + PartialEq + CheckedAdd + TryFrom<Datum<'a>> + Into<Datum<'a>>
+    Debug + Ord + PartialOrd + Eq + PartialEq + TryFrom<Datum<'a>> + Into<Datum<'a>>
 where
     <Self as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
 {
@@ -146,6 +147,16 @@ impl<'a> RangeOps<'a> for i64 {
 
     fn err_type_name() -> &'static str {
         "bigint"
+    }
+}
+
+impl<'a> RangeOps<'a> for Date {
+    fn step(self) -> Option<Date> {
+        self.checked_add(1).ok()
+    }
+
+    fn err_type_name() -> &'static str {
+        "date"
     }
 }
 
@@ -405,6 +416,7 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
             Some(value) => match value {
                 d @ Datum::Int32(_) => self.canonicalize_inner::<i32>(d)?,
                 d @ Datum::Int64(_) => self.canonicalize_inner::<i64>(d)?,
+                d @ Datum::Date(_) => self.canonicalize_inner::<Date>(d)?,
                 d => unreachable!("{d:?} not yet supported in ranges"),
             },
         })

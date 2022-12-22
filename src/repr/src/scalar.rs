@@ -364,6 +364,16 @@ impl TryFrom<Datum<'_>> for CheckedTimestamp<DateTime<Utc>> {
     }
 }
 
+impl TryFrom<Datum<'_>> for Date {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Date(d) => Ok(d),
+            _ => Err(()),
+        }
+    }
+}
+
 impl<'a> Datum<'a> {
     /// Reports whether this datum is null (i.e., is [`Datum::Null`]).
     pub fn is_null(&self) -> bool {
@@ -1002,10 +1012,9 @@ where
     Datum<'a>: From<T>,
 {
     fn from(o: Option<T>) -> Datum<'a> {
-        if let Some(d) = o {
-            d.into()
-        } else {
-            Datum::Null
+        match o {
+            Some(d) => d.into(),
+            None => Datum::Null,
         }
     }
 }
@@ -2841,7 +2850,12 @@ pub struct PropRange(
 );
 
 pub fn arb_range_type() -> BoxedStrategy<ScalarType> {
-    prop_oneof![Just(ScalarType::Int32), Just(ScalarType::Int64)].boxed()
+    prop_oneof![
+        Just(ScalarType::Int32),
+        Just(ScalarType::Int64),
+        Just(ScalarType::Date)
+    ]
+    .boxed()
 }
 
 fn arb_range_data() -> BoxedStrategy<(PropDatum, PropDatum)> {
@@ -2853,6 +2867,10 @@ fn arb_range_data() -> BoxedStrategy<(PropDatum, PropDatum)> {
         (
             any::<i64>().prop_map(PropDatum::Int64),
             any::<i64>().prop_map(PropDatum::Int64),
+        ),
+        (
+            arb_date().prop_map(PropDatum::Date),
+            arb_date().prop_map(PropDatum::Date),
         ),
     ]
     .boxed()
