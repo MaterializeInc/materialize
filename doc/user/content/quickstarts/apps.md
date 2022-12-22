@@ -6,6 +6,7 @@ menu:
     parent: 'quickstarts'
     weight: 30
     name: 'Data Applications'
+draft: true
 aliases:
   - /demos/data-applications
 ---
