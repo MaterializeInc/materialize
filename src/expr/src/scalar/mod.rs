@@ -2489,6 +2489,12 @@ impl From<TimestampError> for EvalError {
     }
 }
 
+impl From<AdtError> for EvalError {
+    fn from(value: AdtError) -> Self {
+        EvalError::Adt(value)
+    }
+}
+
 impl RustType<ProtoEvalError> for EvalError {
     fn into_proto(&self) -> ProtoEvalError {
         use proto_eval_error::Kind::*;

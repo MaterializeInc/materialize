@@ -315,6 +315,55 @@ pub trait TimestampLike:
 
     /// Subtracts given Duration from the current date and time.
     fn checked_sub_signed(self, rhs: Duration) -> Option<Self>;
+
+    // TODO(benesch): remove potentially dangerous usage of `as`.
+    #[allow(clippy::as_conversions)]
+    fn add_timestamp_months<T: TimestampLike>(
+        &self,
+        mut months: i32,
+    ) -> Result<CheckedTimestamp<Self>, TimestampError> {
+        if months == 0 {
+            return Ok(CheckedTimestamp::from_timestamplike(self.clone())?);
+        }
+
+        let (mut year, mut month, mut day) = (self.year(), self.month0() as i32, self.day());
+        let years = months / 12;
+        year = year.checked_add(years).ok_or(TimestampError::OutOfRange)?;
+
+        months %= 12;
+        // positive modulus is easier to reason about
+        if months < 0 {
+            year -= 1;
+            months += 12;
+        }
+        year += (month + months) / 12;
+        month = (month + months) % 12;
+        // account for dt.month0
+        month += 1;
+
+        // handle going from January 31st to February by saturation
+        let mut new_d = chrono::NaiveDate::from_ymd_opt(year, month as u32, day);
+        while new_d.is_none() {
+            // If we have decremented day past 28 and are still receiving `None`,
+            // then we have generally overflowed `NaiveDate`.
+            if day < 28 {
+                return Err(TimestampError::OutOfRange);
+            }
+            day -= 1;
+            new_d = chrono::NaiveDate::from_ymd_opt(year, month as u32, day);
+        }
+        let new_d = new_d.unwrap();
+
+        // Neither postgres nor mysql support leap seconds, so this should be safe.
+        //
+        // Both my testing and https://dba.stackexchange.com/a/105829 support the
+        // idea that we should ignore leap seconds
+        let new_dt = new_d
+            .and_hms_nano_opt(self.hour(), self.minute(), self.second(), self.nanosecond())
+            .unwrap();
+        let new_dt = Self::from_date_time(new_dt);
+        Ok(CheckedTimestamp::from_timestamplike(new_dt)?)
+    }
 }
 
 impl TryFrom<Datum<'_>> for NaiveDateTime {

@@ -22,6 +22,7 @@ use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
+use mz_repr::error::AdtError;
 use num::traits::CheckedNeg;
 use proptest::{prelude::*, strategy::*};
 use proptest_derive::Arbitrary;
@@ -44,7 +45,7 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::any_regex;
-use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
+use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampError, TimestampLike};
 use mz_repr::chrono::any_naive_datetime;
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
@@ -304,15 +305,15 @@ fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn add_timestamplike_interval<'a, T>(
     a: CheckedTimestamp<T>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError>
+) -> Result<Datum<'a>, AdtError>
 where
     T: TimestampLike,
 {
     let dt = a.date_time();
-    let dt = add_timestamp_months(&dt, b.months)?;
+    let dt = dt.add_timestamp_months::<NaiveDateTime>(b.months)?;
     let dt = dt
         .checked_add_signed(b.duration_as_chrono())
-        .ok_or(EvalError::TimestampOutOfRange)?;
+        .ok_or(TimestampError::OutOfRange)?;
     T::from_date_time(dt).try_into().err_into()
 }
 
@@ -323,7 +324,7 @@ fn sub_timestamplike_interval<'a, T>(
 where
     T: TimestampLike,
 {
-    neg_interval_inner(b).and_then(|i| add_timestamplike_interval(a, i))
+    neg_interval_inner(b).and_then(|i| add_timestamplike_interval(a, i).err_into())
 }
 
 fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -1927,13 +1928,15 @@ impl BinaryFunc {
                 eager!(|a: Datum, b: Datum| add_timestamplike_interval(
                     a.unwrap_timestamp(),
                     b.unwrap_interval(),
-                ))
+                )
+                .err_into())
             }
             BinaryFunc::AddTimestampTzInterval => {
                 eager!(|a: Datum, b: Datum| add_timestamplike_interval(
                     a.unwrap_timestamptz(),
                     b.unwrap_interval(),
-                ))
+                )
+                .err_into())
             }
             BinaryFunc::AddDateTime => eager!(add_date_time),
             BinaryFunc::AddDateInterval => eager!(add_date_interval),
