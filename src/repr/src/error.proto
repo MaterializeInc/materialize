@@ -20,5 +20,7 @@ package mz_repr.error;
 message ProtoAdtError {
     oneof kind {
         mz_repr.adt.timestamp.ProtoTimestampError timestamp = 1;
+        google.protobuf.Empty u_int16_out_of_range = 2;
+        google.protobuf.Empty u_int32_out_of_range = 3;
     }
 }

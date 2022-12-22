@@ -22,7 +22,7 @@ use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
-use mz_repr::error::AdtError;
+use mz_repr::error::{FallibleAdd, FallibleNeg};
 use num::traits::CheckedNeg;
 use proptest::{prelude::*, strategy::*};
 use proptest_derive::Arbitrary;
@@ -260,10 +260,7 @@ fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 }
 
 fn add_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_uint16()
-        .checked_add(b.unwrap_uint16())
-        .ok_or(EvalError::UInt16OutOfRange)
-        .map(Datum::from)
+    Ok(a.unwrap_uint16().fallible_add(&b.unwrap_uint16())?.into())
 }
 
 fn add_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -302,21 +299,6 @@ fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
-fn add_timestamplike_interval<'a, T>(
-    a: CheckedTimestamp<T>,
-    b: Interval,
-) -> Result<Datum<'a>, AdtError>
-where
-    T: TimestampLike,
-{
-    let dt = a.date_time();
-    let dt = dt.add_timestamp_months::<NaiveDateTime>(b.months)?;
-    let dt = dt
-        .checked_add_signed(b.duration_as_chrono())
-        .ok_or(TimestampError::OutOfRange)?;
-    T::from_date_time(dt).try_into().err_into()
-}
-
 fn sub_timestamplike_interval<'a, T>(
     a: CheckedTimestamp<T>,
     b: Datum,
@@ -324,7 +306,12 @@ fn sub_timestamplike_interval<'a, T>(
 where
     T: TimestampLike,
 {
-    neg_interval_inner(b).and_then(|i| add_timestamplike_interval(a, i).err_into())
+    neg_interval_inner(b).and_then(|i| {
+        a.date_time()
+            .interval_checked_add(&i)
+            .map(Datum::from)
+            .err_into()
+    })
 }
 
 fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -1140,9 +1127,7 @@ pub fn neg_interval(a: Datum) -> Result<Datum, EvalError> {
 }
 
 fn neg_interval_inner(a: Datum) -> Result<Interval, EvalError> {
-    a.unwrap_interval()
-        .checked_neg()
-        .ok_or(EvalError::IntervalOutOfRange)
+    a.unwrap_interval().fallible_neg().err_into()
 }
 
 fn log_guard_numeric(val: &Numeric, function_name: &str) -> Result<(), EvalError> {
@@ -1924,20 +1909,16 @@ impl BinaryFunc {
             BinaryFunc::AddUInt64 => eager!(add_uint64),
             BinaryFunc::AddFloat32 => eager!(add_float32),
             BinaryFunc::AddFloat64 => eager!(add_float64),
-            BinaryFunc::AddTimestampInterval => {
-                eager!(|a: Datum, b: Datum| add_timestamplike_interval(
-                    a.unwrap_timestamp(),
-                    b.unwrap_interval(),
-                )
-                .err_into())
-            }
-            BinaryFunc::AddTimestampTzInterval => {
-                eager!(|a: Datum, b: Datum| add_timestamplike_interval(
-                    a.unwrap_timestamptz(),
-                    b.unwrap_interval(),
-                )
-                .err_into())
-            }
+            BinaryFunc::AddTimestampInterval => eager!(|a: Datum, b: Datum| Ok(a
+                .unwrap_timestamp()
+                .date_time()
+                .interval_checked_add(&b.unwrap_interval())?
+                .into())),
+            BinaryFunc::AddTimestampTzInterval => eager!(|a: Datum, b: Datum| Ok(a
+                .unwrap_timestamptz()
+                .date_time()
+                .interval_checked_add(&b.unwrap_interval())?
+                .into())),
             BinaryFunc::AddDateTime => eager!(add_date_time),
             BinaryFunc::AddDateInterval => eager!(add_date_interval),
             BinaryFunc::AddTimeInterval => Ok(eager!(add_time_interval)),

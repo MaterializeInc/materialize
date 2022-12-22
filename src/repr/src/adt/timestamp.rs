@@ -24,8 +24,10 @@ use mz_ore::cast::CastFrom;
 use mz_proto::{RustType, TryFromProtoError};
 
 use crate::chrono::ProtoNaiveDateTime;
+use crate::error::AdtError;
 use crate::Datum;
 
+use super::interval::Interval;
 use super::numeric::DecimalLike;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.timestamp.rs"));
@@ -318,7 +320,7 @@ pub trait TimestampLike:
 
     // TODO(benesch): remove potentially dangerous usage of `as`.
     #[allow(clippy::as_conversions)]
-    fn add_timestamp_months<T: TimestampLike>(
+    fn add_timestamp_months(
         &self,
         mut months: i32,
     ) -> Result<CheckedTimestamp<Self>, TimestampError> {
@@ -363,6 +365,14 @@ pub trait TimestampLike:
             .unwrap();
         let new_dt = Self::from_date_time(new_dt);
         Ok(CheckedTimestamp::from_timestamplike(new_dt)?)
+    }
+
+    fn interval_checked_add(&self, i: &Interval) -> Result<CheckedTimestamp<Self>, AdtError> {
+        let dt = self.add_timestamp_months(i.months)?;
+        let t = dt
+            .checked_add_signed(i.duration_as_chrono())
+            .ok_or(TimestampError::OutOfRange)?;
+        Ok(CheckedTimestamp { t })
     }
 }
 

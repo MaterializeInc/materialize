@@ -20,6 +20,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
 use crate::adt::numeric::{DecimalLike, Numeric};
+use crate::error::AdtError;
+
+use super::timestamp::TimestampError;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.interval.rs"));
 
@@ -66,6 +69,16 @@ impl RustType<ProtoInterval> for Interval {
             days: proto.days,
             micros: proto.micros,
         })
+    }
+}
+
+pub enum IntervalError {
+    OutOfRange,
+}
+
+impl crate::error::GenericError for Interval {
+    fn out_of_range() -> AdtError {
+        AdtError::Timestamp(TimestampError::OutOfRange)
     }
 }
 
