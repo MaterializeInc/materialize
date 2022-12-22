@@ -15,6 +15,7 @@ use std::hash::{Hash, Hasher};
 
 use bitflags::bitflags;
 use mz_lowertest::MzReflect;
+use mz_ore::soft_assert;
 use mz_proto::{RustType, TryFromProtoError};
 use num_traits::CheckedAdd;
 use proptest_derive::Arbitrary;
@@ -106,7 +107,19 @@ pub trait RangeOps<'a>:
 where
     <Self as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
 {
-    fn step() -> Option<Self>;
+    /// Increment `self` one step forward, if applicable. Return `None` if
+    /// overflows.
+    ///
+    /// Types that do not have discrete steps should never call this function,
+    /// but we handle this with a soft assert because there's nothing inherently
+    /// wrong with it.
+    fn step(self) -> Option<Self> {
+        soft_assert!(
+            false,
+            "default implementation viable only for continuous value types, which should never be called"
+        );
+        Some(self)
+    }
 
     fn unwrap_datum(d: Datum<'a>) -> Self {
         <Self>::try_from(d)
@@ -117,8 +130,8 @@ where
 }
 
 impl<'a> RangeOps<'a> for i32 {
-    fn step() -> Option<i32> {
-        Some(1)
+    fn step(self) -> Option<i32> {
+        self.checked_add(1)
     }
 
     fn err_type_name() -> &'static str {
@@ -127,8 +140,8 @@ impl<'a> RangeOps<'a> for i32 {
 }
 
 impl<'a> RangeOps<'a> for i64 {
-    fn step() -> Option<i64> {
-        Some(1)
+    fn step(self) -> Option<i64> {
+        self.checked_add(1)
     }
 
     fn err_type_name() -> &'static str {
@@ -381,6 +394,9 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
         }
     }
 
+    /// Rewrite the bounds to the consistent format. This is absolutely
+    /// necessary to perform the correct equality/comparison operations on
+    /// types.
     fn canonicalize(&mut self) -> Result<(), InvalidRangeError> {
         Ok(match self.bound {
             None => {
@@ -394,25 +410,26 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
         })
     }
 
+    /// Canonicalize `self`'s representation for types that have discrete steps
+    /// between values.
+    ///
+    /// Continuous values (e.g. timestamps, numeric) must not be
+    /// canonicalized.
     fn canonicalize_inner<T: RangeOps<'a>>(&mut self, d: Datum<'a>) -> Result<(), InvalidRangeError>
     where
         <T as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
     {
-        if let Some(step) = T::step() {
-            // Upper bounds must be exclusive, lower bounds inclusive
-            if UPPER == self.inclusive {
-                let cur = <T>::unwrap_datum(d);
-                self.bound = Some(
-                    cur.checked_add(&step)
-                        .ok_or_else(|| {
-                            InvalidRangeError::CanonicalizationOverflow(
-                                T::err_type_name().to_string(),
-                            )
-                        })?
-                        .into(),
-                );
-                self.inclusive = !UPPER;
-            }
+        // Upper bounds must be exclusive, lower bounds inclusive
+        if UPPER == self.inclusive {
+            let cur = <T>::unwrap_datum(d);
+            self.bound = Some(
+                cur.step()
+                    .ok_or_else(|| {
+                        InvalidRangeError::CanonicalizationOverflow(T::err_type_name().to_string())
+                    })?
+                    .into(),
+            );
+            self.inclusive = !UPPER;
         }
 
         Ok(())
