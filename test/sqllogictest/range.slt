@@ -1277,3 +1277,549 @@ empty
 false
 false
 false
+
+#
+# daterange
+
+query T
+select '[1970-01-01,62143-12-30)'::daterange::text;
+----
+[1970-01-01,62143-12-30)
+
+query T
+select pg_typeof('[1970-01-01,62143-12-30)'::daterange);
+----
+daterange
+
+query T
+select 'empty'::daterange::text;
+----
+empty
+
+query T
+select pg_typeof('empty'::daterange);
+----
+daterange
+
+query T
+select null::daterange::text
+----
+NULL
+
+# Test incrementing max date
+query error date out of range
+SELECT daterange(('0001-01-01'::date + '262142years 11months 30days'::interval)::date, null, '()');
+
+#parameterized input
+
+query T
+SELECT '(,)'::daterange::text;
+----
+(,)
+
+query T
+SELECT '(,1969-12-31)'::daterange::text;
+----
+(,1969-12-31)
+
+query T
+SELECT '(,1970-01-01)'::daterange::text;
+----
+(,1970-01-01)
+
+query T
+SELECT '(,1970-01-02)'::daterange::text;
+----
+(,1970-01-02)
+
+query T
+SELECT '(,]'::daterange::text;
+----
+(,)
+
+query T
+SELECT '(,1969-12-31]'::daterange::text;
+----
+(,1970-01-01)
+
+query T
+SELECT '(,1970-01-01]'::daterange::text;
+----
+(,1970-01-02)
+
+query T
+SELECT '(,1970-01-02]'::daterange::text;
+----
+(,1970-01-03)
+
+query T
+SELECT '(1969-12-31,)'::daterange::text;
+----
+[1970-01-01,)
+
+query T
+SELECT '(1969-12-31,1969-12-31)'::daterange::text;
+----
+empty
+
+query T
+SELECT '(1969-12-31,1970-01-01)'::daterange::text;
+----
+empty
+
+query T
+SELECT '(1969-12-31,1970-01-02)'::daterange::text;
+----
+[1970-01-01,1970-01-02)
+
+query T
+SELECT '(1969-12-31,]'::daterange::text;
+----
+[1970-01-01,)
+
+query T
+SELECT '(1969-12-31,1969-12-31]'::daterange::text;
+----
+empty
+
+query T
+SELECT '(1969-12-31,1970-01-01]'::daterange::text;
+----
+[1970-01-01,1970-01-02)
+
+query T
+SELECT '(1969-12-31,1970-01-02]'::daterange::text;
+----
+[1970-01-01,1970-01-03)
+
+query T
+SELECT '(1970-01-01,)'::daterange::text;
+----
+[1970-01-02,)
+
+query error lower bound must be less than or equal to range upper bound
+SELECT '(1970-01-01,1969-12-31)'::daterange::text;
+
+query T
+SELECT '(1970-01-01,1970-01-01)'::daterange::text;
+----
+empty
+
+query T
+SELECT '(1970-01-01,1970-01-02)'::daterange::text;
+----
+empty
+
+query T
+SELECT '(1970-01-01,]'::daterange::text;
+----
+[1970-01-02,)
+
+query error lower bound must be less than or equal to range upper bound
+SELECT '(1970-01-01,1969-12-31]'::daterange::text;
+
+query T
+SELECT '(1970-01-01,1970-01-01]'::daterange::text;
+----
+empty
+
+query T
+SELECT '(1970-01-01,1970-01-02]'::daterange::text;
+----
+[1970-01-02,1970-01-03)
+
+query T
+SELECT '(1970-01-02,)'::daterange::text;
+----
+[1970-01-03,)
+
+query error lower bound must be less than or equal to range upper bound
+SELECT '(1970-01-02,1969-12-31)'::daterange::text;
+
+query error lower bound must be less than or equal to range upper bound
+SELECT '(1970-01-02,1970-01-01)'::daterange::text;
+
+query T
+SELECT '(1970-01-02,1970-01-02)'::daterange::text;
+----
+empty
+
+query T
+SELECT '(1970-01-02,]'::daterange::text;
+----
+[1970-01-03,)
+
+query error lower bound must be less than or equal to range upper bound
+SELECT '(1970-01-02,1969-12-31]'::daterange::text;
+
+query error lower bound must be less than or equal to range upper bound
+SELECT '(1970-01-02,1970-01-01]'::daterange::text;
+
+query T
+SELECT '(1970-01-02,1970-01-02]'::daterange::text;
+----
+empty
+
+query T
+SELECT '[,)'::daterange::text;
+----
+(,)
+
+query T
+SELECT '[,1969-12-31)'::daterange::text;
+----
+(,1969-12-31)
+
+query T
+SELECT '[,1970-01-01)'::daterange::text;
+----
+(,1970-01-01)
+
+query T
+SELECT '[,1970-01-02)'::daterange::text;
+----
+(,1970-01-02)
+
+query T
+SELECT '[,]'::daterange::text;
+----
+(,)
+
+query T
+SELECT '[,1969-12-31]'::daterange::text;
+----
+(,1970-01-01)
+
+query T
+SELECT '[,1970-01-01]'::daterange::text;
+----
+(,1970-01-02)
+
+query T
+SELECT '[,1970-01-02]'::daterange::text;
+----
+(,1970-01-03)
+
+query T
+SELECT '[1969-12-31,)'::daterange::text;
+----
+[1969-12-31,)
+
+query T
+SELECT '[1969-12-31,1969-12-31)'::daterange::text;
+----
+empty
+
+query T
+SELECT '[1969-12-31,1970-01-01)'::daterange::text;
+----
+[1969-12-31,1970-01-01)
+
+query T
+SELECT '[1969-12-31,1970-01-02)'::daterange::text;
+----
+[1969-12-31,1970-01-02)
+
+query T
+SELECT '[1969-12-31,]'::daterange::text;
+----
+[1969-12-31,)
+
+query T
+SELECT '[1969-12-31,1969-12-31]'::daterange::text;
+----
+[1969-12-31,1970-01-01)
+
+query T
+SELECT '[1969-12-31,1970-01-01]'::daterange::text;
+----
+[1969-12-31,1970-01-02)
+
+query T
+SELECT '[1969-12-31,1970-01-02]'::daterange::text;
+----
+[1969-12-31,1970-01-03)
+
+query T
+SELECT '[1970-01-01,)'::daterange::text;
+----
+[1970-01-01,)
+
+query error lower bound must be less than or equal to range upper bound
+SELECT '[1970-01-01,1969-12-31)'::daterange::text;
+
+query T
+SELECT '[1970-01-01,1970-01-01)'::daterange::text;
+----
+empty
+
+query T
+SELECT '[1970-01-01,1970-01-02)'::daterange::text;
+----
+[1970-01-01,1970-01-02)
+
+query T
+SELECT '[1970-01-01,]'::daterange::text;
+----
+[1970-01-01,)
+
+query error lower bound must be less than or equal to range upper bound
+SELECT '[1970-01-01,1969-12-31]'::daterange::text;
+
+query T
+SELECT '[1970-01-01,1970-01-01]'::daterange::text;
+----
+[1970-01-01,1970-01-02)
+
+query T
+SELECT '[1970-01-01,1970-01-02]'::daterange::text;
+----
+[1970-01-01,1970-01-03)
+
+query T
+SELECT '[1970-01-02,)'::daterange::text;
+----
+[1970-01-02,)
+
+query error lower bound must be less than or equal to range upper bound
+SELECT '[1970-01-02,1969-12-31)'::daterange::text;
+
+query error lower bound must be less than or equal to range upper bound
+SELECT '[1970-01-02,1970-01-01)'::daterange::text;
+
+query T
+SELECT '[1970-01-02,1970-01-02)'::daterange::text;
+----
+empty
+
+query T
+SELECT '[1970-01-02,]'::daterange::text;
+----
+[1970-01-02,)
+
+query error lower bound must be less than or equal to range upper bound
+SELECT '[1970-01-02,1969-12-31]'::daterange::text;
+
+query error lower bound must be less than or equal to range upper bound
+SELECT '[1970-01-02,1970-01-01]'::daterange::text;
+
+query T
+SELECT '[1970-01-02,1970-01-02]'::daterange::text;
+----
+[1970-01-02,1970-01-03)
+
+# Whitespace handling
+query T
+SELECT
+	DISTINCT column1::daterange::text
+FROM
+	(
+		VALUES
+			('   empty'),
+			('empty  '),
+			('  [1970-01-01,)'),
+			('[  1970-01-01,)'),
+			('[1970-01-01  ,)'),
+			('[  1970-01-01  ,)'),
+            ('[1970-01-01,  1970-01-01)'),
+			('[1970-01-01,1970-01-01  )'),
+			('[1970-01-01,  1970-01-01  )'),
+			('[1970-01-01,)  '),
+			('  (,1970-01-01)'),
+			('(,  1970-01-01)'),
+			('  (,)  ')
+	) t;
+----
+(,)
+empty
+(,1970-01-01)
+[1970-01-01,)
+
+# Input errors
+query error invalid input syntax for type range
+SELECT '[1,)'::daterange
+
+query error invalid input syntax for type range
+SELECT '(,1)'::daterange
+
+statement ok
+CREATE TABLE daterange_values (a daterange);
+
+statement ok
+INSERT INTO daterange_values VALUES
+    ('[,)'::daterange),
+    ('[,1970-01-01]'::daterange),
+    ('[,)'::daterange),
+    ('[,]'::daterange),
+    ('(,1970-01-01)'::daterange),
+    ('(,1970-01-01]'::daterange),
+    ('(,)'::daterange),
+    ('(,]'::daterange),
+    ('[1969-12-31,1970-01-01)'::daterange),
+    ('[1969-12-31,1970-01-01]'::daterange),
+    ('(1969-12-31,1970-01-01)'::daterange),
+    ('(1969-12-31,1970-01-01]'::daterange),
+    ('[1970-01-01,)'::daterange),
+    ('[1970-01-01,]'::daterange),
+    ('(1970-01-01,)'::daterange),
+    ('(1970-01-01,]'::daterange);
+
+query T
+SELECT a::text AS t FROM daterange_values ORDER BY a;
+----
+empty
+(,1970-01-01)
+(,1970-01-02)
+(,1970-01-02)
+(,)
+(,)
+(,)
+(,)
+(,)
+[1969-12-31,1970-01-01)
+[1969-12-31,1970-01-02)
+[1970-01-01,1970-01-02)
+[1970-01-01,)
+[1970-01-01,)
+[1970-01-02,)
+[1970-01-02,)
+
+query T
+SELECT a::text AS t FROM daterange_values EXCEPT SELECT column1::text FROM (VALUES
+    (daterange(null,'1970-01-01')),
+    (daterange(null,'1970-01-01', '[]')),
+    (daterange(null,null)),
+    (daterange(null,null, '[]')),
+    (daterange(null,'1970-01-01', '()')),
+    (daterange(null,'1970-01-01', '(]')),
+    (daterange(null,null, '()')),
+    (daterange(null,null,'(]')),
+    (daterange('1969-12-31','1970-01-01')),
+    (daterange('1969-12-31','1970-01-01', '[]')),
+    (daterange('1969-12-31','1970-01-01', '()')),
+    (daterange('1969-12-31','1970-01-01','(]')),
+    (daterange('1970-01-01',null)),
+    (daterange('1970-01-01',null, '[]')),
+    (daterange('1970-01-01',null,'()')),
+    (daterange('1970-01-01',null,'(]'))
+) t;
+----
+
+
+# Test range in list
+query T
+SELECT (LIST['(,)', 'empty', '[1970-01-01,1970-01-03]']::daterange list)::text;
+----
+{(,),empty,[1970-01-01,1970-01-04)}
+
+query T
+SELECT ('{"(,)","empty","[1970-01-01,1970-01-03]"}'::daterange list)::text;
+----
+{(,),empty,[1970-01-01,1970-01-04)}
+
+# Test range in array
+query T
+SELECT (ARRAY['(,)', 'empty', '[1970-01-01,1970-01-03]']::_daterange)::text;
+----
+{(,),empty,[1970-01-01,1970-01-04)}
+
+query T
+SELECT ('{"(,)","empty","[1970-01-01,1970-01-03]"}'::_daterange)::text;
+----
+{(,),empty,[1970-01-01,1970-01-04)}
+
+# Test builtin functions
+
+query B
+select '(,)'::daterange = '(,)'::daterange;
+----
+true
+
+query B
+select '(,)'::daterange != 'empty'::daterange;
+----
+false
+
+query B
+select '(,)'::daterange > 'empty'::daterange;
+----
+false
+
+query B
+select '(,)'::daterange >= 'empty'::daterange;
+----
+false
+
+query B
+select '(,)'::daterange < 'empty'::daterange;
+----
+false
+
+query B
+select '(,)'::daterange <= 'empty'::daterange;
+----
+false
+
+# Results from PG
+# (,)|t|t|t
+# [1969-12-31,1970-01-01)|t|f|f
+# [1969-12-31,1970-01-02)|t|t|f
+# (,1970-01-01)|t|f|f
+# [1970-01-01,)|f|t|t
+# [1970-01-01,1970-01-02)|f|t|f
+# (,1970-01-02)|t|t|f
+# [1970-01-02,)|f|f|t
+# empty|f|f|f
+# Note that the predicate also ensures equality between @> and <@
+query TTTT
+SELECT
+	DISTINCT
+	a::text,
+	a @> DATE '1969-12-31' AS contains_neg_1,
+	a @> DATE '1970-01-01' AS contains_0,
+	a @> DATE '1970-01-02' AS contains_1
+FROM
+	daterange_values
+WHERE
+	(a @> DATE '1969-12-31' = DATE '1969-12-31' <@ a)
+	AND (a @> DATE '1970-01-01' = DATE '1970-01-01' <@ a)
+	AND (a @> DATE '1970-01-02' = DATE '1970-01-02' <@ a)
+ORDER BY
+	a;
+----
+(,)
+true
+true
+true
+(,1970-01-01)
+true
+false
+false
+(,1970-01-02)
+true
+true
+false
+[1969-12-31,1970-01-01)
+true
+false
+false
+[1969-12-31,1970-01-02)
+true
+true
+false
+[1970-01-01,)
+false
+true
+true
+[1970-01-01,1970-01-02)
+false
+true
+false
+[1970-01-02,)
+false
+false
+true
+empty
+false
+false
+false

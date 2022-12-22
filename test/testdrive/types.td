@@ -22,6 +22,7 @@ _bpchar
 _bytea
 _char
 _date
+_daterange
 _float4
 _float8
 _int2
@@ -64,6 +65,7 @@ bpchar
 bytea
 char
 date
+daterange
 float4
 float8
 int2

@@ -7,34 +7,27 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-#
-# CREATE a view containing int4range
-
-> CREATE MATERIALIZED VIEW int4range_view (a) AS
-  SELECT column1::int4range FROM
-    (
-        VALUES
-        ('[,1)'),
-        ('[,1]'),
-        ('[,)'),
-        ('[,]'),
-        ('(,1)'),
-        ('(,1]'),
-        ('(,)'),
-        ('(,]'),
-        ('[-1,1)'),
-        ('[-1,1]'),
-        ('(-1,1)'),
-        ('(-1,1]'),
-        ('[0,0)'),
-        ('[0,0]'),
-        ('(0,0)'),
-        ('(0,0]'),
-        ('[1,)'),
-        ('[1,]'),
-        ('(1,)'),
-        ('(1,]')
-    );
+> SELECT a::text AS t FROM int4range_view ORDER BY a;
+empty
+empty
+empty
+(,1)
+(,1)
+(,2)
+(,2)
+(,)
+(,)
+(,)
+(,)
+[-1,1)
+[-1,2)
+[0,1)
+[0,1)
+[0,2)
+[1,)
+[1,)
+[2,)
+[2,)
 
 > SELECT a::text AS t FROM int4range_view ORDER BY a;
 empty
@@ -57,3 +50,21 @@ empty
 [1,)
 [2,)
 [2,)
+
+> SELECT a::text AS t FROM daterange_view ORDER BY a;
+empty
+(,1970-01-01)
+(,1970-01-02)
+(,1970-01-02)
+(,)
+(,)
+(,)
+(,)
+(,)
+[1969-12-31,1970-01-01)
+[1969-12-31,1970-01-02)
+[1970-01-01,1970-01-02)
+[1970-01-01,)
+[1970-01-01,)
+[1970-01-02,)
+[1970-01-02,)
