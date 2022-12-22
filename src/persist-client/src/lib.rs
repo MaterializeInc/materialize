@@ -500,7 +500,7 @@ impl PersistClient {
 
         let reader_id = LeasedReaderId::new();
         let heartbeat_ts = (self.cfg.now)();
-        let (_, read_cap) = machine
+        let reader_state = machine
             .register_leased_reader(
                 &reader_id,
                 purpose,
@@ -515,7 +515,7 @@ impl PersistClient {
             gc,
             Arc::clone(&self.blob),
             reader_id,
-            read_cap.since,
+            reader_state.since,
             heartbeat_ts,
         )
         .await;
@@ -1918,6 +1918,30 @@ mod tests {
         let () = read_heartbeat_task
             .await
             .expect("task should shutdown cleanly");
+    }
+
+    /// Regression test for 16743, where the nightly tests found that calling
+    /// maybe_heartbeat_writer or maybe_heartbeat_reader on a "tombstone" shard
+    /// would panic.
+    #[tokio::test]
+    async fn regression_16743_heartbeat_tombstone() {
+        const EMPTY: &[(((), ()), u64, i64)] = &[];
+        let (mut write, mut read) = new_test_client()
+            .await
+            .expect_open::<(), (), u64, i64>(ShardId::new())
+            .await;
+        // Create a tombstone by advancing both the upper and since to [].
+        let () = read.downgrade_since(&Antichain::new()).await;
+        let () = write
+            .compare_and_append(EMPTY, Antichain::from_elem(0), Antichain::new())
+            .await
+            .expect("usage should be valid")
+            .expect("upper should match");
+        // Verify that heartbeating doesn't panic.
+        read.last_heartbeat = 0;
+        read.maybe_heartbeat_reader().await;
+        write.last_heartbeat = 0;
+        write.maybe_heartbeat_writer().await;
     }
 
     proptest! {

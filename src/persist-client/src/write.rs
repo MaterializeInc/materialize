@@ -601,7 +601,14 @@ where
                 .machine
                 .heartbeat_writer(&self.writer_id, heartbeat_ts)
                 .await;
-            if !existed {
+            if !existed && !self.machine.state().collections.is_tombstone() {
+                // It's probably surprising to the caller that the shard
+                // becoming a tombstone expired this writer. Possibly the right
+                // thing to do here is pass up a bool to the caller indicating
+                // whether the WriterId it's trying to heartbeat has been
+                // expired, but that happening on a tombstone vs not is very
+                // different. As a medium-term compromise, pretend we did the
+                // heartbeat here.
                 panic!(
                     "WriterId({}) was expired due to inactivity. Did the machine go to sleep?",
                     self.writer_id

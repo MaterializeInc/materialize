@@ -424,7 +424,7 @@ where
     pub(crate) reader_id: LeasedReaderId,
 
     since: Antichain<T>,
-    last_heartbeat: EpochMillis,
+    pub(crate) last_heartbeat: EpochMillis,
     explicitly_expired: bool,
     leased_seqnos: BTreeMap<SeqNo, usize>,
 
@@ -681,14 +681,17 @@ where
         let new_reader_id = LeasedReaderId::new();
         let mut machine = self.machine.clone();
         let heartbeat_ts = (self.cfg.now)();
-        let read_cap = machine
-            .clone_reader(
+        let reader_state = machine
+            .register_leased_reader(
                 &new_reader_id,
                 purpose,
                 self.cfg.reader_lease_duration,
                 heartbeat_ts,
             )
             .await;
+        // The point of clone is that you're guaranteed to have the same (or
+        // greater) since capability, verify that.
+        assert!(PartialOrder::less_equal(&reader_state.since, &self.since));
         let new_reader = ReadHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
@@ -696,7 +699,7 @@ where
             self.gc.clone(),
             Arc::clone(&self.blob),
             new_reader_id,
-            read_cap.since,
+            reader_state.since,
             heartbeat_ts,
         )
         .await;
@@ -730,7 +733,7 @@ where
     /// call it as frequently as they like. Call this [Self::downgrade_since],
     /// or [Self::maybe_downgrade_since] on some interval that is "frequent"
     /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
-    async fn maybe_heartbeat_reader(&mut self) {
+    pub(crate) async fn maybe_heartbeat_reader(&mut self) {
         let min_elapsed = self.cfg.reader_lease_duration / 2;
         let heartbeat_ts = (self.cfg.now)();
         let elapsed_since_last_heartbeat =
@@ -749,7 +752,14 @@ where
                 .machine
                 .heartbeat_leased_reader(&self.reader_id, heartbeat_ts)
                 .await;
-            if !existed {
+            if !existed && !self.machine.state().collections.is_tombstone() {
+                // It's probably surprising to the caller that the shard
+                // becoming a tombstone expired this reader. Possibly the right
+                // thing to do here is pass up a bool to the caller indicating
+                // whether the LeasedReaderId it's trying to heartbeat has been
+                // expired, but that happening on a tombstone vs not is very
+                // different. As a medium-term compromise, pretend we did the
+                // heartbeat here.
                 panic!(
                     "LeasedReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
                     self.reader_id

@@ -9,7 +9,6 @@
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::convert::Infallible;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
@@ -201,6 +200,14 @@ impl<T: Ord> Ord for HollowBatch<T> {
     }
 }
 
+/// A sentinel for a state transition that was a no-op.
+///
+/// Critically, this also indicates that the no-op state transition was not
+/// committed through compare_and_append and thus is _not linearized_.
+#[derive(Debug)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
+pub struct NoOpStateTransition<T>(pub T);
+
 // TODO: Document invariants.
 #[derive(Debug, Clone)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
@@ -242,7 +249,7 @@ where
         &mut self,
         add_rollup: (SeqNo, &PartialRollupKey),
         remove_rollups: &[(SeqNo, PartialRollupKey)],
-    ) -> ControlFlow<Infallible, bool> {
+    ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
         let (rollup_seqno, rollup_key) = add_rollup;
         let applied = match self.rollups.get(&rollup_seqno) {
             Some(x) => x == rollup_key,
@@ -260,6 +267,9 @@ where
                 removed_key
             );
         }
+        // This state transition is a no-op if applied is false and none of
+        // remove_rollups existed, but we still commit the state change so that
+        // this gets linearized (maybe we're looking at old state).
         Continue(applied)
     }
 
@@ -271,10 +281,8 @@ where
         seqno: SeqNo,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<Infallible, (Upper<T>, LeasedReaderState<T>)> {
-        // TODO: Handle if the reader or writer already exist (probably with a
-        // retry).
-        let read_cap = LeasedReaderState {
+    ) -> ControlFlow<NoOpStateTransition<LeasedReaderState<T>>, LeasedReaderState<T>> {
+        let reader_state = LeasedReaderState {
             debug: HandleDebugState {
                 hostname: hostname.to_owned(),
                 purpose: purpose.to_owned(),
@@ -285,9 +293,19 @@ where
             lease_duration_ms: u64::try_from(lease_duration.as_millis())
                 .expect("lease duration as millis should fit within u64"),
         };
+
+        // If the shard-global upper and since are both the empty antichain,
+        // then no further writes can ever commit and no further reads can be
+        // served. Optimize this by no-op-ing reader registration so that we can
+        // settle the shard into a final unchanging tombstone state.
+        if self.is_tombstone() {
+            return Break(NoOpStateTransition(reader_state));
+        }
+
+        // TODO: Handle if the reader or writer already exists.
         self.leased_readers
-            .insert(reader_id.clone(), read_cap.clone());
-        Continue((Upper(self.trace.upper().clone()), read_cap))
+            .insert(reader_id.clone(), reader_state.clone());
+        Continue(reader_state)
     }
 
     pub fn register_critical_reader<O: Opaque + Codec64>(
@@ -295,26 +313,31 @@ where
         hostname: &str,
         reader_id: &CriticalReaderId,
         purpose: &str,
-    ) -> ControlFlow<Infallible, CriticalReaderState<T>> {
-        let state = match self.critical_readers.get(reader_id) {
-            Some(state) => {
-                let mut state = state.clone();
-                state.debug = HandleDebugState {
-                    hostname: hostname.to_owned(),
-                    purpose: purpose.to_owned(),
-                };
-                state
+    ) -> ControlFlow<NoOpStateTransition<CriticalReaderState<T>>, CriticalReaderState<T>> {
+        let state = CriticalReaderState {
+            debug: HandleDebugState {
+                hostname: hostname.to_owned(),
+                purpose: purpose.to_owned(),
+            },
+            since: self.trace.since().clone(),
+            opaque: OpaqueState(Codec64::encode(&O::initial())),
+            opaque_codec: O::codec_name(),
+        };
+
+        // We expire all readers if the upper and since both advance to the
+        // empty antichain. Gracefully handle this. At the same time,
+        // short-circuit the cmd application so we don't needlessly create new
+        // SeqNos.
+        if self.is_tombstone() {
+            return Break(NoOpStateTransition(state));
+        }
+
+        let state = match self.critical_readers.get_mut(reader_id) {
+            Some(existing_state) => {
+                existing_state.debug = state.debug;
+                existing_state.clone()
             }
             None => {
-                let state = CriticalReaderState {
-                    debug: HandleDebugState {
-                        hostname: hostname.to_owned(),
-                        purpose: purpose.to_owned(),
-                    },
-                    since: self.trace.since().clone(),
-                    opaque: OpaqueState(Codec64::encode(&O::initial())),
-                    opaque_codec: O::codec_name(),
-                };
                 self.critical_readers
                     .insert(reader_id.clone(), state.clone());
                 state
@@ -330,7 +353,9 @@ where
         purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<Infallible, (Upper<T>, WriterState<T>)> {
+    ) -> ControlFlow<NoOpStateTransition<(Upper<T>, WriterState<T>)>, (Upper<T>, WriterState<T>)>
+    {
+        let upper = Upper(self.trace.upper().clone());
         let writer_state = WriterState {
             debug: HandleDebugState {
                 hostname: hostname.to_owned(),
@@ -342,34 +367,18 @@ where
             most_recent_write_token: IdempotencyToken::SENTINEL,
             most_recent_write_upper: Antichain::from_elem(T::minimum()),
         };
+
+        // If the shard-global upper and since are both the empty antichain,
+        // then no further writes can ever commit and no further reads can be
+        // served. Optimize this by no-op-ing writer registration so that we can
+        // settle the shard into a final unchanging tombstone state.
+        if self.is_tombstone() {
+            return Break(NoOpStateTransition((upper, writer_state)));
+        }
+
+        // TODO: Handle if the reader or writer already exists.
         self.writers.insert(writer_id.clone(), writer_state.clone());
         Continue((Upper(self.trace.upper().clone()), writer_state))
-    }
-
-    pub fn clone_reader(
-        &mut self,
-        hostname: &str,
-        new_reader_id: &LeasedReaderId,
-        purpose: &str,
-        seqno: SeqNo,
-        lease_duration: Duration,
-        heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<Infallible, LeasedReaderState<T>> {
-        // TODO: Handle if the reader already exists (probably with a retry).
-        let read_cap = LeasedReaderState {
-            debug: HandleDebugState {
-                hostname: hostname.to_owned(),
-                purpose: purpose.to_owned(),
-            },
-            seqno,
-            since: self.trace.since().clone(),
-            last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
-            lease_duration_ms: u64::try_from(lease_duration.as_millis())
-                .expect("lease duration as millis should fit within u64"),
-        };
-        self.leased_readers
-            .insert(new_reader_id.clone(), read_cap.clone());
-        Continue(read_cap)
     }
 
     pub fn compare_and_append(
@@ -379,6 +388,22 @@ where
         heartbeat_timestamp_ms: u64,
         idempotency_token: &IdempotencyToken,
     ) -> ControlFlow<CompareAndAppendBreak<T>, Vec<FueledMergeReq<T>>> {
+        // We expire all writers if the upper and since both advance to the
+        // empty antichain. Gracefully handle this. At the same time,
+        // short-circuit the cmd application so we don't needlessly create new
+        // SeqNos.
+        if self.is_tombstone() {
+            assert_eq!(self.trace.upper(), &Antichain::new());
+            return Break(CompareAndAppendBreak::Upper {
+                shard_upper: Antichain::new(),
+                // This writer might have been registered before the shard upper
+                // was advanced, which would make this pessimistic in the
+                // Indeterminate handling of compare_and_append at the machine
+                // level, but that's fine.
+                writer_upper: Antichain::new(),
+            });
+        }
+
         let writer_state = match self.writers.get_mut(writer_id) {
             Some(x) => x,
             None => {
@@ -460,7 +485,15 @@ where
     pub fn apply_merge_res(
         &mut self,
         res: &FueledMergeRes<T>,
-    ) -> ControlFlow<Infallible, ApplyMergeResult> {
+    ) -> ControlFlow<NoOpStateTransition<ApplyMergeResult>, ApplyMergeResult> {
+        // We expire all writers if the upper and since both advance to the
+        // empty antichain. Gracefully handle this. At the same time,
+        // short-circuit the cmd application so we don't needlessly create new
+        // SeqNos.
+        if self.is_tombstone() {
+            return Break(NoOpStateTransition(ApplyMergeResult::NotAppliedNoMatch));
+        }
+
         let apply_merge_result = self.trace.apply_merge_res(res);
         Continue(apply_merge_result)
     }
@@ -472,7 +505,15 @@ where
         outstanding_seqno: Option<SeqNo>,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<Infallible, Since<T>> {
+    ) -> ControlFlow<NoOpStateTransition<Since<T>>, Since<T>> {
+        // We expire all readers if the upper and since both advance to the
+        // empty antichain. Gracefully handle this. At the same time,
+        // short-circuit the cmd application so we don't needlessly create new
+        // SeqNos.
+        if self.is_tombstone() {
+            return Break(NoOpStateTransition(Since(Antichain::new())));
+        }
+
         let reader_state = self.leased_reader(reader_id);
 
         // Also use this as an opportunity to heartbeat the reader and downgrade
@@ -516,7 +557,21 @@ where
         reader_id: &CriticalReaderId,
         expected_opaque: &O,
         (new_opaque, new_since): (&O, &Antichain<T>),
-    ) -> ControlFlow<Infallible, Result<Since<T>, (O, Since<T>)>> {
+    ) -> ControlFlow<
+        NoOpStateTransition<Result<Since<T>, (O, Since<T>)>>,
+        Result<Since<T>, (O, Since<T>)>,
+    > {
+        // We expire all readers if the upper and since both advance to the
+        // empty antichain. Gracefully handle this. At the same time,
+        // short-circuit the cmd application so we don't needlessly create new
+        // SeqNos.
+        if self.is_tombstone() {
+            // Match the idempotence behavior below of ignoring the token if
+            // since is already advanced enough (in this case, because it's a
+            // tombstone, we know it's the empty antichain).
+            return Break(NoOpStateTransition(Ok(Since(Antichain::new()))));
+        }
+
         let reader_state = self.critical_reader(reader_id);
         assert_eq!(reader_state.opaque_codec, O::codec_name());
 
@@ -546,7 +601,15 @@ where
         &mut self,
         reader_id: &LeasedReaderId,
         heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<Infallible, bool> {
+    ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
+        // We expire all readers if the upper and since both advance to the
+        // empty antichain. Gracefully handle this. At the same time,
+        // short-circuit the cmd application so we don't needlessly create new
+        // SeqNos.
+        if self.is_tombstone() {
+            return Break(NoOpStateTransition(false));
+        }
+
         match self.leased_readers.get_mut(reader_id) {
             Some(reader_state) => {
                 reader_state.last_heartbeat_timestamp_ms = std::cmp::max(
@@ -564,7 +627,15 @@ where
     pub fn expire_leased_reader(
         &mut self,
         reader_id: &LeasedReaderId,
-    ) -> ControlFlow<Infallible, bool> {
+    ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
+        // We expire all readers if the upper and since both advance to the
+        // empty antichain. Gracefully handle this. At the same time,
+        // short-circuit the cmd application so we don't needlessly create new
+        // SeqNos.
+        if self.is_tombstone() {
+            return Break(NoOpStateTransition(false));
+        }
+
         let existed = self.leased_readers.remove(reader_id).is_some();
         if existed {
             // TODO: Re-enable this once we have #15511.
@@ -589,7 +660,15 @@ where
     pub fn expire_critical_reader(
         &mut self,
         reader_id: &CriticalReaderId,
-    ) -> ControlFlow<Infallible, bool> {
+    ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
+        // We expire all readers if the upper and since both advance to the
+        // empty antichain. Gracefully handle this. At the same time,
+        // short-circuit the cmd application so we don't needlessly create new
+        // SeqNos.
+        if self.is_tombstone() {
+            return Break(NoOpStateTransition(false));
+        }
+
         let existed = self.critical_readers.remove(reader_id).is_some();
         if existed {
             // TODO: Re-enable this once we have #15511.
@@ -606,8 +685,9 @@ where
             //
             // self.update_since();
         }
-        // No-op if existed is false, but still commit the state change so that
-        // this gets linearized.
+        // This state transition is a no-op if existed is false, but we still
+        // commit the state change so that this gets linearized (maybe we're
+        // looking at old state).
         Continue(existed)
     }
 
@@ -615,7 +695,15 @@ where
         &mut self,
         writer_id: &WriterId,
         heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<Infallible, bool> {
+    ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
+        // We expire all writers if the upper and since both advance to the
+        // empty antichain. Gracefully handle this. At the same time,
+        // short-circuit the cmd application so we don't needlessly create new
+        // SeqNos.
+        if self.is_tombstone() {
+            return Break(NoOpStateTransition(false));
+        }
+
         match self.writers.get_mut(writer_id) {
             Some(writer_state) => {
                 writer_state.last_heartbeat_timestamp_ms = std::cmp::max(
@@ -630,10 +718,22 @@ where
         }
     }
 
-    pub fn expire_writer(&mut self, writer_id: &WriterId) -> ControlFlow<Infallible, bool> {
+    pub fn expire_writer(
+        &mut self,
+        writer_id: &WriterId,
+    ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
+        // We expire all writers if the upper and since both advance to the
+        // empty antichain. Gracefully handle this. At the same time,
+        // short-circuit the cmd application so we don't needlessly create new
+        // SeqNos.
+        if self.is_tombstone() {
+            return Break(NoOpStateTransition(false));
+        }
+
         let existed = self.writers.remove(writer_id).is_some();
-        // No-op if existed is false, but still commit the state change so that
-        // this gets linearized.
+        // This state transition is a no-op if existed is false, but we still
+        // commit the state change so that this gets linearized (maybe we're
+        // looking at old state).
         Continue(existed)
     }
 
@@ -682,6 +782,57 @@ where
             since.meet_assign(s);
         }
         self.trace.downgrade_since(&since);
+    }
+
+    fn tombstone_batch() -> HollowBatch<T> {
+        HollowBatch {
+            desc: Description::new(
+                Antichain::from_elem(T::minimum()),
+                Antichain::new(),
+                Antichain::new(),
+            ),
+            parts: Vec::new(),
+            runs: Vec::new(),
+            len: 0,
+        }
+    }
+
+    pub(crate) fn is_tombstone(&self) -> bool {
+        if self.trace.upper().is_empty()
+            && self.trace.since().is_empty()
+            && self.writers.is_empty()
+            && self.leased_readers.is_empty()
+            && self.critical_readers.is_empty()
+        {
+            // Gate this more expensive check behind the cheaper is_empty ones.
+            let mut batches = Vec::new();
+            self.trace.map_batches(|b| batches.push(b));
+            if batches.len() == 1 && batches[0] == &Self::tombstone_batch() {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn become_tombstone(&mut self) -> ControlFlow<NoOpStateTransition<()>, ()> {
+        assert_eq!(self.trace.upper(), &Antichain::new());
+        assert_eq!(self.trace.since(), &Antichain::new());
+
+        if self.is_tombstone() {
+            return Break(NoOpStateTransition(()));
+        }
+
+        self.writers.clear();
+        self.leased_readers.clear();
+        self.critical_readers.clear();
+        let mut new_trace = Trace::default();
+        new_trace.downgrade_since(&Antichain::new());
+        let merge_reqs = new_trace.push_batch(Self::tombstone_batch());
+        assert_eq!(merge_reqs, Vec::new());
+        self.trace = new_trace;
+
+        debug_assert!(self.is_tombstone());
+        Continue(())
     }
 }
 
@@ -877,6 +1028,20 @@ where
         // Assign GC traffic preferentially to writers, falling back to anyone
         // generating new state versions if there are no writers.
         let should_gc = should_gc && (is_write || self.collections.writers.is_empty());
+        // The whole point of a tombstone is that we forever keep exactly one
+        // cheap, unchanging version in consensus. Force GC to run on tombstone
+        // shards to make sure we clean up the final few versions before the
+        // tombstone.
+        //
+        // However, because we write a rollup as of SeqNo X and then link it in
+        // using a state transition (in this case from X to X+1), the minimum
+        // number of live diffs is actually two. Detect when we're in this
+        // minimal two diff state and stop the (otherwise) infinite iteration.
+        let tombstone_needs_rollup = self.collections.is_tombstone() && {
+            let (latest_rollup_seqno, _) = self.latest_rollup();
+            latest_rollup_seqno.next() < self.seqno
+        };
+        let should_gc = should_gc || tombstone_needs_rollup;
         if should_gc {
             self.collections.last_gc_req = new_seqno_since;
             Some(GcReq {
