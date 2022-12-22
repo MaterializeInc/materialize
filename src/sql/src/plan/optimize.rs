@@ -24,6 +24,15 @@ impl<'a> From<&StatementContext<'a>> for OptimizerConfig {
         OptimizerConfig {}
     }
 }
+/// Convert a mutable reference to a [`StatementContext`] to an [`OptimizerConfig`].
+///
+/// This picks up feature flag values such as `qgm_optimizations` from the `PlanContext` if this is present in
+/// the [`StatementContext`], otherwise uses sensible defaults.
+impl<'a> From<&mut StatementContext<'a>> for OptimizerConfig {
+    fn from(_scx: &mut StatementContext) -> Self {
+        OptimizerConfig {}
+    }
+}
 
 impl HirRelationExpr {
     /// Perform optimizing algebraic rewrites on this [`HirRelationExpr`] and lower it to a [`mz_expr::MirRelationExpr`].

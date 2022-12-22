@@ -23,7 +23,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::ScalarType;
 use mz_sql::ast::{InsertSource, Query, Raw, SetExpr, Statement};
 use mz_sql::catalog::SessionCatalog as _;
-use mz_sql::plan::{CreateRolePlan, Params};
+use mz_sql::plan::{CreateRolePlan, Params, StatementTagger};
 
 use crate::client::ConnectionId;
 use crate::command::{
@@ -413,7 +413,9 @@ impl Coordinator {
 
         let catalog = self.catalog.for_session(&session);
         let original_stmt = stmt.clone();
-        let (stmt, depends_on) = match mz_sql::names::resolve(&catalog, stmt) {
+        let mut statement_tagger = StatementTagger::default();
+        let (stmt, depends_on) = match mz_sql::names::resolve(&catalog, &mut statement_tagger, stmt)
+        {
             Ok(resolved) => resolved,
             Err(e) => return tx.send(Err(e.into()), session),
         };
@@ -449,6 +451,7 @@ impl Coordinator {
                             depends_on,
                             original_stmt,
                             otel_ctx,
+                            statement_tagger,
                         },
                     ));
                     if let Err(e) = result {
@@ -465,7 +468,7 @@ impl Coordinator {
             ),
 
             // All other statements are handled immediately.
-            _ => match self.plan_statement(&mut session, stmt, &params) {
+            _ => match self.plan_statement(&mut session, stmt, &params, statement_tagger) {
                 Ok(plan) => self.sequence_plan(tx, session, plan, depends_on).await,
                 Err(e) => tx.send(Err(e), session),
             },

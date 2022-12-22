@@ -69,7 +69,7 @@ query TT
 SHOW CREATE VIEW foo
 ----
 materialize.public.foo
-CREATE VIEW "materialize"."public"."foo" AS SELECT * FROM "materialize"."public"."x"
+CREATE VIEW "materialize"."public"."foo" AS SELECT "materialize"."public"."x"."a" AS "a" FROM "materialize"."public"."x"
 
 statement ok
 DROP VIEW foo;
@@ -81,7 +81,7 @@ query TT
 SHOW CREATE VIEW foo
 ----
 materialize.public.foo
-CREATE VIEW "materialize"."public"."foo" AS SELECT * FROM "materialize"."public"."x"
+CREATE VIEW "materialize"."public"."foo" AS SELECT "materialize"."public"."x"."a" AS "a" FROM "materialize"."public"."x"
 
 # If the name *differs*, fall back to the id version.
 
@@ -89,10 +89,10 @@ statement ok
 DROP VIEW foo;
 
 statement ok
-CREATE VIEW foo AS SELECT * FROM [u1 AS materialize.public.y]
+CREATE VIEW foo AS SELECT "materialize"."public"."y"."a" FROM [u1 AS materialize.public.y]
 
 query TT
 SHOW CREATE VIEW foo
 ----
 materialize.public.foo
-CREATE VIEW "materialize"."public"."foo" AS SELECT * FROM [u1 AS "materialize"."public"."y"]
+CREATE VIEW "materialize"."public"."foo" AS SELECT "materialize"."public"."y"."a" FROM [u1 AS "materialize"."public"."y"]

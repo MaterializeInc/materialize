@@ -12,9 +12,9 @@
 //! This module houses the entry points for planning a SQL statement.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{ColumnName, ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     ColumnDef, RawObjectName, ShowStatement, TableConstraint, UnresolvedDatabaseName,
     UnresolvedSchemaName,
@@ -42,6 +42,7 @@ mod scl;
 pub(crate) mod show;
 mod tcl;
 
+use crate::plan::column_disambiguate::StatementTagger;
 pub(crate) use ddl::PgConfigOptionExtracted;
 
 /// Describes the output of a SQL statement.
@@ -93,6 +94,7 @@ pub fn describe(
     catalog: &dyn SessionCatalog,
     stmt: Statement<Aug>,
     param_types_in: &[Option<ScalarType>],
+    statement_tagger: StatementTagger,
 ) -> Result<StatementDesc, PlanError> {
     let mut param_types = BTreeMap::new();
     for (i, ty) in param_types_in.iter().enumerate() {
@@ -101,10 +103,15 @@ pub fn describe(
         }
     }
 
-    let scx = StatementContext {
+    let mut scx = StatementContext {
         pcx: Some(pcx),
         catalog,
         param_types: RefCell::new(param_types),
+        wildcard_expansions: Default::default(),
+        derived_table_factor_aliases: Default::default(),
+        natural_join_expansions: Default::default(),
+        hacky_using_aliases: Default::default(),
+        statement_tagger: RefCell::new(statement_tagger),
     };
 
     let desc = match stmt {
@@ -192,7 +199,7 @@ pub fn describe(
         }
 
         // DML statements.
-        Statement::Copy(stmt) => dml::describe_copy(&scx, stmt)?,
+        Statement::Copy(stmt) => dml::describe_copy(&mut scx, stmt)?,
         Statement::Delete(stmt) => dml::describe_delete(&scx, stmt)?,
         Statement::Explain(stmt) => dml::describe_explain(&scx, stmt)?,
         Statement::Insert(stmt) => dml::describe_insert(&scx, stmt)?,
@@ -230,6 +237,7 @@ pub fn plan(
     catalog: &dyn SessionCatalog,
     stmt: Statement<Aug>,
     params: &Params,
+    statement_tagger: StatementTagger,
 ) -> Result<Plan, PlanError> {
     let param_types = params
         .types
@@ -244,6 +252,11 @@ pub fn plan(
         pcx,
         catalog,
         param_types: RefCell::new(param_types),
+        wildcard_expansions: Default::default(),
+        derived_table_factor_aliases: Default::default(),
+        natural_join_expansions: Default::default(),
+        hacky_using_aliases: Default::default(),
+        statement_tagger: RefCell::new(statement_tagger),
     };
 
     let plan = match stmt {
@@ -404,6 +417,17 @@ pub struct StatementContext<'a> {
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
     pub param_types: RefCell<BTreeMap<usize, ScalarType>>,
+    /// TODO(jkosh44)
+    pub wildcard_expansions:
+        RefCell<BTreeMap<u64, Vec<(Option<PartialObjectName>, ColumnName, Option<ColumnName>)>>>,
+    /// TODO(jkosh44)
+    pub derived_table_factor_aliases: RefCell<BTreeMap<u64, (Option<Ident>, Vec<Vec<Ident>>)>>,
+    /// TODO(jkosh44)
+    pub natural_join_expansions: RefCell<BTreeMap<u64, Vec<ColumnName>>>,
+    /// TODO(jkosh44)
+    pub hacky_using_aliases: RefCell<Vec<BTreeSet<Ident>>>,
+    /// TODO(jkosh44)
+    pub statement_tagger: RefCell<StatementTagger>,
 }
 
 impl<'a> StatementContext<'a> {
@@ -415,6 +439,11 @@ impl<'a> StatementContext<'a> {
             pcx,
             catalog,
             param_types: Default::default(),
+            wildcard_expansions: Default::default(),
+            derived_table_factor_aliases: Default::default(),
+            natural_join_expansions: Default::default(),
+            hacky_using_aliases: Default::default(),
+            statement_tagger: Default::default(),
         }
     }
 
@@ -655,7 +684,11 @@ impl<'a> StatementContext<'a> {
             ty = "pg_catalog.jsonb".into();
         }
         let data_type = mz_sql_parser::parser::parse_data_type(&ty)?;
-        let (data_type, _) = names::resolve(self.catalog, data_type)?;
+        let (data_type, _) = names::resolve(
+            self.catalog,
+            &mut self.statement_tagger.borrow_mut(),
+            data_type,
+        )?;
         Ok(data_type)
     }
 
@@ -770,5 +803,19 @@ impl<'a> StatementContext<'a> {
         }
 
         Ok((columns, table_constraints))
+    }
+
+    pub fn wildcard_id(&self) -> u64 {
+        self.statement_tagger.borrow_mut().wildcard_id()
+    }
+
+    /// TODO(jkosh44)
+    pub fn table_factor_id(&self) -> u64 {
+        self.statement_tagger.borrow_mut().table_factor_id()
+    }
+
+    /// TODO(jkosh44)
+    pub fn natural_join_id(&self) -> u64 {
+        self.statement_tagger.borrow_mut().natural_join_id()
     }
 }

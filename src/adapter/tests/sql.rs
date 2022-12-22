@@ -97,7 +97,7 @@ use mz_repr::RelationDesc;
 use mz_sql::ast::{Expr, Statement};
 use mz_sql::catalog::CatalogDatabase;
 use mz_sql::names::{self, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier};
-use mz_sql::plan::{PlanContext, QueryContext, QueryLifetime, StatementContext};
+use mz_sql::plan::{PlanContext, QueryContext, QueryLifetime, StatementContext, StatementTagger};
 use mz_sql::DEFAULT_SCHEMA;
 
 // This morally tests the name resolution stuff, but we need access to a
@@ -184,7 +184,8 @@ async fn datadriven() {
                                 Statement::Select(s) => s.query,
                                 _ => unreachable!(),
                             };
-                            let resolved = names::resolve(qcx.scx.catalog, q);
+                            let resolved =
+                                names::resolve(qcx.scx.catalog, &mut StatementTagger::default(), q);
                             match resolved {
                                 Ok((q, _depends_on)) => format!("{}\n", q),
                                 Err(e) => format!("error: {}\n", e),

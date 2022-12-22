@@ -208,7 +208,7 @@ renamed_mz_view
 > SHOW CREATE VIEW renamed_mz_view
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.renamed_mz_view  "CREATE VIEW \"materialize\".\"public\".\"renamed_mz_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_data\""
+materialize.public.renamed_mz_view  "CREATE VIEW \"materialize\".\"public\".\"renamed_mz_view\" AS SELECT \"materialize\".\"public\".\"renamed_mz_data\".\"a\" AS \"a\", \"materialize\".\"public\".\"renamed_mz_data\".\"b\" AS \"b\" FROM \"materialize\".\"public\".\"renamed_mz_data\""
 
 # Item's indexes are properly re-attributed
 > SHOW INDEXES ON renamed_mz_view
@@ -225,7 +225,7 @@ materialize.public.renamed_index "CREATE INDEX \"renamed_index\" IN CLUSTER \"<V
 > SHOW CREATE VIEW dependent_view
 name                                create_sql
 ------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.dependent_view   "CREATE VIEW \"materialize\".\"public\".\"dependent_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_view\""
+materialize.public.dependent_view   "CREATE VIEW \"materialize\".\"public\".\"dependent_view\" AS SELECT \"materialize\".\"public\".\"renamed_mz_view\".\"a\" AS \"a\", \"materialize\".\"public\".\"renamed_mz_view\".\"b\" AS \"b\" FROM \"materialize\".\"public\".\"renamed_mz_view\""
 
 > SHOW CREATE SINK renamed_sink
 name                            create_sql
@@ -242,7 +242,7 @@ materialize.public.byzantine_view "CREATE VIEW \"materialize\".\"public\".\"byza
 > SHOW CREATE VIEW oppositional_view
 name                                 create_sql
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.oppositional_view "CREATE VIEW \"materialize\".\"public\".\"oppositional_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_view\" WHERE \"b\" = '   an adversarial string   \"materialize\".\"public\".\"mz_data\"   '"
+materialize.public.oppositional_view "CREATE VIEW \"materialize\".\"public\".\"oppositional_view\" AS SELECT \"materialize\".\"public\".\"renamed_mz_view\".\"a\" AS \"a\", \"materialize\".\"public\".\"renamed_mz_view\".\"b\" AS \"b\" FROM \"materialize\".\"public\".\"renamed_mz_view\" WHERE \"b\" = '   an adversarial string   \"materialize\".\"public\".\"mz_data\"   '"
 
 # 🔬 Name collisions
 
@@ -403,7 +403,7 @@ contains:renaming conflict
 > SHOW CREATE VIEW db1_db2_scm1_valid_qual
 name                                       create_sql
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.db1_db2_scm1_valid_qual "CREATE VIEW \"materialize\".\"public\".\"db1_db2_scm1_valid_qual\" AS SELECT * FROM (SELECT \"db1\".\"scm1\".\"v1\".\"a\" FROM \"db1\".\"scm1\".\"v1\") AS \"l\" JOIN (SELECT \"db2\".\"scm1\".\"v2\".\"b\" FROM \"db2\".\"scm1\".\"v2\") AS \"r\" ON \"l\".\"a\" = \"r\".\"b\""
+materialize.public.db1_db2_scm1_valid_qual "CREATE VIEW \"materialize\".\"public\".\"db1_db2_scm1_valid_qual\" AS SELECT \"l\".\"a\" AS \"a\", \"r\".\"b\" AS \"b\" FROM (SELECT \"db1\".\"scm1\".\"v1\".\"a\" FROM \"db1\".\"scm1\".\"v1\") AS \"l\" (\"a\") JOIN (SELECT \"db2\".\"scm1\".\"v2\".\"b\" FROM \"db2\".\"scm1\".\"v2\") AS \"r\" (\"b\") ON \"l\".\"a\" = \"r\".\"b\""
 
 > CREATE VIEW "materialize"."public"."db1_db2_scm1_valid_qual_test" AS SELECT * FROM (SELECT "db1"."scm1"."v1"."a" FROM "db1"."scm1"."v1") AS "l" JOIN (SELECT "db2"."scm1"."v2"."b" FROM "db2"."scm1"."v2") AS "r" ON "l"."a" = "r"."b"
 
@@ -572,7 +572,7 @@ contains:renaming conflict
 > SHOW CREATE VIEW db1_scm1_scm2_valid_qual
 name                                        create_sql
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.db1_scm1_scm2_valid_qual "CREATE VIEW \"materialize\".\"public\".\"db1_scm1_scm2_valid_qual\" AS SELECT * FROM (SELECT \"scm1\".\"v4\".\"a\" FROM \"db1\".\"scm1\".\"v4\") AS \"l\" JOIN (SELECT \"scm2\".\"v5\".\"b\" FROM \"db1\".\"scm2\".\"v5\") AS \"r\" ON \"l\".\"a\" = \"r\".\"b\""
+materialize.public.db1_scm1_scm2_valid_qual "CREATE VIEW \"materialize\".\"public\".\"db1_scm1_scm2_valid_qual\" AS SELECT \"l\".\"a\" AS \"a\", \"r\".\"b\" AS \"b\" FROM (SELECT \"scm1\".\"v4\".\"a\" FROM \"db1\".\"scm1\".\"v4\") AS \"l\" (\"a\") JOIN (SELECT \"scm2\".\"v5\".\"b\" FROM \"db1\".\"scm2\".\"v5\") AS \"r\" (\"b\") ON \"l\".\"a\" = \"r\".\"b\""
 
 > CREATE VIEW "materialize"."public"."db1_scm1_scm2_valid_qual_test" AS SELECT * FROM (SELECT "scm1"."v4"."a" FROM "db1"."scm1"."v4") AS "l" JOIN (SELECT "scm2"."v5"."b" FROM "db1"."scm2"."v5") AS "r" ON "l"."a" = "r"."b"
 
@@ -688,7 +688,7 @@ materialize.public.v_v_qual "CREATE VIEW \"materialize\".\"public\".\"v_v_qual\"
 > SHOW CREATE VIEW qualified_wildcard
 name                                  create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.qualified_wildcard "CREATE VIEW \"materialize\".\"public\".\"qualified_wildcard\" AS SELECT \"v7\".* FROM \"materialize\".\"public\".\"v7\""
+materialize.public.qualified_wildcard "CREATE VIEW \"materialize\".\"public\".\"qualified_wildcard\" AS SELECT \"materialize\".\"public\".\"v7\".\"z\" AS \"z\" FROM \"materialize\".\"public\".\"v7\""
 
 > CREATE VIEW "materialize"."public"."qualified_wildcard_test" AS SELECT "v7".* FROM "materialize"."public"."v7"
 
@@ -741,12 +741,13 @@ contains:renaming conflict
 > SHOW CREATE VIEW space_dependent
 name                               create_sql
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.space_dependent "CREATE VIEW \"materialize\".\"public\".\"space_dependent\" AS SELECT * FROM \"materialize\".\"public\".\"now has space\" JOIN \"materialize\".\"public\".\"still has space\" ON \"still has space\".\"my_space\" = \"now has space\".\"has space\""
+materialize.public.space_dependent "CREATE VIEW \"materialize\".\"public\".\"space_dependent\" AS SELECT \"materialize\".\"public\".\"now has space\".\"has space\" AS \"has space\", \"materialize\".\"public\".\"still has space\".\"my_space\" AS \"my_space\" FROM \"materialize\".\"public\".\"now has space\" JOIN \"materialize\".\"public\".\"still has space\" ON \"still has space\".\"my_space\" = \"now has space\".\"has space\""
 
 > CREATE VIEW "materialize"."public"."space_dependent_test" AS SELECT * FROM "materialize"."public"."now has space" JOIN "materialize"."public"."still has space" ON "still has space"."my_space" = "now has space"."has space"
 
 # 🔬 Keyword
 
+# TODO(jkosh44) For some reason the * expansion re-orders the columns from a,b to b,a, causing this to fail
 > CREATE VIEW natural AS
   SELECT * FROM t1 NATURAL JOIN t1 AS a;
 
@@ -756,7 +757,7 @@ materialize.public.space_dependent "CREATE VIEW \"materialize\".\"public\".\"spa
 > SHOW CREATE VIEW unnatural
 name                         create_sql
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.unnatural "CREATE VIEW \"materialize\".\"public\".\"unnatural\" AS SELECT * FROM \"materialize\".\"public\".\"t1\" NATURAL JOIN \"materialize\".\"public\".\"t1\" AS \"a\""
+materialize.public.unnatural "CREATE VIEW \"materialize\".\"public\".\"unnatural\" AS SELECT \"materialize\".\"public\".\"t1\".\"a\" AS \"a\", \"materialize\".\"public\".\"t1\".\"b\" AS \"b\" FROM \"materialize\".\"public\".\"t1\" JOIN \"materialize\".\"public\".\"t1\" AS \"a\" (\"a\", \"b\") USING (\"a\", \"b\")"
 
 > CREATE VIEW "materialize"."public"."unnatural_test" AS SELECT * FROM "materialize"."public"."t1" NATURAL JOIN "materialize"."public"."t1" AS "a"
 
@@ -785,7 +786,7 @@ contains:renaming conflict
 > SHOW CREATE VIEW func_dependency
 name                               create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.func_dependency "CREATE VIEW \"materialize\".\"public\".\"func_dependency\" (\"a\", \"x_a\") AS SELECT * FROM \"materialize\".\"public\".\"count\" JOIN (SELECT * FROM \"materialize\".\"public\".\"count\") AS \"x\" ON \"count\".\"a\" = \"x\".\"a\""
+materialize.public.func_dependency "CREATE VIEW \"materialize\".\"public\".\"func_dependency\" (\"a\", \"x_a\") AS SELECT \"materialize\".\"public\".\"count\".\"a\" AS \"a\", \"x\".\"a\" AS \"a\" FROM \"materialize\".\"public\".\"count\" JOIN (SELECT \"materialize\".\"public\".\"count\".\"a\" AS \"a\" FROM \"materialize\".\"public\".\"count\") AS \"x\" (\"a\") ON \"count\".\"a\" = \"x\".\"a\""
 
 > CREATE VIEW "materialize"."public"."func_dependency_test" ("a", "x_a") AS SELECT * FROM count JOIN (SELECT * FROM count) AS x ON count.a = x.a
 

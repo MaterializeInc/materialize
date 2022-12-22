@@ -13,17 +13,20 @@
 //! are much easier to perform in SQL. Someday, we'll want our own SQL IR,
 //! but for now we just use the parser's AST directly.
 
+use std::collections::HashSet;
 use uuid::Uuid;
 
-use crate::names::Aug;
+use crate::names::{Aug, ResolvedObjectName};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Select, SelectItem, TableAlias,
-    TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName,
+    Expr, Function, FunctionArgs, Ident, JoinConstraint, Op, OrderByExpr, Query, Select,
+    SelectItem, TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName,
+    Value,
 };
 
 use crate::normalize;
+
 use crate::plan::{PlanError, StatementContext};
 
 pub fn transform_query<'a>(
@@ -49,9 +52,17 @@ where
     f(&mut func_rewriter, ast);
     func_rewriter.status?;
 
-    let mut desugarer = Desugarer::new();
+    let mut desugarer = Desugarer::new(scx);
     f(&mut desugarer, ast);
-    desugarer.status
+    desugarer.status?;
+
+    let mut alias_collector = AliasCollector::new();
+    f(&mut alias_collector, ast);
+    let mut subquery_aliaser = SubqueryAliaser::new(alias_collector.table_names);
+    f(&mut subquery_aliaser, ast);
+    subquery_aliaser.status?;
+
+    Ok(())
 }
 
 // Transforms various functions to forms that are more easily handled by the
@@ -296,24 +307,25 @@ impl<'ast> VisitMut<'ast, Aug> for FuncRewriter<'_> {
 ///
 /// For example, `<expr> NOT IN (<subquery>)` is rewritten to `expr <> ALL
 /// (<subquery>)`.
-struct Desugarer {
+struct Desugarer<'a> {
+    scx: &'a StatementContext<'a>,
     status: Result<(), PlanError>,
     recursion_guard: RecursionGuard,
 }
 
-impl CheckedRecursion for Desugarer {
+impl<'a> CheckedRecursion for Desugarer<'a> {
     fn recursion_guard(&self) -> &RecursionGuard {
         &self.recursion_guard
     }
 }
 
-impl<'ast> VisitMut<'ast, Aug> for Desugarer {
+impl<'ast> VisitMut<'ast, Aug> for Desugarer<'_> {
     fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Aug>) {
         self.visit_internal(Self::visit_expr_mut_internal, expr);
     }
 }
 
-impl Desugarer {
+impl<'a> Desugarer<'a> {
     fn visit_internal<F, X>(&mut self, f: F, x: X)
     where
         F: Fn(&mut Self, X) -> Result<(), PlanError>,
@@ -328,8 +340,9 @@ impl Desugarer {
         }
     }
 
-    fn new() -> Desugarer {
+    fn new(scx: &'a StatementContext<'a>) -> Desugarer<'a> {
         Desugarer {
+            scx,
             status: Ok(()),
             recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
@@ -405,6 +418,7 @@ impl Desugarer {
                                 strict: true,
                             }),
                             with_ordinality: false,
+                            id: Some(self.scx.table_factor_id()),
                         },
                         joins: vec![],
                     })
@@ -464,6 +478,7 @@ impl Desugarer {
                         columns: bindings.clone(),
                         strict: true,
                     },
+                    Some(self.scx.table_factor_id()),
                 ))
                 .project(SelectItem::Expr {
                     expr: left
@@ -558,5 +573,282 @@ impl Desugarer {
 
         visit_mut::visit_expr_mut(self, expr);
         Ok(())
+    }
+}
+
+/// TODO(jkosh44)
+struct AliasCollector {
+    table_names: HashSet<Ident>,
+}
+
+impl AliasCollector {
+    fn new() -> AliasCollector {
+        AliasCollector {
+            table_names: HashSet::new(),
+        }
+    }
+}
+
+impl<'ast> VisitMut<'ast, Aug> for AliasCollector {
+    fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Aug>) {
+        if let Some(alias) = table_factor.alias() {
+            self.table_names.insert(alias.name.clone());
+        } else if let TableFactor::Table { name, .. } = table_factor {
+            match name {
+                ResolvedObjectName::Object { full_name, .. } => {
+                    self.table_names.insert(Ident::new(full_name.item.as_str()));
+                }
+                ResolvedObjectName::Cte { name, .. } => {
+                    self.table_names.insert(Ident::new(name.as_str()));
+                }
+                ResolvedObjectName::Error => {}
+            };
+        } else if let TableFactor::Function { function, .. } = table_factor {
+            let function_name = function.name.0.last().expect("empty function name").clone();
+            self.table_names.insert(function_name);
+        }
+        visit_mut::visit_table_factor_mut(self, table_factor);
+    }
+}
+
+struct SubqueryAliaser {
+    aliases: HashSet<Ident>,
+    idx: u64,
+    status: Result<(), PlanError>,
+}
+
+impl SubqueryAliaser {
+    fn new(aliases: HashSet<Ident>) -> SubqueryAliaser {
+        SubqueryAliaser {
+            aliases,
+            idx: 0,
+            status: Ok(()),
+        }
+    }
+
+    fn unique_alias(&mut self) -> Result<Ident, PlanError> {
+        const ANONYMOUS_ALIAS_NAME: &str = "unnamed_subquery";
+        let mut alias = Ident::new(ANONYMOUS_ALIAS_NAME);
+        while self.aliases.contains(&alias) {
+            self.idx = self.idx.checked_add(1).ok_or(PlanError::SubqueryOverflow)?;
+            alias = Ident::new(format!("{ANONYMOUS_ALIAS_NAME}_{}", self.idx));
+        }
+        self.aliases.insert(alias.clone());
+        Ok(alias)
+    }
+}
+
+impl<'ast> VisitMut<'ast, Aug> for SubqueryAliaser {
+    fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Aug>) {
+        match table_factor {
+            TableFactor::Derived { alias, .. } if alias.is_none() => match self.unique_alias() {
+                Ok(unique_alias) => {
+                    *alias = Some(TableAlias {
+                        name: unique_alias,
+                        columns: Vec::new(),
+                        strict: false,
+                    });
+                }
+                Err(e) => self.status = Err(e),
+            },
+            TableFactor::Table { .. }
+            | TableFactor::Function { .. }
+            | TableFactor::RowsFrom { .. }
+            | TableFactor::Derived { .. }
+            | TableFactor::NestedJoin { .. } => {}
+        }
+
+        visit_mut::visit_table_factor_mut(self, table_factor);
+    }
+}
+
+/// TODO(jkosh44) THe columns need to be disambiguated somehow. Look into how postgres does it.
+///  it seems like they disambiguate every invented column name but columns at the top level, though I'm not sure.
+///  If that's the case we can have a flag that checks if we're at the root and if not appends some
+///  number to columns, if the name has been invented.
+/// Tests
+///     SELECT * FROM t;
+///     SELECT t.* FROM t;
+///     SELECT (t).* FROM t;
+///     SELECT (constant-expr).*;
+pub fn expand_select<'a>(
+    scx: &StatementContext,
+    query: &'a mut Query<Aug>,
+) -> Result<(), PlanError> {
+    run_expansion(scx, |t, query| t.visit_query_mut(query), query)
+}
+
+pub(crate) fn run_expansion<F, A>(
+    scx: &StatementContext,
+    mut f: F,
+    ast: &mut A,
+) -> Result<(), PlanError>
+where
+    F: for<'ast> FnMut(&mut dyn VisitMut<'ast, Aug>, &'ast mut A),
+{
+    let mut star_expander = StarExpander::new(scx);
+    f(&mut star_expander, ast);
+    star_expander.status
+}
+
+// TODO(jkosh44)
+struct StarExpander<'a> {
+    scx: &'a StatementContext<'a>,
+    column_aliases: Vec<HashSet<Vec<Ident>>>,
+    status: Result<(), PlanError>,
+}
+
+impl<'a> StarExpander<'a> {
+    fn new(scx: &'a StatementContext<'a>) -> StarExpander<'a> {
+        StarExpander {
+            scx,
+            column_aliases: Vec::new(),
+            status: Ok(()),
+        }
+    }
+}
+
+// TODO(jkosh44) Remove clones, we can probably remove things
+// TODO(jkosh44) TEST CREATE VIEW v AS SELECT 1 FROM (SELECT * FROM (SELECT 1, 1)); Try repeatedly nesting this same pattern.
+// TODO(jkosh44) We also need to disambiguate duplicate columns, does that change the actual definition??? I think not because it's only allowed in nested queries and not in the final output??
+impl<'ast> VisitMut<'ast, Aug> for StarExpander<'_> {
+    fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Aug>) {
+        visit_mut::visit_table_factor_mut(self, table_factor);
+
+        let is_nested_join = matches!(table_factor, TableFactor::NestedJoin { .. });
+
+        let id = table_factor.id().clone();
+        let alias = table_factor.alias_mut();
+
+        // TODO(jkosh44) We need to create a table alias name here if one doesn't exist
+        let binding = self.scx.derived_table_factor_aliases.borrow();
+        let (table_name, column_aliases) = binding
+            .get(&id.expect("TODO(jkosh44)"))
+            .expect("TODO(jkosh44)");
+        let column_aliases = column_aliases
+            .iter()
+            .map(|column_alias| column_alias.last().expect("TODO(jkosh44)"))
+            .cloned()
+            .collect();
+        if let Some(alias) = alias {
+            alias.columns = column_aliases;
+        } else if let Some(table_name) = table_name {
+            // TODO(jkosh44) This seems sketchy INvestigate into nested joins.
+            // SELECT * FROM t3 NATURAL FULL JOIN t4, (t1 LEFT JOIN t2 ON t1.a = t2.a)
+            if !is_nested_join {
+                *alias = Some(TableAlias {
+                    name: table_name.clone(),
+                    columns: column_aliases,
+                    //TODO(jkosh44) Check this
+                    strict: false,
+                });
+            }
+        }
+    }
+
+    fn visit_select_mut(&mut self, select: &'ast mut Select<Aug>) {
+        self.column_aliases.push(HashSet::new());
+        visit_mut::visit_select_mut(self, select);
+        self.column_aliases.pop();
+        let mut projection = Vec::new();
+        for select_item in select.projection.drain(..) {
+            match select_item {
+                // TODO(jkosh44) TEST COUNT(*)!!!
+                SelectItem::Expr {
+                    expr: Expr::QualifiedWildcard { id, .. },
+                    ..
+                }
+                | SelectItem::Wildcard { id } => {
+                    let expansion = self
+                        .scx
+                        .wildcard_expansions
+                        .borrow()
+                        .get(&id)
+                        .cloned()
+                        .expect("jkosh44");
+                    for (table_name, col_name, col_alias) in expansion {
+                        let mut ident = Vec::new();
+                        if let Some(table_name) = table_name {
+                            // PostgreSQL only uses the table name to qualify the column and
+                            // not the database or schema. In case there's naming conflicts
+                            // across schemas, PostreSQL will invent a unique alias for one of
+                            // the tables. We just fully qualify the columns with their
+                            // database and schema to avoid inventing unique aliases.
+                            if let Some(database) = table_name.database {
+                                ident.push(Ident::new(database));
+                            }
+                            if let Some(schema) = table_name.schema {
+                                ident.push(Ident::new(schema));
+                            }
+                            ident.push(Ident::new(table_name.item));
+                        }
+                        match col_alias {
+                            Some(col_alias) => {
+                                ident.push(Ident::new(col_alias.as_str()));
+                                projection.push(SelectItem::Expr {
+                                    expr: Expr::Identifier(ident),
+                                    alias: Some(Ident::new(col_name.as_str())),
+                                });
+                            }
+                            None => {
+                                ident.push(Ident::new(col_name.as_str()));
+                                projection.push(SelectItem::Expr {
+                                    expr: Expr::Identifier(ident),
+                                    alias: None,
+                                });
+                            }
+                        }
+                    }
+                }
+                SelectItem::Expr {
+                    expr: Expr::WildcardAccess { expr, id },
+                    ..
+                } => {
+                    let expansion = self
+                        .scx
+                        .wildcard_expansions
+                        .borrow()
+                        .get(&id)
+                        .cloned()
+                        .expect("jkosh44");
+                    for (_table_name, col_name, _col_alias) in expansion {
+                        // TODO(jkosh44) Might be nested not field access.
+                        let select_item = SelectItem::Expr {
+                            expr: Expr::FieldAccess {
+                                expr: expr.clone(),
+                                field: Ident::new(col_name.as_str()),
+                            },
+                            alias: None,
+                        };
+                        projection.push(select_item);
+                    }
+                }
+                item @ SelectItem::Expr { .. } => projection.push(item),
+            }
+        }
+        select.projection = projection;
+    }
+
+    fn visit_join_constraint_mut(&mut self, join_constraint: &'ast mut JoinConstraint<Aug>) {
+        visit_mut::visit_join_constraint_mut(self, join_constraint);
+        if let JoinConstraint::Natural { id } = join_constraint {
+            let expansion = self
+                .scx
+                .natural_join_expansions
+                .borrow()
+                .get(id)
+                .cloned()
+                .expect("TODO(jkosh44)");
+            *join_constraint = if expansion.is_empty() {
+                JoinConstraint::On(Expr::Value(Value::Boolean(true)))
+            } else {
+                JoinConstraint::Using(
+                    expansion
+                        .into_iter()
+                        .map(|col| Ident::new(col.as_str()))
+                        .collect(),
+                )
+            };
+        }
     }
 }

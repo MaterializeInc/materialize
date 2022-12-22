@@ -376,6 +376,7 @@ impl Coordinator {
             depends_on,
             original_stmt,
             otel_ctx,
+            statement_tagger,
         }: CreateSourceStatementReady,
     ) {
         otel_ctx.attach_as_parent();
@@ -416,6 +417,7 @@ impl Coordinator {
                 &mut session,
                 Statement::CreateSubsource(subsource_stmt),
                 &params,
+                statement_tagger.clone(),
             ) {
                 Ok(Plan::CreateSource(plan)) => plan,
                 Ok(_) => {
@@ -438,7 +440,12 @@ impl Coordinator {
             Ok(id) => id,
             Err(e) => return tx.send(Err(e.into()), session),
         };
-        let plan = match self.plan_statement(&mut session, Statement::CreateSource(stmt), &params) {
+        let plan = match self.plan_statement(
+            &mut session,
+            Statement::CreateSource(stmt),
+            &params,
+            statement_tagger,
+        ) {
             Ok(Plan::CreateSource(plan)) => plan,
             Ok(_) => {
                 unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource")

@@ -1112,7 +1112,10 @@ impl<'a> Parser<'a> {
                     expr: Box::new(expr),
                     field: kw.into_ident(),
                 }),
-                Some(Token::Star) => Ok(Expr::WildcardAccess(Box::new(expr))),
+                Some(Token::Star) => Ok(Expr::WildcardAccess {
+                    expr: Box::new(expr),
+                    id: (),
+                }),
                 unexpected => self.expected(
                     self.peek_prev_pos(),
                     "an identifier or a '*' after '.'",
@@ -4377,7 +4380,10 @@ impl<'a> Parser<'a> {
                     }
                 }
                 if ends_with_wildcard {
-                    Ok(Expr::QualifiedWildcard(id_parts))
+                    Ok(Expr::QualifiedWildcard {
+                        qualifier: id_parts,
+                        id: (),
+                    })
                 } else if self.consume_token(&Token::LParen) {
                     self.prev_token();
                     self.parse_function(UnresolvedObjectName(id_parts))
@@ -5177,6 +5183,7 @@ impl<'a> Parser<'a> {
                     function: TableFunction { name, args },
                     alias,
                     with_ordinality,
+                    id: (),
                 });
             }
         }
@@ -5230,6 +5237,7 @@ impl<'a> Parser<'a> {
             Ok(TableFactor::NestedJoin {
                 join: Box::new(table_and_joins),
                 alias: self.parse_optional_table_alias()?,
+                id: (),
             })
         } else if self.parse_keywords(&[ROWS, FROM]) {
             Ok(self.parse_rows_from()?)
@@ -5244,11 +5252,13 @@ impl<'a> Parser<'a> {
                         function: TableFunction { name, args },
                         alias,
                         with_ordinality,
+                        id: (),
                     })
                 }
                 _ => Ok(TableFactor::Table {
                     name,
                     alias: self.parse_optional_table_alias()?,
+                    id: (),
                 }),
             }
         }
@@ -5264,6 +5274,7 @@ impl<'a> Parser<'a> {
             functions,
             alias,
             with_ordinality,
+            id: (),
         })
     }
 
@@ -5290,12 +5301,13 @@ impl<'a> Parser<'a> {
             },
             subquery,
             alias,
+            id: (),
         })
     }
 
     fn parse_join_constraint(&mut self, natural: bool) -> Result<JoinConstraint<Raw>, ParserError> {
         if natural {
-            Ok(JoinConstraint::Natural)
+            Ok(JoinConstraint::Natural { id: () })
         } else if self.parse_keyword(ON) {
             let constraint = self.parse_expr()?;
             Ok(JoinConstraint::On(constraint))
@@ -5427,7 +5439,7 @@ impl<'a> Parser<'a> {
     /// Parse a comma-delimited list of projections after SELECT
     fn parse_select_item(&mut self) -> Result<SelectItem<Raw>, ParserError> {
         if self.consume_token(&Token::Star) {
-            return Ok(SelectItem::Wildcard);
+            return Ok(SelectItem::Wildcard { id: () });
         }
         Ok(SelectItem::Expr {
             expr: self.parse_expr()?,

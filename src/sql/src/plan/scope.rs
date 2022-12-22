@@ -49,16 +49,19 @@ use mz_repr::ColumnName;
 
 use crate::ast::Expr;
 use crate::names::{Aug, PartialObjectName};
+
 use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
 use crate::plan::plan_utils::JoinSide;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeItem {
     /// The name of the table that produced this scope item, if any.
     pub table_name: Option<PartialObjectName>,
     /// The name of the column.
     pub column_name: ColumnName,
+    /// TODO(jkosh44)
+    pub column_alias: Option<ColumnName>,
     /// The expressions from which this scope item is derived. Used by `GROUP
     /// BY`.
     pub exprs: BTreeSet<Expr<Aug>>,
@@ -77,6 +80,7 @@ pub struct ScopeItem {
     /// having three columns in scope named `a` would result in "ambiguous
     /// column reference" errors.
     pub allow_unqualified_references: bool,
+    pub using_column: bool,
     /// Whether reference the item should produce an error about the item being
     /// on the wrong side of a lateral join.
     ///
@@ -96,7 +100,7 @@ pub struct ScopeItem {
     _private: (),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scope {
     // The items in this scope.
     pub items: Vec<ScopeItem>,
@@ -127,9 +131,11 @@ impl ScopeItem {
         ScopeItem {
             table_name: None,
             column_name: "?column?".into(),
+            column_alias: None,
             exprs: BTreeSet::new(),
             from_single_column_function: false,
             allow_unqualified_references: true,
+            using_column: false,
             lateral_error_if_referenced: false,
             is_exists_column_for_a_table_function_that_was_in_the_target_list: false,
             _private: (),

@@ -199,8 +199,19 @@ pub fn plan_prepare(
 ) -> Result<Plan, PlanError> {
     // TODO: PREPARE supports specifying param types.
     let param_types = [];
-    let (stmt_resolved, _) = names::resolve(scx.catalog, *stmt.clone())?;
-    let desc = describe(scx.pcx()?, scx.catalog, stmt_resolved, &param_types)?;
+    let (stmt_resolved, _) = names::resolve(
+        scx.catalog,
+        &mut scx.statement_tagger.borrow_mut(),
+        *stmt.clone(),
+    )?;
+    let desc = describe(
+        scx.pcx()?,
+        scx.catalog,
+        stmt_resolved,
+        &param_types,
+        // TODO(jkosh44) Sketch, but also sketch that we reconstruct a new scx in the middle of the statement processing.
+        scx.statement_tagger.borrow().clone(),
+    )?;
     Ok(Plan::Prepare(PreparePlan {
         name: name.to_string(),
         stmt: *stmt,

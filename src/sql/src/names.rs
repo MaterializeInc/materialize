@@ -32,6 +32,7 @@ use crate::ast::{
 };
 use crate::catalog::{CatalogItemType, CatalogTypeDetails, SessionCatalog};
 use crate::normalize;
+use crate::plan::column_disambiguate::StatementTagger;
 use crate::plan::PlanError;
 
 /// A fully-qualified human readable name of an item in the catalog.
@@ -102,8 +103,8 @@ pub struct PartialObjectName {
 }
 
 impl PartialObjectName {
-    // Whether either self or other might be a (possibly differently qualified)
-    // version of the other.
+    /// Whether either self or other might be a (possibly differently qualified)
+    /// version of the other.
     pub fn matches(&self, other: &Self) -> bool {
         match (&self.database, &other.database) {
             (Some(d1), Some(d2)) if d1 != d2 => return false,
@@ -114,6 +115,19 @@ impl PartialObjectName {
             _ => (),
         }
         self.item == other.item
+    }
+
+    /// TODO(jkosh44)
+    pub fn into_idents(&self) -> Vec<Ident> {
+        let mut idents = Vec::new();
+        if let Some(database) = &self.database {
+            idents.push(Ident::new(database));
+        }
+        if let Some(schema) = &self.schema {
+            idents.push(Ident::new(schema));
+        }
+        idents.push(Ident::new(&self.item));
+        idents
     }
 }
 
@@ -599,6 +613,9 @@ impl AstInfo for Aug {
     type ClusterName = ResolvedClusterName;
     type DataType = ResolvedDataType;
     type CteId = LocalId;
+    type WildcardId = u64;
+    type TableFactorId = Option<u64>;
+    type NaturalJoinId = u64;
 }
 
 /// The identifier for a schema.
@@ -700,15 +717,20 @@ impl fmt::Display for RoleId {
 #[derive(Debug)]
 pub struct NameResolver<'a> {
     catalog: &'a dyn SessionCatalog,
+    statement_tagger: &'a mut StatementTagger,
     ctes: BTreeMap<String, LocalId>,
     status: Result<(), PlanError>,
     ids: BTreeSet<GlobalId>,
 }
 
 impl<'a> NameResolver<'a> {
-    fn new(catalog: &'a dyn SessionCatalog) -> NameResolver {
+    fn new(
+        catalog: &'a dyn SessionCatalog,
+        statement_tagger: &'a mut StatementTagger,
+    ) -> NameResolver<'a> {
         NameResolver {
             catalog,
+            statement_tagger,
             ctes: BTreeMap::new(),
             status: Ok(()),
             ids: BTreeSet::new(),
@@ -1161,6 +1183,24 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             ConnectionKafkaBroker(broker) => ConnectionKafkaBroker(self.fold_kafka_broker(broker)),
         }
     }
+    fn fold_wildcard_id(
+        &mut self,
+        _wildcard_id: <Raw as AstInfo>::WildcardId,
+    ) -> <Aug as AstInfo>::WildcardId {
+        self.statement_tagger.wildcard_id()
+    }
+    fn fold_table_factor_id(
+        &mut self,
+        _table_factor: <Raw as AstInfo>::TableFactorId,
+    ) -> <Aug as AstInfo>::TableFactorId {
+        Some(self.statement_tagger.table_factor_id())
+    }
+    fn fold_natural_join_id(
+        &mut self,
+        _natural_join: <Raw as AstInfo>::NaturalJoinId,
+    ) -> <Aug as AstInfo>::NaturalJoinId {
+        self.statement_tagger.natural_join_id()
+    }
 }
 
 /// Resolves names in an AST node using the provided catalog.
@@ -1172,12 +1212,13 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 )]
 pub fn resolve<N>(
     catalog: &dyn SessionCatalog,
+    statement_taggger: &mut StatementTagger,
     node: N,
 ) -> Result<(N::Folded, BTreeSet<GlobalId>), PlanError>
 where
     N: FoldNode<Raw, Aug>,
 {
-    let mut resolver = NameResolver::new(catalog);
+    let mut resolver = NameResolver::new(catalog, statement_taggger);
     let result = node.fold(&mut resolver);
     resolver.status?;
     Ok((result, resolver.ids))
@@ -1272,6 +1313,24 @@ impl Fold<Aug, Aug> for TransientResolver<'_> {
         node: <Aug as AstInfo>::SchemaName,
     ) -> <Aug as AstInfo>::SchemaName {
         node
+    }
+    fn fold_wildcard_id(
+        &mut self,
+        wildcard_id: <Aug as AstInfo>::WildcardId,
+    ) -> <Aug as AstInfo>::WildcardId {
+        wildcard_id
+    }
+    fn fold_table_factor_id(
+        &mut self,
+        table_factor: <Aug as AstInfo>::TableFactorId,
+    ) -> <Aug as AstInfo>::TableFactorId {
+        table_factor
+    }
+    fn fold_natural_join_id(
+        &mut self,
+        natural_join: <Aug as AstInfo>::NaturalJoinId,
+    ) -> <Aug as AstInfo>::NaturalJoinId {
+        natural_join
     }
 }
 

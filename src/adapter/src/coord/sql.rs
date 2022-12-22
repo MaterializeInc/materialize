@@ -12,7 +12,7 @@
 
 use mz_repr::{GlobalId, ScalarType};
 use mz_sql::names::Aug;
-use mz_sql::plan::StatementDesc;
+use mz_sql::plan::{StatementDesc, StatementTagger};
 use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::coord::Coordinator;
@@ -26,9 +26,16 @@ impl Coordinator {
         session: &mut Session,
         stmt: mz_sql::ast::Statement<Aug>,
         params: &mz_sql::plan::Params,
+        statement_tagger: StatementTagger,
     ) -> Result<mz_sql::plan::Plan, AdapterError> {
         let pcx = session.pcx();
-        let plan = mz_sql::plan::plan(Some(pcx), &self.catalog.for_session(session), stmt, params)?;
+        let plan = mz_sql::plan::plan(
+            Some(pcx),
+            &self.catalog.for_session(session),
+            stmt,
+            params,
+            statement_tagger,
+        )?;
         Ok(plan)
     }
 

@@ -1358,6 +1358,7 @@ impl Coordinator {
 
         self.maybe_create_linked_cluster(id).await;
 
+        // TODO(jkosh44) This is bad, what happens if we error here? The sink is never cleaned up.
         let create_export_token = return_if_err!(
             self.controller
                 .storage

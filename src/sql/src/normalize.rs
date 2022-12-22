@@ -271,7 +271,7 @@ pub fn create_statement(
 
         fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Aug>) {
             match table_factor {
-                TableFactor::Table { name, alias, .. } => {
+                TableFactor::Table { name, alias, id: _ } => {
                     self.visit_object_name_mut(name);
                     if let Some(alias) = alias {
                         self.visit_table_alias_mut(alias);
@@ -453,8 +453,8 @@ pub fn create_statement(
             *name = allocate_name(name)?;
             *if_not_exists = false;
         }
-
-        _ => unreachable!(),
+        // TODO(jkosh44) Revert this
+        _ => {} // _ => unreachable!(),
     }
 
     Ok(stmt.to_ast_string_stable())
@@ -561,6 +561,7 @@ mod tests {
     use super::*;
     use crate::catalog::DummyCatalog;
     use crate::names;
+    use crate::plan::StatementTagger;
 
     #[test]
     fn normalized_create() -> Result<(), Box<dyn Error>> {
@@ -569,7 +570,7 @@ mod tests {
         let parsed = mz_sql_parser::parser::parse_statements("create view foo as select 1 as bar")?
             .into_element();
 
-        let (stmt, _) = names::resolve(scx.catalog, parsed)?;
+        let (stmt, _) = names::resolve(scx.catalog, &mut StatementTagger::default(), parsed)?;
 
         // Ensure that all identifiers are quoted.
         assert_eq!(
