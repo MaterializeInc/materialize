@@ -1588,6 +1588,23 @@ pub fn plan_view(
     params: &Params,
     temporary: bool,
 ) -> Result<(QualifiedObjectName, View), PlanError> {
+    let ViewDefinition {
+        name,
+        columns,
+        query,
+    } = def;
+    // TODO(jkosh44)
+    let mut name = name.clone();
+    let mut columns = columns.clone();
+    let name = &mut name;
+    let columns = &mut columns;
+
+    let query::PlannedQuery {
+        mut expr,
+        mut desc,
+        finishing,
+    } = query::plan_root_query(scx, query, QueryLifetime::Static)?;
+
     let create_sql = normalize::create_statement(
         scx,
         Statement::CreateView(CreateViewStatement {
@@ -1596,18 +1613,6 @@ pub fn plan_view(
             definition: def.clone(),
         }),
     )?;
-
-    let ViewDefinition {
-        name,
-        columns,
-        query,
-    } = def;
-
-    let query::PlannedQuery {
-        mut expr,
-        mut desc,
-        finishing,
-    } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
 
     expr.bind_parameters(params)?;
     //TODO: materialize#724 - persist finishing information with the view?
@@ -1704,7 +1709,7 @@ pub fn plan_create_materialized_view(
         mut expr,
         mut desc,
         finishing,
-    } = query::plan_root_query(scx, stmt.query, QueryLifetime::Static)?;
+    } = query::plan_root_query(scx, &mut stmt.query, QueryLifetime::Static)?;
 
     expr.bind_parameters(params)?;
     expr.finish(finishing);

@@ -174,6 +174,7 @@ struct Parser<'a> {
     /// The index of the first unprocessed token in `self.tokens`
     index: usize,
     recursion_guard: RecursionGuard,
+    wildcard_id: u64,
 }
 
 /// Defines a number of precedence classes operators follow. Since this enum derives Ord, the
@@ -211,6 +212,7 @@ impl<'a> Parser<'a> {
             tokens,
             index: 0,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+            wildcard_id: 0,
         }
     }
 
@@ -5344,7 +5346,9 @@ impl<'a> Parser<'a> {
     /// Parse a comma-delimited list of projections after SELECT
     fn parse_select_item(&mut self) -> Result<SelectItem<Raw>, ParserError> {
         if self.consume_token(&Token::Star) {
-            return Ok(SelectItem::Wildcard);
+            let id = self.wildcard_id;
+            self.wildcard_id += 1;
+            return Ok(SelectItem::Wildcard { id });
         }
         Ok(SelectItem::Expr {
             expr: self.parse_expr()?,

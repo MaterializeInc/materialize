@@ -105,12 +105,14 @@ pub struct PlannedQuery<E> {
 #[tracing::instrument(target = "compiler", level = "trace", name = "ast_to_hir", skip_all)]
 pub fn plan_root_query(
     scx: &StatementContext,
-    mut query: Query<Aug>,
+    query: &mut Query<Aug>,
     lifetime: QueryLifetime,
 ) -> Result<PlannedQuery<HirRelationExpr>, PlanError> {
-    transform_ast::transform_query(scx, &mut query)?;
+    transform_ast::transform_query(scx, query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
-    let (mut expr, scope, mut finishing) = plan_query(&mut qcx, &query)?;
+    let (mut expr, scope, mut finishing) = plan_query(&mut qcx, query)?;
+    println!("wildcard expansions: {:?}", qcx.scx.wildcard_expansions);
+    transform_ast::expand_select(scx, query)?;
 
     // Attempt to push the finishing's ordering past its projection. This allows
     // data to be projected down on the workers rather than the coordinator. It
@@ -1682,7 +1684,7 @@ fn plan_view_select(
 
     // Step 4. Expand SELECT clause.
     let projection = {
-        let ecx = &ExprContext {
+        let ecx = &mut ExprContext {
             qcx,
             name: "SELECT clause",
             scope: &from_scope,
@@ -1693,7 +1695,7 @@ fn plan_view_select(
         };
         let mut out = vec![];
         for si in &s.projection {
-            if *si == SelectItem::Wildcard && s.from.is_empty() {
+            if matches!(*si, SelectItem::Wildcard { .. }) && s.from.is_empty() {
                 sql_bail!("SELECT * with no tables specified is not valid");
             }
             out.extend(expand_select_item(ecx, si, &table_func_names)?);
@@ -2806,7 +2808,8 @@ fn expand_select_item<'a>(
                 .collect();
             Ok(items)
         }
-        SelectItem::Wildcard => {
+        // TODO(jkosh44)
+        SelectItem::Wildcard { id } => {
             let items: Vec<_> = ecx
                 .scope
                 .items
@@ -2818,6 +2821,21 @@ fn expand_select_item<'a>(
                     (ExpandedSelectItem::InputOrdinal(i), name)
                 })
                 .collect();
+
+            let column_names = items
+                .iter()
+                .map(|(_, column_name)| column_name)
+                .cloned()
+                .collect();
+            let old = ecx
+                .qcx
+                .scx
+                .wildcard_expansions
+                .borrow_mut()
+                .insert(*id, column_names);
+            if let Some(old) = old {
+                println!("DUPLICATE PLANNING {id}: {old:?}");
+            }
 
             Ok(items)
         }

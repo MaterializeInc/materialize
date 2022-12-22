@@ -432,7 +432,7 @@ pub enum SelectItem<T: AstInfo> {
     /// An expression, optionally followed by `[ AS ] alias`.
     Expr { expr: Expr<T>, alias: Option<Ident> },
     /// An unqualified `*`.
-    Wildcard,
+    Wildcard { id: u64 },
 }
 
 impl<T: AstInfo> AstDisplay for SelectItem<T> {
@@ -445,7 +445,7 @@ impl<T: AstInfo> AstDisplay for SelectItem<T> {
                     f.write_node(alias);
                 }
             }
-            SelectItem::Wildcard => f.write_str("*"),
+            SelectItem::Wildcard { .. } => f.write_str("*"),
         }
     }
 }

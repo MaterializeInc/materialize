@@ -556,3 +556,66 @@ impl Desugarer {
         Ok(())
     }
 }
+
+pub fn expand_select<'a>(
+    scx: &StatementContext,
+    query: &'a mut Query<Aug>,
+) -> Result<(), PlanError> {
+    run_expansion(scx, |t, query| t.visit_query_mut(query), query)
+}
+
+pub(crate) fn run_expansion<F, A>(
+    scx: &StatementContext,
+    mut f: F,
+    ast: &mut A,
+) -> Result<(), PlanError>
+where
+    F: for<'ast> FnMut(&mut dyn VisitMut<'ast, Aug>, &'ast mut A),
+{
+    let mut star_expander = StarExpander::new(scx);
+    f(&mut star_expander, ast);
+    star_expander.status
+}
+
+// TODO(jkosh44)
+struct StarExpander<'a> {
+    scx: &'a StatementContext<'a>,
+    status: Result<(), PlanError>,
+}
+
+impl<'a> StarExpander<'a> {
+    fn new(scx: &'a StatementContext<'a>) -> StarExpander<'a> {
+        StarExpander {
+            scx,
+            status: Ok(()),
+        }
+    }
+}
+
+impl<'ast> VisitMut<'ast, Aug> for StarExpander<'_> {
+    fn visit_select_mut(&mut self, select: &'ast mut Select<Aug>) {
+        visit_mut::visit_select_mut(self, select);
+        let mut projection = Vec::new();
+        for select_item in select.projection.drain(..) {
+            match select_item {
+                item @ SelectItem::Expr { .. } => projection.push(item),
+                SelectItem::Wildcard { id } => {
+                    let expansion = self
+                        .scx
+                        .wildcard_expansions
+                        .borrow()
+                        .get(&id)
+                        .cloned()
+                        .expect("jkosh44");
+                    for col_name in expansion {
+                        projection.push(SelectItem::Expr {
+                            expr: Expr::Identifier(vec![Ident::new(col_name.as_str())]),
+                            alias: None,
+                        })
+                    }
+                }
+            }
+        }
+        select.projection = projection;
+    }
+}

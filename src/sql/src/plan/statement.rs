@@ -14,7 +14,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{ColumnName, ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     RawObjectName, ShowStatement, UnresolvedDatabaseName, UnresolvedSchemaName,
 };
@@ -105,6 +105,7 @@ pub fn describe(
         pcx: Some(pcx),
         catalog,
         param_types: RefCell::new(param_types),
+        wildcard_expansions: Default::default(),
     };
 
     let desc = match stmt {
@@ -243,6 +244,7 @@ pub fn plan(
         pcx,
         catalog,
         param_types: RefCell::new(param_types),
+        wildcard_expansions: Default::default(),
     };
 
     let plan = match stmt {
@@ -403,6 +405,8 @@ pub struct StatementContext<'a> {
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
     pub param_types: RefCell<BTreeMap<usize, ScalarType>>,
+    /// TODO(jkosh44)
+    pub wildcard_expansions: RefCell<BTreeMap<u64, Vec<ColumnName>>>,
 }
 
 impl<'a> StatementContext<'a> {
@@ -414,6 +418,7 @@ impl<'a> StatementContext<'a> {
             pcx,
             catalog,
             param_types: Default::default(),
+            wildcard_expansions: Default::default(),
         }
     }
 
