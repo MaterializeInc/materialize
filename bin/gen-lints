@@ -9,17 +9,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# pre-push — quickly look for errors that will fail in CI.
+# gen-lints -- regenerates lint annotations on all root Rust files.
 
-set -euo pipefail
-
-SHLIB_NOT_IN_CI=1
-
-. misc/shlib/shlib.bash
-
-ci_try bin/lint
-ci_try cargo fmt -- --check
-ci_try cargo clippy --all-targets
-ci_try bin/doc --no-deps
-
-ci_status_report
+exec "$(dirname "$0")"/pyactivate -m materialize.cli.gen-lints "$@"

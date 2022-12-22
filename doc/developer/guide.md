@@ -244,7 +244,7 @@ We use the following tools to perform automatic code style checks:
 
 Tool                  | Use                                | Run locally with
 ----------------------|------------------------------------|------------------
-[Clippy]              | Rust semantic nits                 | `bin/check`
+[Clippy]              | Rust semantic nits                 | `cargo clippy`
 [rustfmt]             | Rust code formatter                | `cargo fmt`
 Linter                | General formatting nits            | `bin/lint`
 [cargo-udeps]         | Check for unused Rust dependencies | `bin/unused-deps`
