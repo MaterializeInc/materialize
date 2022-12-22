@@ -24,7 +24,7 @@ use timely::Data;
 use tokio::sync::Notify;
 
 /// Monitors progress at a `Stream`.
-trait ProbeNotify<G: Scope, D: Data> {
+pub trait ProbeNotify<G: Scope, D: Data> {
     /// Constructs a progress probe which indicates which timestamps have elapsed at the operator.
     fn probe_notify(&self) -> Handle<G::Timestamp>;
 
@@ -41,9 +41,13 @@ impl<G: Scope, D: Data> ProbeNotify<G, D> for Stream<G, D> {
 
     fn probe_notify_with(&self, handle: &mut Handle<G::Timestamp>) -> Stream<G, D> {
         let mut handle = handle.clone();
+        // We need to reset the handle's frontier from the empty one to the minimal one, to enable
+        // downgrading.
+        handle.update_frontier(&[Timestamp::minimum()]);
+
         self.inspect_container(move |update| {
             if let Err(frontier) = update {
-                handle.downgrade(frontier);
+                handle.update_frontier(frontier);
             }
         })
     }
@@ -60,9 +64,12 @@ pub struct Handle<T: Timestamp> {
 
 impl<T: Timestamp> Default for Handle<T> {
     fn default() -> Self {
+        // Initialize the handle frontier to the empty frontier, to prevent it from unintentionally
+        // holding back the global frontier. Only when a handle is used to probe a stream do we
+        // reset its frontier to the minimal one.
         Handle {
-            frontier: Rc::new(RefCell::new(MutableAntichain::new_bottom(T::minimum()))),
-            handle_frontier: Antichain::from_elem(T::minimum()),
+            frontier: Rc::new(RefCell::new(MutableAntichain::new())),
+            handle_frontier: Antichain::new(),
             notify: Rc::new(Notify::new()),
         }
     }
@@ -109,7 +116,7 @@ impl<T: Timestamp> Handle<T> {
     }
 
     #[inline]
-    fn downgrade(&mut self, new_frontier: &[T]) {
+    fn update_frontier(&mut self, new_frontier: &[T]) {
         let mut frontier = self.frontier.borrow_mut();
         let changes = frontier.update_iter(
             self.handle_frontier
@@ -136,10 +143,9 @@ impl<T: Timestamp> Drop for Handle<T> {
 
 impl<T: Timestamp> Clone for Handle<T> {
     fn clone(&self) -> Self {
-        self.frontier.borrow_mut().update_iter([(T::minimum(), 1)]);
         Handle {
             frontier: Rc::clone(&self.frontier),
-            handle_frontier: Antichain::from_elem(T::minimum()),
+            handle_frontier: Antichain::new(),
             notify: Rc::clone(&self.notify),
         }
     }
