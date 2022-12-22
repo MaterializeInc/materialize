@@ -95,7 +95,9 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
         echo "hint: run bin/pyfmt" >&2
     fi
     try bin/lint-cargo
-    try bin/completion check
+    try bin/gen-completion check
+    try bin/gen-lints
+    try git diff --exit-code
 fi
 
 try_finish

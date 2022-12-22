@@ -18,7 +18,7 @@ set -euo pipefail
 ci_try bin/xcompile cargo test --locked --doc
 # Intentionally run check last, since otherwise it won't use the cache.
 # https://github.com/rust-lang/rust-clippy/issues/3840
-ci_try bin/check
+ci_try cargo clippy --all-targets
 
 ci_try bin/doc
 ci_try bin/doc --document-private-items

@@ -72,7 +72,7 @@ steps:
 
   - id: lint-macos
     label: macOS Clippy
-    command: bin/check
+    command: cargo clippy --all-targets
     env:
       CARGO_INCREMENTAL: "0"
       RUSTUP_TOOLCHAIN: $RUST_VERSION
