@@ -285,9 +285,13 @@ pub fn build_compute_dataflow<A: Allocate>(
                             let oks_v = Variable::new(region, Product::new(Default::default(), 1));
                             let err_v = Variable::new(region, Product::new(Default::default(), 1));
 
+                            use differential_dataflow::operators::Consolidate;
                             context.insert_id(
                                 Id::Local(*id),
-                                CollectionBundle::from_collections(oks_v.clone(), err_v.clone()),
+                                CollectionBundle::from_collections(
+                                    oks_v.consolidate(),
+                                    err_v.consolidate(),
+                                ),
                             );
                             variables.insert(Id::Local(*id), (oks_v, err_v));
                         }
