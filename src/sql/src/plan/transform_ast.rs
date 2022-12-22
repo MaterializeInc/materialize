@@ -638,6 +638,10 @@ impl<'ast> VisitMut<'ast, Aug> for SubqueryAliaser {
     }
 }
 
+/// TODO(jkosh44) THe columns need to be disambiguated somehow. Look into how postgres does it.
+///  it seems like they disambiguate every invented column name but columns at the top level, though I'm not sure.
+///  If that's the case we can have a flag that checks if we're at the root and if not appends some
+///  number to columns, if the name has been invented.
 pub fn expand_select<'a>(
     scx: &StatementContext,
     query: &'a mut Query<Aug>,
@@ -673,6 +677,7 @@ impl<'a> StarExpander<'a> {
     }
 }
 
+// TEST CREATE VIEW v AS SELECT 1 FROM (SELECT * FROM (SELECT 1, 1));
 impl<'ast> VisitMut<'ast, Aug> for StarExpander<'_> {
     fn visit_select_mut(&mut self, select: &'ast mut Select<Aug>) {
         visit_mut::visit_select_mut(self, select);
@@ -688,11 +693,30 @@ impl<'ast> VisitMut<'ast, Aug> for StarExpander<'_> {
                         .get(&id)
                         .cloned()
                         .expect("jkosh44");
-                    for col_name in expansion {
-                        projection.push(SelectItem::Expr {
-                            expr: Expr::Identifier(vec![Ident::new(col_name.as_str())]),
-                            alias: None,
-                        })
+                    for (table_name, col_name) in expansion {
+                        let expr = match table_name {
+                            Some(table_name) => {
+                                // PostgreSQL only uses the table name to qualify the column and
+                                // not the database or schema. In case there's naming conflicts
+                                // across schema, PostreSQL will invent a unique alias for one of
+                                // the tables. We just fully qualify the columns with their
+                                // database and schema to avoid inventing unique aliases.
+                                let mut ident = Vec::new();
+                                if let Some(database) = table_name.database {
+                                    ident.push(Ident::new(database));
+                                }
+                                if let Some(schema) = table_name.schema {
+                                    ident.push(Ident::new(schema));
+                                }
+                                ident.push(Ident::new(table_name.item));
+                                Expr::FieldAccess {
+                                    expr: Box::new(Expr::Identifier(ident)),
+                                    field: Ident::new(col_name.as_str()),
+                                }
+                            }
+                            None => Expr::Identifier(vec![Ident::new(col_name.as_str())]),
+                        };
+                        projection.push(SelectItem::Expr { expr, alias: None })
                     }
                 }
             }

@@ -406,7 +406,7 @@ pub struct StatementContext<'a> {
     /// occurs.
     pub param_types: RefCell<BTreeMap<usize, ScalarType>>,
     /// TODO(jkosh44)
-    pub wildcard_expansions: RefCell<BTreeMap<u64, Vec<ColumnName>>>,
+    pub wildcard_expansions: RefCell<BTreeMap<u64, Vec<(Option<PartialObjectName>, ColumnName)>>>,
 }
 
 impl<'a> StatementContext<'a> {

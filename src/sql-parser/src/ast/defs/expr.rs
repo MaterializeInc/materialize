@@ -34,7 +34,10 @@ pub enum Expr<T: AstInfo> {
     /// Identifier e.g. table name or column name
     Identifier(Vec<Ident>),
     /// Qualified wildcard, e.g. `alias.*` or `schema.table.*`.
-    QualifiedWildcard(Vec<Ident>),
+    QualifiedWildcard {
+        qualifier: Vec<Ident>,
+        id: u64,
+    },
     /// A field access, like `(expr).foo`.
     FieldAccess {
         expr: Box<Expr<T>>,
@@ -46,7 +49,10 @@ pub enum Expr<T: AstInfo> {
     /// wildcard access occurs on an arbitrary expression, rather than a
     /// qualified name. The distinction is important for PostgreSQL
     /// compatibility.
-    WildcardAccess(Box<Expr<T>>),
+    WildcardAccess {
+        expr: Box<Expr<T>>,
+        id: u64,
+    },
     /// A positional parameter, e.g., `$1` or `$42`
     Parameter(usize),
     /// Boolean negation
@@ -197,8 +203,8 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Expr::Identifier(s) => f.write_node(&display::separated(s, ".")),
-            Expr::QualifiedWildcard(q) => {
-                f.write_node(&display::separated(q, "."));
+            Expr::QualifiedWildcard { qualifier, .. } => {
+                f.write_node(&display::separated(qualifier, "."));
                 f.write_str(".*");
             }
             Expr::FieldAccess { expr, field } => {
@@ -206,7 +212,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_str(".");
                 f.write_node(field);
             }
-            Expr::WildcardAccess(expr) => {
+            Expr::WildcardAccess { expr, .. } => {
                 f.write_node(expr);
                 f.write_str(".*");
             }

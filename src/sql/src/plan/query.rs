@@ -113,6 +113,11 @@ pub fn plan_root_query(
     let (mut expr, scope, mut finishing) = plan_query(&mut qcx, query)?;
     println!("wildcard expansions: {:?}", qcx.scx.wildcard_expansions);
     transform_ast::expand_select(scx, query)?;
+    // TODO(jkosh44)
+    /*debug_assert_eq!(
+        Ok::<_, PlanError>((expr, scope, finishing)),
+        plan_query(&mut qcx, query)
+    );*/
 
     // Attempt to push the finishing's ordering past its projection. This allows
     // data to be projected down on the workers rather than the coordinator. It
@@ -2736,7 +2741,11 @@ fn expand_select_item<'a>(
 ) -> Result<Vec<(ExpandedSelectItem<'a>, ColumnName)>, PlanError> {
     match s {
         SelectItem::Expr {
-            expr: Expr::QualifiedWildcard(table_name),
+            expr:
+                Expr::QualifiedWildcard {
+                    qualifier: table_name,
+                    id,
+                },
             alias: _,
         } => {
             let table_name =
@@ -2748,17 +2757,37 @@ fn expand_select_item<'a>(
                 .enumerate()
                 .filter(|(_i, item)| item.is_from_table(&table_name))
                 .map(|(i, item)| {
-                    let name = item.column_name.clone();
-                    (ExpandedSelectItem::InputOrdinal(i), name)
+                    let column_name = item.column_name.clone();
+                    let table_name = item.table_name.clone();
+                    (ExpandedSelectItem::InputOrdinal(i), table_name, column_name)
                 })
                 .collect();
             if out.is_empty() {
                 sql_bail!("no table named '{}' in scope", table_name);
             }
+
+            let column_names = out
+                .iter()
+                .map(|(_, table_name, column_name)| (table_name.clone(), column_name.clone()))
+                .collect();
+            let old = ecx
+                .qcx
+                .scx
+                .wildcard_expansions
+                .borrow_mut()
+                .insert(*id, column_names);
+            if let Some(old) = old {
+                println!("DUPLICATE PLANNING {id}: {old:?}");
+            }
+
+            let out = out
+                .into_iter()
+                .map(|(i, _, column_name)| (i, column_name))
+                .collect();
             Ok(out)
         }
         SelectItem::Expr {
-            expr: Expr::WildcardAccess(sql_expr),
+            expr: Expr::WildcardAccess { expr: sql_expr, id },
             alias: _,
         } => {
             // A bit silly to have to plan the expression here just to get its
@@ -2771,7 +2800,7 @@ fn expand_select_item<'a>(
                 ScalarType::Record { fields, .. } => fields,
                 ty => sql_bail!("type {} is not composite", ecx.humanize_scalar_type(&ty)),
             };
-            let mut skip_cols: HashSet<ColumnName> = HashSet::new();
+            let mut skip_cols: HashMap<ColumnName, Option<PartialObjectName>> = HashMap::new();
             if let Expr::Identifier(ident) = sql_expr.as_ref() {
                 if let [name] = ident.as_slice() {
                     if let Ok(items) = ecx.scope.items_from_table(
@@ -2786,25 +2815,42 @@ fn expand_select_item<'a>(
                             if item
                                 .is_exists_column_for_a_table_function_that_was_in_the_target_list
                             {
-                                skip_cols.insert(item.column_name.clone());
+                                skip_cols.insert(item.column_name.clone(), item.table_name.clone());
                             }
                         }
                     }
                 }
             }
-            let items = fields
+            let items: Vec<_> = fields
                 .iter()
                 .filter_map(|(name, _ty)| {
-                    if skip_cols.contains(name) {
-                        None
-                    } else {
+                    skip_cols.get_key_value(name).map(|(col_name, table_name)| {
                         let item = ExpandedSelectItem::Expr(Cow::Owned(Expr::FieldAccess {
                             expr: sql_expr.clone(),
                             field: Ident::new(name.as_str()),
                         }));
-                        Some((item, name.clone()))
-                    }
+                        (item, table_name.clone(), col_name.clone())
+                    })
                 })
+                .collect();
+
+            let column_names = items
+                .iter()
+                .map(|(_, table_name, column_name)| (table_name.clone(), column_name.clone()))
+                .collect();
+            let old = ecx
+                .qcx
+                .scx
+                .wildcard_expansions
+                .borrow_mut()
+                .insert(*id, column_names);
+            if let Some(old) = old {
+                println!("DUPLICATE PLANNING {id}: {old:?}");
+            }
+
+            let items = items
+                .into_iter()
+                .map(|(i, _, column_name)| (i, column_name))
                 .collect();
             Ok(items)
         }
@@ -2817,15 +2863,15 @@ fn expand_select_item<'a>(
                 .enumerate()
                 .filter(|(_i, item)| item.allow_unqualified_references)
                 .map(|(i, item)| {
-                    let name = item.column_name.clone();
-                    (ExpandedSelectItem::InputOrdinal(i), name)
+                    let col_name = item.column_name.clone();
+                    let table_name = item.table_name.clone();
+                    (ExpandedSelectItem::InputOrdinal(i), table_name, col_name)
                 })
                 .collect();
 
             let column_names = items
                 .iter()
-                .map(|(_, column_name)| column_name)
-                .cloned()
+                .map(|(_, table_name, column_name)| (table_name.clone(), column_name.clone()))
                 .collect();
             let old = ecx
                 .qcx
@@ -2837,6 +2883,10 @@ fn expand_select_item<'a>(
                 println!("DUPLICATE PLANNING {id}: {old:?}");
             }
 
+            let items = items
+                .into_iter()
+                .map(|(i, _, column_name)| (i, column_name))
+                .collect();
             Ok(items)
         }
         SelectItem::Expr { expr, alias } => {
@@ -3096,9 +3146,10 @@ fn plan_expr_inner<'a>(
 
     match e {
         // Names.
-        Expr::Identifier(names) | Expr::QualifiedWildcard(names) => {
-            Ok(plan_identifier(ecx, names)?.into())
-        }
+        Expr::Identifier(names)
+        | Expr::QualifiedWildcard {
+            qualifier: names, ..
+        } => Ok(plan_identifier(ecx, names)?.into()),
 
         // Literals.
         Expr::Value(val) => plan_literal(val),
@@ -3141,7 +3192,7 @@ fn plan_expr_inner<'a>(
         )?
         .into()),
         Expr::FieldAccess { expr, field } => plan_field_access(ecx, expr, field),
-        Expr::WildcardAccess(expr) => plan_expr(ecx, expr),
+        Expr::WildcardAccess { expr, .. } => plan_expr(ecx, expr),
         Expr::Subscript { expr, positions } => plan_subscript(ecx, expr, positions),
         Expr::Like {
             expr,

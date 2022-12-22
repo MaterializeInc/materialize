@@ -174,7 +174,7 @@ struct Parser<'a> {
     /// The index of the first unprocessed token in `self.tokens`
     index: usize,
     recursion_guard: RecursionGuard,
-    wildcard_id: u64,
+    next_wildcard_id: u64,
 }
 
 /// Defines a number of precedence classes operators follow. Since this enum derives Ord, the
@@ -212,7 +212,7 @@ impl<'a> Parser<'a> {
             tokens,
             index: 0,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
-            wildcard_id: 0,
+            next_wildcard_id: 0,
         }
     }
 
@@ -1100,7 +1100,14 @@ impl<'a> Parser<'a> {
                     expr: Box::new(expr),
                     field: kw.into_ident(),
                 }),
-                Some(Token::Star) => Ok(Expr::WildcardAccess(Box::new(expr))),
+                Some(Token::Star) => {
+                    let id = self.next_wildcard_id;
+                    self.next_wildcard_id += 1;
+                    Ok(Expr::WildcardAccess {
+                        expr: Box::new(expr),
+                        id,
+                    })
+                }
                 unexpected => self.expected(
                     self.peek_prev_pos(),
                     "an identifier or a '*' after '.'",
@@ -4306,7 +4313,12 @@ impl<'a> Parser<'a> {
                     }
                 }
                 if ends_with_wildcard {
-                    Ok(Expr::QualifiedWildcard(id_parts))
+                    let id = self.next_wildcard_id;
+                    self.next_wildcard_id += 1;
+                    Ok(Expr::QualifiedWildcard {
+                        qualifier: id_parts,
+                        id,
+                    })
                 } else if self.consume_token(&Token::LParen) {
                     self.prev_token();
                     self.parse_function(UnresolvedObjectName(id_parts))
@@ -5346,8 +5358,8 @@ impl<'a> Parser<'a> {
     /// Parse a comma-delimited list of projections after SELECT
     fn parse_select_item(&mut self) -> Result<SelectItem<Raw>, ParserError> {
         if self.consume_token(&Token::Star) {
-            let id = self.wildcard_id;
-            self.wildcard_id += 1;
+            let id = self.next_wildcard_id;
+            self.next_wildcard_id += 1;
             return Ok(SelectItem::Wildcard { id });
         }
         Ok(SelectItem::Expr {

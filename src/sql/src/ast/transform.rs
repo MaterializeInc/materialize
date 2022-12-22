@@ -237,7 +237,7 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
                     self.min_qual_depth = std::cmp::min(p + 1, self.min_qual_depth);
                 }
             }
-            Expr::QualifiedWildcard(i) => {
+            Expr::QualifiedWildcard { qualifier: i, .. } => {
                 self.check_failure(i);
                 if let Some(p) = i.iter().rposition(|e| e == self.name) {
                     self.min_qual_depth = std::cmp::min(p + 1, self.min_qual_depth);
@@ -327,7 +327,7 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
                 let i = id.len() - 1;
                 self.maybe_rewrite_idents(&mut id[..i]);
             }
-            Expr::QualifiedWildcard(id) => {
+            Expr::QualifiedWildcard { qualifier: id, .. } => {
                 self.maybe_rewrite_idents(id);
             }
             _ => visit_mut::visit_expr_mut(self, e),
