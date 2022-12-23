@@ -54,7 +54,7 @@ Sources are the first step in most Materialize projects. For this quickstart, yo
 
     CREATE CONNECTION ecommerce_kafka_connection TO KAFKA (
         BROKER 'TBD',
-        SASL MECHANISMS = 'SCRAM-SHA-256',
+        SASL MECHANISMS = 'PLAIN',
         SASL USERNAME = 'TBD',
         SASL PASSWORD = SECRET kafka_password
     );
