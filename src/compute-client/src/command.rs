@@ -13,8 +13,7 @@ use std::collections::BTreeSet;
 use std::num::NonZeroI64;
 
 use proptest::prelude::{any, Arbitrary};
-use proptest::prop_oneof;
-use proptest::strategy::{BoxedStrategy, Strategy};
+use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
@@ -177,38 +176,45 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
 }
 
 impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
+    type Strategy = Union<BoxedStrategy<Self>>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop_oneof![
-            any::<InstanceConfig>().prop_map(ComputeCommand::CreateInstance),
-            proptest::collection::vec(
-                any::<DataflowDescription<crate::plan::Plan, CollectionMetadata, mz_repr::Timestamp>>(),
-                1..4
-            )
-            .prop_map(ComputeCommand::CreateDataflows),
-            proptest::collection::vec(
-                (
-                    any::<GlobalId>(),
-                    proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4)
-                ),
-                1..4
-            )
-            .prop_map(|collections| ComputeCommand::AllowCompaction(
-                collections
-                    .into_iter()
-                    .map(|(id, frontier_vec)| { (id, Antichain::from(frontier_vec)) })
-                    .collect()
-            )),
-            any::<Peek>().prop_map(ComputeCommand::Peek),
-            proptest::collection::vec(any_uuid(), 1..6).prop_map(|uuids| {
-                ComputeCommand::CancelPeeks {
-                    uuids: BTreeSet::from_iter(uuids.into_iter()),
-                }
-            })
-        ]
-        .boxed()
+        Union::new(vec![
+                any::<InstanceConfig>().prop_map(ComputeCommand::CreateInstance).boxed(),
+                proptest::collection::vec(
+                    any::<
+                        DataflowDescription<
+                            crate::plan::Plan,
+                            CollectionMetadata,
+                            mz_repr::Timestamp,
+                        >,
+                    >(),
+                    1..4,
+                )
+                .prop_map(ComputeCommand::CreateDataflows).boxed(),
+                proptest::collection::vec(
+                    (
+                        any::<GlobalId>(),
+                        proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
+                    ),
+                    1..4,
+                )
+                .prop_map(|collections| {
+                    ComputeCommand::AllowCompaction(
+                        collections
+                            .into_iter()
+                            .map(|(id, frontier_vec)| (id, Antichain::from(frontier_vec)))
+                            .collect(),
+                    )
+                }).boxed(),
+                any::<Peek>().prop_map(ComputeCommand::Peek).boxed(),
+                proptest::collection::vec(any_uuid(), 1..6).prop_map(|uuids| {
+                    ComputeCommand::CancelPeeks {
+                        uuids: BTreeSet::from_iter(uuids.into_iter()),
+                    }
+                }).boxed(),
+            ])
     }
 }
 

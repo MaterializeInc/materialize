@@ -12,8 +12,7 @@
 use std::num::NonZeroUsize;
 
 use proptest::prelude::{any, Arbitrary, Just};
-use proptest::prop_oneof;
-use proptest::strategy::{BoxedStrategy, Strategy};
+use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use uuid::Uuid;
@@ -88,20 +87,23 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
 }
 
 impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
+    type Strategy = Union<BoxedStrategy<Self>>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop_oneof![
+        Union::new(vec![
             proptest::collection::vec((any::<GlobalId>(), any_antichain()), 1..4)
-                .prop_map(ComputeResponse::FrontierUppers),
-            (any_uuid(), any::<PeekResponse>()).prop_map(|(id, resp)| {
-                ComputeResponse::PeekResponse(id, resp, OpenTelemetryContext::empty())
-            }),
+                .prop_map(ComputeResponse::FrontierUppers)
+                .boxed(),
+            (any_uuid(), any::<PeekResponse>())
+                .prop_map(|(id, resp)| {
+                    ComputeResponse::PeekResponse(id, resp, OpenTelemetryContext::empty())
+                })
+                .boxed(),
             (any::<GlobalId>(), any::<SubscribeResponse>())
-                .prop_map(|(id, resp)| ComputeResponse::SubscribeResponse(id, resp)),
-        ]
-        .boxed()
+                .prop_map(|(id, resp)| ComputeResponse::SubscribeResponse(id, resp))
+                .boxed(),
+        ])
     }
 }
 
@@ -170,23 +172,23 @@ impl RustType<ProtoPeekResponse> for PeekResponse {
 }
 
 impl Arbitrary for PeekResponse {
-    type Strategy = BoxedStrategy<Self>;
+    type Strategy = Union<BoxedStrategy<Self>>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop_oneof![
+        Union::new(vec![
             proptest::collection::vec(
                 (
                     any::<Row>(),
-                    (1..usize::MAX).prop_map(|u| NonZeroUsize::try_from(u).unwrap())
+                    (1..usize::MAX).prop_map(|u| NonZeroUsize::try_from(u).unwrap()),
                 ),
-                1..11
+                1..11,
             )
-            .prop_map(PeekResponse::Rows),
-            ".*".prop_map(PeekResponse::Error),
-            Just(PeekResponse::Canceled),
-        ]
-        .boxed()
+            .prop_map(PeekResponse::Rows)
+            .boxed(),
+            ".*".prop_map(PeekResponse::Error).boxed(),
+            Just(PeekResponse::Canceled).boxed(),
+        ])
     }
 }
 
@@ -234,16 +236,18 @@ impl RustType<ProtoSubscribeResponse> for SubscribeResponse<mz_repr::Timestamp> 
 }
 
 impl Arbitrary for SubscribeResponse<mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
+    type Strategy = Union<BoxedStrategy<Self>>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop_oneof![
-            any::<SubscribeBatch<mz_repr::Timestamp>>().prop_map(SubscribeResponse::Batch),
+        Union::new(vec![
+            any::<SubscribeBatch<mz_repr::Timestamp>>()
+                .prop_map(SubscribeResponse::Batch)
+                .boxed(),
             proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4)
                 .prop_map(|antichain| SubscribeResponse::DroppedAt(Antichain::from(antichain)))
-        ]
-        .boxed()
+                .boxed(),
+        ])
     }
 }
 

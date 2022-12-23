@@ -21,8 +21,7 @@ use std::iter;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use proptest::prelude::{any, Arbitrary};
-use proptest::prop_oneof;
-use proptest::strategy::{BoxedStrategy, Strategy};
+use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::PartialOrder;
@@ -248,30 +247,34 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
 }
 
 impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
+    type Strategy = Union<BoxedStrategy<Self>>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop_oneof![
+        Union::new(vec![
             proptest::collection::vec(any::<CreateSourceCommand<mz_repr::Timestamp>>(), 1..4)
-                .prop_map(StorageCommand::CreateSources),
+                .prop_map(StorageCommand::CreateSources)
+                .boxed(),
             proptest::collection::vec(any::<CreateSinkCommand<mz_repr::Timestamp>>(), 1..4)
-                .prop_map(StorageCommand::CreateSinks),
+                .prop_map(StorageCommand::CreateSinks)
+                .boxed(),
             proptest::collection::vec(
                 (
                     any::<GlobalId>(),
-                    proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4)
+                    proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
                 ),
-                1..4
+                1..4,
             )
-            .prop_map(|collections| StorageCommand::AllowCompaction(
-                collections
-                    .into_iter()
-                    .map(|(id, frontier_vec)| { (id, Antichain::from(frontier_vec)) })
-                    .collect()
-            )),
-        ]
-        .boxed()
+            .prop_map(|collections| {
+                StorageCommand::AllowCompaction(
+                    collections
+                        .into_iter()
+                        .map(|(id, frontier_vec)| (id, Antichain::from(frontier_vec)))
+                        .collect(),
+                )
+            })
+            .boxed(),
+        ])
     }
 }
 
@@ -317,15 +320,16 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
 }
 
 impl Arbitrary for StorageResponse<mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
+    type Strategy = Union<BoxedStrategy<Self>>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop_oneof![
-            proptest::collection::vec((any::<GlobalId>(), any_antichain()), 1..4)
-                .prop_map(StorageResponse::FrontierUppers),
-        ]
-        .boxed()
+        Union::new(vec![proptest::collection::vec(
+            (any::<GlobalId>(), any_antichain()),
+            1..4,
+        )
+        .prop_map(StorageResponse::FrontierUppers)
+        .boxed()])
     }
 }
 
