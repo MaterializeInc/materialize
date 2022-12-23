@@ -300,7 +300,9 @@ where
                         let mut descs_output = descs_output.activate();
                         let mut descs_session = descs_output.session(&session_cap);
 
-                        if size_in_bytes > 0 {
+                        // Only track in-flight parts if flow control is enabled. Otherwise we
+                        // would leak memory, as tracked parts would never be drained.
+                        if flow_control_bytes.is_some() && size_in_bytes > 0 {
                             inflight_parts.push((progress.clone(), size_in_bytes));
                             inflight_bytes += size_in_bytes;
                             trace!(
@@ -356,6 +358,10 @@ where
             // budget of usize::MAX), because the stream has no data, we don't
             // cause unbounded buffering in timely.
             while inflight_bytes >= max_inflight_bytes {
+                // We can never get here when flow control is disabled, as we are not tracking
+                // in-flight bytes in this case.
+                assert_eq!(flow_control_bytes, None);
+
                 // Get an upper bound until which we should produce data
                 let flow_control_upper = match flow_control_input.next().await {
                     Some(Event::Progress(frontier)) => frontier,
