@@ -683,16 +683,13 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
         #[test]
-        #[ignore]
         fn peek_protobuf_roundtrip(expect in any::<Peek>() ) {
             let actual = protobuf_roundtrip::<_, ProtoPeek>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
-        // TODO: Unignore after fixing #14543.
         #[test]
-        #[ignore]
         fn compute_command_protobuf_roundtrip(expect in any::<ComputeCommand<mz_repr::Timestamp>>() ) {
             let actual = protobuf_roundtrip::<_, ProtoComputeCommand>(&expect);
             assert!(actual.is_ok());

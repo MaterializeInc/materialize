@@ -550,7 +550,6 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
         #[test]
-        #[ignore]
         fn storage_command_protobuf_roundtrip(expect in any::<StorageCommand<mz_repr::Timestamp>>() ) {
             let actual = protobuf_roundtrip::<_, ProtoStorageCommand>(&expect);
             assert!(actual.is_ok());
