@@ -38,7 +38,7 @@ include!(concat!(
 
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
+pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     /// Sources instantiations made available to the dataflow pair with monotonicity information.
     pub source_imports: BTreeMap<GlobalId, (SourceInstanceDesc<S>, bool)>,
     /// Indexes made available to the dataflow.
