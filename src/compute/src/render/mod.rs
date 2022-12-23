@@ -259,14 +259,7 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
-                    context.import_index(
-                        compute_state,
-                        &mut tokens,
-                        scope,
-                        region,
-                        *idx_id,
-                        &idx.0,
-                    );
+                    context.import_index(compute_state, &mut tokens, region, *idx_id, &idx.0);
                 }
 
                 // Build declared objects.
@@ -347,14 +340,7 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
-                    context.import_index(
-                        compute_state,
-                        &mut tokens,
-                        scope,
-                        region,
-                        *idx_id,
-                        &idx.0,
-                    );
+                    context.import_index(compute_state, &mut tokens, region, *idx_id, &idx.0);
                 }
 
                 // Build declared objects.
@@ -428,7 +414,6 @@ where
         &mut self,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-        scope: &mut G,
         region: &mut Child<'g, G, T>,
         idx_id: GlobalId,
         idx: &IndexDesc,
@@ -441,13 +426,13 @@ where
 
             let token = traces.to_drop().clone();
             let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
-                scope,
+                &mut region.parent,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
             );
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
-                scope,
+                &mut region.parent,
                 &format!("ErrIndex({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
