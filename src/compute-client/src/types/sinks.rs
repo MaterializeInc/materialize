@@ -25,7 +25,7 @@ include!(concat!(
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct ComputeSinkDesc<S = (), T = mz_repr::Timestamp> {
+pub struct ComputeSinkDesc<S: 'static = (), T = mz_repr::Timestamp> {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
     pub connection: ComputeSinkConnection<S>,
@@ -80,7 +80,7 @@ impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, mz_r
 }
 
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum ComputeSinkConnection<S = ()> {
+pub enum ComputeSinkConnection<S: 'static = ()> {
     Subscribe(SubscribeSinkConnection),
     Persist(PersistSinkConnection<S>),
 }

@@ -182,8 +182,11 @@ extra_lints=(
 
     # suggest better alternatives
     # See `clippy.toml` for more info
-    # TODO(guswynn): renamed this to `disallowed_methods` when we upgrade
     clippy::disallowed_methods
+
+    # suggest better alternatives
+    # See `clippy.toml` for more info
+    clippy::disallowed_macros
 
     # Implementing `From`
     # gets you `Into` for free.
