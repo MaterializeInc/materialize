@@ -152,10 +152,11 @@ pub fn build_compute_dataflow<A: Allocate>(
 ) {
     // Mutually recursive view definitions require special handling.
     let recursive = dataflow.objects_to_build.iter().any(|object| {
-        use mz_expr::CollectionPlan;
-        let mut depends_on = BTreeSet::new();
-        object.plan.depends_on_into(&mut depends_on);
-        depends_on.into_iter().any(|id| id >= object.id)
+        if let Plan::LetRec { .. } = object.plan {
+            true
+        } else {
+            false
+        }
     });
 
     // Determine indexes to export
@@ -269,31 +270,47 @@ pub fn build_compute_dataflow<A: Allocate>(
                 }
 
                 // Build declared objects.
-                // It is important that we only use the `Variable` until the object is bound.
-                // At that point, all subsequent uses should have access to the object itself.
-                let mut variables = BTreeMap::new();
-                for object in dataflow.objects_to_build.iter() {
-                    use differential_dataflow::operators::iterate::Variable;
-
-                    let oks_v = Variable::new(region, Product::new(Default::default(), 1));
-                    let err_v = Variable::new(region, Product::new(Default::default(), 1));
-
-                    context.insert_id(
-                        Id::Global(object.id),
-                        CollectionBundle::from_collections(oks_v.clone(), err_v.clone()),
-                    );
-                    variables.insert(object.id, (oks_v, err_v));
-                }
+                let mut any_letrec = false;
                 for object in dataflow.objects_to_build {
-                    let id = object.id;
-                    let bundle = context.render_plan(object.plan, region, region.index());
-                    // We need to ensure that the raw collection exists, but do not have enough information
-                    // here to cause that to happen.
-                    let (oks, err) = bundle.collection.clone().unwrap();
-                    context.insert_id(Id::Global(object.id), bundle);
-                    let (oks_v, err_v) = variables.remove(&id).unwrap();
-                    oks_v.set(&oks);
-                    err_v.set(&err);
+                    if let Plan::LetRec { ids, values, body } = object.plan {
+                        assert!(!any_letrec, "Cannot render multiple instances of LetRec");
+                        any_letrec = true;
+                        // Build declared objects.
+                        // It is important that we only use the `Variable` until the object is bound.
+                        // At that point, all subsequent uses should have access to the object itself.
+                        let mut variables = BTreeMap::new();
+                        for id in ids.iter() {
+                            use differential_dataflow::operators::iterate::Variable;
+
+                            let oks_v = Variable::new(region, Product::new(Default::default(), 1));
+                            let err_v = Variable::new(region, Product::new(Default::default(), 1));
+
+                            use differential_dataflow::operators::Consolidate;
+                            context.insert_id(
+                                Id::Local(*id),
+                                CollectionBundle::from_collections(
+                                    oks_v.consolidate(),
+                                    err_v.consolidate(),
+                                ),
+                            );
+                            variables.insert(Id::Local(*id), (oks_v, err_v));
+                        }
+                        for (id, value) in ids.into_iter().zip(values.into_iter()) {
+                            let bundle = context.render_plan(value, region, region.index());
+                            // We need to ensure that the raw collection exists, but do not have enough information
+                            // here to cause that to happen.
+                            let (oks, err) = bundle.collection.clone().unwrap();
+                            context.insert_id(Id::Local(id), bundle);
+                            let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
+                            oks_v.set(&oks);
+                            err_v.set(&err);
+                        }
+
+                        let bundle = context.render_plan(*body, region, region.index());
+                        context.insert_id(Id::Global(object.id), bundle);
+                    } else {
+                        context.build_object(region, object);
+                    }
                 }
 
                 // Export declared indexes.

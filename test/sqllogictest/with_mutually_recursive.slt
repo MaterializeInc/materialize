@@ -9,15 +9,141 @@
 
 mode cockroach
 
+## Test correct (intended) behavior:
+
 ## Test a plausibly correct recursive query.
-## query I
-## WITH MUTUALLY RECURSIVE
-##     foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
-##     bar (a int) as (SELECT a FROM foo)
-## SELECT * FROM bar;
-## ----
-## 1
-## 1
+query I
+WITH MUTUALLY RECURSIVE
+    foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
+    bar (a int) as (SELECT a FROM foo)
+SELECT * FROM bar;
+----
+1
+1
+
+## Test a straightforward recursive query.
+## This could not terminate if we fail to consolidate iterates.
+query I
+WITH MUTUALLY RECURSIVE
+    t (n int) AS (
+        VALUES (1)
+        UNION ALL
+        SELECT n+1 FROM t WHERE n < 100
+    )
+SELECT sum(n) FROM t;
+----
+5050
+
+## Test a straightforward mutually recursive query.
+query I
+WITH MUTUALLY RECURSIVE
+    evens(n int) AS (
+        VALUES (1)
+        UNION ALL
+        SELECT n+1 FROM odds WHERE n < 100
+    ),
+    odds (n int) AS (
+        VALUES (0)
+        UNION ALL
+        SELECT n+1 FROM evens
+    ),
+    both (n int) AS (
+        SELECT * FROM evens
+        UNION ALL
+        SELECT * FROM odds
+    )
+SELECT sum(n) FROM both;
+----
+10100
+
+## Test a potentially surprising recursive query.
+## The analogue of this query in postgres produces only powers of two.
+query I
+WITH MUTUALLY RECURSIVE
+    numbers (n int) as (
+        VALUES (1)
+        UNION ALL
+        (
+            WITH rebound AS (SELECT * FROM numbers)
+            SELECT distinct t1.n + t2.n AS n
+            FROM rebound AS t1, rebound AS t2
+            WHERE t1.n <= 256 AND t2.n <= 256
+        )
+    )
+SELECT count(*) FROM numbers;
+----
+512
+
+## Test a correlated recursive subquery.
+query II
+SELECT bound, (
+    WITH MUTUALLY RECURSIVE
+        numbers (n int) as (
+            VALUES (1)
+            UNION ALL
+            (
+                WITH rebound AS (SELECT * FROM numbers)
+                SELECT distinct t1.n + t2.n AS n
+                FROM rebound AS t1, rebound AS t2
+                WHERE t1.n <= bound AND t2.n <= bound
+            )
+        )
+    SELECT count(*) FROM numbers
+)
+FROM (
+    SELECT generate_series AS bound FROM generate_series(1, 10)
+);
+----
+1  2
+2  4
+3  6
+4  8
+5  10
+6  12
+7  14
+8  16
+9  18
+10  20
+
+## Test recursive name resolution in SELECT subquery
+query III
+WITH MUTUALLY RECURSIVE
+    foo (a int, b int) AS (SELECT (
+        SELECT MIN(c) FROM bar
+    ), 2 UNION SELECT 5, 5 FROM bar),
+    bar (c int) as (SELECT a FROM foo)
+SELECT * FROM foo, bar;
+----
+5  2  5
+5  2  5
+5  5  5
+5  5  5
+
+## Test recursive name resolution in FROM clause
+query III
+WITH MUTUALLY RECURSIVE
+    foo (a int, b int) AS (
+        SELECT 1, 2 UNION
+        SELECT * FROM (
+            SELECT MIN(c), 2 FROM bar
+        )
+    ),
+    bar (c int) as (SELECT a FROM foo)
+SELECT * FROM foo, bar;
+----
+1  2  1
+
+## Test recursive name resolution in FROM clause
+query I
+WITH MUTUALLY RECURSIVE
+    foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
+    bar (a int) as (SELECT a FROM foo)
+SELECT (SELECT COUNT(*) FROM foo) FROM bar;
+----
+2
+2
+
+## Test error cases
 
 ## Test a recursive query with mismatched types.
 statement error did not match inferred type
@@ -73,45 +199,7 @@ WITH MUTUALLY RECURSIVE
     bar (a int) as (SELECT a FROM foo)
 SELECT a FROM foo, bar;
 
-## Test recursive name resolution in SELECT subquery
-## query III
-## WITH MUTUALLY RECURSIVE
-##     foo (a int, b int) AS (SELECT (
-##         SELECT MIN(c) FROM bar
-##     ), 2 UNION SELECT 5, 5 FROM bar),
-##     bar (c int) as (SELECT a FROM foo)
-## SELECT * FROM foo, bar;
-## ----
-## 5  2  5
-## 5  2  5
-## 5  5  5
-## 5  5  5
-
-## Test recursive name resolution in FROM clause
-## query III
-## WITH MUTUALLY RECURSIVE
-##     foo (a int, b int) AS (
-##         SELECT 1, 2 UNION
-##         SELECT * FROM (
-##             SELECT MIN(c), 2 FROM bar
-##         )
-##     ),
-##     bar (c int) as (SELECT a FROM foo)
-## SELECT * FROM foo, bar;
-## ----
-## 1  2  1
-
-## Test recursive name resolution in FROM clause
-## query I
-## WITH MUTUALLY RECURSIVE
-##     foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
-##     bar (a int) as (SELECT a FROM foo)
-## SELECT (SELECT COUNT(*) FROM foo) FROM bar;
-## ----
-## 2
-## 2
-
-## Explain plans:
+## Test Explain plans:
 
 ## Test a plausibly correct recursive query.
 query T multiline
