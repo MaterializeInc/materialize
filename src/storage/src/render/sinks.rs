@@ -26,7 +26,6 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistLocation, ShardId};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::source::persist_source;
-use mz_storage_client::source::persist_source::NO_FLOW_CONTROL;
 use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sinks::{
     MetadataFilled, SinkEnvelope, StorageSinkConnection, StorageSinkDesc,
@@ -63,8 +62,7 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
         Some(sink.as_of.frontier.clone()),
         timely::progress::Antichain::new(),
         None,
-        &timely::dataflow::operators::generic::operator::empty(scope),
-        NO_FLOW_CONTROL,
+        None,
         // Copy the logic in DeltaJoin/Get/Join to start.
         |_timer, count| count > 1_000_000,
     );

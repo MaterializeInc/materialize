@@ -105,6 +105,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
@@ -112,6 +113,7 @@ use timely::dataflow::operators::InspectCore;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::order::Product;
+use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
 use timely::worker::Worker as TimelyWorker;
 use timely::PartialOrder;
@@ -204,9 +206,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     dataflow.as_of.clone(),
                     dataflow.until.clone(),
                     mfp.as_mut(),
-                    // TODO: provide a more meaningful flow control input
-                    &timely::dataflow::operators::generic::operator::empty(region),
-                    NO_FLOW_CONTROL,
+                    None,
                     // Copy the logic in DeltaJoin/Get/Join to start.
                     |_timer, count| count > 1_000_000,
                 );
@@ -806,10 +806,6 @@ where
         }
     }
 }
-
-use differential_dataflow::lattice::Lattice;
-use mz_storage_client::source::persist_source::NO_FLOW_CONTROL;
-use timely::progress::timestamp::Refines;
 
 /// A timestamp type that can be used for operations within MZ's dataflow layer.
 pub trait RenderTimestamp: Timestamp + Lattice + Refines<mz_repr::Timestamp> {
