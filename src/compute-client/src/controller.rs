@@ -719,17 +719,14 @@ where
         }
 
         // Process pending replica heartbeats.
-        // TODO(teskje): Use `BTreeMap::pop_first`, once stable.
-        if let Some(replica_id) = self.compute.replica_heartbeats.keys().next().copied() {
-            let when = self.compute.replica_heartbeats.remove(&replica_id).unwrap();
+        if let Some((replica_id, when)) = self.compute.replica_heartbeats.pop_first() {
             return Some(ComputeControllerResponse::ReplicaHeartbeat(
                 replica_id, when,
             ));
         }
 
         // Process pending replica metrics responses
-        if let Some(replica_id) = self.compute.replica_metrics.keys().next().copied() {
-            let metrics = self.compute.replica_metrics.remove(&replica_id).unwrap();
+        if let Some((replica_id, metrics)) = self.compute.replica_metrics.pop_first() {
             return Some(ComputeControllerResponse::ReplicaMetrics(
                 replica_id, metrics,
             ));
