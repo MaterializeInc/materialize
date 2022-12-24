@@ -41,7 +41,7 @@ use crate::coord::appends::BuiltinTableUpdateSource;
 use crate::coord::Coordinator;
 use crate::session::vars::SystemVars;
 use crate::session::Session;
-use crate::telemetry::EnvironmentIdExt;
+use crate::telemetry::SegmentClientExt;
 use crate::util::ComputeSinkId;
 use crate::{catalog, AdapterError};
 
@@ -303,14 +303,11 @@ impl<S: Append + 'static> Coordinator<S> {
                     event.object_type.as_title_case(),
                     event.event_type.as_title_case()
                 );
-                segment_client.track(
+                segment_client.environment_track(
+                    &self.catalog.config().environment_id,
                     user_metadata.user_id,
                     event_type,
-                    json!({
-                        "event_source": "environmentd",
-                        "details": event.details.as_json(),
-                    }),
-                    Some(self.catalog.config().environment_id.as_segment_context()),
+                    json!({ "details": event.details.as_json() }),
                 );
             }
         }
