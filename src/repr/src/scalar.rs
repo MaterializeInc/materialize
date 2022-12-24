@@ -124,6 +124,8 @@ pub enum Datum<'a> {
     /// A universally unique identifier.
     Uuid(Uuid),
     MzTimestamp(crate::Timestamp),
+    /// A range of values, e.g. [-1, 1).
+    Range(Range<DatumNested<'a>>),
     /// A placeholder value.
     ///
     /// Dummy values are never meant to be observed. Many operations on `Datum`
@@ -149,8 +151,11 @@ pub enum Datum<'a> {
     // calling `<` on Datums (see `fn lt` in scalar/func.rs).
     /// An unknown value.
     Null,
-    /// A range of values, e.g. [-1, 1).
-    Range(Range<DatumNested<'a>>),
+    // WARNING! DON'T PLACE NEW DATUM VARIANTS HERE!
+    //
+    // This order of variants of this enum determines how nulls sort. We
+    // have decided that nulls should sort last in Materialize, so all
+    // other datum variants should appear before `Null`.
 }
 
 impl TryFrom<Datum<'_>> for bool {
