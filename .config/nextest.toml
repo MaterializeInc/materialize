@@ -6,6 +6,11 @@ filter = "package(mz-environmentd)"
 threads-required = 8
 slow-timeout = { period = "120s", terminate-after = 2 }
 
+[[profile.default.overrides]]
+filter = "package(mz-environmentd) and test(test_pgtest)"
+threads-required = 8
+slow-timeout = { period = "300s", terminate-after = 2 }
+
 [profile.ci]
 junit = { path = "junit_cargo-test.xml" }
 fail-fast = false
