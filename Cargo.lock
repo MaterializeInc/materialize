@@ -3550,6 +3550,7 @@ dependencies = [
  "prometheus",
  "scopeguard",
  "serde",
+ "smallvec",
  "timely",
  "tokio",
  "tracing",
