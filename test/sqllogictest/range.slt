@@ -7,6 +7,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+#
+# meta
+
+# Ensure range sorts of null correctly
+query B
+SELECT ARRAY['(,)']::int4range[] < ARRAY[NULL]::int4range[];
+----
+true
+
 
 #
 # int4range
@@ -450,6 +459,7 @@ CREATE TABLE int4range_values (a int4range);
 
 statement ok
 INSERT INTO int4range_values VALUES
+    (null),
     ('[,1)'::int4range),
     ('[,1]'::int4range),
     ('[,)'::int4range),
@@ -494,6 +504,7 @@ empty
 [1,)
 [2,)
 [2,)
+NULL
 
 query T
 SELECT a::text AS t FROM int4range_values EXCEPT SELECT column1::text FROM (VALUES
@@ -519,6 +530,7 @@ SELECT a::text AS t FROM int4range_values EXCEPT SELECT column1::text FROM (VALU
     (int4range(1,null,'(]'))
 ) t;
 ----
+NULL
 
 query error invalid range bound flags
 SELECT int4range(null,null,' (]');
@@ -1084,6 +1096,7 @@ CREATE TABLE int8range_values (a int8range);
 
 statement ok
 INSERT INTO int8range_values VALUES
+    (null),
     ('[,1)'::int8range),
     ('[,1]'::int8range),
     ('[,)'::int8range),
@@ -1128,6 +1141,7 @@ empty
 [1,)
 [2,)
 [2,)
+NULL
 
 query T
 SELECT a::text AS t FROM int8range_values EXCEPT SELECT column1::text FROM (VALUES
@@ -1153,6 +1167,7 @@ SELECT a::text AS t FROM int8range_values EXCEPT SELECT column1::text FROM (VALU
     (int8range(1,null,'(]'))
 ) t;
 ----
+NULL
 
 
 # Test range in list
@@ -1647,6 +1662,7 @@ CREATE TABLE daterange_values (a daterange);
 
 statement ok
 INSERT INTO daterange_values VALUES
+    (null),
     ('[,)'::daterange),
     ('[,1970-01-01]'::daterange),
     ('[,)'::daterange),
@@ -1683,6 +1699,7 @@ empty
 [1970-01-01,)
 [1970-01-02,)
 [1970-01-02,)
+NULL
 
 query T
 SELECT a::text AS t FROM daterange_values EXCEPT SELECT column1::text FROM (VALUES
@@ -1704,6 +1721,7 @@ SELECT a::text AS t FROM daterange_values EXCEPT SELECT column1::text FROM (VALU
     (daterange('1970-01-01',null,'(]'))
 ) t;
 ----
+NULL
 
 
 # Test range in list
