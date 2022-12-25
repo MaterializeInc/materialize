@@ -233,6 +233,10 @@ impl ComputeReplicaAllocation {
     }
 }
 
+/// The default logging interval for [`ComputeReplicaLogging`], in number
+/// of microseconds.
+pub const DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS: u32 = 1_000_000;
+
 /// Logging configuration of a replica.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ComputeReplicaLogging {

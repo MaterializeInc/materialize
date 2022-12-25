@@ -290,6 +290,10 @@ pub trait CatalogComputeInstance<'a> {
     /// Returns a stable ID for the compute instance.
     fn id(&self) -> ComputeInstanceId;
 
+    /// Returns the ID of the object this compute instance is linked to, if
+    /// any.
+    fn linked_object_id(&self) -> Option<GlobalId>;
+
     /// Returns the set of non-transient exports (indexes, materialized views)
     /// of this cluster.
     fn exports(&self) -> &std::collections::HashSet<GlobalId>;

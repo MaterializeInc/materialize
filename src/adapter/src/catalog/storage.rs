@@ -281,6 +281,7 @@ async fn migrate<S: Append>(
             ));
             let default_instance = ComputeInstanceValue {
                 name: "default".into(),
+                linked_object_id: None,
             };
             let default_replica = ComputeReplicaValue {
                 compute_instance_id: DEFAULT_USER_COMPUTE_INSTANCE_ID,
@@ -683,12 +684,12 @@ impl<S: Append> Connection<S> {
 
     pub async fn load_compute_instances(
         &mut self,
-    ) -> Result<Vec<(ComputeInstanceId, String)>, Error> {
+    ) -> Result<Vec<(ComputeInstanceId, String, Option<GlobalId>)>, Error> {
         Ok(COLLECTION_COMPUTE_INSTANCES
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
-            .map(|(k, v)| (k.id, v.name))
+            .map(|(k, v)| (k.id, v.name, v.linked_object_id))
             .collect())
     }
 
@@ -1177,10 +1178,12 @@ impl<'a, S: Append> Transaction<'a, S> {
     pub fn insert_user_compute_instance(
         &mut self,
         cluster_name: &str,
+        linked_object_id: Option<GlobalId>,
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
     ) -> Result<ComputeInstanceId, Error> {
         self.insert_compute_instance(
             cluster_name,
+            linked_object_id,
             introspection_source_indexes,
             USER_COMPUTE_ID_ALLOC_KEY,
             ComputeInstanceId::User,
@@ -1195,6 +1198,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     ) -> Result<ComputeInstanceId, Error> {
         self.insert_compute_instance(
             cluster_name,
+            None,
             introspection_source_indexes,
             SYSTEM_COMPUTE_ID_ALLOC_KEY,
             ComputeInstanceId::System,
@@ -1204,6 +1208,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     fn insert_compute_instance<F>(
         &mut self,
         cluster_name: &str,
+        linked_object_id: Option<GlobalId>,
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
         id_alloc_key: &str,
         compute_instance_id_variant: F,
@@ -1217,6 +1222,7 @@ impl<'a, S: Append> Transaction<'a, S> {
             ComputeInstanceKey { id },
             ComputeInstanceValue {
                 name: cluster_name.to_string(),
+                linked_object_id,
             },
         ) {
             return Err(Error::new(ErrorKind::ClusterAlreadyExists(
@@ -1252,7 +1258,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     ) -> Result<(ReplicaId, ComputeInstanceId), Error> {
         let id = self.get_and_increment_id(REPLICA_ID_ALLOC_KEY.to_string())?;
         let mut compute_instance_id = None;
-        for (ComputeInstanceKey { id }, ComputeInstanceValue { name }) in
+        for (ComputeInstanceKey { id }, ComputeInstanceValue { name, .. }) in
             self.compute_instances.items()
         {
             if &name == compute_name {
@@ -1381,14 +1387,16 @@ impl<'a, S: Append> Transaction<'a, S> {
     pub fn remove_compute_instance(
         &mut self,
         name: &str,
-    ) -> Result<(ComputeInstanceId, Vec<GlobalId>), Error> {
+    ) -> Result<(ComputeInstanceId, Option<GlobalId>, Vec<GlobalId>), Error> {
         let deleted = self.compute_instances.delete(|_k, v| v.name == name);
         if deleted.is_empty() {
             Err(SqlCatalogError::UnknownComputeInstance(name.to_owned()).into())
         } else {
             assert_eq!(deleted.len(), 1);
             // Cascade delete introsepction sources and cluster replicas.
-            let id = deleted.into_element().0.id;
+            let (key, value) = deleted.into_element();
+            let id = key.id;
+            let linked_object_id = value.linked_object_id;
             self.compute_replicas
                 .delete(|_k, v| v.compute_instance_id == id);
             let introspection_source_indexes = self
@@ -1396,6 +1404,7 @@ impl<'a, S: Append> Transaction<'a, S> {
                 .delete(|k, _v| k.compute_id == id);
             Ok((
                 id,
+                linked_object_id,
                 introspection_source_indexes
                     .into_iter()
                     .map(|(_, v)| GlobalId::System(v.index_id))
@@ -1846,6 +1855,7 @@ pub struct ComputeInstanceKey {
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ComputeInstanceValue {
     name: String,
+    linked_object_id: Option<GlobalId>,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
