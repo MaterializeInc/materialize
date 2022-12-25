@@ -104,12 +104,13 @@ use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::Aug;
-use mz_sql::plan::{MutationKind, Params};
+use mz_sql::plan::{self, MutationKind, Params};
 use mz_stash::Append;
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, StorageError,
 };
 use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::hosts::StorageHostConfig;
 use mz_storage_client::types::sinks::StorageSinkConnection;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_transform::Optimizer;
@@ -498,6 +499,16 @@ impl<S: Append + 'static> Coordinator<S> {
 
         info!("coordinator init: creating compute replicas");
         for instance in self.catalog.compute_instances() {
+            // Linked clusters are presently a fiction maintained by the
+            // catalog. They should not yet result in the creation of actual
+            // compute instances.
+            //
+            // TODO(benesch): turn linked clusters into real clusters. See
+            // MaterializeInc/cloud#4929.
+            if instance.linked_object_id.is_some() {
+                continue;
+            }
+
             self.controller.compute.create_instance(
                 instance.id,
                 instance.log_indexes.clone(),
@@ -680,6 +691,25 @@ impl<S: Append + 'static> Coordinator<S> {
                         .insert(entry.id());
                 }
                 CatalogItem::Index(idx) => {
+                    // Linked clusters are presently a fiction maintained by the
+                    // catalog. They do not yet result in the creation of actual
+                    // compute instances, and so we must suppress the creation
+                    // of indexes on those clusters. (Users cannot create
+                    // indexes on linked clusters, but the indexes for the
+                    // built-in logging sources must be suppressed.)
+                    //
+                    // TODO(benesch): turn linked clusters into real clusters.
+                    // See MaterializeInc/cloud#4929.
+                    if self
+                        .catalog
+                        .try_get_compute_instance(idx.compute_instance)
+                        .expect("index on missing compute instance")
+                        .linked_object_id
+                        .is_some()
+                    {
+                        continue;
+                    }
+
                     let policy_entry = policies_to_set
                         .entry(policy.expect("indexes have a compaction window"))
                         .or_insert_with(Default::default);
@@ -953,6 +983,50 @@ impl<S: Append + 'static> Coordinator<S> {
         info!("coordinator init: sending builtin table updates");
         self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
             .await;
+
+        // TODO(benesch): remove this migration in v0.40, since all sources and
+        // sinks created in v0.39+ will be created with linked clusters if
+        // appropriate.
+        info!("coordinator init: SPECIAL MIGRATION: ensuring all sources and sinks have linked clusters");
+        let mut linked_cluster_ops = vec![];
+        for entry in &entries {
+            // Only sources with ingestions need linked clusters.
+            let host_config = match entry.item() {
+                CatalogItem::Source(source) => match &source.data_source {
+                    DataSourceDesc::Ingestion(ingestion) => Some(&ingestion.host_config),
+                    _ => None,
+                },
+                CatalogItem::Sink(sink) => Some(&sink.host_config),
+                _ => None,
+            };
+            let Some(host_config) = host_config else { continue };
+
+            // Don't create linked clusters if one already exists.
+            if self.catalog.get_linked_cluster(entry.id()).is_some() {
+                continue;
+            }
+
+            // Convert resolved host config back to the host config we would
+            // have gotten from the SQL layer.
+            let host_config = match host_config {
+                StorageHostConfig::Managed { size, .. } => {
+                    plan::StorageHostConfig::Managed { size: size.into() }
+                }
+                StorageHostConfig::Remote { addr } => {
+                    plan::StorageHostConfig::Remote { addr: addr.into() }
+                }
+            };
+
+            info!("adding linked cluster for {}", entry.id());
+            linked_cluster_ops.extend(
+                self.create_linked_cluster_ops(entry.id(), entry.name(), &host_config)
+                    .await?,
+            );
+        }
+        // Dummy session is appropriate for system migrations, as it will
+        // present as user `mz_system` in the audit log.
+        self.catalog_transact(Some(&Session::dummy()), linked_cluster_ops)
+            .await?;
 
         info!("coordinator init: bootstrap complete");
         Ok(())

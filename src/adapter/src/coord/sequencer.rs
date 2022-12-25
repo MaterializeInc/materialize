@@ -9,7 +9,7 @@
 
 //! Logic for executing a planned SQL query.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::time::Duration;
 
@@ -22,6 +22,7 @@ use tracing::{event, warn, Level};
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::controller::{
     ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLogging, ReplicaId,
+    DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS,
 };
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDesc, IndexDesc};
 use mz_compute_client::types::sinks::{
@@ -41,16 +42,17 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
-    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
-    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, CreateComputeInstancePlan, CreateComputeReplicaPlan, CreateConnectionPlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan,
-    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
-    CreateTypePlan, CreateViewPlan, DropComputeInstancesPlan, DropComputeReplicasPlan,
-    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
-    FetchPlan, IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan,
-    Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan, RotateKeysPlan,
-    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SubscribeFrom, SubscribePlan, View,
+    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
+    AlterOptionParameter, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterSystemResetPlan, AlterSystemSetPlan, CreateComputeInstancePlan, CreateComputeReplicaPlan,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DropComputeInstancesPlan,
+    DropComputeReplicasPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    ExecutePlan, ExplainPlan, FetchPlan, IndexOption, InsertPlan, MaterializedView, MutationKind,
+    OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
+    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
+    StorageHostConfig, SubscribeFrom, SubscribePlan, View,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_stash::Append;
@@ -489,11 +491,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 create_sql: plan.source.create_sql,
                 data_source: match plan.source.ingestion {
                     Some(ingestion) => {
-                        let host_config = self.catalog.resolve_storage_host_config(
-                            plan.host_config,
-                            // Undefined sizes permitted in unsafe mode
-                            self.catalog.config().unsafe_mode,
-                        )?;
+                        let host_config = self
+                            .catalog
+                            .resolve_storage_host_config(&plan.host_config)?;
                         DataSourceDesc::Ingestion(catalog::Ingestion {
                             desc: ingestion.desc,
                             source_imports: ingestion.source_imports,
@@ -521,6 +521,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 name: plan.name.clone(),
                 item: CatalogItem::Source(source.clone()),
             });
+            if let DataSourceDesc::Ingestion(_) = &source.data_source {
+                ops.extend(
+                    self.create_linked_cluster_ops(source_id, &plan.name, &plan.host_config)
+                        .await?,
+                );
+            }
             sources.push((source_id, source));
         }
         match self.catalog_transact(Some(session), ops).await {
@@ -797,6 +803,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect();
         let mut ops = vec![catalog::Op::CreateComputeInstance {
             name: name.clone(),
+            linked_object_id: None,
             arranged_introspection_sources: arranged_introspection_sources.clone(),
         }];
 
@@ -1244,7 +1251,7 @@ impl<S: Append + 'static> Coordinator<S> {
             sink,
             with_snapshot,
             if_not_exists,
-            host_config,
+            host_config: plan_host_config,
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
@@ -1263,14 +1270,20 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         };
 
-        // Validate the storage host config. The size can only be undefined
-        // in unsafe mode.
-        let allow_undefined_size = self.catalog.config().unsafe_mode;
-        let host_config = match self
-            .catalog
-            .resolve_storage_host_config(host_config, allow_undefined_size)
-        {
+        // Validate the storage host config.
+        let host_config = match self.catalog.resolve_storage_host_config(&plan_host_config) {
             Ok(host_config) => host_config,
+            Err(e) => {
+                tx.send(Err(e), session);
+                return;
+            }
+        };
+
+        let linked_cluster_ops = match self
+            .create_linked_cluster_ops(id, &name, &plan_host_config)
+            .await
+        {
+            Ok(linked_cluster_ops) => linked_cluster_ops,
             Err(e) => {
                 tx.send(Err(e), session);
                 return;
@@ -1300,12 +1313,13 @@ impl<S: Append + 'static> Coordinator<S> {
             host_config,
         };
 
-        let ops = vec![catalog::Op::CreateItem {
+        let mut ops = vec![catalog::Op::CreateItem {
             id,
             oid,
             name: name.clone(),
             item: CatalogItem::Sink(catalog_sink.clone()),
         }];
+        ops.extend(linked_cluster_ops);
 
         let from = self.catalog.get_entry(&catalog_sink.from);
         let from_name = from.name().item.clone();
@@ -1717,65 +1731,19 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn sequence_drop_compute_instances(
         &mut self,
         session: &mut Session,
-        plan: DropComputeInstancesPlan,
+        DropComputeInstancesPlan { names }: DropComputeInstancesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut ops = Vec::new();
-        let mut instance_replica_drop_sets = Vec::with_capacity(plan.names.len());
-        let mut is_active_instance = false;
-        for compute_name in plan.names {
-            let instance = self.catalog.resolve_compute_instance(&compute_name)?;
-            instance_replica_drop_sets.push((
-                instance.id,
-                instance.replicas_by_id.keys().cloned().collect::<Vec<_>>(),
-            ));
-            for replica_name in instance.replica_id_by_name.keys() {
-                ops.push(catalog::Op::DropComputeReplica {
-                    name: replica_name.to_string(),
-                    compute_name: compute_name.clone(),
-                });
-            }
-
-            let mut ids_to_drop: Vec<GlobalId> = instance.exports().iter().cloned().collect();
-
-            // Determine from the replica which additional items to drop. This is the set
-            // of items that depend on the introspection sources. The sources
-            // itself are removed with Op::DropComputeReplica.
-            for replica in instance.replicas_by_id.values() {
-                let logging = &replica.config.logging;
-                let log_and_view_ids = logging.source_and_view_ids();
-                let view_ids: HashSet<_> = logging.view_ids().collect();
-                for log_id in log_and_view_ids {
-                    // We consider the dependencies of both views and logs, but remove the
-                    // views itself. The views are included as they depend on the source,
-                    // but we dont need an explicit Op::DropItem as they are dropped together
-                    // with the replica.
-                    ids_to_drop.extend(
-                        self.catalog
-                            .get_entry(&log_id)
-                            .used_by()
-                            .into_iter()
-                            .filter(|x| !view_ids.contains(x)),
-                    )
-                }
-            }
-
-            if compute_name.as_str() == session.vars().cluster() {
-                is_active_instance = true;
-            }
-
-            ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
-            ops.push(catalog::Op::DropComputeInstance { name: compute_name });
-        }
+        let (ids, ops) = self.catalog.drop_compute_instance_ops(&names);
 
         self.catalog_transact(Some(session), ops).await?;
-        for (instance_id, replicas) in instance_replica_drop_sets {
+        for (instance_id, replicas) in ids {
             for replica_id in replicas {
                 self.drop_replica(instance_id, replica_id).await.unwrap();
             }
             self.controller.compute.drop_instance(instance_id);
         }
 
-        if is_active_instance {
+        if names.iter().any(|n| n == session.vars().cluster()) {
             session.add_notice(AdapterNotice::DroppedActiveCluster {
                 name: session.vars().cluster().to_string(),
             });
@@ -1789,60 +1757,14 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         DropComputeReplicasPlan { names }: DropComputeReplicasPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        if names.is_empty() {
-            return Ok(ExecuteResponse::DroppedComputeReplica);
-        }
-        let mut ops = Vec::with_capacity(names.len());
-        let mut replicas_to_drop = Vec::with_capacity(names.len());
-        let mut ids_to_drop = vec![];
-        for (instance_name, replica_name) in names {
-            let instance = self.catalog.resolve_compute_instance(&instance_name)?;
-            ops.push(catalog::Op::DropComputeReplica {
-                name: replica_name.clone(),
-                compute_name: instance_name.clone(),
-            });
-            let replica_id = instance.replica_id_by_name[&replica_name];
-
-            // Determine from the replica which additional items to drop. This is the set
-            // of items that depend on the introspection sources. The sources
-            // itself are removed with Op::DropComputeReplica.
-            let logging = &instance
-                .replicas_by_id
-                .get(&replica_id)
-                .unwrap()
-                .config
-                .logging;
-
-            let log_and_view_ids = logging.source_and_view_ids();
-            let view_ids: HashSet<_> = logging.view_ids().collect();
-
-            for log_id in log_and_view_ids {
-                // We consider the dependencies of both views and logs, but remove the
-                // views itself. The views are included as they depend on the source,
-                // but we dont need an explicit Op::DropItem as they are dropped together
-                // with the replica.
-                ids_to_drop.extend(
-                    self.catalog
-                        .get_entry(&log_id)
-                        .used_by()
-                        .into_iter()
-                        .filter(|x| !view_ids.contains(x)),
-                )
-            }
-
-            replicas_to_drop.push((instance.id, replica_id));
-        }
-
-        ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
+        let (ids, ops) = self.catalog.drop_compute_instance_replica_ops(&names);
 
         self.catalog_transact(Some(session), ops).await?;
-
         fail::fail_point!("after_catalog_drop_replica");
 
-        for (compute_id, replica_id) in replicas_to_drop {
-            self.drop_replica(compute_id, replica_id).await.unwrap();
+        for (instance_id, replica_id) in ids {
+            self.drop_replica(instance_id, replica_id).await.unwrap();
         }
-
         fail::fail_point!("after_sequencer_drop_replica");
 
         Ok(ExecuteResponse::DroppedComputeReplica)
@@ -3482,25 +3404,32 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         AlterSinkPlan { id, size, remote }: AlterSinkPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let op = catalog::Op::AlterSink { id, size, remote };
-        self.catalog_transact(Some(session), vec![op]).await?;
+        let host_config = alter_storage_host_config(size, remote)?;
+        if let Some(host_config) = host_config {
+            let mut ops = vec![catalog::Op::AlterSink {
+                id,
+                host_config: host_config.clone(),
+            }];
+            ops.extend(self.alter_linked_cluster_ops(id, &host_config)?);
+            self.catalog_transact(Some(session), ops).await?;
 
-        // Re-fetch the updated item from the catalog
-        let entry = self.catalog.get_entry(&id);
-        let full_name = self
-            .catalog
-            .resolve_full_name(entry.name(), Some(session.conn_id()))
-            .to_string();
-        let updated_sink = entry.sink().ok_or_else(|| CatalogError::UnexpectedType {
-            name: full_name,
-            actual_type: entry.item_type(),
-            expected_type: CatalogItemType::Sink,
-        })?;
+            // Re-fetch the updated item from the catalog
+            let entry = self.catalog.get_entry(&id);
+            let full_name = self
+                .catalog
+                .resolve_full_name(entry.name(), Some(session.conn_id()))
+                .to_string();
+            let updated_sink = entry.sink().ok_or_else(|| CatalogError::UnexpectedType {
+                name: full_name,
+                actual_type: entry.item_type(),
+                expected_type: CatalogItemType::Sink,
+            })?;
 
-        self.controller
-            .storage
-            .alter_collections(vec![(id, updated_sink.host_config.clone())])
-            .await?;
+            self.controller
+                .storage
+                .alter_collections(vec![(id, updated_sink.host_config.clone())])
+                .await?;
+        }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Sink))
     }
@@ -3510,27 +3439,37 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         AlterSourcePlan { id, size, remote }: AlterSourcePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let op = catalog::Op::AlterSource { id, size, remote };
-        self.catalog_transact(Some(session), vec![op]).await?;
-
-        // Re-fetch the updated item from the catalog
-        let entry = self.catalog.get_entry(&id);
-        let full_name = self
+        let source = self
             .catalog
-            .resolve_full_name(entry.name(), Some(session.conn_id()))
-            .to_string();
-        let updated_source = entry.source().ok_or_else(|| CatalogError::UnexpectedType {
-            name: full_name,
-            actual_type: entry.item_type(),
-            expected_type: CatalogItemType::Source,
-        })?;
-        if let DataSourceDesc::Ingestion(Ingestion { host_config, .. }) =
-            &updated_source.data_source
-        {
-            self.controller
-                .storage
-                .alter_collections(vec![(id, host_config.clone())])
-                .await?;
+            .get_entry(&id)
+            .source()
+            .expect("known to be source");
+        match source.data_source {
+            DataSourceDesc::Ingestion(_) => (),
+            DataSourceDesc::Source | DataSourceDesc::Introspection(_) => {
+                coord_bail!("cannot ALTER this type of source");
+            }
+        }
+        let host_config = alter_storage_host_config(size, remote)?;
+        if let Some(host_config) = host_config {
+            let mut ops = vec![catalog::Op::AlterSource {
+                id,
+                host_config: host_config.clone(),
+            }];
+            ops.extend(self.alter_linked_cluster_ops(id, &host_config)?);
+            self.catalog_transact(Some(session), ops).await?;
+
+            // Re-fetch the updated item from the catalog
+            let entry = self.catalog.get_entry(&id);
+            let updated_source = entry.source().expect("known to be source");
+            if let DataSourceDesc::Ingestion(Ingestion { host_config, .. }) =
+                &updated_source.data_source
+            {
+                self.controller
+                    .storage
+                    .alter_collections(vec![(id, host_config.clone())])
+                    .await?;
+            }
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
@@ -3665,6 +3604,15 @@ impl<S: Append + 'static> Coordinator<S> {
     fn update_max_result_size(&mut self) {
         let mut compute = self.controller.active_compute();
         for compute_instance in self.catalog.compute_instances() {
+            // Linked clusters are presently a fiction maintained by the
+            // catalog. They do not yet result in the creation of actual
+            // compute instances.
+            //
+            // TODO(benesch): turn linked clusters into real clusters. See
+            // MaterializeInc/cloud#4929.
+            if compute_instance.linked_object_id.is_some() {
+                continue;
+            }
             compute
                 .update_max_result_size(
                     compute_instance.id,
@@ -3826,6 +3774,97 @@ impl<S: Append + 'static> Coordinator<S> {
 
         Ok(())
     }
+
+    /// Generates the catalog operations to create a linked cluster for the
+    /// source or sink with the given name.
+    pub(crate) async fn create_linked_cluster_ops(
+        &mut self,
+        linked_object_id: GlobalId,
+        name: &QualifiedObjectName,
+        config: &StorageHostConfig,
+    ) -> Result<Vec<catalog::Op>, AdapterError> {
+        let name = self.catalog.resolve_full_name(name, None);
+        let name = format!("{}_{}_{}", name.database, name.schema, name.item);
+        let name = self.catalog.find_available_cluster_name(&name);
+        let arranged_introspection_sources =
+            self.catalog.allocate_arranged_introspection_sources().await;
+        let mut ops = vec![catalog::Op::CreateComputeInstance {
+            name: name.clone(),
+            linked_object_id: Some(linked_object_id),
+            arranged_introspection_sources,
+        }];
+        ops.extend(self.create_linked_cluster_op(name, config)?);
+        Ok(ops)
+    }
+
+    /// Generates the catalog operation to create a replica of the given linked
+    /// cluster for the given storage host configuration.
+    fn create_linked_cluster_op(
+        &mut self,
+        on_cluster_name: String,
+        config: &StorageHostConfig,
+    ) -> Result<Option<catalog::Op>, AdapterError> {
+        let size = match config {
+            StorageHostConfig::Managed { size } => size.clone(),
+            StorageHostConfig::Undefined => {
+                let (size, _alloc) = self.catalog.default_storage_host_size();
+                size
+            }
+            StorageHostConfig::Remote { .. } => return Ok(None),
+        };
+        let azs = self.catalog.state().availability_zones();
+        let n_replicas_per_az = azs
+            .iter()
+            .map(|az| (az.clone(), 0))
+            .collect::<HashMap<_, _>>();
+        let location = self.catalog.concretize_replica_location(
+            SerializedComputeReplicaLocation::Managed {
+                size,
+                availability_zone: Self::choose_az(&n_replicas_per_az),
+                az_user_specified: false,
+            },
+        )?;
+        let logging = {
+            ComputeReplicaLogging {
+                log_logging: false,
+                interval: Some(Duration::from_micros(
+                    DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS.into(),
+                )),
+                sources: vec![],
+                views: vec![],
+            }
+        };
+        Ok(Some(catalog::Op::CreateComputeReplica {
+            name: "linked".into(),
+            on_cluster_name,
+            config: ComputeReplicaConfig {
+                idle_arrangement_merge_effort: None,
+                location,
+                logging,
+            },
+        }))
+    }
+
+    /// Generates the catalog operations to alter the linked cluster for the
+    /// source or sink with the given ID, if such a cluster exists.
+    fn alter_linked_cluster_ops(
+        &mut self,
+        linked_object_id: GlobalId,
+        config: &StorageHostConfig,
+    ) -> Result<Vec<catalog::Op>, AdapterError> {
+        let mut ops = vec![];
+        if let Some(linked_cluster) = self.catalog.get_linked_cluster(linked_object_id) {
+            let cluster_name = linked_cluster.name.clone();
+            for name in linked_cluster.replica_id_by_name.keys() {
+                let (_ids, drop_ops) = self
+                    .catalog
+                    .drop_compute_instance_replica_ops(&[(cluster_name.clone(), name.into())]);
+                ops.extend(drop_ops);
+            }
+            ops.extend(self.create_linked_cluster_op(cluster_name, config)?)
+        }
+        Ok(ops)
+    }
 }
 
 enum LogReadStyle<'a> {
@@ -3884,4 +3923,23 @@ where
     }
 
     Ok(())
+}
+
+/// Return a [`StorageHostConfig`] based on the possibly altered parameters.
+fn alter_storage_host_config(
+    size: AlterOptionParameter,
+    remote: AlterOptionParameter,
+) -> Result<Option<StorageHostConfig>, AdapterError> {
+    match (size, remote) {
+        // Should be caught during planning, but it is better to be safe
+        (AlterOptionParameter::Set(_), AlterOptionParameter::Set(_)) => {
+            coord_bail!("only one of REMOTE and SIZE can be set")
+        }
+        (AlterOptionParameter::Set(size), _) => Ok(Some(StorageHostConfig::Managed { size })),
+        (_, AlterOptionParameter::Set(addr)) => Ok(Some(StorageHostConfig::Remote { addr })),
+        (_, AlterOptionParameter::Reset) | (AlterOptionParameter::Reset, _) => {
+            Ok(Some(StorageHostConfig::Undefined))
+        }
+        (_, _) => Ok(None),
+    }
 }

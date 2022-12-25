@@ -59,10 +59,9 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    AlterOptionParameter, CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
-    StorageHostConfig as PlanStorageHostConfig,
+    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
+    Plan, PlanContext, StatementDesc, StorageHostConfig as PlanStorageHostConfig,
 };
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
@@ -182,6 +181,7 @@ pub struct CatalogState {
     temporary_schemas: HashMap<ConnectionId, Schema>,
     compute_instances_by_id: HashMap<ComputeInstanceId, ComputeInstance>,
     compute_instances_by_name: HashMap<String, ComputeInstanceId>,
+    compute_instances_by_linked_object_id: HashMap<GlobalId, ComputeInstanceId>,
     roles: HashMap<String, Role>,
     config: mz_sql::catalog::CatalogConfig,
     oid_counter: u32,
@@ -676,6 +676,7 @@ impl CatalogState {
         &mut self,
         id: ComputeInstanceId,
         name: String,
+        linked_object_id: Option<GlobalId>,
         introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
     ) {
         let mut log_indexes = BTreeMap::new();
@@ -737,6 +738,7 @@ impl CatalogState {
             ComputeInstance {
                 name: name.clone(),
                 id,
+                linked_object_id,
                 exports: HashSet::new(),
                 log_indexes,
                 replica_id_by_name: HashMap::new(),
@@ -744,6 +746,12 @@ impl CatalogState {
             },
         );
         assert!(self.compute_instances_by_name.insert(name, id).is_none());
+        if let Some(linked_object_id) = linked_object_id {
+            assert!(self
+                .compute_instances_by_linked_object_id
+                .insert(linked_object_id, id)
+                .is_none());
+        }
     }
 
     fn insert_compute_replica(
@@ -1161,8 +1169,7 @@ impl CatalogState {
 
     pub fn resolve_storage_host_config(
         &self,
-        storage_host_config: PlanStorageHostConfig,
-        allow_undefined: bool,
+        storage_host_config: &PlanStorageHostConfig,
     ) -> Result<StorageHostConfig, AdapterError> {
         let host_sizes = &self.storage_host_sizes;
         let mut entries = host_sizes.0.iter().collect::<Vec<_>>();
@@ -1177,28 +1184,31 @@ impl CatalogState {
             )| (workers, memory_limit),
         );
         let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-        let storage_host_config = match storage_host_config {
-            PlanStorageHostConfig::Remote { addr } => StorageHostConfig::Remote { addr },
-            PlanStorageHostConfig::Managed { size } => {
-                let allocation = host_sizes.0.get(&size).ok_or_else(|| {
-                    AdapterError::InvalidStorageHostSize {
-                        size: size.clone(),
-                        expected,
+        let storage_host_config =
+            match storage_host_config {
+                PlanStorageHostConfig::Remote { addr } => {
+                    StorageHostConfig::Remote { addr: addr.into() }
+                }
+                PlanStorageHostConfig::Managed { size } => {
+                    let allocation = host_sizes.0.get(size).ok_or_else(|| {
+                        AdapterError::InvalidStorageHostSize {
+                            size: size.clone(),
+                            expected,
+                        }
+                    })?;
+                    StorageHostConfig::Managed {
+                        allocation: allocation.clone(),
+                        size: size.into(),
                     }
-                })?;
-                StorageHostConfig::Managed {
-                    allocation: allocation.clone(),
-                    size,
                 }
-            }
-            PlanStorageHostConfig::Undefined => {
-                if !allow_undefined {
-                    return Err(AdapterError::StorageHostSizeRequired { expected });
+                PlanStorageHostConfig::Undefined => {
+                    if !self.config.unsafe_mode {
+                        return Err(AdapterError::StorageHostSizeRequired { expected });
+                    }
+                    let (size, allocation) = self.default_storage_host_size();
+                    StorageHostConfig::Managed { allocation, size }
                 }
-                let (size, allocation) = self.default_storage_host_size();
-                StorageHostConfig::Managed { allocation, size }
-            }
-        };
+            };
         Ok(storage_host_config)
     }
 
@@ -1220,10 +1230,10 @@ impl CatalogState {
         &self.availability_zones
     }
 
-    /// Returns the default storage host size
+    /// Returns the default storage host size and allocation.
     ///
-    /// If a default size was given as configuration, it is always used, otherwise the
-    /// smallest host size is used instead.
+    /// If a default size was given as configuration, it is always used,
+    /// otherwise the smallest host size is used instead.
     pub fn default_storage_host_size(&self) -> (String, StorageHostResourceAllocation) {
         match &self.default_storage_host_size {
             Some(default_storage_host_size) => {
@@ -1391,6 +1401,7 @@ pub struct ComputeInstance {
     pub name: String,
     pub id: ComputeInstanceId,
     pub log_indexes: BTreeMap<LogVariant, GlobalId>,
+    pub linked_object_id: Option<GlobalId>,
     /// Indexes and materialized views exported by this compute instance.
     /// Does not include introspection source indexes.
     pub exports: HashSet<GlobalId>,
@@ -2205,6 +2216,7 @@ impl<S: Append> Catalog<S> {
                 temporary_schemas: HashMap::new(),
                 compute_instances_by_id: HashMap::new(),
                 compute_instances_by_name: HashMap::new(),
+                compute_instances_by_linked_object_id: HashMap::new(),
                 roles: HashMap::new(),
                 config: mz_sql::catalog::CatalogConfig {
                     start_time: to_datetime((config.now)()),
@@ -2452,7 +2464,7 @@ impl<S: Append> Catalog<S> {
         }
 
         let compute_instances = catalog.storage().await.load_compute_instances().await?;
-        for (id, name) in compute_instances {
+        for (id, name, linked_object_id) in compute_instances {
             let introspection_source_index_gids = catalog
                 .storage()
                 .await
@@ -2484,7 +2496,9 @@ impl<S: Append> Catalog<S> {
                 )
                 .await?;
 
-            catalog.state.insert_compute_instance(id, name, all_indexes);
+            catalog
+                .state
+                .insert_compute_instance(id, name, linked_object_id, all_indexes);
         }
 
         let replicas = catalog.storage().await.load_compute_replicas().await?;
@@ -2666,9 +2680,19 @@ impl<S: Append> Catalog<S> {
                     .push(catalog.state.pack_depends_update(depender, dependee, 1));
             })
         }
-        for (name, id) in &catalog.state.compute_instances_by_name {
-            builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
-            let instance = &catalog.state.compute_instances_by_id[id];
+        for (id, instance) in &catalog.state.compute_instances_by_id {
+            builtin_table_updates.push(
+                catalog
+                    .state
+                    .pack_compute_instance_update(&instance.name, 1),
+            );
+            if let Some(linked_object_id) = instance.linked_object_id {
+                builtin_table_updates.push(catalog.state.pack_cluster_link_update(
+                    &instance.name,
+                    linked_object_id,
+                    1,
+                ));
+            }
             for (replica_name, replica_id) in &instance.replica_id_by_name {
                 builtin_table_updates.push(catalog.state.pack_compute_replica_update(
                     *id,
@@ -3558,7 +3582,11 @@ impl<S: Append> Catalog<S> {
                 SYSTEM_USER.name
             );
         }
-        Ok(self.resolve_compute_instance(session.vars().cluster())?)
+        let instance = self.resolve_compute_instance(session.vars().cluster())?;
+        if instance.linked_object_id.is_some() {
+            coord_bail!("cannot execute queries on linked clusters");
+        }
+        Ok(instance)
     }
 
     pub fn state(&self) -> &CatalogState {
@@ -3672,7 +3700,7 @@ impl<S: Append> Catalog<S> {
         if let Some(id) = id {
             let database = self.get_database(&id);
             for (schema_id, schema) in &database.schemas_by_id {
-                Self::drop_schema_items(schema, &self.state.entry_by_id, &mut ops, &mut seen);
+                self.drop_schema_items(schema, &mut ops, &mut seen);
                 ops.push(Op::DropSchema {
                     database_id: id.clone(),
                     schema_id: schema_id.clone(),
@@ -3689,7 +3717,7 @@ impl<S: Append> Catalog<S> {
         if let Some((database_id, schema_id)) = id {
             let database = self.get_database(&database_id);
             let schema = &database.schemas_by_id[&schema_id];
-            Self::drop_schema_items(schema, &self.state.entry_by_id, &mut ops, &mut seen);
+            self.drop_schema_items(schema, &mut ops, &mut seen);
             ops.push(Op::DropSchema {
                 database_id,
                 schema_id,
@@ -3698,39 +3726,117 @@ impl<S: Append> Catalog<S> {
         ops
     }
 
-    pub fn drop_items_ops(&mut self, ids: &[GlobalId]) -> Vec<Op> {
+    pub fn drop_compute_instance_ops(
+        &self,
+        instance_names: &[String],
+    ) -> (HashMap<ComputeInstanceId, Vec<u64>>, Vec<Op>) {
+        let mut names = vec![];
+        let mut instance_ops = vec![];
+        let mut ids_to_drop = vec![];
+        for instance_name in instance_names {
+            let instance = self
+                .resolve_compute_instance(instance_name)
+                .expect("instance name already validated");
+            for replica_name in instance.replica_id_by_name.keys() {
+                names.push((instance_name.clone(), replica_name.clone()));
+            }
+            instance_ops.push(Op::DropComputeInstance {
+                name: instance_name.into(),
+            });
+            ids_to_drop.extend(instance.exports().iter().copied());
+        }
+        let (ids, replica_ops) = self.drop_compute_instance_replica_ops(&names);
+        let mut ops = self.drop_items_ops(&ids_to_drop);
+        ops.extend(replica_ops);
+        ops.extend(instance_ops);
+        (ids.into_iter().into_group_map(), ops)
+    }
+
+    /// Creates the catalog operations to drop the given compute instance
+    /// replicas.
+    ///
+    /// Returns the (instance ID, replica ID) pairs to drop, and the catalog
+    /// operations to do so.
+    pub fn drop_compute_instance_replica_ops(
+        &self,
+        names: &[(String, String)],
+    ) -> (Vec<(ComputeInstanceId, u64)>, Vec<Op>) {
+        let mut ops = vec![];
+        let mut replicas_to_drop = vec![];
+        let mut ids_to_drop = vec![];
+        for (instance_name, replica_name) in names {
+            let instance = self
+                .resolve_compute_instance(instance_name)
+                .expect("instance name already validated");
+            ops.push(Op::DropComputeReplica {
+                name: replica_name.clone(),
+                compute_name: instance_name.clone(),
+            });
+            let replica_id = instance.replica_id_by_name[replica_name];
+
+            // Determine from the replica which additional items to drop. This is the set
+            // of items that depend on the introspection sources. The sources
+            // itself are removed with Op::DropComputeReplica.
+            let logging = &instance
+                .replicas_by_id
+                .get(&replica_id)
+                .unwrap()
+                .config
+                .logging;
+
+            let log_and_view_ids = logging.source_and_view_ids();
+            let view_ids: HashSet<_> = logging.view_ids().collect();
+
+            for log_id in log_and_view_ids {
+                // We consider the dependencies of both views and logs, but remove the
+                // views itself. The views are included as they depend on the source,
+                // but we dont need an explicit Op::DropItem as they are dropped together
+                // with the replica.
+                ids_to_drop.extend(
+                    self.get_entry(&log_id)
+                        .used_by()
+                        .into_iter()
+                        .filter(|x| !view_ids.contains(x)),
+                )
+            }
+
+            replicas_to_drop.push((instance.id, replica_id));
+        }
+
+        ops.extend(self.drop_items_ops(&ids_to_drop));
+        (replicas_to_drop, ops)
+    }
+
+    pub fn drop_items_ops(&self, ids: &[GlobalId]) -> Vec<Op> {
         let mut ops = vec![];
         let mut seen = HashSet::new();
         for &id in ids {
-            Self::drop_item_cascade(id, &self.state.entry_by_id, &mut ops, &mut seen);
+            self.drop_item_cascade(id, &mut ops, &mut seen);
         }
         ops
     }
 
-    fn drop_schema_items(
-        schema: &Schema,
-        by_id: &BTreeMap<GlobalId, CatalogEntry>,
-        ops: &mut Vec<Op>,
-        seen: &mut HashSet<GlobalId>,
-    ) {
+    fn drop_schema_items(&self, schema: &Schema, ops: &mut Vec<Op>, seen: &mut HashSet<GlobalId>) {
         for &id in schema.items.values() {
-            Self::drop_item_cascade(id, by_id, ops, seen)
+            self.drop_item_cascade(id, ops, seen);
         }
     }
 
-    fn drop_item_cascade(
-        id: GlobalId,
-        by_id: &BTreeMap<GlobalId, CatalogEntry>,
-        ops: &mut Vec<Op>,
-        seen: &mut HashSet<GlobalId>,
-    ) {
+    fn drop_item_cascade(&self, id: GlobalId, ops: &mut Vec<Op>, seen: &mut HashSet<GlobalId>) {
         if !seen.contains(&id) {
             seen.insert(id);
-            for &u in &by_id[&id].used_by {
-                Self::drop_item_cascade(u, by_id, ops, seen)
+            for u in &self.state.entry_by_id[&id].used_by {
+                self.drop_item_cascade(*u, ops, seen);
             }
-            for subsource in by_id[&id].subsources() {
-                Self::drop_item_cascade(subsource, by_id, ops, seen)
+            for subsource in self.state.entry_by_id[&id].subsources() {
+                self.drop_item_cascade(subsource, ops, seen);
+            }
+            if let Some(linked_cluster_id) =
+                self.state.compute_instances_by_linked_object_id.get(&id)
+            {
+                let name = &self.state.compute_instances_by_id[linked_cluster_id].name;
+                let (_ids, cluster_ops) = self.drop_compute_instance_ops(&[name.clone()]);
+                ops.extend(cluster_ops);
             }
             ops.push(Op::DropItem(id));
         }
@@ -3782,6 +3888,29 @@ impl<S: Append> Catalog<S> {
             schema: name.schema.clone(),
             item: name.item.clone(),
         }
+    }
+
+    pub fn find_available_cluster_name(&self, name: &str) -> String {
+        let mut i = 0;
+        let mut candidate = name.to_string();
+        while self
+            .state
+            .compute_instances_by_name
+            .contains_key(&candidate)
+        {
+            i += 1;
+            candidate = format!("{}{}", name, i);
+        }
+        candidate
+    }
+
+    /// Gets the linked cluster associated with the provided object ID, if it
+    /// exists.
+    pub fn get_linked_cluster(&self, object_id: GlobalId) -> Option<&ComputeInstance> {
+        self.state
+            .compute_instances_by_linked_object_id
+            .get(&object_id)
+            .map(|id| &self.state.compute_instances_by_id[id])
     }
 
     pub fn concretize_replica_location(
@@ -3842,13 +3971,19 @@ impl<S: Append> Catalog<S> {
         Ok(location)
     }
 
+    /// Returns the default storage host size and allocation.
+    ///
+    /// If a default size was given as configuration, it is always used,
+    /// otherwise the smallest host size is used instead.
+    pub fn default_storage_host_size(&self) -> (String, StorageHostResourceAllocation) {
+        self.state.default_storage_host_size()
+    }
+
     pub fn resolve_storage_host_config(
         &self,
-        storage_host_config: PlanStorageHostConfig,
-        allow_undefined: bool,
+        storage_host_config: &PlanStorageHostConfig,
     ) -> Result<StorageHostConfig, AdapterError> {
-        self.state
-            .resolve_storage_host_config(storage_host_config, allow_undefined)
+        self.state.resolve_storage_host_config(storage_host_config)
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -3949,6 +4084,7 @@ impl<S: Append> Catalog<S> {
             CreateComputeInstance {
                 id: ComputeInstanceId,
                 name: String,
+                linked_object_id: Option<GlobalId>,
                 // These are the legacy, active logs of this compute instance
                 arranged_introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
             },
@@ -4022,7 +4158,7 @@ impl<S: Append> Catalog<S> {
 
         for op in ops {
             match op {
-                Op::AlterSink { id, size, remote } => {
+                Op::AlterSink { id, host_config } => {
                     use mz_sql::ast::Value;
                     use mz_sql_parser::ast::CreateSinkOptionName::*;
 
@@ -4057,78 +4193,68 @@ impl<S: Append> Catalog<S> {
                         _ => coord_bail!("sink {id} was not created with a CREATE SINK statement"),
                     };
 
-                    let new_config = alter_host_config(&old_sink.host_config, size, remote)?;
+                    create_stmt
+                        .with_options
+                        .retain(|x| ![Remote, Size].contains(&x.name));
 
-                    if let Some(config) = new_config {
-                        create_stmt
-                            .with_options
-                            .retain(|x| ![Remote, Size].contains(&x.name));
+                    let new_host_option = match &host_config {
+                        plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
+                        plan::StorageHostConfig::Remote { addr } => Some((Remote, addr.clone())),
+                        plan::StorageHostConfig::Undefined => None,
+                    };
 
-                        let new_host_option = match &config {
-                            plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
-                            plan::StorageHostConfig::Remote { addr } => {
-                                Some((Remote, addr.clone()))
-                            }
-                            plan::StorageHostConfig::Undefined => None,
-                        };
-
-                        if let Some((name, value)) = new_host_option {
-                            create_stmt.with_options.push(CreateSinkOption {
-                                name,
-                                value: Some(WithOptionValue::Value(Value::String(value))),
-                            });
-                        }
-
-                        // Undefined size sinks only allowed in unsafe mode.
-                        let allow_undefined_size = state.config().unsafe_mode;
-
-                        let host_config =
-                            state.resolve_storage_host_config(config, allow_undefined_size)?;
-                        let create_sql = stmt.to_ast_string_stable();
-                        let sink = CatalogItem::Sink(Sink {
-                            create_sql,
-                            host_config: host_config.clone(),
-                            ..old_sink
+                    if let Some((name, value)) = new_host_option {
+                        create_stmt.with_options.push(CreateSinkOption {
+                            name,
+                            value: Some(WithOptionValue::Value(Value::String(value))),
                         });
-
-                        let ser = Self::serialize_item(&sink);
-                        tx.update_item(id, &name.item, &ser)?;
-
-                        // NB: this will be re-incremented by the action below.
-                        builtin_table_updates.extend(state.pack_item_update(id, -1));
-
-                        state.add_to_audit_log(
-                            oracle_write_ts,
-                            session,
-                            tx,
-                            builtin_table_updates,
-                            audit_events,
-                            EventType::Alter,
-                            ObjectType::Sink,
-                            EventDetails::AlterSourceSinkV1(mz_audit_log::AlterSourceSinkV1 {
-                                id: id.to_string(),
-                                name: Self::full_name_detail(&state.resolve_full_name(
-                                    &name,
-                                    session.map(|session| session.conn_id()),
-                                )),
-                                old_size: old_sink.host_config.size().map(|x| x.to_string()),
-                                new_size: host_config.size().map(|x| x.to_string()),
-                            }),
-                        )?;
-
-                        let to_name = entry.name().clone();
-                        catalog_action(
-                            state,
-                            builtin_table_updates,
-                            Action::UpdateItem {
-                                id,
-                                to_name,
-                                to_item: sink,
-                            },
-                        )?;
                     }
+
+                    let host_config = state.resolve_storage_host_config(&host_config)?;
+                    let create_sql = stmt.to_ast_string_stable();
+                    let sink = CatalogItem::Sink(Sink {
+                        create_sql,
+                        host_config: host_config.clone(),
+                        ..old_sink
+                    });
+
+                    let ser = Self::serialize_item(&sink);
+                    tx.update_item(id, &name.item, &ser)?;
+
+                    // NB: this will be re-incremented by the action below.
+                    builtin_table_updates.extend(state.pack_item_update(id, -1));
+
+                    state.add_to_audit_log(
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Sink,
+                        EventDetails::AlterSourceSinkV1(mz_audit_log::AlterSourceSinkV1 {
+                            id: id.to_string(),
+                            name: Self::full_name_detail(&state.resolve_full_name(
+                                &name,
+                                session.map(|session| session.conn_id()),
+                            )),
+                            old_size: old_sink.host_config.size().map(|x| x.to_string()),
+                            new_size: host_config.size().map(|x| x.to_string()),
+                        }),
+                    )?;
+
+                    let to_name = entry.name().clone();
+                    catalog_action(
+                        state,
+                        builtin_table_updates,
+                        Action::UpdateItem {
+                            id,
+                            to_name,
+                            to_item: sink,
+                        },
+                    )?;
                 }
-                Op::AlterSource { id, size, remote } => {
+                Op::AlterSource { id, host_config } => {
                     use mz_sql::ast::Value;
                     use mz_sql_parser::ast::CreateSourceOptionName::*;
 
@@ -4165,98 +4291,78 @@ impl<S: Append> Catalog<S> {
                         ),
                     };
 
-                    let new_config = match &old_source.data_source {
-                        DataSourceDesc::Ingestion(ingestion) => {
-                            alter_host_config(&ingestion.host_config, size, remote)?
-                        }
-                        DataSourceDesc::Introspection(_) | DataSourceDesc::Source => None,
+                    create_stmt
+                        .with_options
+                        .retain(|x| ![Size, Remote].contains(&x.name));
+
+                    let new_host_option = match &host_config {
+                        plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
+                        plan::StorageHostConfig::Remote { addr } => Some((Remote, addr.clone())),
+                        plan::StorageHostConfig::Undefined => None,
                     };
 
-                    if let Some(config) = new_config {
-                        create_stmt
-                            .with_options
-                            .retain(|x| ![Size, Remote].contains(&x.name));
-
-                        let new_host_option = match &config {
-                            plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
-                            plan::StorageHostConfig::Remote { addr } => {
-                                Some((Remote, addr.clone()))
-                            }
-                            plan::StorageHostConfig::Undefined => None,
-                        };
-
-                        if let Some((name, value)) = new_host_option {
-                            create_stmt.with_options.push(CreateSourceOption {
-                                name,
-                                value: Some(WithOptionValue::Value(Value::String(value))),
-                            });
-                        }
-
-                        // Only introspection + subsources can have an undefined size outside of
-                        // unsafe mode.
-                        let allow_undefined_size = state.config().unsafe_mode
-                            || match old_source.data_source {
-                                DataSourceDesc::Introspection(_) | DataSourceDesc::Source => true,
-                                DataSourceDesc::Ingestion(_) => false,
-                            };
-
-                        let old_size = old_source.size().map(|s| s.to_string());
-                        let host_config =
-                            state.resolve_storage_host_config(config, allow_undefined_size)?;
-                        let new_size = host_config.size().map(|s| s.to_string());
-                        let data_source = match old_source.data_source {
-                            DataSourceDesc::Ingestion(ingestion) => {
-                                    DataSourceDesc::Ingestion(Ingestion {
-                                    host_config,
-                                    ..ingestion
-                                })
-                            }
-                            _ => unreachable!("already guaranteed that we do not permit modifying either SIZE or REMOTE of subsource or introspection source"),
-                        };
-
-                        let create_sql = stmt.to_ast_string_stable();
-                        let source = CatalogItem::Source(Source {
-                            create_sql,
-                            data_source,
-                            ..old_source
+                    if let Some((name, value)) = new_host_option {
+                        create_stmt.with_options.push(CreateSourceOption {
+                            name,
+                            value: Some(WithOptionValue::Value(Value::String(value))),
                         });
-
-                        let ser = Self::serialize_item(&source);
-                        tx.update_item(id, &name.item, &ser)?;
-
-                        // NB: this will be re-incremented by the action below.
-                        builtin_table_updates.extend(state.pack_item_update(id, -1));
-
-                        state.add_to_audit_log(
-                            oracle_write_ts,
-                            session,
-                            tx,
-                            builtin_table_updates,
-                            audit_events,
-                            EventType::Alter,
-                            ObjectType::Source,
-                            EventDetails::AlterSourceSinkV1(mz_audit_log::AlterSourceSinkV1 {
-                                id: id.to_string(),
-                                name: Self::full_name_detail(&state.resolve_full_name(
-                                    &name,
-                                    session.map(|session| session.conn_id()),
-                                )),
-                                old_size,
-                                new_size,
-                            }),
-                        )?;
-
-                        let to_name = entry.name().clone();
-                        catalog_action(
-                            state,
-                            builtin_table_updates,
-                            Action::UpdateItem {
-                                id,
-                                to_name,
-                                to_item: source,
-                            },
-                        )?;
                     }
+
+                    let old_size = old_source.size().map(|s| s.to_string());
+                    let host_config = state.resolve_storage_host_config(&host_config)?;
+                    let new_size = host_config.size().map(|s| s.to_string());
+                    let data_source = match old_source.data_source {
+                        DataSourceDesc::Ingestion(ingestion) => {
+                                DataSourceDesc::Ingestion(Ingestion {
+                                host_config,
+                                ..ingestion
+                            })
+                        }
+                        _ => unreachable!("already guaranteed that we do not permit modifying either SIZE or REMOTE of subsource or introspection source"),
+                    };
+
+                    let create_sql = stmt.to_ast_string_stable();
+                    let source = CatalogItem::Source(Source {
+                        create_sql,
+                        data_source,
+                        ..old_source
+                    });
+
+                    let ser = Self::serialize_item(&source);
+                    tx.update_item(id, &name.item, &ser)?;
+
+                    // NB: this will be re-incremented by the action below.
+                    builtin_table_updates.extend(state.pack_item_update(id, -1));
+
+                    state.add_to_audit_log(
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Source,
+                        EventDetails::AlterSourceSinkV1(mz_audit_log::AlterSourceSinkV1 {
+                            id: id.to_string(),
+                            name: Self::full_name_detail(&state.resolve_full_name(
+                                &name,
+                                session.map(|session| session.conn_id()),
+                            )),
+                            old_size,
+                            new_size,
+                        }),
+                    )?;
+
+                    let to_name = entry.name().clone();
+                    catalog_action(
+                        state,
+                        builtin_table_updates,
+                        Action::UpdateItem {
+                            id,
+                            to_name,
+                            to_item: source,
+                        },
+                    )?;
                 }
                 Op::CreateDatabase {
                     name,
@@ -4388,6 +4494,7 @@ impl<S: Append> Catalog<S> {
                 }
                 Op::CreateComputeInstance {
                     name,
+                    linked_object_id,
                     arranged_introspection_sources,
                 } => {
                     if is_reserved_name(&name) {
@@ -4395,8 +4502,11 @@ impl<S: Append> Catalog<S> {
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
-                    let id =
-                        tx.insert_user_compute_instance(&name, &arranged_introspection_sources)?;
+                    let id = tx.insert_user_compute_instance(
+                        &name,
+                        linked_object_id,
+                        &arranged_introspection_sources,
+                    )?;
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -4416,6 +4526,7 @@ impl<S: Append> Catalog<S> {
                         Action::CreateComputeInstance {
                             id,
                             name,
+                            linked_object_id,
                             arranged_introspection_sources,
                         },
                     )?;
@@ -4669,9 +4780,16 @@ impl<S: Append> Catalog<S> {
                             ErrorKind::ReadOnlyComputeInstance(name),
                         )));
                     }
-                    let (instance_id, introspection_source_index_ids) =
+                    let (instance_id, linked_object_id, introspection_source_index_ids) =
                         tx.remove_compute_instance(&name)?;
                     builtin_table_updates.push(state.pack_compute_instance_update(&name, -1));
+                    if let Some(linked_object_id) = linked_object_id {
+                        builtin_table_updates.push(state.pack_cluster_link_update(
+                            &name,
+                            linked_object_id,
+                            -1,
+                        ));
+                    }
                     for id in &introspection_source_index_ids {
                         builtin_table_updates.extend(state.pack_item_update(*id, -1));
                     }
@@ -5080,6 +5198,7 @@ impl<S: Append> Catalog<S> {
                 Action::CreateComputeInstance {
                     id,
                     name,
+                    linked_object_id,
                     arranged_introspection_sources,
                 } => {
                     info!("create cluster {}", name);
@@ -5088,8 +5207,20 @@ impl<S: Append> Catalog<S> {
                             .iter()
                             .map(|(_, id)| *id)
                             .collect();
-                    state.insert_compute_instance(id, name.clone(), arranged_introspection_sources);
+                    state.insert_compute_instance(
+                        id,
+                        name.clone(),
+                        linked_object_id,
+                        arranged_introspection_sources,
+                    );
                     builtin_table_updates.push(state.pack_compute_instance_update(&name, 1));
+                    if let Some(linked_object_id) = linked_object_id {
+                        builtin_table_updates.push(state.pack_cluster_link_update(
+                            &name,
+                            linked_object_id,
+                            1,
+                        ));
+                    }
                     for id in arranged_introspection_source_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
@@ -5172,6 +5303,13 @@ impl<S: Append> Catalog<S> {
                         .compute_instances_by_id
                         .remove(&id)
                         .expect("can only drop known instances");
+
+                    if let Some(linked_object_id) = instance.linked_object_id {
+                        state
+                            .compute_instances_by_linked_object_id
+                            .remove(&linked_object_id)
+                            .expect("can only drop known instances");
+                    }
 
                     assert!(
                         instance.exports.is_empty() && instance.replicas_by_id.is_empty(),
@@ -5362,27 +5500,23 @@ impl<S: Append> Catalog<S> {
                 timeline,
                 host_config,
                 ..
-            }) => {
-                let allow_undefined_size = true;
-                CatalogItem::Source(Source {
-                    create_sql: source.create_sql,
-                    data_source: match source.ingestion {
-                        Some(ingestion) => DataSourceDesc::Ingestion(Ingestion {
-                            desc: ingestion.desc,
-                            source_imports: ingestion.source_imports,
-                            subsource_exports: ingestion.subsource_exports,
-                            host_config: self
-                                .resolve_storage_host_config(host_config, allow_undefined_size)?,
-                        }),
-                        None => DataSourceDesc::Source,
-                    },
-                    desc: source.desc,
-                    timeline,
-                    depends_on,
-                    custom_logical_compaction_window: None,
-                    is_retained_metrics_relation: false,
-                })
-            }
+            }) => CatalogItem::Source(Source {
+                create_sql: source.create_sql,
+                data_source: match source.ingestion {
+                    Some(ingestion) => DataSourceDesc::Ingestion(Ingestion {
+                        desc: ingestion.desc,
+                        source_imports: ingestion.source_imports,
+                        subsource_exports: ingestion.subsource_exports,
+                        host_config: self.resolve_storage_host_config(&host_config)?,
+                    }),
+                    None => DataSourceDesc::Source,
+                },
+                desc: source.desc,
+                timeline,
+                depends_on,
+                custom_logical_compaction_window: None,
+                is_retained_metrics_relation: false,
+            }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(view.expr)?;
@@ -5422,19 +5556,15 @@ impl<S: Append> Catalog<S> {
                 with_snapshot,
                 host_config,
                 ..
-            }) => {
-                let allow_undefined_size = true;
-                CatalogItem::Sink(Sink {
-                    create_sql: sink.create_sql,
-                    from: sink.from,
-                    connection: StorageSinkConnectionState::Pending(sink.connection_builder),
-                    envelope: sink.envelope,
-                    with_snapshot,
-                    depends_on,
-                    host_config: self
-                        .resolve_storage_host_config(host_config, allow_undefined_size)?,
-                })
-            }
+            }) => CatalogItem::Sink(Sink {
+                create_sql: sink.create_sql,
+                from: sink.from,
+                connection: StorageSinkConnectionState::Pending(sink.connection_builder),
+                envelope: sink.envelope,
+                with_snapshot,
+                depends_on,
+                host_config: self.resolve_storage_host_config(&host_config)?,
+            }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
                 details: CatalogTypeDetails {
@@ -5641,42 +5771,15 @@ pub fn is_reserved_name(name: &str) -> bool {
         .any(|prefix| name.starts_with(prefix))
 }
 
-/// Return a [`plan::StorageHostConfig`] based on an existing [`StorageHostConfig`] and a set of potentially altered parameters.
-///
-/// If a [`None`] is returned, it means the existing config does not need to be updated.
-fn alter_host_config(
-    old_config: &StorageHostConfig,
-    size: AlterOptionParameter,
-    remote: AlterOptionParameter,
-) -> Result<Option<plan::StorageHostConfig>, AdapterError> {
-    use plan::AlterOptionParameter::*;
-
-    match (old_config, size, remote) {
-        // Should be caught during planning, but it is better to be safe
-        (_, Set(_), Set(_)) => {
-            coord_bail!("only one of REMOTE and SIZE can be set")
-        }
-        (_, Set(size), _) => Ok(Some(plan::StorageHostConfig::Managed { size })),
-        (_, _, Set(addr)) => Ok(Some(plan::StorageHostConfig::Remote { addr })),
-        (StorageHostConfig::Remote { .. }, _, Reset)
-        | (StorageHostConfig::Managed { .. }, Reset, _) => {
-            Ok(Some(plan::StorageHostConfig::Undefined))
-        }
-        (_, _, _) => Ok(None),
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum Op {
     AlterSink {
         id: GlobalId,
-        size: AlterOptionParameter,
-        remote: AlterOptionParameter,
+        host_config: plan::StorageHostConfig,
     },
     AlterSource {
         id: GlobalId,
-        size: AlterOptionParameter,
-        remote: AlterOptionParameter,
+        host_config: plan::StorageHostConfig,
     },
     CreateDatabase {
         name: String,
@@ -5694,6 +5797,7 @@ pub enum Op {
     },
     CreateComputeInstance {
         name: String,
+        linked_object_id: Option<GlobalId>,
         arranged_introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
     },
     CreateComputeReplica {
@@ -6208,6 +6312,10 @@ impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
 
     fn id(&self) -> ComputeInstanceId {
         self.id
+    }
+
+    fn linked_object_id(&self) -> Option<GlobalId> {
+        self.linked_object_id
     }
 
     fn exports(&self) -> &HashSet<GlobalId> {
