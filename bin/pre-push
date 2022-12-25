@@ -19,7 +19,7 @@ SHLIB_NOT_IN_CI=1
 
 ci_try bin/lint
 ci_try cargo fmt -- --check
-ci_try cargo clippy --all-targets
+ci_try cargo clippy --all-targets -- -D warnings
 ci_try bin/doc --no-deps
 
 ci_status_report
