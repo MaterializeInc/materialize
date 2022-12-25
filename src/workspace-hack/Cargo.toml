@@ -65,7 +65,7 @@ num-bigint = { version = "0.4.3", features = ["std"] }
 num-integer = { version = "0.1.44", features = ["i128", "std"] }
 num-traits = { version = "0.2.15", features = ["i128", "libm", "std"] }
 openssl = { version = "0.10.43", features = ["vendored"] }
-openssl-sys = { version = "0.9.79", default-features = false, features = ["openssl-src", "vendored"] }
+openssl-sys = { version = "0.9.80", default-features = false, features = ["openssl-src", "vendored"] }
 ordered-float = { version = "3.4.0", features = ["serde", "std"] }
 parking_lot = { version = "0.12.0", features = ["send_guard"] }
 phf = { version = "0.11.1", features = ["std", "uncased"] }
@@ -165,7 +165,7 @@ num-bigint = { version = "0.4.3", features = ["std"] }
 num-integer = { version = "0.1.44", features = ["i128", "std"] }
 num-traits = { version = "0.2.15", features = ["i128", "libm", "std"] }
 openssl = { version = "0.10.43", features = ["vendored"] }
-openssl-sys = { version = "0.9.79", default-features = false, features = ["openssl-src", "vendored"] }
+openssl-sys = { version = "0.9.80", default-features = false, features = ["openssl-src", "vendored"] }
 ordered-float = { version = "3.4.0", features = ["serde", "std"] }
 parking_lot = { version = "0.12.0", features = ["send_guard"] }
 phf = { version = "0.11.1", features = ["std", "uncased"] }
