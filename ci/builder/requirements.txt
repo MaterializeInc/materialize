@@ -15,7 +15,7 @@ ec2instanceconnectcli==1.0.2
 flake8==6.0.0
 python-frontmatter==1.0.0
 humanize==4.4.0
-isort==5.11.3
+isort==5.11.4
 junit-xml==1.9
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
