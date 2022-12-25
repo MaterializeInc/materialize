@@ -15,11 +15,13 @@ futures = "0.3.25"
 hex = "0.4.3"
 itertools = "0.10.5"
 libc = "0.2.138"
+maplit = "1.0.2"
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["async"] }
 mz-pid-file = { path = "../pid-file" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
+serde = "1.0.147"
 serde_json = "1.0.89"
 scopeguard = "1.1.0"
 sha1 = "0.10.5"

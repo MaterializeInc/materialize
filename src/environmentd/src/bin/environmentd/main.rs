@@ -115,7 +115,9 @@ use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{
     KubernetesImagePullPolicy, KubernetesOrchestrator, KubernetesOrchestratorConfig,
 };
-use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
+use mz_orchestrator_process::{
+    ProcessOrchestrator, ProcessOrchestratorConfig, ProcessOrchestratorTcpProxyConfig,
+};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs, TracingOrchestrator};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metric;
@@ -386,6 +388,23 @@ pub struct Args {
     /// browsers).
     #[clap(long, env = "ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR")]
     orchestrator_process_tcp_proxy_listen_addr: Option<IpAddr>,
+    /// A directory in which the process orchestrator should write Prometheus
+    /// scrape targets, for use with Prometheus's file-based service discovery.
+    ///
+    /// Each namespaced orchestrator will maintain a single JSON file into the
+    /// directory named `NAMESPACE.json` containing the scrape targets for all
+    /// extant services. The scrape targets will use the TCP proxy address, as
+    /// Prometheus does not support scraping over Unix domain sockets.
+    ///
+    /// This option is ignored unless
+    /// `--orchestrator-process-tcp-proxy-listen-addr` is set.
+    ///
+    /// See also: <https://prometheus.io/docs/guides/file-sd/>
+    #[clap(
+        long,
+        env = "ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY"
+    )]
+    orchestrator_process_prometheus_service_discovery_directory: Option<PathBuf>,
     /// The clusterd image reference to use.
     #[structopt(
         long,
@@ -713,7 +732,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                             .orchestrator_process_wrapper
                             .map_or(Ok(vec![]), |s| shell_words::split(&s))?,
                         propagate_crashes: args.orchestrator_process_propagate_crashes,
-                        tcp_proxy_listen_addr: args.orchestrator_process_tcp_proxy_listen_addr,
+                        tcp_proxy: args.orchestrator_process_tcp_proxy_listen_addr.map(
+                            |listen_addr| ProcessOrchestratorTcpProxyConfig {
+                                listen_addr,
+                                prometheus_service_discovery_dir: args
+                                    .orchestrator_process_prometheus_service_discovery_directory,
+                            },
+                        ),
                     }))
                     .context("creating process orchestrator")?,
             );

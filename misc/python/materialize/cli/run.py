@@ -111,7 +111,7 @@ def main() -> int:
             path = ROOT / "target" / "release" / args.program
         else:
             path = ROOT / "target" / "debug" / args.program
-        command = [str(path), *args.args]
+        command = [str(path)]
         if args.tokio_console:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
         if args.program == "environmentd":
@@ -128,8 +128,16 @@ def main() -> int:
             # files that have been deleted. There's no race if we reset in the
             # opposite order.
             if args.reset:
-                print("Removing mzdata directory...")
-                shutil.rmtree(mzdata, ignore_errors=True)
+                # Remove everything in the `mzdata`` directory *except* for
+                # the `prometheus` directory.
+                paths = list(mzdata.glob("prometheus/*"))
+                paths.extend(p for p in mzdata.glob("*") if p.name != "prometheus")
+                for path in paths:
+                    print(f"Removing {path}...")
+                    if path.is_dir():
+                        shutil.rmtree(path, ignore_errors=True)
+                    else:
+                        path.unlink()
 
             mzdata.mkdir(exist_ok=True)
             environment_file = mzdata / "environment-id"
@@ -140,14 +148,20 @@ def main() -> int:
                 environment_file.write_text(environment_id)
 
             command += [
+                # Setting the listen addresses below to 0.0.0.0 is required
+                # to allow Prometheus running in Docker (misc/prometheus)
+                # access these services to scrape metrics.
+                f"--internal-http-listen-addr=0.0.0.0:6878",
                 f"--orchestrator=process",
                 f"--orchestrator-process-secrets-directory={mzdata}/secrets",
-                f"--orchestrator-process-tcp-proxy-listen-addr=127.0.0.1",
+                f"--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
+                f"--orchestrator-process-prometheus-service-discovery-directory={mzdata}/prometheus",
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--persist-blob-url=file://{mzdata}/persist/blob",
                 f"--adapter-stash-url={args.postgres}?options=--search_path=adapter",
                 f"--storage-stash-url={args.postgres}?options=--search_path=storage",
                 f"--environment-id={environment_id}",
+                *args.args,
             ]
         elif args.program == "sqllogictest":
             _handle_lingering_services(kill=True)

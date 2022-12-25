@@ -821,7 +821,7 @@ impl RunnerInner {
                 secrets_dir: temp_dir.path().join("secrets"),
                 command_wrapper: vec![],
                 propagate_crashes: true,
-                tcp_proxy_listen_addr: None,
+                tcp_proxy: None,
             })
             .await?,
         );
