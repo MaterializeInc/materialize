@@ -839,6 +839,9 @@ class ServiceConfig(TypedDict, total=False):
     By default, the name of the service is used as the hostname.
     """
 
+    extra_hosts: List[str]
+    """Additional hostname mappings."""
+
     entrypoint: List[str]
     """Override the entrypoint specified in the image."""
 
