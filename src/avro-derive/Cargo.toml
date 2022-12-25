@@ -10,6 +10,6 @@ rust-version.workspace = true
 proc-macro = true
 
 [dependencies]
-quote = "1.0.21"
+quote = "1.0.23"
 syn = { version = "1.0.103", features = ["full"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
