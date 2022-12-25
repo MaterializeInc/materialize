@@ -77,7 +77,7 @@ prometheus = { version = "0.13.3", default-features = false, features = ["libc",
 prost = { version = "0.11.3", features = ["no-recursion-limit", "prost-derive", "std"] }
 prost-reflect = { version = "0.9.2", default-features = false, features = ["base64", "serde", "serde-value", "serde1"] }
 prost-types = { version = "0.11.2", features = ["std"] }
-quote = { version = "1.0.21", features = ["proc-macro"] }
+quote = { version = "1.0.23", features = ["proc-macro"] }
 rand = { version = "0.8.5", features = ["alloc", "getrandom", "libc", "rand_chacha", "small_rng", "std", "std_rng"] }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake", "cmake-build", "libz", "libz-static", "libz-sys", "openssl-sys", "ssl", "ssl-vendored", "zstd", "zstd-sys"] }
 regex = { version = "1.7.0", features = ["aho-corasick", "memchr", "perf", "perf-cache", "perf-dfa", "perf-inline", "perf-literal", "std", "unicode", "unicode-age", "unicode-bool", "unicode-case", "unicode-gencat", "unicode-perl", "unicode-script", "unicode-segment"] }
@@ -177,7 +177,7 @@ prometheus = { version = "0.13.3", default-features = false, features = ["libc",
 prost = { version = "0.11.3", features = ["no-recursion-limit", "prost-derive", "std"] }
 prost-reflect = { version = "0.9.2", default-features = false, features = ["base64", "serde", "serde-value", "serde1"] }
 prost-types = { version = "0.11.2", features = ["std"] }
-quote = { version = "1.0.21", features = ["proc-macro"] }
+quote = { version = "1.0.23", features = ["proc-macro"] }
 rand = { version = "0.8.5", features = ["alloc", "getrandom", "libc", "rand_chacha", "small_rng", "std", "std_rng"] }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake", "cmake-build", "libz", "libz-static", "libz-sys", "openssl-sys", "ssl", "ssl-vendored", "zstd", "zstd-sys"] }
 regex = { version = "1.7.0", features = ["aho-corasick", "memchr", "perf", "perf-cache", "perf-dfa", "perf-inline", "perf-literal", "std", "unicode", "unicode-age", "unicode-bool", "unicode-case", "unicode-gencat", "unicode-perl", "unicode-script", "unicode-segment"] }
