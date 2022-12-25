@@ -79,9 +79,11 @@ use std::env;
 use std::fmt::Debug;
 use std::fs::Permissions;
 use std::future::Future;
+use std::net::{IpAddr, TcpListener as StdTcpListener};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -90,24 +92,29 @@ use anyhow::{bail, Context};
 use async_stream::stream;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::stream::BoxStream;
+use futures::future;
+use futures::stream::{BoxStream, FuturesUnordered, TryStreamExt};
 use itertools::Itertools;
 use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use scopeguard::defer;
 use sha1::{Digest, Sha1};
 use sysinfo::{Pid, PidExt, ProcessExt, ProcessRefreshKind, System, SystemExt};
 use tokio::fs;
+use tokio::io;
+use tokio::net::{TcpListener, UnixStream};
 use tokio::process::{Child, Command};
+use tokio::select;
 use tokio::sync::broadcast::{self, Sender};
 use tokio::time::{self, Duration};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use mz_orchestrator::{
-    NamespacedOrchestrator, Orchestrator, Service, ServiceConfig, ServiceEvent, ServicePort,
+    NamespacedOrchestrator, Orchestrator, Service, ServiceConfig, ServiceEvent,
     ServiceProcessMetrics, ServiceStatus,
 };
 use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::netio::UnixSocketAddr;
+use mz_ore::option::OptionExt;
 use mz_ore::result::ResultExt;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_pid_file::PidFile;
@@ -130,6 +137,19 @@ pub struct ProcessOrchestratorConfig {
     pub command_wrapper: Vec<String>,
     /// Whether to crash this process if a child process crashes.
     pub propagate_crashes: bool,
+    /// An IP address on which to bind TCP proxies for Unix domain sockets.
+    ///
+    /// If `Some`, for each named port of each created service, the process
+    /// orchestrator will bind a TCP listener to the specified address that
+    /// proxies incoming connections to the underlying Unix domain socket. The
+    /// allocated TCP port will be emitted as a tracing event.
+    ///
+    /// If `None`, no TCP proxies will be created.
+    ///
+    /// The primary use is live debugging the running child services via tools
+    /// that do not support Unix domain sockets (e.g., Prometheus, web
+    /// browsers).
+    pub tcp_proxy_listen_addr: Option<IpAddr>,
 }
 
 /// An orchestrator backed by processes on the local machine.
@@ -150,6 +170,7 @@ pub struct ProcessOrchestrator {
     secrets_dir: PathBuf,
     command_wrapper: Vec<String>,
     propagate_crashes: bool,
+    tcp_proxy_listen_addr: Option<IpAddr>,
 }
 
 impl ProcessOrchestrator {
@@ -162,6 +183,7 @@ impl ProcessOrchestrator {
             secrets_dir,
             command_wrapper,
             propagate_crashes,
+            tcp_proxy_listen_addr,
         }: ProcessOrchestratorConfig,
     ) -> Result<ProcessOrchestrator, anyhow::Error> {
         let metadata_dir = env::temp_dir().join(format!("environmentd-{environment_id}"));
@@ -183,6 +205,7 @@ impl ProcessOrchestrator {
             secrets_dir: fs::canonicalize(secrets_dir).await?,
             command_wrapper,
             propagate_crashes,
+            tcp_proxy_listen_addr,
         })
     }
 }
@@ -203,6 +226,7 @@ impl Orchestrator for ProcessOrchestrator {
                 service_event_tx,
                 system: Mutex::new(System::new()),
                 propagate_crashes: self.propagate_crashes,
+                tcp_proxy_listen_addr: self.tcp_proxy_listen_addr,
             })
         }))
     }
@@ -220,6 +244,7 @@ struct NamespacedProcessOrchestrator {
     service_event_tx: Sender<ServiceEvent>,
     system: Mutex<System>,
     propagate_crashes: bool,
+    tcp_proxy_listen_addr: Option<IpAddr>,
 }
 
 #[async_trait]
@@ -278,7 +303,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             image,
             init_container_image: _,
             args,
-            ports,
+            ports: ports_in,
             memory_limit: _,
             cpu_limit: _,
             scale,
@@ -302,6 +327,25 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 
         // Create the state for new processes.
         for i in process_states.len()..scale.get() {
+            // Allocate listeners for each TCP proxy, if requested.
+            let mut ports = vec![];
+            for port in &ports_in {
+                let tcp_proxy_listener = match self.tcp_proxy_listen_addr {
+                    None => None,
+                    Some(addr) => {
+                        let listener = StdTcpListener::bind((addr, 0))
+                            .with_context(|| format!("binding to {addr}"))?;
+                        listener.set_nonblocking(true)?;
+                        Some(TcpListener::from_std(listener)?)
+                    }
+                };
+                ports.push(ServiceProcessPort {
+                    name: port.name.clone(),
+                    tcp_proxy_listener,
+                });
+            }
+
+            // Launch supervisor process.
             let handle = mz_ore::task::spawn(
                 || format!("process-orchestrator:{full_id}-{i}"),
                 self.supervise_service_process(ServiceProcessConfig {
@@ -310,9 +354,10 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                     i,
                     image: image.clone(),
                     args,
-                    ports: ports.clone(),
+                    ports,
                 }),
             );
+
             process_states.push(ProcessState {
                 _handle: handle.abort_on_drop(),
                 status: ProcessStatus::NotReady,
@@ -392,10 +437,10 @@ impl NamespacedProcessOrchestrator {
         };
 
         let listen_addrs = ports
-            .into_iter()
+            .iter()
             .map(|p| {
                 let addr = socket_path(&run_dir, &p.name, i);
-                (p.name, addr)
+                (p.name.clone(), addr)
             })
             .collect();
         let mut args = args(&listen_addrs);
@@ -407,12 +452,35 @@ impl NamespacedProcessOrchestrator {
         ));
 
         async move {
+            let mut proxy_handles = vec![];
+            for port in ports {
+                if let Some(tcp_listener) = port.tcp_proxy_listener {
+                    let local_addr = tcp_listener.local_addr().ok().display_or("<unknown>");
+                    info!(
+                        "{full_id}-{i}: {} tcp proxy listening on {}",
+                        port.name, local_addr
+                    );
+                    let uds_path = &listen_addrs[&port.name];
+                    let handle = mz_ore::task::spawn(
+                        || format!("{full_id}-{i}-proxy-{}", port.name),
+                        tcp_proxy(TcpProxyConfig {
+                            name: format!("{full_id}-{i}-{}", port.name),
+                            tcp_listener,
+                            uds_path: uds_path.clone(),
+                        }),
+                    );
+                    proxy_handles.push(handle.abort_on_drop());
+                }
+            }
+
             supervise_existing_process(&state_updater, &pid_file).await;
 
             loop {
                 for path in listen_addrs.values() {
                     if let Err(e) = fs::remove_file(path).await {
-                        warn!("unable to remove {path} while launching {full_id}-{i}: {e}")
+                        if e.kind() != io::ErrorKind::NotFound {
+                            warn!("unable to remove {path} while launching {full_id}-{i}: {e}")
+                        }
                     }
                 }
 
@@ -466,7 +534,12 @@ struct ServiceProcessConfig<'a> {
     i: usize,
     image: String,
     args: &'a (dyn Fn(&HashMap<String, String>) -> Vec<String> + Send + Sync),
-    ports: Vec<ServicePort>,
+    ports: Vec<ServiceProcessPort>,
+}
+
+struct ServiceProcessPort {
+    name: String,
+    tcp_proxy_listener: Option<TcpListener>,
 }
 
 /// Supervises an existing process, if it exists.
@@ -551,6 +624,45 @@ fn did_process_crash(status: ExitStatus) -> bool {
         status.signal(),
         Some(SIGABRT | SIGBUS | SIGSEGV | SIGTRAP | SIGILL)
     )
+}
+
+struct TcpProxyConfig {
+    name: String,
+    tcp_listener: TcpListener,
+    uds_path: String,
+}
+
+async fn tcp_proxy(
+    TcpProxyConfig {
+        name,
+        tcp_listener,
+        uds_path,
+    }: TcpProxyConfig,
+) {
+    let mut conns = FuturesUnordered::<Pin<Box<dyn Future<Output = _> + Send>>>::new();
+    conns.push(Box::pin(future::pending()));
+    loop {
+        select! {
+            res = tcp_listener.accept() => {
+                debug!("{name}: accepting tcp proxy connection");
+                let uds_path = uds_path.clone();
+                conns.push(Box::pin(async move {
+                    let (mut tcp_conn, _) = res.context("accepting tcp connection")?;
+                    let mut uds_conn = UnixStream::connect(uds_path)
+                        .await
+                        .context("making uds connection")?;
+                    io::copy_bidirectional(&mut tcp_conn, &mut uds_conn)
+                        .await
+                        .context("proxying")
+                }));
+            }
+            res = conns.try_next() => {
+                if let Err(e) = res {
+                    warn!("{name}: tcp proxy connection failed: {e:#}");
+                }
+            }
+        }
+    }
 }
 
 struct ProcessStateUpdater {

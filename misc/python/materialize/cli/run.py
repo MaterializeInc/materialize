@@ -142,6 +142,7 @@ def main() -> int:
             command += [
                 f"--orchestrator=process",
                 f"--orchestrator-process-secrets-directory={mzdata}/secrets",
+                f"--orchestrator-process-tcp-proxy-listen-addr=127.0.0.1",
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--persist-blob-url=file://{mzdata}/persist/blob",
                 f"--adapter-stash-url={args.postgres}?options=--search_path=adapter",

@@ -261,6 +261,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             secrets_dir: data_directory.join("secrets"),
             command_wrapper: vec![],
             propagate_crashes: config.propagate_crashes,
+            tcp_proxy_listen_addr: None,
         }))?,
     );
     // Messing with the clock causes persist to expire leases, causing hangs and

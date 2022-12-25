@@ -83,7 +83,7 @@ use std::cmp;
 use std::env;
 use std::ffi::CStr;
 use std::iter;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -373,6 +373,19 @@ pub struct Args {
     /// processes by crashing the parent process.
     #[clap(long, env = "ORCHESTRATOR_PROCESS_PROPAGATE_CRASHES")]
     orchestrator_process_propagate_crashes: bool,
+    /// An IP address on which the process orchestrator should bind TCP proxies
+    /// for Unix domain sockets.
+    ///
+    /// When specified, for each named port of each created service, the process
+    /// orchestrator will bind a TCP listener to the specified address that
+    /// proxies incoming connections to the underlying Unix domain socket. The
+    /// allocated TCP port will be emitted as a tracing event.
+    ///
+    /// The primary use is live debugging the running child services via tools
+    /// that do not support Unix domain sockets (e.g., Prometheus, web
+    /// browsers).
+    #[clap(long, env = "ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR")]
+    orchestrator_process_tcp_proxy_listen_addr: Option<IpAddr>,
     /// The clusterd image reference to use.
     #[structopt(
         long,
@@ -700,6 +713,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                             .orchestrator_process_wrapper
                             .map_or(Ok(vec![]), |s| shell_words::split(&s))?,
                         propagate_crashes: args.orchestrator_process_propagate_crashes,
+                        tcp_proxy_listen_addr: args.orchestrator_process_tcp_proxy_listen_addr,
                     }))
                     .context("creating process orchestrator")?,
             );
