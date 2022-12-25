@@ -41,7 +41,7 @@ ALLOW_LINTS = [
     # The style and complexity lints frustrated too many engineers and caused
     # more bikeshedding than they saved. These lint categories are largely a
     # matter of opinion. A few of the worthwhile lints in these categories are
-    # reenabled below.
+    # reenabled in `DENY_LINTS` below.
     "clippy::style",
     "clippy::complexity",
     # clippy::large_enum_variant complains when enum variants have divergent
@@ -50,22 +50,21 @@ ALLOW_LINTS = [
     # and the suggested solution—boxing the large variant—might actually result
     # in slower code due to the allocation.
     "clippy::large_enum_variant",
-    # clippy::mutable_key_type disallows using internally mutable types as keys in `HashMap`,
-    # because their order could change. This is a good lint in principle, but its current
-    # implementation is too strict -- it disallows anything containing an `Arc` or `Rc`,
-    # for example.
+    # clippy::mutable_key_type disallows using internally mutable types as keys
+    # in `HashMap`, because their order could change. This is a good lint in
+    # principle, but its current implementation is too strict -- it disallows
+    # anything containing an `Arc` or `Rc`, for example.
     "clippy::mutable_key_type",
-    # This lint has too many false positives in Rust v1.47.0.
-    # See: https://github.com/rust-lang/rust-clippy/issues/5991
-    "clippy::needless_collect",
     # Unstable sort is not strictly better than sort, notably on partially
     # sorted inputs.
     "clippy::stable_sort_primitive",
-    # This lint has false positives where the pattern cannot be avoided without cloning
-    # the key used in the map.
+    # This lint has false positives where the pattern cannot be avoided without
+    # cloning the key used in the map.
     "clippy::map_entry",
-    ## Its unclear if the performance gain here is worth it
-    ## TODO(guswynn): figure out if this should be enabled
+    # It is unclear if the performance gain from using `Box::default` instead of
+    # `Box::new` is meaningful; and the lint can result in inconsistencies
+    # when some types implement `Default` and others do not.
+    # TODO(guswynn): benchmark the performance gain.
     "clippy::box_default",
 ]
 
@@ -75,8 +74,9 @@ deny_lints = [
     # Comparison of a bool with `true` or `false` is indeed clearer as `x` or
     # `!x`.
     "clippy::bool_comparison",
-    # x.clone() -> Arc::clone(&x)
-    # This clarifies a significant amount of code.
+    # Rewrite `x.clone()` to `Arc::clone(&x)`.
+    # This clarifies a significant amount of code by making it visually clear
+    # when a clone is cheap.
     "clippy::clone_on_ref_ptr",
     # These can catch real bugs, because something that is expected (a cast, a
     # conversion, a statement) is not happening.
@@ -98,7 +98,7 @@ deny_lints = [
     "clippy::wildcard_dependencies",
     # Zero-prefixed literals may be incorrectly interpreted as octal literals.
     "clippy::zero_prefixed_literal",
-    # Purely redundant tokens
+    # Purely redundant tokens.
     "clippy::borrowed_box",
     "clippy::deref_addrof",
     "clippy::double_must_use",
@@ -114,21 +114,21 @@ deny_lints = [
     "clippy::unnecessary_cast",
     "clippy::useless_asref",
     "clippy::useless_conversion",
-    # Very likely to be confusing
+    # Very likely to be confusing.
     "clippy::builtin_type_shadow",
     "clippy::duplicate_underscore_argument",
-    # Purely redundant tokens; very likely to be confusing
+    # Purely redundant tokens; very likely to be confusing.
     "clippy::double_neg",
-    # Purely redundant tokens; code is misleading
+    # Purely redundant tokens; code is misleading.
     "clippy::unnecessary_mut_passed",
-    # Purely redundant tokens; probably a mistake
+    # Purely redundant tokens; probably a mistake.
     "clippy::wildcard_in_or_patterns",
-    # Semantically wrong level of nesting
+    # Semantically wrong level of nesting.
     "clippy::collapsible_if",
     "clippy::collapsible_else_if",
-    # Transmuting between T and T* seems 99% likely to be buggy code
+    # Transmuting between T and T* seems 99% likely to be buggy code.
     "clippy::crosspointer_transmute",
-    # Confusing and likely buggy
+    # Confusing and likely buggy.
     "clippy::excessive_precision",
     "clippy::overflow_check_conditional",
     # The `as` operator silently truncates data in many situations. It is very
@@ -139,42 +139,41 @@ deny_lints = [
     # When absolutely essential (e.g., casting from a float to an integer), you
     # can attach `#[allow(clippy::as_conversion)]` to a single statement.
     "clippy::as_conversions",
-    # Confusing
+    # Confusing.
     "clippy::match_overlapping_arm",
-    # Confusing; possibly a mistake
+    # Confusing; possibly a mistake.
     "clippy::zero_divided_by_zero",
-    # Probably a mistake
+    # Probably a mistake.
     "clippy::must_use_unit",
     "clippy::suspicious_assignment_formatting",
     "clippy::suspicious_else_formatting",
     "clippy::suspicious_unary_op_formatting",
-    # Legit performance impact
+    # Legitimate performance impact.
     "clippy::mut_mutex_lock",
     "clippy::print_literal",
     "clippy::same_item_push",
     "clippy::useless_format",
     "clippy::write_literal",
-    # Extra closures slow down compiles
+    # Extra closures slow down compiles due to unnecessary code generation
+    # that LLVM needs to optimize.
     "clippy::redundant_closure",
     "clippy::redundant_closure_call",
     "clippy::unnecessary_lazy_evaluations",
-    # Provably either redundant or wrong
+    # Provably either redundant or wrong.
     "clippy::partialeq_ne_impl",
-    # This one is debatable, but it's so ingrained at this point that we might as well keep it
+    # This one is a debatable style nit, but it's so ingrained at this point
+    # that we might as well keep it.
     "clippy::redundant_field_names",
-    # Needless unsafe
+    # Needless unsafe.
     "clippy::transmutes_expressible_as_ptr_casts",
-    # Needless async
+    # Needless async.
     "clippy::unused_async",
-    # suggest better alternatives
-    # See `clippy.toml` for more info
+    # Disallow the methods and macros listed in clippy.toml; see that file
+    # for rationale.
     "clippy::disallowed_methods",
-    # suggest better alternatives
-    # See `clippy.toml` for more info
     "clippy::disallowed_macros",
-    # Implementing `From`
-    # gets you `Into` for free.
-    # See <https://doc.rust-lang.org/std/convert/trait.Into.html>.
+    # Implementing `From` gives you `Into` for free, but the reverse is not
+    # true.
     "clippy::from_over_into",
 ]
 

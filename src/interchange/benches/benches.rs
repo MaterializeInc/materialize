@@ -16,7 +16,6 @@
 #![allow(clippy::complexity)]
 #![allow(clippy::large_enum_variant)]
 #![allow(clippy::mutable_key_type)]
-#![allow(clippy::needless_collect)]
 #![allow(clippy::stable_sort_primitive)]
 #![allow(clippy::map_entry)]
 #![allow(clippy::box_default)]
