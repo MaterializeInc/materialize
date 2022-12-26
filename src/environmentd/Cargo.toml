@@ -114,7 +114,7 @@ tungstenite = "0.18.0"
 
 [build-dependencies]
 anyhow = "1.0.66"
-cc = "1.0.77"
+cc = "1.0.78"
 mz-npm = { path = "../npm" }
 
 [features]
