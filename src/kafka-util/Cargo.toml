@@ -18,7 +18,7 @@ num_cpus = "1.14.0"
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
-serde = { version = "1.0.147", features = ["derive"] }
+serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.89"
 tokio = { version = "1.23.0", features = ["macros", "sync"] }
 thiserror = "1.0.37"

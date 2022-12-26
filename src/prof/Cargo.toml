@@ -22,7 +22,7 @@ mz-build-info = { path = "../build-info" }
 mz-http-util = { path = "../http-util" }
 mz-ore = { path = "../ore" }
 pprof = { git = "https://github.com/MaterializeInc/pprof-rs.git" }
-serde = { version = "1.0.147", features = ["derive"] }
+serde = { version = "1.0.152", features = ["derive"] }
 tempfile = "3.2.0"
 tracing = "0.1.37"
 tokio = { version = "1.23.0", features = ["time"] }
