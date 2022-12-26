@@ -49,6 +49,7 @@ use crate::typedefs::{RowKeySpine, RowSpine};
 /// we just had a single reduce operator computing everything together, and
 /// this arrangement can also be re-used.
 fn render_reduce_plan<G, T>(
+    dataflow_id: usize,
     plan: ReducePlan,
     collection: Collection<G, (Row, Row), Diff>,
     err_input: Collection<G, DataflowError, Diff>,
@@ -77,7 +78,7 @@ where
         // can go ahead and render them directly.
         ReducePlan::Distinct => build_distinct(collection).into(),
         ReducePlan::DistinctNegated => build_distinct_retractions(collection).into(),
-        ReducePlan::Accumulable(expr) => build_accumulable(collection, expr).into(),
+        ReducePlan::Accumulable(expr) => build_accumulable(dataflow_id, collection, expr).into(),
         ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr).into(),
         ReducePlan::Basic(expr) => build_basic(collection, expr).into(),
         // Otherwise, we need to render something different for each type of
@@ -89,7 +90,7 @@ where
             if let Some(accumulable) = expr.accumulable {
                 to_collate.push((
                     ReductionType::Accumulable,
-                    build_accumulable(collection.clone(), accumulable),
+                    build_accumulable(dataflow_id, collection.clone(), accumulable),
                 ));
             }
             if let Some(hierarchical) = expr.hierarchical {
@@ -259,7 +260,7 @@ where
         err = err.concat(&err_input);
 
         // Render the reduce plan
-        render_reduce_plan(reduce_plan, ok, err, key_arity)
+        render_reduce_plan(self.dataflow_id, reduce_plan, ok, err, key_arity)
     }
 }
 
@@ -1008,6 +1009,7 @@ impl Multiply<Diff> for Accum {
 /// values to data, at which point a final map applies operator-specific logic to
 /// yield the final aggregate.
 fn build_accumulable<G>(
+    dataflow_id: usize,
     collection: Collection<G, (Row, Row), Diff>,
     AccumulablePlan {
         full_aggrs,
@@ -1343,11 +1345,11 @@ where
                             | (
                                 AggregateFunc::SumUInt32,
                                 AccumInner::SimpleNumber { accum, .. },
-                            ) => Datum::UInt64(u64::try_from(*accum).unwrap_or_else(|_| panic!("Invalid accumulated result {accum} for unsigned function"))),
+                            ) => Datum::UInt64(u64::try_from(*accum).unwrap_or_else(|_| panic!("Invalid accumulated result {accum} for unsigned function in dataflow {}", dataflow_id))),
                             (
                                 AggregateFunc::SumUInt64,
                                 AccumInner::SimpleNumber { accum, .. },
-                            ) => Datum::from(u128::try_from(*accum).unwrap_or_else(|_| panic!("Invalid accumulated result {accum} for unsigned function"))),
+                            ) => Datum::from(u128::try_from(*accum).unwrap_or_else(|_| panic!("Invalid accumulated result {accum} for unsigned function in dataflow {}", dataflow_id))),
                             (
                                 AggregateFunc::SumFloat32,
                                 AccumInner::Float {
