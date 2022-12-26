@@ -12,10 +12,12 @@ aliases:
   - /sql/create-source/postgresql
 ---
 
-{{< beta />}}
+{{< warning >}}
+Before creating a PostgreSQL source, you must set up logical replication in the upstream database. For step-by-step instructions, see the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source).
+{{< /warning >}}
 
 {{% create-source/intro %}}
-To connect to a Postgres instance, you first need to [create a connection](#creating-a-connection) that specifies access and authentication parameters. Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements.
+To connect to a PostgreSQL instance, you first need to [create a connection](#creating-a-connection) that specifies access and authentication parameters. Once created, a connection is **reusable** across multiple `CREATE SOURCE` statements.
 {{% /create-source/intro %}}
 
 ## Syntax
@@ -49,7 +51,7 @@ Field                                | Value     | Description
 
 This source uses PostgreSQL's native replication protocol to continually ingest changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database (also know as _change data capture_).
 
-For this reason, the upstream database must be configured to support logical replication. To get logical replication set up, follow the step-by-step instructions in the [Change Data Capture (Postgres) guide](/integrations/cdc-postgres/#direct-postgres-source).
+For this reason, the upstream database must be configured to support logical replication. To get logical replication set up, follow the step-by-step instructions in the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source).
 
 #### Creating a source
 
@@ -134,6 +136,10 @@ DELETE FROM t;
 
 ## Examples
 
+{{< warning >}}
+Before creating a PostgreSQL source, you must set up logical replication in the upstream database. For step-by-step instructions, see the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source).
+{{< /warning >}}
+
 ### Creating a connection
 
 A connection describes how to connect and authenticate to an external system you want Materialize to read data from.
@@ -209,7 +215,7 @@ The smallest source size (`3xsmall`) is a resonable default to get started. For 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
-- [Change Data Capture (PostgreSQL) guide](/integrations/cdc-postgres/#direct-postgres-source)
+- [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source)
 
 [`enum`]: https://www.postgresql.org/docs/current/datatype-enum.html
 [`money`]: https://www.postgresql.org/docs/current/datatype-money.html
