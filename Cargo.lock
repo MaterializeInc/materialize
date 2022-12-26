@@ -1866,6 +1866,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "enum-as-inner"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9720bba047d567ffc8a3cba48bf19126600e249ab7f128e9233e6376976a116"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "enum-iterator"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6980,12 +6992,13 @@ dependencies = [
 
 [[package]]
 name = "sysctl"
-version = "0.5.2"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f99d037b2bef227ab8963f4b0acc33ecbb1f9a2e7365add7789372b387ec19e1"
+checksum = "ed66d6a2ccbd656659289bc90767895b7abbdec897a0fc6031aca3ed1cb51d3e"
 dependencies = [
  "bitflags",
  "byteorder",
+ "enum-as-inner",
  "libc",
  "thiserror",
  "walkdir",
