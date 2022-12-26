@@ -1150,7 +1150,7 @@ dependencies = [
 [[package]]
 name = "columnation"
 version = "0.1.0"
-source = "git+https://github.com/frankmcsherry/columnation#4c5f5e9470fda0e9c9931817b5e47748cc14a5a4"
+source = "git+https://github.com/frankmcsherry/columnation#bfd9e2a953768887138e56f10f9be13e27ef175a"
 dependencies = [
  "paste",
 ]
@@ -1687,7 +1687,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#93da9134f7b440beef329216e434ea974619ac38"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#c2e8fefce9ddad0aef5afcac0238b4dc6ae0ddcb"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1764,7 +1764,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#93da9134f7b440beef329216e434ea974619ac38"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#c2e8fefce9ddad0aef5afcac0238b4dc6ae0ddcb"
 dependencies = [
  "abomonation",
  "abomonation_derive",
