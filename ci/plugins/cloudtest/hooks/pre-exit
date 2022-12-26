@@ -9,23 +9,23 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-set -xeu
+set -euo pipefail
 
-echo "~~~ Cleaning up after cloudtest" >&2
+. misc/shlib/shlib.bash
 
-bin/ci-builder run stable kubectl --context kind-kind get pods -o name | grep -v -E 'kubernetes|minio|postgres|redpanda' | xargs -L 1 bin/ci-builder run stable kubectl --context kind-kind logs --prefix=true > kubectl-get-logs.log || true
-buildkite-agent artifact upload kubectl-get-logs.log
+kubectl() {
+    bin/ci-builder run stable kubectl --context=kind-cloudtest "$@"
+}
 
-bin/ci-builder run stable kubectl --context kind-kind get pods -o name | grep -v -E 'kubernetes|minio|postgres|redpanda' | xargs -L 1 bin/ci-builder run stable kubectl --context kind-kind logs --previous --prefix=true > kubectl-get-logs-previous.log || true
-buildkite-agent artifact upload kubectl-get-logs-previous.log
+ci_unimportant_heading "cloudtest: Uploading logs..."
+for pod in $(kubectl get pods -o name | grep -v -E 'kubernetes|minio|cockroach|redpanda'); do
+  kubectl logs --prefix=true "$pod" &>> kubectl-get-logs.log || true
+  kubectl logs --previous --prefix=true "$pod" &>> kubectl-get-logs-previous.log || true
+done
+kubectl get events > kubectl-get-events.log || true
+kubectl get all > kubectl-get-all.log || true
+kubectl describe all > kubectl-describe-all.log || true
+buildkite-agent artifact upload "kubectl-*.log"
 
-bin/ci-builder run stable kubectl --context kind-kind get events > kubectl-get-events.log || true
-buildkite-agent artifact upload kubectl-get-events.log
-
-bin/ci-builder run stable kubectl --context kind-kind get all > kubectl-get-all.log || true
-buildkite-agent artifact upload kubectl-get-all.log
-
-bin/ci-builder run stable kubectl --context kind-kind describe all > kubectl-describe-all.log || true
-buildkite-agent artifact upload kubectl-describe-all.log
-
-bin/ci-builder run stable kubectl --context kind-kind delete all --all
+ci_unimportant_heading "cloudtest: Resetting..."
+bin/ci-builder run stable test/cloudtest/reset

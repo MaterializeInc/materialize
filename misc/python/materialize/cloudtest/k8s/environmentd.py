@@ -91,9 +91,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         s3_endpoint = urllib.parse.quote("http://minio-service.default:9000")
 
         args = [
-            "--availability-zone=kind-worker",
-            "--availability-zone=kind-worker2",
-            "--availability-zone=kind-worker3",
+            "--availability-zone=cloudtest-worker",
+            "--availability-zone=cloudtest-worker2",
+            "--availability-zone=cloudtest-worker3",
             "--aws-account-id=123456789000",
             "--aws-external-id-prefix=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
             "--announce-egress-ip=1.2.3.4",
