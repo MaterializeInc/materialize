@@ -28,6 +28,9 @@ If Kafka is not part of your stack, you can use the [Postgres source](/sql/creat
 
 Before creating a source in Materialize, you need to ensure that the upstream database is configured to support [logical replication](https://www.postgresql.org/docs/10/logical-replication.html).
 
+{{< tabs >}}
+{{< tab "Self-hosted">}}
+
 As a _superuser_:
 
 1. Check the [`wal_level` configuration](https://www.postgresql.org/docs/current/wal-configuration.html) setting:
@@ -38,15 +41,97 @@ As a _superuser_:
 
     The default value is `replica`. For CDC, you'll need to set it to `logical` in the database configuration file (`postgresql.conf`). Keep in mind that changing the `wal_level` requires a restart of the Postgres instance and can affect database performance.
 
-    **Note:** If you're using Postgres on a Cloud service like Amazon RDS, AWS Aurora, or Cloud SQL, you'll need to take some additional steps. For more information, see [Postgres in the cloud](/integrations/#postgresql).
+1. Restart the database so all changes can take effect.
+
+{{< /tab >}}
+
+{{< tab "AWS RDS">}}
+
+We recommend following the [AWS RDS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html#PostgreSQL.Concepts.General.FeatureSupport.LogicalReplication) documentation for detailed information on logical replication configuration and best practices.
+
+As a _superuser_ (`rds_superuser`):
+
+1. Create a custom RDS parameter group and associate it with your instance. You will not be able to set custom parameters on the default RDS parameter groups.
+
+1. In the custom RDS parameter group, set the `rds.logical_replication` static parameter to `1`.
+
+1. Add the egress IP addresses associated with your Materialize region to the security group of the RDS instance. You can find these addresses by querying the `mz_egress_ips` table in Materialize.
+
+1. Restart the database so all changes can take effect.
+
+{{< /tab >}}
+
+{{< tab "AWS Aurora">}}
+
+{{< note >}}
+Aurora Serverless (v1) [does **not** support](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless.html#aurora-serverless.limitations) logical replication, so it's not possible to use this service with Materialize.
+{{</ note >}}
+
+We recommend following the [AWS Aurora](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraPostgreSQL.Replication.Logical.html#AuroraPostgreSQL.Replication.Logical.Configure) documentation for detailed information on logical replication configuration and best practices.
+
+As a _superuser_:
+
+1. Create a DB cluster parameter group for your instance using the following settings:
+
+    Set **Parameter group family** to your version of Aurora PostgreSQL.
+
+    Set **Type** to **DB Cluster Parameter Group**.
+
+1. In the DB cluster parameter group, set the `rds.logical_replication` static parameter to `1`.
+
+1. In the DB cluster parameter group, set reasonable values for `max_replication_slots`, `max_wal_senders`, `max_logical_replication_workers`, and `max_worker_processes parameters`  based on your expected usage.
+
+1. Add the egress IP addresses associated with your Materialize region to the security group of the DB instance. You can find these addresses by querying the `mz_egress_ips` table in Materialize.
+
+1. Restart the database so all changes can take effect.
+
+{{< /tab >}}
+
+{{< tab "Azure DB">}}
+
+We recommend following the [Azure DB for PostgreSQL](https://docs.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-logical#pre-requisites-for-logical-replication-and-logical-decoding) documentation for detailed information on logical replication configuration and best practices.
+
+1. In the Azure portal, or using the Azure CLI, [enable logical replication](https://docs.microsoft.com/en-us/azure/postgresql/concepts-logical#set-up-your-server) for the PostgreSQL instance.
+
+1. Add the egress IP addresses associated with your Materialize region to the list of allowed IP addresses under the "Connections security" menu. You can find these addresses by querying the `mz_egress_ips` table in Materialize.
+
+1. Restart the database so all changes can take effect.
+
+{{< /tab >}}
+
+{{< tab "Cloud SQL">}}
+
+We recommend following the [Cloud SQL for PostgreSQL](https://cloud.google.com/sql/docs/postgres/replication/configure-logical-replication#configuring-your-postgresql-instance) documentation for detailed information on logical replication configuration and best practices.
+
+As a _superuser_ (`cloudsqlsuperuser`):
+
+1. In the Google Cloud Console, enable logical replication by setting the `cloudsql.logical_decoding` configuration parameter to `on`.
+
+1. Add the egress IP addresses associated with your Materialize region to the list of allowed IP addresses. You can find these addresses by querying the `mz_egress_ips` table in Materialize.
+
+1. Restart the database so all changes can take effect.
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+Once logical replication is enabled:
 
 1. Grant the required privileges to the replication user:
 
     ```sql
-    ALTER ROLE "user" WITH REPLICATION;
+    ALTER ROLE "dbuser" WITH REPLICATION;
     ```
 
-    **Note:** This user also needs `SELECT` privileges on the tables you want to replicate, for the initial table sync.
+    And ensure that this user has the right permissions on the tables you want to replicate:
+
+    ```sql
+    GRANT CONNECT ON DATABASE dbname TO dbuser;
+    GRANT USAGE ON SCHEMA schema TO dbuser;
+    GRANT SELECT ON ALL TABLES IN SCHEMA schema TO dbuser;
+    ```
+
+    **Note:** `SELECT` privileges on the tables you want to replicate are needed for the initial table sync.
 
 1. Set the replica identity to `FULL` for the tables you want to replicate:
 
@@ -102,7 +187,7 @@ CREATE SOURCE mz_source
 Materialize performs an initial sync of all tables in the publication before it starts ingesting change events.
 {{</ note >}}
 
-### Create materialized views
+### Create a materialized view
 
 Any materialized view that depends on replication subsources will be incrementally updated as change events stream in, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original Postgres database.
 
@@ -124,6 +209,9 @@ If Kafka is part of your stack, you can use [Debezium](https://debezium.io/) and
 
 Before deploying a Debezium connector, you need to ensure that the upstream database is configured to support [logical replication](https://www.postgresql.org/docs/10/logical-replication.html).
 
+{{< tabs >}}
+{{< tab "Self-hosted">}}
+
 As a _superuser_:
 
 1. Check the [`wal_level` configuration](https://www.postgresql.org/docs/current/wal-configuration.html) setting:
@@ -134,7 +222,79 @@ As a _superuser_:
 
     The default value is `replica`. For CDC, you'll need to set it to `logical` in the database configuration file (`postgresql.conf`). Keep in mind that changing the `wal_level` requires a restart of the Postgres instance and can affect database performance.
 
-    **Note:** If you're using Postgres on a Cloud service like Amazon RDS, AWS Aurora, or Cloud SQL, you'll need to take some additional steps. For more information, see [Postgres Cloud Support Notes](/integrations/#postgresql).
+1. Restart the database so all changes can take effect.
+
+{{< /tab >}}
+
+{{< tab "AWS RDS">}}
+
+We recommend following the [AWS RDS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html#PostgreSQL.Concepts.General.FeatureSupport.LogicalReplication) documentation for detailed information on logical replication configuration and best practices.
+
+As a _superuser_ (`rds_superuser`):
+
+1. Create a custom RDS parameter group and associate it with your instance. You will not be able to set custom parameters on the default RDS parameter groups.
+
+1. In the custom RDS parameter group, set the `rds.logical_replication` static parameter to `1`.
+
+1. Add the egress IP addresses associated with your Materialize region to the security group of the RDS instance. You can find these addresses by querying the `mz_egress_ips` table in Materialize.
+
+1. Restart the database so all changes can take effect.
+
+{{< /tab >}}
+
+{{< tab "AWS Aurora">}}
+
+{{< note >}}
+Aurora Serverless (v1) [does **not** support](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless.html#aurora-serverless.limitations) logical replication, so it's not possible to use this service with Materialize.
+{{</ note >}}
+
+We recommend following the [AWS Aurora](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraPostgreSQL.Replication.Logical.html#AuroraPostgreSQL.Replication.Logical.Configure) documentation for detailed information on logical replication configuration and best practices.
+
+As a _superuser_:
+
+1. Create a DB cluster parameter group for your instance using the following settings:
+
+    Set **Parameter group family** to your version of Aurora PostgreSQL.
+
+    Set **Type** to **DB Cluster Parameter Group**.
+
+1. In the DB cluster parameter group, set the `rds.logical_replication` static parameter to `1`.
+
+1. In the DB cluster parameter group, set reasonable values for `max_replication_slots`, `max_wal_senders`, `max_logical_replication_workers`, and `max_worker_processes parameters`  based on your expected usage.
+
+1. Add the egress IP addresses associated with your Materialize region to the security group of the DB instance. You can find these addresses by querying the `mz_egress_ips` table in Materialize.
+
+1. Restart the database so all changes can take effect.
+
+{{< /tab >}}
+
+{{< tab "Azure DB">}}
+
+We recommend following the [Azure DB for PostgreSQL](https://docs.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-logical#pre-requisites-for-logical-replication-and-logical-decoding) documentation for detailed information on logical replication configuration and best practices.
+
+1. In the Azure portal, or using the Azure CLI, [enable logical replication](https://docs.microsoft.com/en-us/azure/postgresql/concepts-logical#set-up-your-server) for the PostgreSQL instance.
+
+1. Add the egress IP addresses associated with your Materialize region to the list of allowed IP addresses under the "Connections security" menu. You can find these addresses by querying the `mz_egress_ips` table in Materialize.
+
+1. Restart the database so all changes can take effect.
+
+{{< /tab >}}
+
+{{< tab "Cloud SQL">}}
+
+We recommend following the [Cloud SQL for PostgreSQL](https://cloud.google.com/sql/docs/postgres/replication/configure-logical-replication#configuring-your-postgresql-instance) documentation for detailed information on logical replication configuration and best practices.
+
+As a _superuser_ (`cloudsqlsuperuser`):
+
+1. In the Google Cloud Console, enable logical replication by setting the `cloudsql.logical_decoding` configuration parameter to `on`.
+
+1. Add the egress IP addresses associated with your Materialize region to the list of allowed IP addresses. You can find these addresses by querying the `mz_egress_ips` table in Materialize.
+
+1. Restart the database so all changes can take effect.
+
+{{< /tab >}}
+
+{{< /tabs >}}
 
 1. Grant enough privileges to ensure Debezium can operate in the database. The specific privileges will depend on how much control you want to give to the replication user, so we recommend following the [Debezium documentation](https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-replication-user-privileges).
 
