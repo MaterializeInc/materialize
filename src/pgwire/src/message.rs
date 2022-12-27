@@ -410,6 +410,7 @@ impl ErrorResponse {
             AdapterNotice::DroppedActiveDatabase { .. } => SqlState::WARNING,
             AdapterNotice::DroppedActiveCluster { .. } => SqlState::WARNING,
             AdapterNotice::QueryTimestamp { .. } => SqlState::WARNING,
+            AdapterNotice::EmptySubscribe { .. } => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -562,6 +563,7 @@ impl Severity {
             AdapterNotice::DroppedActiveDatabase { .. } => Severity::Notice,
             AdapterNotice::DroppedActiveCluster { .. } => Severity::Notice,
             AdapterNotice::QueryTimestamp { .. } => Severity::Notice,
+            AdapterNotice::EmptySubscribe { .. } => Severity::Notice,
         }
     }
 }

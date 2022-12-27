@@ -61,6 +61,10 @@ pub enum AdapterNotice {
     QueryTimestamp {
         timestamp: mz_repr::Timestamp,
     },
+    EmptySubscribe {
+        as_of: mz_repr::Timestamp,
+        up_to: mz_repr::Timestamp,
+    },
 }
 
 impl AdapterNotice {
@@ -138,6 +142,9 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::QueryTimestamp { timestamp } => {
                 write!(f, "query timestamp: {}", timestamp)
+            }
+            AdapterNotice::EmptySubscribe { as_of, up_to } => {
+                write!(f, "subscribe as of {as_of} (inclusive) up to {up_to} (exclusive) is guaranteed to be empty")
             }
         }
     }
