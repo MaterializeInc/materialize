@@ -177,7 +177,7 @@ def workflow_storage_managed_collections(c: Composition) -> None:
 
 
 def workflow_default(c: Composition) -> None:
-    workflow_github_8021(c)
-    workflow_audit_log(c)
-    workflow_timelines(c)
-    workflow_stash(c)
+    c.workflow("github-8021")
+    c.workflow("audit-log")
+    c.workflow("timelines")
+    c.workflow("stash")
