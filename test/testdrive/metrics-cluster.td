@@ -15,8 +15,8 @@
       c.name,
       r.name,
       u.process_id,
-      u.cpu_percent_normalized > 0.0,
-      u.cpu_percent > 0.0,
+      u.cpu_percent_normalized >= 0.0,
+      u.cpu_percent >= 0.0,
       u.memory_percent > 0.0
   FROM
       mz_clusters AS c
