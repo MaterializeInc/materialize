@@ -58,6 +58,7 @@ class Application:
                         "kind",
                         "load",
                         "docker-image",
+                        "--name=cloudtest",
                         dep.spec(),
                     ]
                 )
@@ -68,7 +69,7 @@ class Application:
         ).decode("ascii")
 
     def context(self) -> str:
-        return "kind-kind"
+        return "kind-cloudtest"
 
 
 class MaterializeApplication(Application):
@@ -84,7 +85,7 @@ class MaterializeApplication(Application):
         self.release_mode = release_mode
         self.aws_region = aws_region
 
-        # Register the VpcEndpoint CRD
+        # Register the VpcEndpoint CRD.
         self.kubectl(
             "apply",
             "-f",
@@ -94,7 +95,7 @@ class MaterializeApplication(Application):
             ),
         )
 
-        # Start metrics-server
+        # Start metrics-server.
         self.kubectl(
             "apply",
             "-f",
@@ -131,12 +132,12 @@ class MaterializeApplication(Application):
 
         self.images = ["environmentd", "clusterd", "testdrive", "postgres"]
 
-        # Label the minicube nodes in a way that mimics Materialize cloud
+        # Label the kind nodes in a way that mimics production.
         for node in [
-            "kind-control-plane",
-            "kind-worker",
-            "kind-worker2",
-            "kind-worker3",
+            "cloudtest-control-plane",
+            "cloudtest-worker",
+            "cloudtest-worker2",
+            "cloudtest-worker3",
         ]:
             self.kubectl(
                 "label",

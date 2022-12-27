@@ -51,7 +51,7 @@ class K8sResource:
         return RbacAuthorizationV1Api(api_client)
 
     def context(self) -> str:
-        return "kind-kind"
+        return "kind-cloudtest"
 
     def namespace(self) -> str:
         return "default"

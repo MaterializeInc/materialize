@@ -98,6 +98,10 @@ try_finish() {
     exit 0
 }
 
+ci_unimportant_heading() {
+    echo "~~~" "$@" >&2
+}
+
 ci_collapsed_heading() {
     echo "---" "$@" >&2
 }
@@ -133,6 +137,30 @@ ci_status_report() {
     if ((ci_try_passed != ci_try_total)); then
         exit 1
     fi
+}
+
+# read_list PREFIX
+#
+# Appends the environment variables `PREFIX_0`, `PREFIX_1`, ... `PREFIX_N` to
+# the `result` global variable, stopping when `PREFIX_N` is an empty string.
+read_list() {
+    result=()
+
+    local i=0
+    local param="${1}_${i}"
+
+    if [[ "${!1:-}" ]]; then
+        echo "error: mzcompose command must be an array, not a string" >&2
+        exit 1
+    fi
+
+    while [[ "${!param:-}" ]]; do
+        result+=("${!param}")
+        i=$((i+1))
+        param="${1}_${i}"
+    done
+
+    [[ ${#result[@]} -gt 0 ]] || return 1
 }
 
 # mapfile_shim [array]

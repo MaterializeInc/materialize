@@ -11,32 +11,10 @@
 
 set -euo pipefail
 
+. misc/shlib/shlib.bash
+
 mzcompose() {
     bin/ci-builder run stable bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
-}
-
-# read_list PREFIX
-#
-# Appends the environment variables `PREFIX_0`, `PREFIX_1`, ... `PREFIX_N` to
-# the `result` global variable, stopping when `PREFIX_N` is an empty string.
-read_list() {
-    result=()
-
-    local i=0
-    local param="${1}_${i}"
-
-    if [[ "${!1:-}" ]]; then
-        echo "error: mzcompose command must be an array, not a string" >&2
-        exit 1
-    fi
-
-    while [[ "${!param:-}" ]]; do
-        result+=("${!param}")
-        i=$((i+1))
-        param="${1}_${i}"
-    done
-
-    [[ ${#result[@]} -gt 0 ]] || return 1
 }
 
 service=${BUILDKITE_PLUGIN_MZCOMPOSE_RUN:-default}
@@ -50,22 +28,22 @@ fi
 # Sometimes build cancellations prevent us from properly cleaning up the last
 # Docker Compose run, which can leave old containers or volumes around that will
 # interfere with this build.
-echo "--- :docker: Purging containers and volumes from previous builds"
+ci_collapsed_heading ":docker: Purging containers and volumes from previous builds"
 mzcompose --mz-quiet kill
 mzcompose --mz-quiet rm --force -v
 mzcompose --mz-quiet down --volumes
 
-echo "--- :docker: Rebuilding non-mzbuild containers"
+ci_collapsed_heading ":docker: Rebuilding non-mzbuild containers"
 mzcompose --mz-quiet build
 
 # Start dependencies under a different heading so that the main heading is less
 # noisy. But not if the service is actually a workflow, in which case it will
 # do its own dependency management.
 if ! mzcompose --mz-quiet list-workflows | grep -q "$service"; then
-    echo "--- :docker: Starting dependencies" >&2
+    ci_collapsed_heading ":docker: Starting dependencies"
     mzcompose up -d --scale "$service=0" "$service"
 fi
 
-echo "+++ :docker: Running \`mzcompose run ${run_args[*]}\`" >&2
+ci_uncollapsed_heading ":docker: Running \`mzcompose run ${run_args[*]}\`"
 
 mzcompose run "${run_args[@]}"
