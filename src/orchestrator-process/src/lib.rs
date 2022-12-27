@@ -238,11 +238,18 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 
         let mut system = self.system.lock().expect("lock poisoned");
         let mut metrics = vec![];
+        // Refresh all processes, even though it's slightly wasteful to do so,
+        // to work around https://github.com/GuillaumeGomez/sysinfo/issues/898 .
+        system.refresh_processes_specifics(ProcessRefreshKind::new().with_cpu());
         for pid in pids {
             let (cpu_nano_cores, memory_bytes) = match pid {
                 None => (None, None),
                 Some(pid) => {
-                    system.refresh_process_specifics(pid, ProcessRefreshKind::new().with_cpu());
+                    // TODO[btv] Uncomment this, and remove the call to `refresh_process_specifics`
+                    // outside the loop, if https://github.com/GuillaumeGomez/sysinfo/issues/898
+                    // is ever fixed.
+                    //
+                    // system.refresh_process_specifics(pid, ProcessRefreshKind::new().with_cpu());
                     match system.process(pid) {
                         None => (None, None),
                         Some(process) => {
