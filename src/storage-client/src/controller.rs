@@ -1486,8 +1486,9 @@ where
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
 /// and also allows us to differentiate between a token being present versus being set for the
 /// first time.
+// TODO(aljoscha): Move this to a different module?
 #[derive(PartialEq, Clone, Debug)]
-pub(crate) struct PersistEpoch(Option<NonZeroI64>);
+pub struct PersistEpoch(Option<NonZeroI64>);
 
 impl Opaque for PersistEpoch {
     fn initial() -> Self {
