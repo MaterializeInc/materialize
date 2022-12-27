@@ -28,7 +28,7 @@ Field | Use
 ------|-----
 _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
-**CONNECTION** _connection_name_ | The name of the Postgres connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgres) documentation page.
+**CONNECTION** _connection_name_ | The name of the PostgreSQL connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgres) documentation page.
 **FOR ALL TABLES** | Create subsources for all tables in the publication.
 **FOR TABLES(** _table_list_ **)** | Create subsources for specific tables in the publication.
 
@@ -36,7 +36,7 @@ _src_name_  | The name for the source.
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
-`PUBLICATION`                        | `text`    | **Required.** The Postgres [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
+`PUBLICATION`                        | `text`    | **Required.** The PostgreSQL [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
 `TEXT COLUMNS`                       | A list of names | Decode data as `text` for specific columns that contain PostgreSQL types that are unsupported in Materialize.
 
 ### `WITH` options
@@ -55,7 +55,7 @@ For this reason, the upstream database must be configured to support logical rep
 
 #### Creating a source
 
-To avoid creating multiple replication slots upstream and minimize the required bandwidth, Materialize ingests the raw replication stream data for **all** tables included in a specific publication. When you define a Postgres source:
+To avoid creating multiple replication slots upstream and minimize the required bandwidth, Materialize ingests the raw replication stream data for **all** tables included in a specific publication. When you define a PostgreSQL source:
 
 ```sql
 CREATE SOURCE mz_source
@@ -80,7 +80,7 @@ SHOW SOURCES;
 
 It's important to note that the schema metadata is captured when the source is initially created, and is validated against the upstream schema upon restart. If you wish to add additional tables to the original publication and use them in Materialize, the source must be dropped and recreated.
 
-##### Postgres schemas
+##### PostgreSQL schemas
 
 `CREATE SOURCE` will attempt to create each upstream table in the **current** schema. This may lead to naming collisions if, for example, you are replicating `schema1.table_1` and `schema2.table_1`. Use the `FOR TABLES` clause to provide aliases for each upstream table, in such cases, or to specify an alternative destination schema in Materialize.
 
@@ -92,20 +92,20 @@ CREATE SOURCE mz_source
 ```
 #### Creating materialized views
 
-As soon as you define a Postgres source, Materialize will:
+As soon as you define a PostgreSQL source, Materialize will:
 
-1. Create a replication slot in the upstream Postgres database (see [Postgres replication slots](#postgres-replication-slots)). The name of the replication slots created by Materialize is prefixed with `materialize_` for easy identification.
+1. Create a replication slot in the upstream PostgreSQL database (see [PostgreSQL replication slots](#postgresql-replication-slots)). The name of the replication slots created by Materialize is prefixed with `materialize_` for easy identification.
 
 1. Perform an initial, snapshot-based sync of the tables in the publication before it starts ingesting change events.
 
-1. Incrementally update any materialized or indexed views that depend on the source as change events stream in, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original Postgres database.
+1. Incrementally update any materialized or indexed views that depend on the source as change events stream in, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original PostgreSQL database.
 
-##### Postgres replication slots
+##### PostgreSQL replication slots
 
 Each source ingests the raw replication stream data for all tables in the specified publication using **a single** replication slot. This allows you to minimize the performance impact on the upstream database, as well as reuse the same source across multiple materializations.
 
 {{< warning >}}
-Make sure to delete any replication slots if you stop using Materialize, or if either the Materialize or Postgres instances crash.
+Make sure to delete any replication slots if you stop using Materialize, or if either the Materialize or PostgreSQL instances crash.
 {{< /warning >}}
 
 If you delete all objects that depend on a source without also dropping the source, the upstream replication slot will linger and continue to accumulate data so that the source can resume in the future. To avoid unbounded disk space usage, make sure to use [`DROP SOURCE`](/sql/drop-source/) or manually delete the replication slot.
@@ -159,9 +159,56 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 );
 ```
 
+If your PostgreSQL server is not exposed to the public internet, you can tunnel the connection through an AWS PrivateLink service or an SSH bastion host:
+
+{{< tabs tabID="1" >}}
+{{< tab "AWS PrivateLink">}}
+
+```sql
+CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+);
+```
+
+```sql
+CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
+
+CREATE CONNECTION pg_connection TO POSTGRES (
+    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
+    PORT 5432,
+    USER 'postgres',
+    PASSWORD SECRET pgpass,
+    AWS PRIVATELINK privatelink_svc,
+    DATABASE 'postgres'
+);
+```
+{{< /tab >}}
+{{< tab "SSH tunnel">}}
+```sql
+CREATE CONNECTION ssh_connection TO SSH TUNNEL (
+    HOST 'bastion-host',
+    PORT 22,
+    USER 'materialize',
+);
+```
+
+```sql
+CREATE CONNECTION pg_connection TO POSTGRES (
+    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
+    PORT 5432,
+    SSH TUNNEL ssh_connection,
+    DATABASE 'postgres'
+);
+```
+
+For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check out [this guide](/ops/network-security/ssh-tunnel/).
+{{< /tab >}}
+{{< /tabs >}}
+
 ### Creating a source {#create-source-example}
 
-_Create subsources for all tables included in the Postgres publication_
+_Create subsources for all tables included in the PostgreSQL publication_
 
 ```sql
 CREATE SOURCE mz_source
@@ -170,7 +217,7 @@ CREATE SOURCE mz_source
     WITH (SIZE = '3xsmall');
 ```
 
-_Create subsources for specific tables included in the Postgres publication_
+_Create subsources for specific tables included in the PostgreSQL publication_
 
 ```sql
 CREATE SOURCE mz_source
