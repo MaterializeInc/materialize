@@ -33,17 +33,17 @@ goofus,gallant
 # interval is 20 seconds.
 
 > SELECT
-     s.name,
-     u.cpu_percent >= 0.0,
-     u.cpu_percent_normalized >= 0.0,
-     u.memory_percent > 0.0
- FROM
-     mz_sources AS s
-         JOIN
-             mz_internal.mz_source_utilization AS u
-             ON s.id = u.source_id
- WHERE s.name IN ( 'metrics_test_source' )
- ORDER BY s.name
+      s.name,
+      u.cpu_percent >= 0.0,
+      u.cpu_percent_normalized >= 0.0,
+      u.memory_percent > 0.0
+  FROM
+      mz_sources AS s
+          JOIN
+              mz_internal.mz_source_utilization AS u
+              ON s.id = u.source_id
+  WHERE s.name IN ( 'metrics_test_source' )
+  ORDER BY s.name
 metrics_test_source true true true
 
 > SELECT
