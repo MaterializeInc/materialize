@@ -99,6 +99,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `replica_id`     | [`uint8`] | The ID of a cluster replica.                               |
 | `process_id`     | [`uint8`] | An identifier of a compute process within a replica.       |
 | `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
+| `cpu_percent_normalized`    | [`uint8`] | Approximate CPU usage, in percent of the total number of timely workers. Can exceed 100, as threads other than timely workers may be scheduled. |
 | `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
 
 ### `mz_dataflows`
@@ -439,6 +440,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 |------------------|-----------|------------------------------------------------------------|
 | `source_id`      | [`uint8`] | The ID of a source.                                        |
 | `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
+| `cpu_percent_normalized`    | [`uint8`] | Approximate CPU usage, in percent of the total number of timely workers. Can exceed 100, as threads other than timely workers may be scheduled. |
 | `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
 
 ### `mz_sink_utilization`
@@ -452,6 +454,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 |------------------|-----------|------------------------------------------------------------|
 | `sink_id`        | [`uint8`] | The ID of a sink.                                          |
 | `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
+| `cpu_percent_normalized`    | [`uint8`] | Approximate CPU usage, in percent of the total number of timely workers. Can exceed 100, as threads other than timely workers may be scheduled. |
 | `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
 
 ### `mz_storage_host_metrics`
