@@ -316,7 +316,7 @@ If you add or remove dependencies on crates, you will likely need to regenerate
 the `workspace-hack` crate. You can do this by running:
 
 ```
-cargo install cargo-hakari
+cargo install --locked cargo-hakari
 cargo hakari generate
 cargo hakari manage-deps
 ```
