@@ -15,7 +15,9 @@ cd "$(dirname "$0")/../.."
 
 . misc/shlib/shlib.bash
 
-run kind create cluster --name=cloudtest --config=misc/kind/cluster.yaml --wait=60s || true
+if ! kind get clusters | grep -q cloudtest; then
+    run kind create cluster --name=cloudtest --config=misc/kind/cluster.yaml --wait=60s
+fi
 
 for f in misc/kind/configmaps/*; do
     run kubectl --context=kind-cloudtest apply -f "$f"
