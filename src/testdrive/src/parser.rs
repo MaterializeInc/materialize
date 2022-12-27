@@ -426,12 +426,7 @@ impl<'a> Iterator for LineReader<'a> {
         while let Some((i, c)) = chars.next() {
             if c == '\n' {
                 self.src_line += 1;
-                if fold_newlines
-                    && i + 3 < self.inner.len()
-                    && self.inner.is_char_boundary(i + 1)
-                    && self.inner.is_char_boundary(i + 3)
-                    && &self.inner[i + 1..i + 3] == "  "
-                {
+                if fold_newlines && self.inner.get(i + 1..i + 3) == Some("  ") {
                     // Chomp the newline and one space. This ensures a SQL query
                     // that is split over two lines does not become invalid.
                     chars.next();
