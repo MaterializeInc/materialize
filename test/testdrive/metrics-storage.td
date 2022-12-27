@@ -47,17 +47,17 @@ goofus,gallant
 metrics_test_source true true true
 
 > SELECT
-     s.name,
-     u.cpu_percent >= 0.0,
-     u.cpu_percent_normalized >= 0.0,
-     u.memory_percent > 0.0
- FROM
-     mz_sinks AS s
-         JOIN
-             mz_internal.mz_sink_utilization AS u
-             ON s.id = u.sink_id
- WHERE s.name IN ( 'metrics_test_sink' )
- ORDER BY s.name
+      s.name,
+      u.cpu_percent >= 0.0,
+      u.cpu_percent_normalized >= 0.0,
+      u.memory_percent > 0.0
+  FROM
+      mz_sinks AS s
+          JOIN
+              mz_internal.mz_sink_utilization AS u
+              ON s.id = u.sink_id
+  WHERE s.name IN ( 'metrics_test_sink' )
+  ORDER BY s.name
 metrics_test_sink true true true
 
 > DROP SINK metrics_test_sink
