@@ -1347,7 +1347,7 @@ where
                             (
                                 AggregateFunc::SumUInt64,
                                 AccumInner::SimpleNumber { accum, .. },
-                            ) => Datum::from(u128::try_from(*accum).unwrap_or_else(|_| panic!("Invalid accumulated result {accum} for unsigned function"))),
+                            ) => Datum::from(*accum),
                             (
                                 AggregateFunc::SumFloat32,
                                 AccumInner::Float {
