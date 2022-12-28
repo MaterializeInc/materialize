@@ -695,29 +695,26 @@ impl<'ast> VisitMut<'ast, Aug> for StarExpander<'_> {
                         .cloned()
                         .expect("jkosh44");
                     for (table_name, col_name) in expansion {
-                        let expr = match table_name {
-                            Some(table_name) => {
-                                // PostgreSQL only uses the table name to qualify the column and
-                                // not the database or schema. In case there's naming conflicts
-                                // across schema, PostreSQL will invent a unique alias for one of
-                                // the tables. We just fully qualify the columns with their
-                                // database and schema to avoid inventing unique aliases.
-                                let mut ident = Vec::new();
-                                if let Some(database) = table_name.database {
-                                    ident.push(Ident::new(database));
-                                }
-                                if let Some(schema) = table_name.schema {
-                                    ident.push(Ident::new(schema));
-                                }
-                                ident.push(Ident::new(table_name.item));
-                                Expr::FieldAccess {
-                                    expr: Box::new(Expr::Identifier(ident)),
-                                    field: Ident::new(col_name.as_str()),
-                                }
+                        let mut ident = Vec::new();
+                        if let Some(table_name) = table_name {
+                            // PostgreSQL only uses the table name to qualify the column and
+                            // not the database or schema. In case there's naming conflicts
+                            // across schemas, PostreSQL will invent a unique alias for one of
+                            // the tables. We just fully qualify the columns with their
+                            // database and schema to avoid inventing unique aliases.
+                            if let Some(database) = table_name.database {
+                                ident.push(Ident::new(database));
                             }
-                            None => Expr::Identifier(vec![Ident::new(col_name.as_str())]),
-                        };
-                        projection.push(SelectItem::Expr { expr, alias: None })
+                            if let Some(schema) = table_name.schema {
+                                ident.push(Ident::new(schema));
+                            }
+                            ident.push(Ident::new(table_name.item));
+                        }
+                        ident.push(Ident::new(col_name.as_str()));
+                        projection.push(SelectItem::Expr {
+                            expr: Expr::Identifier(ident),
+                            alias: None,
+                        });
                     }
                 }
             }
