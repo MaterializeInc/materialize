@@ -10,13 +10,19 @@
 from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
+from materialize.zippy.crdb_capabilities import CockroachIsRunning
 from materialize.zippy.framework import Action, Capability
+from materialize.zippy.minio_capabilities import MinioIsRunning
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.view_capabilities import ViewExists
 
 
 class MzStart(Action):
     """Starts a Mz instance (all components are running in the same container)."""
+
+    @classmethod
+    def requires(self) -> Set[Type[Capability]]:
+        return {CockroachIsRunning, MinioIsRunning}
 
     def run(self, c: Composition) -> None:
         c.up("materialized")
@@ -53,6 +59,19 @@ class MzStop(Action):
 
     def withholds(self) -> Set[Type[Capability]]:
         return {MzIsRunning}
+
+
+class MzRestart(Action):
+    """Restarts the entire Mz instance (all components are running in the same container)."""
+
+    @classmethod
+    def requires(self) -> Set[Type[Capability]]:
+        return {MzIsRunning}
+
+    def run(self, c: Composition) -> None:
+        c.kill("materialized")
+        c.up("materialized")
+        c.wait_for_materialized(timeout_secs=300)
 
 
 class KillClusterd(Action):
