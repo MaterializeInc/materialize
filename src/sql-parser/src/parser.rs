@@ -1100,14 +1100,10 @@ impl<'a> Parser<'a> {
                     expr: Box::new(expr),
                     field: kw.into_ident(),
                 }),
-                Some(Token::Star) => {
-                    let id = self.next_wildcard_id;
-                    self.next_wildcard_id += 1;
-                    Ok(Expr::WildcardAccess {
-                        expr: Box::new(expr),
-                        id,
-                    })
-                }
+                Some(Token::Star) => Ok(Expr::WildcardAccess {
+                    expr: Box::new(expr),
+                    id: self.wildcard_id(),
+                }),
                 unexpected => self.expected(
                     self.peek_prev_pos(),
                     "an identifier or a '*' after '.'",
@@ -4313,11 +4309,9 @@ impl<'a> Parser<'a> {
                     }
                 }
                 if ends_with_wildcard {
-                    let id = self.next_wildcard_id;
-                    self.next_wildcard_id += 1;
                     Ok(Expr::QualifiedWildcard {
                         qualifier: id_parts,
-                        id,
+                        id: self.wildcard_id(),
                     })
                 } else if self.consume_token(&Token::LParen) {
                     self.prev_token();
@@ -5358,9 +5352,9 @@ impl<'a> Parser<'a> {
     /// Parse a comma-delimited list of projections after SELECT
     fn parse_select_item(&mut self) -> Result<SelectItem<Raw>, ParserError> {
         if self.consume_token(&Token::Star) {
-            let id = self.next_wildcard_id;
-            self.next_wildcard_id += 1;
-            return Ok(SelectItem::Wildcard { id });
+            return Ok(SelectItem::Wildcard {
+                id: self.wildcard_id(),
+            });
         }
         Ok(SelectItem::Expr {
             expr: self.parse_expr()?,
@@ -5735,6 +5729,13 @@ impl<'a> Parser<'a> {
         };
 
         Ok(Statement::Raise(RaiseStatement { severity }))
+    }
+
+    /// TODO(jkosh44)
+    fn wildcard_id(&mut self) -> u64 {
+        let id = self.next_wildcard_id;
+        self.next_wildcard_id += 1;
+        id
     }
 }
 

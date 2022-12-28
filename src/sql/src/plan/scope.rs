@@ -53,7 +53,7 @@ use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
 use crate::plan::plan_utils::JoinSide;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeItem {
     /// The name of the table that produced this scope item, if any.
     pub table_name: Option<PartialObjectName>,
@@ -96,7 +96,7 @@ pub struct ScopeItem {
     _private: (),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scope {
     // The items in this scope.
     pub items: Vec<ScopeItem>,

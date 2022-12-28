@@ -31,6 +31,8 @@
 //! reach the same aggregates during normal planning later on, we look them up
 //! in an `ExprContext` to find the precomputed versions.
 
+//! TODO(jkosh44) Write a blurb about * expansion
+
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -110,14 +112,14 @@ pub fn plan_root_query(
 ) -> Result<PlannedQuery<HirRelationExpr>, PlanError> {
     transform_ast::transform_query(scx, query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
-    let (mut expr, scope, mut finishing) = plan_query(&mut qcx, query)?;
-    println!("wildcard expansions: {:?}", qcx.scx.wildcard_expansions);
+    let planned_query = plan_query(&mut qcx, query)?;
     transform_ast::expand_select(scx, query)?;
-    // TODO(jkosh44)
-    /*debug_assert_eq!(
-        Ok::<_, PlanError>((expr, scope, finishing)),
-        plan_query(&mut qcx, query)
-    );*/
+    debug_assert_eq!(
+        &planned_query,
+        &plan_query(&mut qcx, query).expect("re-planning query failed"),
+        "re-planning the expanded query resulted in a different plan"
+    );
+    let (mut expr, scope, mut finishing) = planned_query;
 
     // Attempt to push the finishing's ordering past its projection. This allows
     // data to be projected down on the workers rather than the coordinator. It

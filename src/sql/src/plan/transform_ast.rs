@@ -685,6 +685,7 @@ impl<'ast> VisitMut<'ast, Aug> for StarExpander<'_> {
         for select_item in select.projection.drain(..) {
             match select_item {
                 item @ SelectItem::Expr { .. } => projection.push(item),
+                // TODO(jkosh44) Should include all wildcard variants in expr. TEST COUNT(*)!!!
                 SelectItem::Wildcard { id } => {
                     let expansion = self
                         .scx
