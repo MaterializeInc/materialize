@@ -789,6 +789,20 @@ SUBSCRIBE (SELECT * FROM a)
 Subscribe(SubscribeStatement { relation: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None, up_to: None })
 
 parse-statement
+SUBSCRIBE foo.bar AS OF now() UP TO now() + interval '1' day
+----
+SUBSCRIBE foo.bar AS OF now() UP TO now() + INTERVAL '1' DAY
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }) })
+
+parse-statement
+SUBSCRIBE foo.bar UP TO now() + interval '1' day
+----
+SUBSCRIBE foo.bar UP TO now() + INTERVAL '1' DAY
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }) })
+
+parse-statement
 CREATE TABLE public.customer (
         customer_id integer DEFAULT nextval(public.customer_customer_id_seq),
         store_id smallint NOT NULL,

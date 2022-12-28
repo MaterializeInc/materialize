@@ -2100,6 +2100,10 @@ impl<T: AstInfo> AstDisplay for SubscribeStatement<T> {
             f.write_str(" ");
             f.write_node(as_of);
         }
+        if let Some(up_to) = &self.up_to {
+            f.write_str(" UP TO ");
+            f.write_node(up_to);
+        }
     }
 }
 impl_display_t!(SubscribeStatement);
