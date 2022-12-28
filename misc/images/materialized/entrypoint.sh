@@ -11,6 +11,17 @@
 
 set -euo pipefail
 
+cat <<EOF >/dev/stderr
+WARNING: This Docker image is not officially supported by Materialize. We do not
+offer support for this Docker image. Do not run production deployments using
+this Docker image.
+
+WARNING: The performance characteristics of this Docker image are not
+representative of the performance characteristics of our hosted offering. This
+image bundles several services into the same container, while in our hosted
+offering we run these services scaled across many machines.
+EOF
+
 COCKROACH_SKIP_ENABLING_DIAGNOSTIC_REPORTING=true cockroach start-single-node \
     --insecure \
     --background
