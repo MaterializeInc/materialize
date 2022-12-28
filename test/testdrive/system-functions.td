@@ -23,7 +23,7 @@ true
 true
 
 > SELECT length(cast(mz_environment_id() as text));
-53
+55
 
 > SELECT length(cast(mz_internal.mz_session_id() as text));
 36

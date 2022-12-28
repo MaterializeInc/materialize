@@ -31,7 +31,7 @@ DEFAULT_MZ_VOLUMES = [
     "tmp:/share/tmp",
 ]
 
-DEFAULT_MZ_ENVIRONMENT_ID = "mzcompose-test-00000000-0000-0000-0000-000000000000-0"
+DEFAULT_MZ_ENVIRONMENT_ID = "docker-mzcompose-00000000-0000-0000-0000-000000000000-0"
 
 
 class Materialized(Service):
@@ -68,13 +68,12 @@ class Materialized(Service):
                 "MZ_SOFT_ASSERTIONS=1",
                 "MZ_UNSAFE_MODE=1",
                 "MZ_EXPERIMENTAL=1",
-                f"MZ_ENVIRONMENT_ID={DEFAULT_MZ_ENVIRONMENT_ID}",
-                f"MZ_PERSIST_BLOB_URL={persist_blob_url}",
+                # TODO(benesch): remove the following environment variables
+                # after v0.38 ships, since these environment variables will be
+                # baked into the Docker image.
                 f"MZ_ORCHESTRATOR=process",
+                f"MZ_PERSIST_BLOB_URL={persist_blob_url}",
                 f"MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY={data_directory}/secrets",
-                # TODO(benesch): remove this legacy environment variable once
-                # the upgrade tests no longer test v0.33.
-                f"MZ_ORCHESTRATOR_PROCESSDATA_DIRECTORY={data_directory}",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
                 # then accidentally dependent on the state of the host machine.
@@ -83,8 +82,6 @@ class Materialized(Service):
                 # use Composition.override.
                 "MZ_LOG_FILTER",
                 "CLUSTERD_LOG_FILTER",
-                "INTERNAL_SQL_LISTEN_ADDR=0.0.0.0:6877",
-                "INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878",
             ]
 
         if forward_aws_credentials:
@@ -94,8 +91,14 @@ class Materialized(Service):
                 "AWS_SESSION_TOKEN",
             ]
 
-        if environment_id:
-            environment += [f"MZ_ENVIRONMENT_ID={environment_id}"]
+        if not environment_id:
+            # TODO(benesch): remove this special case when v0.39 ships, since
+            # the legacy upgrade tests will no longer be testing v0.37.1.
+            if image is not None and image.endswith("v0.37.1"):
+                environment_id = "mzcompose-test-00000000-0000-0000-0000-000000000000-0"
+            else:
+                environment_id = DEFAULT_MZ_ENVIRONMENT_ID
+        environment += [f"MZ_ENVIRONMENT_ID={environment_id}"]
 
         if propagate_crashes:
             environment += ["MZ_ORCHESTRATOR_PROCESS_PROPAGATE_CRASHES=1"]
