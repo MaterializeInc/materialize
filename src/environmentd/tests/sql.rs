@@ -447,6 +447,33 @@ fn test_subscribe_negative_diffs() {
 }
 
 #[test]
+fn test_empty_subscribe_notice() {
+    let config = util::Config::default().with_now(NOW_ZERO.clone());
+    let server = util::start_server(config).unwrap();
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| tx.unbounded_send(notice).unwrap())
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client
+        .batch_execute("SUBSCRIBE TO t UP TO 0")
+        .unwrap();
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let Some(e) = rx.try_next().unwrap() else {
+                return Err("No notice received")
+            };
+            assert!(e.message().contains("guaranteed to be empty"));
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn test_subscribe_basic() {
     // Set the timestamp to zero for deterministic initial timestamps.
     let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
