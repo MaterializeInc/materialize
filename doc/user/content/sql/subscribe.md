@@ -127,6 +127,8 @@ The `UP TO` clause allows specifying a timestamp at which the `SUBSCRIBE` will c
 
 The lower timestamp bound specified by `AS OF` is inclusive, whereas the upper bound specified by `UP TO` is exclusive. Thus, a `SUBSCRIBE` query whose `AS OF` is equal to its `UP TO` will terminate after returning zero rows.
 
+A `SUBSCRIBE` whose `UP TO` is less than its "as of" timestamp (whether that timestamp was specified in an `AS OF` clause or chosen by the system) will signal an error.
+
 ### Duration
 
 `SUBSCRIBE` will continue to run until canceled, session ends, the `UP TO` timestamp is reached, or all updates have been presented. The latter case typically occurs when

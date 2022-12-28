@@ -32,6 +32,11 @@ use crate::session::Var;
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
 pub enum AdapterError {
+    /// A `SUBSCRIBE` was requested whose `UP TO` bound precedes its `as_of` timestamp
+    AbsurdSubscribeBounds {
+        as_of: mz_repr::Timestamp,
+        up_to: mz_repr::Timestamp,
+    },
     /// An error occurred in a catalog operation.
     Catalog(catalog::Error),
     /// The cached plan or descriptor changed.
@@ -306,6 +311,14 @@ impl AdapterError {
 impl fmt::Display for AdapterError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            AdapterError::AbsurdSubscribeBounds { as_of, up_to } => {
+                assert!(up_to < as_of);
+                write!(
+                    f,
+                    r#"subscription lower ("as of") bound is beyond its upper ("up to") bound: {} < {}"#,
+                    up_to, as_of
+                )
+            }
             AdapterError::ChangedPlan => f.write_str("cached plan must not change result type"),
             AdapterError::Catalog(e) => e.fmt(f),
             AdapterError::ConstrainedParameter {

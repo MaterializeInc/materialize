@@ -458,7 +458,10 @@ fn test_empty_subscribe_notice() {
         .unwrap();
 
     client.batch_execute("CREATE TABLE t (a int)").unwrap();
-    client.batch_execute("SUBSCRIBE TO t UP TO 0").unwrap();
+    let now = util::get_explain_timestamp("t", &mut client);
+    client
+        .batch_execute(&format!("SUBSCRIBE TO t AS OF {now} UP TO {now}"))
+        .unwrap();
     Retry::default()
         .max_duration(Duration::from_secs(10))
         .retry(|_| {
@@ -469,6 +472,21 @@ fn test_empty_subscribe_notice() {
             Ok(())
         })
         .unwrap();
+}
+
+#[test]
+fn test_empty_subscribe_error() {
+    let config = util::Config::default().with_now(NOW_ZERO.clone());
+    let server = util::start_server(config).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    let now = util::get_explain_timestamp("t", &mut client);
+    let e = client
+        .batch_execute(&format!("SUBSCRIBE TO t AS OF {now} UP TO {}", now - 1))
+        .expect_err("expected DB error");
+    let e = e.as_db_error().expect("expected DB error");
+    assert!(e.code().code() == "22000")
 }
 
 #[test]

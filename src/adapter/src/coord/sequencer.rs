@@ -2500,8 +2500,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 .map(|expr| coord.evaluate_when(expr, session))
                 .transpose()?;
             if let Some(up_to) = up_to {
-                if frontier_ts >= up_to {
-                    session.add_notice(AdapterNotice::EmptySubscribe {
+                if frontier_ts == up_to {
+                    session.add_notice(AdapterNotice::EqualSubscribeBounds { bound: up_to });
+                } else if frontier_ts > up_to {
+                    return Err(AdapterError::AbsurdSubscribeBounds {
                         as_of: frontier_ts,
                         up_to,
                     });
