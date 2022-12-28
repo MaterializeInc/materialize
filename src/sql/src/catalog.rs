@@ -683,8 +683,8 @@ impl From<InvalidCloudProviderError> for InvalidEnvironmentIdError {
 pub enum CloudProvider {
     /// A pseudo-provider value used by local development environments.
     Local,
-    /// A pseudo-provider value used by mzcompose.
-    MzCompose,
+    /// A pseudo-provider value used by Docker.
+    Docker,
     /// A pseudo-provider value used by cloudtest.
     Cloudtest,
     /// Amazon Web Services.
@@ -695,7 +695,7 @@ impl fmt::Display for CloudProvider {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             CloudProvider::Local => f.write_str("local"),
-            CloudProvider::MzCompose => f.write_str("mzcompose"),
+            CloudProvider::Docker => f.write_str("docker"),
             CloudProvider::Cloudtest => f.write_str("cloudtest"),
             CloudProvider::Aws => f.write_str("aws"),
         }
@@ -708,7 +708,7 @@ impl FromStr for CloudProvider {
     fn from_str(s: &str) -> Result<CloudProvider, InvalidCloudProviderError> {
         match s {
             "local" => Ok(CloudProvider::Local),
-            "mzcompose" => Ok(CloudProvider::MzCompose),
+            "docker" => Ok(CloudProvider::Docker),
             "cloudtest" => Ok(CloudProvider::Cloudtest),
             "aws" => Ok(CloudProvider::Aws),
             _ => Err(InvalidCloudProviderError),
