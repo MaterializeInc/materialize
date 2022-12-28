@@ -2802,7 +2802,8 @@ fn expand_select_item<'a>(
                 ScalarType::Record { fields, .. } => fields,
                 ty => sql_bail!("type {} is not composite", ecx.humanize_scalar_type(&ty)),
             };
-            let mut skip_cols: HashMap<ColumnName, Option<PartialObjectName>> = HashMap::new();
+            let mut skip_cols: HashSet<ColumnName> = HashSet::new();
+            let mut all_cols: HashMap<ColumnName, Option<PartialObjectName>> = HashMap::new();
             if let Expr::Identifier(ident) = sql_expr.as_ref() {
                 if let [name] = ident.as_slice() {
                     if let Ok(items) = ecx.scope.items_from_table(
@@ -2814,10 +2815,12 @@ fn expand_select_item<'a>(
                         },
                     ) {
                         for (_, item) in items {
+                            all_cols.insert(item.column_name.clone(), item.table_name.clone());
+                            // TODO(jkosh44) Make sure there's a test for this scenario
                             if item
                                 .is_exists_column_for_a_table_function_that_was_in_the_target_list
                             {
-                                skip_cols.insert(item.column_name.clone(), item.table_name.clone());
+                                skip_cols.insert(item.column_name.clone());
                             }
                         }
                     }
@@ -2825,14 +2828,19 @@ fn expand_select_item<'a>(
             }
             let items: Vec<_> = fields
                 .iter()
-                .filter_map(|(name, _ty)| {
-                    skip_cols.get_key_value(name).map(|(col_name, table_name)| {
+                .filter_map(|(col_name, _ty)| {
+                    if skip_cols.contains(col_name) {
+                        None
+                    } else {
                         let item = ExpandedSelectItem::Expr(Cow::Owned(Expr::FieldAccess {
                             expr: sql_expr.clone(),
-                            field: Ident::new(name.as_str()),
+                            field: Ident::new(col_name.as_str()),
                         }));
-                        (item, table_name.clone(), col_name.clone())
-                    })
+                        let table_name = all_cols
+                            .get(col_name)
+                            .expect("TODO(jkosh44): NOT RIGHT, what about table funcs??? We need to restore the table funcs to their original names");
+                        Some((item, table_name.clone(), col_name.clone()))
+                    }
                 })
                 .collect();
 

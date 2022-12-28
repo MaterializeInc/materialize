@@ -642,6 +642,11 @@ impl<'ast> VisitMut<'ast, Aug> for SubqueryAliaser {
 ///  it seems like they disambiguate every invented column name but columns at the top level, though I'm not sure.
 ///  If that's the case we can have a flag that checks if we're at the root and if not appends some
 ///  number to columns, if the name has been invented.
+/// Tests
+///     SELECT * FROM t;
+///     SELECT t.* FROM t;
+///     SELECT (t).* FROM t;
+///     SELECT (constant-expr).*;
 pub fn expand_select<'a>(
     scx: &StatementContext,
     query: &'a mut Query<Aug>,
@@ -677,16 +682,24 @@ impl<'a> StarExpander<'a> {
     }
 }
 
-// TEST CREATE VIEW v AS SELECT 1 FROM (SELECT * FROM (SELECT 1, 1));
+// TODO(jkosh44) TEST CREATE VIEW v AS SELECT 1 FROM (SELECT * FROM (SELECT 1, 1)); Try repeatedly nesting this same pattern.
+// TODO(jkosh44) We also need to disambiguate duplicate columns, does that change the actual definition??? I think not because it's only allowed in nested queries and not in the final output??
 impl<'ast> VisitMut<'ast, Aug> for StarExpander<'_> {
     fn visit_select_mut(&mut self, select: &'ast mut Select<Aug>) {
         visit_mut::visit_select_mut(self, select);
         let mut projection = Vec::new();
         for select_item in select.projection.drain(..) {
             match select_item {
-                item @ SelectItem::Expr { .. } => projection.push(item),
-                // TODO(jkosh44) Should include all wildcard variants in expr. TEST COUNT(*)!!!
-                SelectItem::Wildcard { id } => {
+                // TODO(jkosh44) TEST COUNT(*)!!!
+                SelectItem::Expr {
+                    expr: Expr::QualifiedWildcard { id, .. },
+                    ..
+                }
+                | SelectItem::Expr {
+                    expr: Expr::WildcardAccess { id, .. },
+                    ..
+                }
+                | SelectItem::Wildcard { id } => {
                     let expansion = self
                         .scx
                         .wildcard_expansions
@@ -717,6 +730,7 @@ impl<'ast> VisitMut<'ast, Aug> for StarExpander<'_> {
                         });
                     }
                 }
+                item @ SelectItem::Expr { .. } => projection.push(item),
             }
         }
         select.projection = projection;
