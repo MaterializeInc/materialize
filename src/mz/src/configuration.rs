@@ -14,7 +14,6 @@ use std::{collections::BTreeMap, fmt::Display, fs, path::PathBuf};
 use anyhow::{bail, Context};
 use dirs::home_dir;
 use once_cell::sync::Lazy;
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, USER_AGENT};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -310,13 +309,8 @@ impl Profile<'_> {
     ) -> Result<ValidProfile<'_>, anyhow::Error> {
         let api_token: FronteggAPIToken = self.profile.app_password.as_str().try_into()?;
 
-        let mut headers = HeaderMap::new();
-        headers.insert(USER_AGENT, HeaderValue::from_static("reqwest"));
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-
         let authentication_result = client
             .post(self.endpoint().api_token_auth_url())
-            .headers(headers)
             .json(&api_token)
             .send()
             .await

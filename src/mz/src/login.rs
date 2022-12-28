@@ -14,12 +14,11 @@ use std::net::SocketAddr;
 use anyhow::{bail, Context, Ok, Result};
 use axum::http::StatusCode;
 use axum::{extract::Query, response::IntoResponse, routing::get, Router};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::Client;
 use tokio::sync::broadcast::{channel, Sender};
 
 use crate::configuration::{Configuration, Endpoint, FronteggAPIToken, FronteggAuth};
-use crate::utils::trim_newline;
+use crate::utils::{trim_newline, RequestBuilderExt};
 use crate::BrowserAPIToken;
 
 /// Request handler for the server waiting the browser API token creation
@@ -89,21 +88,12 @@ pub(crate) async fn generate_api_token(
     access_token_response: FronteggAuth,
     description: &String,
 ) -> Result<FronteggAPIToken, reqwest::Error> {
-    let authorization: String = format!("Bearer {}", access_token_response.access_token);
-
-    let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static("reqwest"));
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(authorization.as_str()).unwrap(),
-    );
     let mut body = HashMap::new();
     body.insert("description", description);
 
     client
         .post(endpoint.api_token_url())
-        .headers(headers)
+        .authenticate(&access_token_response)
         .json(&body)
         .send()
         .await?
@@ -122,13 +112,8 @@ async fn authenticate_user(
     access_token_request_body.insert("email", email);
     access_token_request_body.insert("password", password);
 
-    let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static("reqwest"));
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-
     let response = client
         .post(endpoint.user_auth_url())
-        .headers(headers)
         .json(&access_token_request_body)
         .send()
         .await?;
@@ -147,6 +132,7 @@ async fn authenticate_user(
 /// Log the user using the console, generates an API token and saves the new profile data.
 pub(crate) async fn login_with_console(
     endpoint: Endpoint,
+    client: &Client,
     profile_name: &String,
     config: &mut Configuration,
 ) -> Result<()> {
@@ -162,14 +148,12 @@ pub(crate) async fn login_with_console(
     let _ = std::io::stdout().flush();
     let password = rpassword::read_password().unwrap();
 
-    let client = Client::new();
-
     // Check if there is a secret somewhere.
     // If there is none save the api token someone on the root folder.
-    let auth_user = authenticate_user(&endpoint, &client, &email, &password).await?;
+    let auth_user = authenticate_user(&endpoint, client, &email, &password).await?;
     let api_token = generate_api_token(
         &endpoint,
-        &client,
+        client,
         auth_user,
         &String::from("App password for the CLI"),
     )

@@ -84,9 +84,9 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use reqwest::Client;
 use secrets::SecretCommand;
 use serde::Deserialize;
+use utils::new_client;
 
 use crate::configuration::{Configuration, Endpoint, WEB_DOCS_URL};
 use crate::login::{generate_api_token, login_with_browser, login_with_console};
@@ -249,13 +249,13 @@ struct CloudProviderAndRegion {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Cli::parse();
+    let client = new_client()?;
     let mut config = Configuration::load(args.profile.as_deref())?;
 
     match args.command {
         Commands::AppPassword(password_cmd) => {
             let profile = config.get_profile()?;
 
-            let client = Client::new();
             let valid_profile = profile.validate(&client).await?;
 
             match password_cmd.command {
@@ -307,129 +307,115 @@ async fn main() -> Result<()> {
             config.update_current_profile(profile.clone());
             if config.get_profile().is_err() || force {
                 if interactive {
-                    login_with_console(endpoint, &profile, &mut config).await?
+                    login_with_console(endpoint, &client, &profile, &mut config).await?
                 } else {
                     login_with_browser(endpoint, &profile, &mut config).await?
                 }
             }
         }
 
-        Commands::Region { command } => {
-            let client = Client::new();
+        Commands::Region { command } => match command {
+            RegionCommand::Enable {
+                cloud_provider_region,
+                version,
+                environmentd_extra_arg,
+            } => {
+                let cloud_provider_region = CloudProviderRegion::from_str(&cloud_provider_region)?;
+                let mut profile = config.get_profile()?;
 
-            match command {
-                RegionCommand::Enable {
-                    cloud_provider_region,
+                let valid_profile = profile.validate(&client).await?;
+
+                let loading_spinner = run_loading_spinner("Enabling region...".to_string());
+                let cloud_provider =
+                    get_provider_by_region_name(&client, &valid_profile, &cloud_provider_region)
+                        .await
+                        .with_context(|| "Retrieving cloud provider.")?;
+
+                let region = enable_region_environment(
+                    &client,
+                    &cloud_provider,
                     version,
                     environmentd_extra_arg,
-                } => {
-                    let cloud_provider_region =
-                        CloudProviderRegion::from_str(&cloud_provider_region)?;
-                    let mut profile = config.get_profile()?;
+                    &valid_profile,
+                )
+                .await
+                .with_context(|| "Enabling region.")?;
 
-                    let valid_profile = profile.validate(&client).await?;
-
-                    let loading_spinner = run_loading_spinner("Enabling region...".to_string());
-                    let cloud_provider = get_provider_by_region_name(
-                        &client,
-                        &valid_profile,
-                        &cloud_provider_region,
-                    )
+                let environment = get_region_environment(&client, &valid_profile, &region)
                     .await
-                    .with_context(|| "Retrieving cloud provider.")?;
+                    .with_context(|| "Retrieving environment data.")?;
 
-                    let region = enable_region_environment(
-                        &client,
-                        &cloud_provider,
-                        version,
-                        environmentd_extra_arg,
-                        &valid_profile,
-                    )
-                    .await
-                    .with_context(|| "Enabling region.")?;
-
-                    let environment = get_region_environment(&client, &valid_profile, &region)
-                        .await
-                        .with_context(|| "Retrieving environment data.")?;
-
-                    loop {
-                        if check_environment_health(&valid_profile, &environment)? {
-                            break;
-                        }
+                loop {
+                    if check_environment_health(&valid_profile, &environment)? {
+                        break;
                     }
-
-                    loading_spinner.finish_with_message(format!("{cloud_provider_region} enabled"));
-                    profile.set_default_region(cloud_provider_region);
                 }
 
-                RegionCommand::Disable {
-                    cloud_provider_region,
-                } => {
-                    let cloud_provider_region =
-                        CloudProviderRegion::from_str(&cloud_provider_region)?;
-                    let profile = config.get_profile()?;
-
-                    let valid_profile = profile.validate(&client).await?;
-
-                    let loading_spinner = run_loading_spinner("Disabling region...".to_string());
-                    let cloud_provider = get_provider_by_region_name(
-                        &client,
-                        &valid_profile,
-                        &cloud_provider_region,
-                    )
-                    .await
-                    .with_context(|| "Retrieving cloud provider.")?;
-
-                    disable_region_environment(&client, &cloud_provider, &valid_profile)
-                        .await
-                        .with_context(|| "Disabling region.")?;
-
-                    loading_spinner
-                        .finish_with_message(format!("{cloud_provider_region} disabled"));
-                }
-
-                RegionCommand::List => {
-                    let profile = config.get_profile()?;
-
-                    let valid_profile = profile.validate(&client).await?;
-
-                    let cloud_providers = list_cloud_providers(&client, &valid_profile)
-                        .await
-                        .with_context(|| "Retrieving cloud providers.")?;
-                    let cloud_providers_regions =
-                        list_regions(&cloud_providers, &client, &valid_profile)
-                            .await
-                            .with_context(|| "Listing regions.")?;
-                    cloud_providers_regions
-                        .iter()
-                        .for_each(|cloud_provider_region| {
-                            print_region_enabled(cloud_provider_region);
-                        });
-                }
-
-                RegionCommand::Status {
-                    cloud_provider_region,
-                } => {
-                    let cloud_provider_region =
-                        CloudProviderRegion::from_str(&cloud_provider_region)?;
-
-                    let profile = config.get_profile()?;
-
-                    let valid_profile = profile.validate(&client).await?;
-
-                    let environment = get_provider_region_environment(
-                        &client,
-                        &valid_profile,
-                        &cloud_provider_region,
-                    )
-                    .await
-                    .with_context(|| "Retrieving cloud provider region.")?;
-                    let health = check_environment_health(&valid_profile, &environment)?;
-
-                    print_environment_status(environment, health);
-                }
+                loading_spinner.finish_with_message(format!("{cloud_provider_region} enabled"));
+                profile.set_default_region(cloud_provider_region);
             }
-        }
+
+            RegionCommand::Disable {
+                cloud_provider_region,
+            } => {
+                let cloud_provider_region = CloudProviderRegion::from_str(&cloud_provider_region)?;
+                let profile = config.get_profile()?;
+
+                let valid_profile = profile.validate(&client).await?;
+
+                let loading_spinner = run_loading_spinner("Disabling region...".to_string());
+                let cloud_provider =
+                    get_provider_by_region_name(&client, &valid_profile, &cloud_provider_region)
+                        .await
+                        .with_context(|| "Retrieving cloud provider.")?;
+
+                disable_region_environment(&client, &cloud_provider, &valid_profile)
+                    .await
+                    .with_context(|| "Disabling region.")?;
+
+                loading_spinner.finish_with_message(format!("{cloud_provider_region} disabled"));
+            }
+
+            RegionCommand::List => {
+                let profile = config.get_profile()?;
+
+                let valid_profile = profile.validate(&client).await?;
+
+                let cloud_providers = list_cloud_providers(&client, &valid_profile)
+                    .await
+                    .with_context(|| "Retrieving cloud providers.")?;
+                let cloud_providers_regions =
+                    list_regions(&cloud_providers, &client, &valid_profile)
+                        .await
+                        .with_context(|| "Listing regions.")?;
+                cloud_providers_regions
+                    .iter()
+                    .for_each(|cloud_provider_region| {
+                        print_region_enabled(cloud_provider_region);
+                    });
+            }
+
+            RegionCommand::Status {
+                cloud_provider_region,
+            } => {
+                let cloud_provider_region = CloudProviderRegion::from_str(&cloud_provider_region)?;
+
+                let profile = config.get_profile()?;
+
+                let valid_profile = profile.validate(&client).await?;
+
+                let environment = get_provider_region_environment(
+                    &client,
+                    &valid_profile,
+                    &cloud_provider_region,
+                )
+                .await
+                .with_context(|| "Retrieving cloud provider region.")?;
+                let health = check_environment_health(&valid_profile, &environment)?;
+
+                print_environment_status(environment, health);
+            }
+        },
 
         Commands::Secret {
             cloud_provider_region,
@@ -446,7 +432,6 @@ async fn main() -> Result<()> {
                     .context("no region specified and no default region set")?,
             };
 
-            let client = Client::new();
             let valid_profile = profile.validate(&client).await?;
 
             command
@@ -468,7 +453,6 @@ async fn main() -> Result<()> {
                     .context("no region specified and no default region set")?,
             };
 
-            let client = Client::new();
             let valid_profile = profile.validate(&client).await?;
 
             shell(client, valid_profile, cloud_provider_region)
