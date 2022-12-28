@@ -42,7 +42,7 @@ fn run_psql_shell(valid_profile: ValidProfile<'_>, environment: &Environment) ->
         .arg("-p")
         .arg(port)
         .arg("materialize")
-        .env("PGPASSWORD", valid_profile.profile.get_app_password())
+        .env("PGPASSWORD", valid_profile.app_password)
         .exec();
 
     Err(error).context("failed to spawn psql")
@@ -62,7 +62,7 @@ pub(crate) fn check_environment_health(
         .arg(host)
         .arg("-p")
         .arg(port)
-        .env("PGPASSWORD", valid_profile.profile.get_app_password())
+        .env("PGPASSWORD", valid_profile.app_password.clone())
         .arg("-d")
         .arg("materialize")
         .arg("-q")

@@ -25,3 +25,6 @@ uuid = "1.2.2"
 url = "2.3.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 postgres-protocol = "0.6.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "2.7.0"

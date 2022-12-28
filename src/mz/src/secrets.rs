@@ -194,7 +194,7 @@ async fn execute_query(
         .post(url)
         .basic_auth(
             valid_profile.profile.get_email(),
-            Some(valid_profile.profile.get_app_password()),
+            Some(valid_profile.app_password.to_string()),
         )
         .json(&sql)
         .send()
