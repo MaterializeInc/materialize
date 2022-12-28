@@ -2472,7 +2472,11 @@ impl<S: Append + 'static> Coordinator<S> {
             session.add_transaction_ops(TransactionOps::Subscribe)?;
         }
 
-        let make_sink_desc = |coord: &mut Coordinator<S>, session: &mut Session, from, from_desc, uses| {
+        let make_sink_desc = |coord: &mut Coordinator<S>,
+                              session: &mut Session,
+                              from,
+                              from_desc,
+                              uses| {
             // Determine the frontier of updates to subscribe *from*.
             // Updates greater or equal to this frontier will be produced.
             let id_bundle = coord

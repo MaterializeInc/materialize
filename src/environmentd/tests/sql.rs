@@ -458,9 +458,7 @@ fn test_empty_subscribe_notice() {
         .unwrap();
 
     client.batch_execute("CREATE TABLE t (a int)").unwrap();
-    client
-        .batch_execute("SUBSCRIBE TO t UP TO 0")
-        .unwrap();
+    client.batch_execute("SUBSCRIBE TO t UP TO 0").unwrap();
     Retry::default()
         .max_duration(Duration::from_secs(10))
         .retry(|_| {
