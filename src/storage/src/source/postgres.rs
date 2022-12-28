@@ -436,6 +436,7 @@ impl OffsetCommitter for PgOffsetCommitter {
 }
 
 /// Defers to `postgres_replication_loop_inner` and sends errors through the channel if they occur
+#[allow(clippy::or_fun_call)]
 async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
     loop {
         match postgres_replication_loop_inner(&mut task_info).await {
@@ -456,8 +457,10 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
             }
             Err(ReplicationError::Irrecoverable(e)) => {
                 warn!(
-                    "irrecoverable error for source {}: {}",
-                    &task_info.source_id, e
+                    "irrecoverable error for source {}: {}, cause: {}",
+                    &task_info.source_id,
+                    e,
+                    e.source().unwrap_or(anyhow::anyhow!("unknown").as_ref())
                 );
                 // If the channel is shutting down, so is the source.
                 let _ = task_info
@@ -478,8 +481,10 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
             }
             Err(ReplicationError::Definite(e)) => {
                 warn!(
-                    "irrecoverable error for source {}: {}",
-                    &task_info.source_id, e
+                    "irrecoverable error for source {}: {}, cause: {}",
+                    &task_info.source_id,
+                    e,
+                    e.source().unwrap_or(anyhow::anyhow!("unknown").as_ref())
                 );
                 // Drop the send error, as we have no way of communicating back to the
                 // source operator if the channel is gone.

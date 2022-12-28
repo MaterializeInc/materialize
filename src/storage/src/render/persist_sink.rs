@@ -63,6 +63,7 @@ where
 pub fn render<G>(
     scope: &mut G,
     src_id: GlobalId,
+    output_index: usize,
     metadata: CollectionMetadata,
     source_data: Collection<G, Result<Row, DataflowError>, Diff>,
     storage_state: &mut StorageState,
@@ -135,6 +136,20 @@ where
             // The non-active workers report that they are done snapshotting.
             source_statistics.initialize_snapshot_committed(&Antichain::<Timestamp>::new());
             return;
+        }
+
+        // Pause the source to prevent committing the snapshot
+        let mut should_pause = false;
+        (|| {
+            fail::fail_point!("pg_snapshot_pause", |val| {
+                should_pause = val.map_or(false, |index| {
+                    let index: usize = index.parse().unwrap();
+                    index == output_index
+                });
+            });
+        })();
+        if should_pause {
+            futures::future::pending().await
         }
 
         while let Some(event) = input.next().await {

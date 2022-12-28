@@ -750,3 +750,32 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
         assert False, "SUBSCRIBE didn't return the expected error"
 
     killer.join()
+
+
+def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
+    """Test PostgreSQL snapshot partial failure"""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        # Start postgres for the pg source
+        Postgres(),
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="storage", environment_extra=["FAILPOINTS=pg_snapshot_pause=return(2)"]
+        ),
+    ):
+        c.up("materialized", "postgres", "storage")
+
+        c.run("testdrive", "pg-snapshot-partial-failure/01-configure-postgres.td")
+        c.run("testdrive", "pg-snapshot-partial-failure/02-create-sources.td")
+
+        c.run("testdrive", "pg-snapshot-partial-failure/03-verify-good-sub-source.td")
+
+        # Restart the storage instance with the failpoint off...
+        with c.override(
+            # turn off the failpoint
+            Clusterd(name="storage")
+        ):
+            c.up("storage")
+            c.run("testdrive", "pg-snapshot-partial-failure/04-verify-data.td")
