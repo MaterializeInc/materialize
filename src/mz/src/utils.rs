@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use crate::configuration::FronteggAuth;
 
-/// Create a stanard client with common
+/// Create a standard client with common
 /// header values for all requests.
 pub fn new_client() -> Result<Client> {
     let mut headers = HeaderMap::new();
