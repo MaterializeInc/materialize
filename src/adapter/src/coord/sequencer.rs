@@ -2458,6 +2458,7 @@ impl<S: Append + 'static> Coordinator<S> {
             when,
             copy_to,
             emit_progress,
+            up_to,
         } = plan;
 
         let compute_instance = self.catalog.active_compute_instance(session)?;
@@ -2471,7 +2472,11 @@ impl<S: Append + 'static> Coordinator<S> {
             session.add_transaction_ops(TransactionOps::Subscribe)?;
         }
 
-        let make_sink_desc = |coord: &mut Coordinator<S>, from, from_desc, uses| {
+        let make_sink_desc = |coord: &mut Coordinator<S>,
+                              session: &mut Session,
+                              from,
+                              from_desc,
+                              uses| {
             // Determine the frontier of updates to subscribe *from*.
             // Updates greater or equal to this frontier will be produced.
             let id_bundle = coord
@@ -2488,9 +2493,24 @@ impl<S: Append + 'static> Coordinator<S> {
                     timeline,
                     None,
                 )?
-                .timestamp_context
-                .antichain();
+                .timestamp_context;
+            let frontier_ts = frontier.timestamp_or_default();
 
+            let up_to = up_to
+                .map(|expr| coord.evaluate_when(expr, session))
+                .transpose()?;
+            if let Some(up_to) = up_to {
+                if frontier_ts == up_to {
+                    session.add_notice(AdapterNotice::EqualSubscribeBounds { bound: up_to });
+                } else if frontier_ts > up_to {
+                    return Err(AdapterError::AbsurdSubscribeBounds {
+                        as_of: frontier_ts,
+                        up_to,
+                    });
+                }
+            }
+            let frontier = frontier.antichain();
+            let up_to = up_to.map(Antichain::from_elem).unwrap_or_default();
             Ok::<_, AdapterError>(ComputeSinkDesc {
                 from,
                 from_desc,
@@ -2499,6 +2519,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     frontier,
                     strict: !with_snapshot,
                 },
+                up_to,
             })
         };
 
@@ -2520,7 +2541,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .unwrap()
                     .into_owned();
                 let sink_id = self.catalog.allocate_user_id().await?;
-                let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id][..])?;
+                let sink_desc = make_sink_desc(self, session, from_id, from_desc, &[from_id][..])?;
                 let sink_name = format!("subscribe-{}", sink_id);
                 self.dataflow_builder(compute_instance_id)
                     .build_sink_dataflow(sink_name, sink_id, sink_desc)?
@@ -2535,7 +2556,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let id = self.allocate_transient_id()?;
                 let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
-                let sink_desc = make_sink_desc(self, id, desc, &depends_on)?;
+                let sink_desc = make_sink_desc(self, session, id, desc, &depends_on)?;
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(compute_instance_id);
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;

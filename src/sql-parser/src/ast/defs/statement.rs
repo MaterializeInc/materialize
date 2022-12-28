@@ -2084,6 +2084,7 @@ pub struct SubscribeStatement<T: AstInfo> {
     pub relation: SubscribeRelation<T>,
     pub options: Vec<SubscribeOption<T>>,
     pub as_of: Option<AsOf<T>>,
+    pub up_to: Option<Expr<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for SubscribeStatement<T> {
@@ -2098,6 +2099,10 @@ impl<T: AstInfo> AstDisplay for SubscribeStatement<T> {
         if let Some(as_of) = &self.as_of {
             f.write_str(" ");
             f.write_node(as_of);
+        }
+        if let Some(up_to) = &self.up_to {
+            f.write_str(" UP TO ");
+            f.write_node(up_to);
         }
     }
 }

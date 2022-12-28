@@ -30,6 +30,7 @@ pub struct ComputeSinkDesc<S: 'static = (), T = mz_repr::Timestamp> {
     pub from_desc: RelationDesc,
     pub connection: ComputeSinkConnection<S>,
     pub as_of: SinkAsOf<T>,
+    pub up_to: Antichain<T>,
 }
 
 impl Arbitrary for ComputeSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
@@ -42,13 +43,17 @@ impl Arbitrary for ComputeSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
             any::<RelationDesc>(),
             any::<ComputeSinkConnection<CollectionMetadata>>(),
             any::<SinkAsOf<mz_repr::Timestamp>>(),
+            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
         )
-            .prop_map(|(from, from_desc, connection, as_of)| ComputeSinkDesc {
-                from,
-                from_desc,
-                connection,
-                as_of,
-            })
+            .prop_map(
+                |(from, from_desc, connection, as_of, up_to_frontier)| ComputeSinkDesc {
+                    from,
+                    from_desc,
+                    connection,
+                    as_of,
+                    up_to: Antichain::from(up_to_frontier),
+                },
+            )
             .boxed()
     }
 }
@@ -60,6 +65,7 @@ impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, mz_r
             from: Some(self.from.into_proto()),
             from_desc: Some(self.from_desc.into_proto()),
             as_of: Some(self.as_of.into_proto()),
+            up_to: Some(self.up_to.into_proto()),
         }
     }
 
@@ -75,6 +81,9 @@ impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, mz_r
             as_of: proto
                 .as_of
                 .into_rust_if_some("ProtoComputeSinkDesc::as_of")?,
+            up_to: proto
+                .up_to
+                .into_rust_if_some("ProtoComputeSinkDesc::up_to")?,
         })
     }
 }

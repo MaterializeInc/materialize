@@ -447,6 +447,49 @@ fn test_subscribe_negative_diffs() {
 }
 
 #[test]
+fn test_empty_subscribe_notice() {
+    let config = util::Config::default().with_now(NOW_ZERO.clone());
+    let server = util::start_server(config).unwrap();
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| tx.unbounded_send(notice).unwrap())
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    let now = util::get_explain_timestamp("t", &mut client);
+    client
+        .batch_execute(&format!("SUBSCRIBE TO t AS OF {now} UP TO {now}"))
+        .unwrap();
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let Some(e) = rx.try_next().unwrap() else {
+                return Err("No notice received")
+            };
+            assert!(e.message().contains("guaranteed to be empty"));
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn test_empty_subscribe_error() {
+    let config = util::Config::default().with_now(NOW_ZERO.clone());
+    let server = util::start_server(config).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    let now = util::get_explain_timestamp("t", &mut client);
+    let e = client
+        .batch_execute(&format!("SUBSCRIBE TO t AS OF {now} UP TO {}", now - 1))
+        .expect_err("expected DB error");
+    let e = e.as_db_error().expect("expected DB error");
+    assert!(e.code().code() == "22000")
+}
+
+#[test]
 fn test_subscribe_basic() {
     // Set the timestamp to zero for deterministic initial timestamps.
     let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
@@ -541,6 +584,33 @@ fn test_subscribe_basic() {
             assert_eq!(actual.get::<_, String>("data"), *expected_data);
             assert_eq!(actual.get::<_, MzTimestamp>("mz_timestamp").0, expected_ts);
         }
+    }
+
+    // Check that a subscription with `UP TO` is cut off at the proper point
+    let begin = events[0].0;
+    for (ts, _) in &events {
+        client_reads
+            .batch_execute(&*format!(
+                "COMMIT; BEGIN;
+            DECLARE c CURSOR FOR SUBSCRIBE t AS OF {begin} UP TO {}",
+                ts
+            ))
+            .unwrap();
+        for (expected_ts, expected_data) in events.iter() {
+            if expected_ts >= ts {
+                // We hit the `UP TO`; we should be done.
+                break;
+            }
+
+            let actual = client_reads.query_one("FETCH c", &[]).unwrap();
+            assert_eq!(actual.get::<_, String>("data"), *expected_data);
+            assert_eq!(actual.get::<_, MzTimestamp>("mz_timestamp").0, *expected_ts);
+        }
+        // Make sure no rows from after or equal to the `UP TO` show up.
+        // This also checks that the subscribe has been dropped, since
+        // we don't specify a timeout.
+        let should_be_empty = client_reads.query("FETCH c", &[]).unwrap();
+        assert!(should_be_empty.is_empty())
     }
 
     // Aggressively compact the data in the index, then subscribe an unmaterialized

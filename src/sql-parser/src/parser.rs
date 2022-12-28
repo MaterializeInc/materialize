@@ -5341,6 +5341,16 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse `UP TO`, if present
+    fn parse_optional_up_to(&mut self) -> Result<Option<Expr<Raw>>, ParserError> {
+        if self.parse_keyword(UP) {
+            self.expect_keyword(TO)?;
+            self.parse_expr().map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Parse a comma-delimited list of projections after SELECT
     fn parse_select_item(&mut self) -> Result<SelectItem<Raw>, ParserError> {
         if self.consume_token(&Token::Star) {
@@ -5488,10 +5498,12 @@ impl<'a> Parser<'a> {
             vec![]
         };
         let as_of = self.parse_optional_as_of()?;
+        let up_to = self.parse_optional_up_to()?;
         Ok(Statement::Subscribe(SubscribeStatement {
             relation,
             options,
             as_of,
+            up_to,
         }))
     }
 

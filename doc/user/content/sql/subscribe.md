@@ -113,9 +113,25 @@ with several additional columns that describe the nature of the update:
 </tbody>
 </table>
 
+### `AS OF`
+
+The `AS OF` clause allows specifying a timestamp at which the `SUBSCRIBE` should begin returning results, in order to inspect the historical state of a relation. If `AS OF` is specified, no rows whose timestamp is less than the specified timestamp will be returned. If the timestamp specified is earlier than the earliest historical state retained by the source relations, an error will be signaled.
+
+Currently, all user-defined sources and tables have a retention window of one second, so `AS OF` is of limited usefulness except when subscribing to queries over certain internal relations.
+
+### `UP TO`
+
+The `UP TO` clause allows specifying a timestamp at which the `SUBSCRIBE` will cease running. If `UP TO` is specified, no rows whose timestamp is greater than or equal to the specified timestamp will be returned.
+
+### Interaction of `AS OF` and `UP TO`
+
+The lower timestamp bound specified by `AS OF` is inclusive, whereas the upper bound specified by `UP TO` is exclusive. Thus, a `SUBSCRIBE` query whose `AS OF` is equal to its `UP TO` will terminate after returning zero rows.
+
+A `SUBSCRIBE` whose `UP TO` is less than its "as of" timestamp (whether that timestamp was specified in an `AS OF` clause or chosen by the system) will signal an error.
+
 ### Duration
 
-`SUBSCRIBE` will continue to run until canceled, session ends, or until all updates have been presented. The latter case typically occurs when
+`SUBSCRIBE` will continue to run until canceled, session ends, the `UP TO` timestamp is reached, or all updates have been presented. The latter case typically occurs when
 tailing constant views (e.g. `CREATE VIEW v AS SELECT 1`).
 
 {{< warning >}}
@@ -125,7 +141,8 @@ results. Since `SUBSCRIBE` can run forever, naively executing a `SUBSCRIBE` usin
 driver's standard query API may never return.
 
 Either use an API in your driver that does not buffer rows or use the
-[`FETCH`](/sql/fetch) statement to fetch rows from `SUBSCRIBE` in batches.
+[`FETCH`](/sql/fetch) statement or `AS OF` and `UP TO` bounds
+to fetch rows from `SUBSCRIBE` in batches.
 See the [examples](#examples) for details.
 
 {{< /warning >}}

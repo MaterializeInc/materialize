@@ -16,6 +16,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use differential_dataflow::lattice::Lattice;
 use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::warn;
@@ -67,8 +68,8 @@ pub enum ExprPrepStyle<'a> {
         logical_time: Option<mz_repr::Timestamp>,
         session: &'a Session,
     },
-    /// The expression is being prepared for evaluation in an AS OF clause.
-    AsOf,
+    /// The expression is being prepared for evaluation in an AS OF or UP TO clause.
+    AsOfUpTo,
 }
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -101,7 +102,17 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
         for dataflow in dataflows.into_iter() {
             output_ids.extend(dataflow.export_ids());
-            dataflow_plans.push(self.finalize_dataflow(dataflow, instance));
+            let mut plan = self.finalize_dataflow(dataflow, instance);
+            // If the only outputs of the dataflow are sinks, we might
+            // be able to turn off the computation early, if they all
+            // have non-trivial `up_to`s.
+            if plan.index_exports.is_empty() {
+                plan.until = Antichain::from_elem(Timestamp::MIN);
+                for (_, sink) in &plan.sink_exports {
+                    plan.until.join_assign(&sink.up_to);
+                }
+            }
+            dataflow_plans.push(plan);
         }
         self.controller
             .active_compute()
@@ -410,6 +421,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                 frontier: as_of,
                 strict: false,
             },
+            up_to: Antichain::default(),
         };
         self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
 
@@ -541,7 +553,7 @@ pub fn prep_relation_expr(
                 }
             })
         }
-        ExprPrepStyle::OneShot { .. } | ExprPrepStyle::AsOf => expr
+        ExprPrepStyle::OneShot { .. } | ExprPrepStyle::AsOfUpTo => expr
             .0
             .try_visit_scalars_mut(&mut |s| prep_scalar_expr(catalog, s, style)),
     }
@@ -572,7 +584,7 @@ pub fn prep_scalar_expr(
         }),
 
         // Reject the query if it contains any unmaterializable function calls.
-        ExprPrepStyle::Index | ExprPrepStyle::AsOf => {
+        ExprPrepStyle::Index | ExprPrepStyle::AsOfUpTo => {
             let mut last_observed_unmaterializable_func = None;
             expr.visit_mut_post(&mut |e| {
                 if let MirScalarExpr::CallUnmaterializable(f) = e {
@@ -583,9 +595,9 @@ pub fn prep_scalar_expr(
             if let Some(f) = last_observed_unmaterializable_func {
                 let err = match style {
                     ExprPrepStyle::Index => AdapterError::UnmaterializableFunction(f),
-                    ExprPrepStyle::AsOf => AdapterError::UncallableFunction {
+                    ExprPrepStyle::AsOfUpTo => AdapterError::UncallableFunction {
                         func: f,
-                        context: "AS OF",
+                        context: "AS OF or UP TO",
                     },
                     _ => unreachable!(),
                 };

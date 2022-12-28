@@ -808,6 +808,29 @@ where
     Ok(expr.map(map_exprs).project(project_key))
 }
 
+/// Plans an expression in the `UP TO` position of a `SUBSCRIBE` statement.
+pub fn plan_up_to(
+    scx: &StatementContext,
+    mut up_to: Expr<Aug>,
+) -> Result<MirScalarExpr, PlanError> {
+    let scope = Scope::empty();
+    let desc = RelationDesc::empty();
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    transform_ast::transform_expr(scx, &mut up_to)?;
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "UP TO",
+        scope: &scope,
+        relation_type: desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_windows: false,
+    };
+    plan_expr(ecx, &up_to)?
+        .type_as_any(ecx)?
+        .lower_uncorrelated()
+}
+
 /// Plans an expression in the AS OF position of a `SELECT` or `SUBSCRIBE` statement.
 pub fn plan_as_of(
     scx: &StatementContext,
