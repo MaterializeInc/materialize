@@ -18,13 +18,13 @@ use differential_dataflow::consolidation;
 use differential_dataflow::lattice::Lattice;
 use futures::{stream::LocalBoxStream, StreamExt};
 use itertools::Itertools;
-use mz_ore::halt;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 
 use mz_expr::PartitionId;
+use mz_ore::halt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ListenEvent;
@@ -35,6 +35,7 @@ use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::controller::PersistEpoch;
 use mz_storage_client::types::sources::{MzOffset, SourceData};
 use mz_storage_client::util::antichain::{MutableOffsetAntichain, OffsetAntichain};
+use mz_storage_client::util::remap_handle::RemapHandleReader;
 use mz_timely_util::order::Partitioned;
 
 use crate::source::reclock::{
@@ -238,86 +239,9 @@ fn unpack_binding(data: SourceData) -> (PartitionId, MzOffset) {
 }
 
 #[async_trait::async_trait(?Send)]
-impl RemapHandle for PersistHandle {
+impl RemapHandleReader for PersistHandle {
     type FromTime = Partitioned<PartitionId, MzOffset>;
     type IntoTime = mz_repr::Timestamp;
-
-    async fn compare_and_append(
-        &mut self,
-        mut updates: Vec<(Self::FromTime, Self::IntoTime, Diff)>,
-        upper: Antichain<Self::IntoTime>,
-        new_upper: Antichain<Self::IntoTime>,
-    ) -> Result<(), Upper<Self::IntoTime>> {
-        // The following section performs a translation of the native timely timestamps to the
-        // progress format presented to users which at the moment is not compatible with how
-        // Antichians work. A proper migration and subsequent deletion of this section will happen
-        // soon.
-        //
-        // Now, we need to come up with the updates to the OffsetAntichain representation that is
-        // already in the shard. In our state we store the latest value of the source frontier in
-        // both the native format (Antichain<Partitioned<PartitionId, MzOffset>>) and the compat
-        // one (OffsetAntichain).
-        //
-        // In order to calculate the updates to the OffsetAntichain that correspond to the change
-        // in native timestamps we will accumulate the provided diffs into concrete Antichains for
-        // each time that the frontier changed, convert into an OffsetAntichain, and diff those
-        // with the OffsetAntichain.
-
-        // Vector holding the result of the translation
-        let mut compat_frontier_updates = vec![];
-
-        // First, we will sort the updates by time to be able to iterate over the groups
-        updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
-        let mut native_frontier = self.native_source_upper.clone();
-        let mut compat_frontier = self.compat_source_upper.frontier();
-
-        // Then, we will iterate over the group of updates in time order and produce the native
-        // Antichain at each point, convert it to a compat OffsetAntichain, and diff it with
-        // current OffsetAntichain representation.
-        for (ts, updates) in &updates.into_iter().group_by(|update| update.1) {
-            native_frontier.update_iter(
-                updates
-                    .into_iter()
-                    .map(|(src_ts, _ts, diff)| (src_ts, diff)),
-            );
-            let new_compat_frontier = OffsetAntichain::from(native_frontier.frontier().to_owned());
-
-            compat_frontier_updates.extend(
-                compat_frontier
-                    .iter()
-                    .map(|(pid, offset)| ((pid.clone(), *offset), ts, -1)),
-            );
-            compat_frontier_updates.extend(
-                new_compat_frontier
-                    .iter()
-                    .map(|(pid, offset)| ((pid.clone(), *offset), ts, 1)),
-            );
-
-            compat_frontier = new_compat_frontier;
-        }
-        // Then, consolidate the compat updates and we're done
-        consolidation::consolidate_updates(&mut compat_frontier_updates);
-
-        // And finally convert into rows and attempt to append to the shard
-        let mut row_updates = vec![];
-        for ((pid, offset), ts, diff) in compat_frontier_updates {
-            row_updates.push((pack_binding(pid, offset), ts, diff));
-        }
-
-        let updates = row_updates
-            .iter()
-            .map(|(data, time, diff)| ((data, ()), time, diff));
-        let upper = upper.clone();
-        let new_upper = new_upper.clone();
-        match self
-            .write_handle
-            .compare_and_append(updates, upper, new_upper)
-            .await
-        {
-            Ok(result) => return result,
-            Err(invalid_use) => panic!("compare_and_append failed: {invalid_use}"),
-        }
-    }
 
     async fn next(
         &mut self,
@@ -427,6 +351,86 @@ impl RemapHandle for PersistHandle {
             }
         }
         None
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl RemapHandle for PersistHandle {
+    async fn compare_and_append(
+        &mut self,
+        mut updates: Vec<(Self::FromTime, Self::IntoTime, Diff)>,
+        upper: Antichain<Self::IntoTime>,
+        new_upper: Antichain<Self::IntoTime>,
+    ) -> Result<(), Upper<Self::IntoTime>> {
+        // The following section performs a translation of the native timely timestamps to the
+        // progress format presented to users which at the moment is not compatible with how
+        // Antichians work. A proper migration and subsequent deletion of this section will happen
+        // soon.
+        //
+        // Now, we need to come up with the updates to the OffsetAntichain representation that is
+        // already in the shard. In our state we store the latest value of the source frontier in
+        // both the native format (Antichain<Partitioned<PartitionId, MzOffset>>) and the compat
+        // one (OffsetAntichain).
+        //
+        // In order to calculate the updates to the OffsetAntichain that correspond to the change
+        // in native timestamps we will accumulate the provided diffs into concrete Antichains for
+        // each time that the frontier changed, convert into an OffsetAntichain, and diff those
+        // with the OffsetAntichain.
+
+        // Vector holding the result of the translation
+        let mut compat_frontier_updates = vec![];
+
+        // First, we will sort the updates by time to be able to iterate over the groups
+        updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+        let mut native_frontier = self.native_source_upper.clone();
+        let mut compat_frontier = self.compat_source_upper.frontier();
+
+        // Then, we will iterate over the group of updates in time order and produce the native
+        // Antichain at each point, convert it to a compat OffsetAntichain, and diff it with
+        // current OffsetAntichain representation.
+        for (ts, updates) in &updates.into_iter().group_by(|update| update.1) {
+            native_frontier.update_iter(
+                updates
+                    .into_iter()
+                    .map(|(src_ts, _ts, diff)| (src_ts, diff)),
+            );
+            let new_compat_frontier = OffsetAntichain::from(native_frontier.frontier().to_owned());
+
+            compat_frontier_updates.extend(
+                compat_frontier
+                    .iter()
+                    .map(|(pid, offset)| ((pid.clone(), *offset), ts, -1)),
+            );
+            compat_frontier_updates.extend(
+                new_compat_frontier
+                    .iter()
+                    .map(|(pid, offset)| ((pid.clone(), *offset), ts, 1)),
+            );
+
+            compat_frontier = new_compat_frontier;
+        }
+        // Then, consolidate the compat updates and we're done
+        consolidation::consolidate_updates(&mut compat_frontier_updates);
+
+        // And finally convert into rows and attempt to append to the shard
+        let mut row_updates = vec![];
+        for ((pid, offset), ts, diff) in compat_frontier_updates {
+            row_updates.push((pack_binding(pid, offset), ts, diff));
+        }
+
+        let updates = row_updates
+            .iter()
+            .map(|(data, time, diff)| ((data, ()), time, diff));
+        let upper = upper.clone();
+        let new_upper = new_upper.clone();
+        match self
+            .write_handle
+            .compare_and_append(updates, upper, new_upper)
+            .await
+        {
+            Ok(result) => return result,
+            Err(invalid_use) => panic!("compare_and_append failed: {invalid_use}"),
+        }
     }
 
     async fn compact(&mut self, new_since: Antichain<Self::IntoTime>) {

@@ -18,6 +18,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use bytes::BufMut;
+use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
 use globset::{Glob, GlobBuilder};
 use itertools::Itertools;
@@ -25,19 +26,21 @@ use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use timely::order::PartialOrder;
 use timely::progress::{Antichain, PathSummary, Timestamp};
 use timely::scheduling::ActivateOnDrop;
 use uuid::Uuid;
 
-use mz_expr::MirScalarExpr;
+use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::{ColumnType, Diff, GlobalId, RelationDesc, RelationType, Row, ScalarType};
+use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
+use mz_repr::{ColumnType, Datum, Diff, GlobalId, RelationDesc, RelationType, Row, ScalarType};
+use mz_timely_util::order::{Interval, Partitioned, RangeBound};
 
 use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::types::connections::aws::AwsConfig;
@@ -2323,6 +2326,169 @@ impl Codec for SourceData {
     fn decode(buf: &[u8]) -> Result<Self, String> {
         let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
         proto.into_rust().map_err(|err| err.to_string())
+    }
+}
+
+impl From<MzOffset> for SourceData {
+    fn from(value: MzOffset) -> Self {
+        let mut row = Row::with_capacity(1);
+        let mut packer = row.packer();
+        packer.push(Datum::UInt64(value.offset));
+        SourceData(Ok(row))
+    }
+}
+
+impl TryFrom<SourceData> for MzOffset {
+    type Error = anyhow::Error;
+    fn try_from(data: SourceData) -> Result<Self, Self::Error> {
+        let row = data.0.map_err(|_| anyhow!("invalid binding"))?;
+        let mut datums = row.iter();
+        Ok(match (datums.next(), datums.next()) {
+            (Some(Datum::UInt64(offset)), None) => MzOffset::from(offset),
+            invalid_binding => bail!("invalid binding {:?}", invalid_binding),
+        })
+    }
+}
+
+impl From<Partitioned<PartitionId, MzOffset>> for SourceData {
+    fn from(partition: Partitioned<PartitionId, MzOffset>) -> SourceData {
+        use mz_repr::adt::range;
+        use Datum::{Int32, Null};
+        use PartitionId::Kafka;
+        let mut row = Row::with_capacity(2);
+        let mut packer = row.packer();
+
+        let to_numeric = |p: &i32| Datum::from(OrderedDecimal(Numeric::from(*p)));
+
+        let (lower, upper) = match partition.interval() {
+            Interval::Range(l, u) => match (l, u) {
+                (RangeBound::Bottom, RangeBound::Top) => ((Null, false), (Null, false)),
+                (RangeBound::Bottom, RangeBound::Elem(Kafka(pid))) => {
+                    ((Null, false), (to_numeric(pid), false))
+                }
+                (RangeBound::Elem(Kafka(pid)), RangeBound::Top) => {
+                    ((to_numeric(pid), false), (Null, false))
+                }
+                (RangeBound::Elem(Kafka(l_pid)), RangeBound::Elem(Kafka(u_pid))) => {
+                    assert_ne!(
+                        l_pid, u_pid,
+                        "cannot support empty ranges or ranges equivalent to points"
+                    );
+                    ((to_numeric(l_pid), false), (to_numeric(u_pid), false))
+                }
+                // PartitionId::None is not serialized to SourceData.
+                o @ ((RangeBound::Elem(PartitionId::None), _)
+                | (_, RangeBound::Elem(PartitionId::None))) => {
+                    unreachable!("{:?} should not be serialized as SourceData", o)
+                }
+                o => unreachable!("don't know how to handle this partition {o:?}"),
+            },
+            Interval::Point(Kafka(pid)) => ((to_numeric(pid), true), (to_numeric(pid), true)),
+            Interval::Point(PartitionId::None) => {
+                // n.b. early return here to simplify case of handling ranges.
+                packer.push(Datum::UInt64(partition.timestamp().offset));
+                return SourceData(Ok(row));
+            }
+        };
+
+        let offset = partition.timestamp().offset;
+
+        // Ensure no partitions are negative
+        for (d, inc) in [lower, upper] {
+            assert!(
+                // Only points are written with inclsuive bounds.
+                inc ^ (offset == 0),
+                "points cannot have 0 offsets; ranges must have 0 offsets, but got {:?}",
+                partition
+            );
+            if let Int32(p) = d {
+                assert!(p >= 0, "no negative partitions");
+            }
+        }
+
+        packer
+            .push_range(range::Range::new(Some((
+                range::RangeBound::new(lower.0, lower.1),
+                range::RangeBound::new(upper.0, upper.1),
+            ))))
+            .expect("pushing range must not generate errors");
+
+        packer.push(Datum::UInt64(partition.timestamp().offset));
+        SourceData(Ok(row))
+    }
+}
+
+#[derive(Error, Debug)]
+/// Errors converting SourceData to Partitioned<PartitionId, MzOffset>
+pub enum PartitionedConversionError {
+    #[error("partitioned values do not support empty ranges")]
+    EmptyRange,
+}
+
+impl TryFrom<SourceData> for Partitioned<PartitionId, MzOffset> {
+    type Error = PartitionedConversionError;
+    /// # Panics
+    /// - If `data`'s first tuple is an error
+    /// - If `data`'s row's first element is `Datum::Range` and:
+    ///     - The range is not canonicalizable because of an internal error in
+    ///       the range.
+    ///     - The lower or upper bound is not `Datum::Int32` or its value is <
+    ///       0. This is because Kafka partitions are never negative.
+    ///     - The row's second element (the offset) is > 0, but the range does
+    ///       not represent a point. Points represent partitions we've seen, and
+    ///       only points have non-zero offsets.
+    ///     - The offset is 0 and the lower bound is 0. The only value whose
+    ///       lower bound should be inclusive of 0 is the value representing the
+    ///       point 0, i.e. [0,1). This check ensures that we don't introduce
+    ///       negative partitions.
+    fn try_from(data: SourceData) -> Result<Self, Self::Error> {
+        use PartitionId::Kafka;
+
+        let row = data.0.expect("invalid binding");
+        let mut datums = row.iter();
+
+        Ok(match (datums.next(), datums.next(), datums.next()) {
+            (Some(Datum::Range(range)), Some(Datum::UInt64(offset)), None) => {
+                let mut range = range.into_bounds(|b| b.datum());
+                range.canonicalize().expect("ranges must be valid");
+                let range = range.inner.ok_or(PartitionedConversionError::EmptyRange)?;
+
+                let lower = range.lower.bound.map(|lower| {
+                    let p = i32::try_from(lower.unwrap_numeric().0)
+                        .expect("only i32 values converted to ranges");
+                    assert!(p >= 0, "no negative partitions");
+                    Kafka(p)
+                });
+
+                let upper = range.upper.bound.map(|upper| {
+                    let p = i32::try_from(upper.unwrap_numeric().0)
+                        .expect("only i32 values converted to ranges");
+                    assert!(p >= 0, "no negative partitions");
+                    Kafka(p)
+                });
+
+                match (lower, upper) {
+                    // Partitioned points get expressed as [x,x], which is
+                    // canonicalized as [x, x+1); we assert that ranges are
+                    // never expressed in the same terms, i.e. there is no range
+                    // whose lower bound equals its upper bound.
+                    (Some(Kafka(l)), Some(Kafka(u)))
+                        if l == u && range.lower.inclusive && range.upper.inclusive =>
+                    {
+                        assert!(offset > 0, "points have non-zero offsets");
+                        Partitioned::with_partition(Kafka(l), MzOffset::from(offset))
+                    }
+                    _ => {
+                        assert!(offset == 0, "ranges have zero offsets");
+                        Partitioned::with_range(lower, upper, MzOffset::from(offset))
+                    }
+                }
+            }
+            (Some(Datum::UInt64(offset)), None, None) => {
+                Partitioned::with_partition(PartitionId::None, MzOffset::from(offset))
+            }
+            invalid_binding => unreachable!("invalid binding {:?}", invalid_binding),
+        })
     }
 }
 

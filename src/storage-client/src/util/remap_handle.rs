@@ -16,22 +16,15 @@ use timely::progress::Timestamp;
 use mz_persist_client::Upper;
 use mz_repr::Diff;
 
-/// A handle that can be used to durably persist a remap collection translating FromTime to
+/// A handle that can produce the data expressing the translation of FromTime to
 /// IntoTime.
+///
+/// This trait is a subtrait of `RemapHandle` so it can be shared between the
+/// primary reclocking implementation and remap collection migrations.
 #[async_trait::async_trait(?Send)]
-pub trait RemapHandle {
+pub trait RemapHandleReader {
     type FromTime: Timestamp;
     type IntoTime: Timestamp;
-
-    /// Attempt to write the batch of remap collection updates to the collection. If the remap
-    /// collection was already written by some other process an error will return with the current
-    /// upper.
-    async fn compare_and_append(
-        &mut self,
-        updates: Vec<(Self::FromTime, Self::IntoTime, Diff)>,
-        upper: Antichain<Self::IntoTime>,
-        new_upper: Antichain<Self::IntoTime>,
-    ) -> Result<(), Upper<Self::IntoTime>>;
 
     /// Produces the next batch of data contained in the remap collection and the upper frontier of
     /// that batch. The return batch should contain all the updates that happened at times not
@@ -42,6 +35,21 @@ pub trait RemapHandle {
         Vec<(Self::FromTime, Self::IntoTime, Diff)>,
         Antichain<Self::IntoTime>,
     )>;
+}
+
+/// A handle that can be used to durably persist a remap collection translating FromTime to
+/// IntoTime.
+#[async_trait::async_trait(?Send)]
+pub trait RemapHandle: RemapHandleReader {
+    /// Attempt to write the batch of remap collection updates to the collection. If the remap
+    /// collection was already written by some other process an error will return with the current
+    /// upper.
+    async fn compare_and_append(
+        &mut self,
+        updates: Vec<(Self::FromTime, Self::IntoTime, Diff)>,
+        upper: Antichain<Self::IntoTime>,
+        new_upper: Antichain<Self::IntoTime>,
+    ) -> Result<(), Upper<Self::IntoTime>>;
 
     async fn compact(&mut self, since: Antichain<Self::IntoTime>);
 
