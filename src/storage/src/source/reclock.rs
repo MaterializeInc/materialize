@@ -608,7 +608,6 @@ mod tests {
     use tokio::sync::Mutex;
 
     use mz_build_info::DUMMY_BUILD_INFO;
-    use mz_expr::PartitionId;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cache::PersistClientCache;
@@ -635,15 +634,14 @@ mod tests {
     async fn make_test_operator(
         shard: ShardId,
         as_of: Antichain<Timestamp>,
-        partitioned_source: bool,
     ) -> (
         ReclockOperator<
-            Partitioned<PartitionId, MzOffset>,
+            Partitioned<i32, MzOffset>,
             Timestamp,
-            impl RemapHandle<FromTime = Partitioned<PartitionId, MzOffset>, IntoTime = Timestamp>,
+            impl RemapHandle<FromTime = Partitioned<i32, MzOffset>, IntoTime = Timestamp>,
             impl Stream<Item = (Timestamp, Antichain<Timestamp>)>,
         >,
-        ReclockFollower<Partitioned<PartitionId, MzOffset>, Timestamp>,
+        ReclockFollower<Partitioned<i32, MzOffset>, Timestamp>,
     ) {
         let metadata = CollectionMetadata {
             persist_location: PersistLocation {
@@ -669,7 +667,6 @@ mod tests {
             "unittest",
             0,
             1,
-            partitioned_source,
         )
         .await
         .unwrap();
@@ -684,12 +681,12 @@ mod tests {
         (operator, follower)
     }
 
-    /// Generates a `Partitioned<PartitionId, MzOffset>` antichain where all the provided
+    /// Generates a `Partitioned<i32, MzOffset>` antichain where all the provided
     /// partitions are at the specified offset and the gaps in between are filled with range
     /// timestamps at offset zero.
-    fn partitioned_frontier<I>(items: I) -> Antichain<Partitioned<PartitionId, MzOffset>>
+    fn partitioned_frontier<I>(items: I) -> Antichain<Partitioned<i32, MzOffset>>
     where
-        I: IntoIterator<Item = (PartitionId, MzOffset)>,
+        I: IntoIterator<Item = (i32, MzOffset)>,
     {
         let mut frontier = Antichain::new();
         let mut prev = None;
@@ -705,17 +702,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_basic_usage() {
-        const PART_ID: PartitionId = PartitionId::None;
         let (mut operator, mut follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into()), false).await;
+            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
 
         // Reclock offsets 1 and 3 to timestamp 1000
         let batch = vec![
-            (1, Partitioned::with_partition(PART_ID, MzOffset::from(1))),
-            (1, Partitioned::with_partition(PART_ID, MzOffset::from(1))),
-            (3, Partitioned::with_partition(PART_ID, MzOffset::from(3))),
+            (1, Partitioned::with_partition(0, MzOffset::from(1))),
+            (1, Partitioned::with_partition(0, MzOffset::from(1))),
+            (3, Partitioned::with_partition(0, MzOffset::from(3))),
         ];
-        let source_upper = partitioned_frontier([(PART_ID, MzOffset::from(4))]);
+        let source_upper = partitioned_frontier([(0, MzOffset::from(4))]);
         follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
 
         let reclocked_msgs = follower
@@ -729,7 +725,7 @@ mod tests {
 
         // This will return the antichain containing 1000 because that's where future messages will
         // offset 1 will be reclocked to
-        let query = partitioned_frontier([(PART_ID, MzOffset::from(1))]);
+        let query = partitioned_frontier([(0, MzOffset::from(1))]);
         assert_eq!(
             Ok(Antichain::from_elem(1000.into())),
             follower.reclock_frontier(query.borrow())
@@ -737,8 +733,8 @@ mod tests {
 
         // Reclock more messages for offsets 3 to the same timestamp
         let batch = vec![
-            (3, Partitioned::with_partition(PART_ID, MzOffset::from(3))),
-            (3, Partitioned::with_partition(PART_ID, MzOffset::from(3))),
+            (3, Partitioned::with_partition(0, MzOffset::from(3))),
+            (3, Partitioned::with_partition(0, MzOffset::from(3))),
         ];
         let reclocked_msgs = follower
             .reclock(batch)
@@ -748,7 +744,7 @@ mod tests {
 
         // We're done with offset 3. Now reclocking the source upper will result to the overall
         // target upper (1001) because any new bindings will be minted beyond that timestamp.
-        let query = partitioned_frontier([(PART_ID, MzOffset::from(4))]);
+        let query = partitioned_frontier([(0, MzOffset::from(4))]);
 
         assert_eq!(
             Ok(Antichain::from_elem(1001.into())),
@@ -758,11 +754,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_reclock_frontier() {
-        const PART1: PartitionId = PartitionId::Kafka(1);
-        const PART2: PartitionId = PartitionId::Kafka(2);
-
         let (mut operator, mut follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into()), true).await;
+            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
 
         let query = Antichain::from_elem(Partitioned::minimum());
         // This is the initial source frontier so we should get the initial ts upper
@@ -774,18 +767,15 @@ mod tests {
         // Mint a couple of bindings for multiple partitions
         follower.push_trace_batch(
             operator
-                .mint(partitioned_frontier([(PART1, MzOffset::from(10))]).borrow())
+                .mint(partitioned_frontier([(1, MzOffset::from(10))]).borrow())
                 .await,
         );
 
         follower.push_trace_batch(
             operator
                 .mint(
-                    partitioned_frontier([
-                        (PART1, MzOffset::from(10)),
-                        (PART2, MzOffset::from(10)),
-                    ])
-                    .borrow(),
+                    partitioned_frontier([(1, MzOffset::from(10)), (2, MzOffset::from(10))])
+                        .borrow(),
                 )
                 .await,
         );
@@ -803,7 +793,7 @@ mod tests {
                 ),
                 // updates from first mint
                 (
-                    Partitioned::with_range(None, Some(PART1), MzOffset::from(0)),
+                    Partitioned::with_range(None, Some(1), MzOffset::from(0)),
                     1000.into(),
                     1
                 ),
@@ -813,33 +803,33 @@ mod tests {
                     -1
                 ),
                 (
-                    Partitioned::with_range(Some(PART1), None, MzOffset::from(0)),
+                    Partitioned::with_range(Some(1), None, MzOffset::from(0)),
                     1000.into(),
                     1
                 ),
                 (
-                    Partitioned::with_partition(PART1, MzOffset::from(10)),
+                    Partitioned::with_partition(1, MzOffset::from(10)),
                     1000.into(),
                     1
                 ),
                 // updates from second mint
                 (
-                    Partitioned::with_range(Some(PART1), Some(PART2), MzOffset::from(0)),
+                    Partitioned::with_range(Some(1), Some(2), MzOffset::from(0)),
                     2000.into(),
                     1
                 ),
                 (
-                    Partitioned::with_range(Some(PART1), None, MzOffset::from(0)),
+                    Partitioned::with_range(Some(1), None, MzOffset::from(0)),
                     2000.into(),
                     -1
                 ),
                 (
-                    Partitioned::with_range(Some(PART2), None, MzOffset::from(0)),
+                    Partitioned::with_range(Some(2), None, MzOffset::from(0)),
                     2000.into(),
                     1
                 ),
                 (
-                    Partitioned::with_partition(PART2, MzOffset::from(10)),
+                    Partitioned::with_partition(2, MzOffset::from(10)),
                     2000.into(),
                     1
                 ),
@@ -854,19 +844,18 @@ mod tests {
         );
 
         // Map a frontier that advances only one of the partitions
-        let query = partitioned_frontier([(PART1, MzOffset::from(9))]);
+        let query = partitioned_frontier([(1, MzOffset::from(9))]);
         assert_eq!(
             Ok(Antichain::from_elem(1000.into())),
             follower.reclock_frontier(query.borrow())
         );
-        let query = partitioned_frontier([(PART1, MzOffset::from(10))]);
+        let query = partitioned_frontier([(1, MzOffset::from(10))]);
         assert_eq!(
             Ok(Antichain::from_elem(2000.into())),
             follower.reclock_frontier(query.borrow())
         );
         // A frontier that is the upper of both partitions should map to the timestamp upper
-        let query =
-            partitioned_frontier([(PART1, MzOffset::from(10)), (PART2, MzOffset::from(10))]);
+        let query = partitioned_frontier([(1, MzOffset::from(10)), (2, MzOffset::from(10))]);
         assert_eq!(
             Ok(Antichain::from_elem(2001.into())),
             follower.reclock_frontier(query.borrow())
@@ -874,8 +863,7 @@ mod tests {
 
         // Advance the operator and confirm that we get to the next timestamp
         follower.push_trace_batch(operator.advance().await);
-        let query =
-            partitioned_frontier([(PART1, MzOffset::from(10)), (PART2, MzOffset::from(10))]);
+        let query = partitioned_frontier([(1, MzOffset::from(10)), (2, MzOffset::from(10))]);
         assert_eq!(
             Ok(Antichain::from_elem(3001.into())),
             follower.reclock_frontier(query.borrow())
@@ -884,7 +872,7 @@ mod tests {
         // Compact but not enough to change the bindings
         operator.compact(Antichain::from_elem(900.into())).await;
         follower.compact(Antichain::from_elem(900.into()));
-        let query = partitioned_frontier([(PART1, MzOffset::from(9))]);
+        let query = partitioned_frontier([(1, MzOffset::from(9))]);
         assert_eq!(
             Ok(Antichain::from_elem(1000.into())),
             follower.reclock_frontier(query.borrow())
@@ -893,15 +881,15 @@ mod tests {
         // Compact enough to compact bindings
         operator.compact(Antichain::from_elem(1500.into())).await;
         follower.compact(Antichain::from_elem(1500.into()));
-        let query = partitioned_frontier([(PART1, MzOffset::from(9))]);
+        let query = partitioned_frontier([(1, MzOffset::from(9))]);
         assert_eq!(
             Err(ReclockError::NotBeyondSince(Partitioned::with_partition(
-                PART1,
+                1,
                 MzOffset::from(9)
             ))),
             follower.reclock_frontier(query.borrow())
         );
-        let query = partitioned_frontier([(PART1, MzOffset::from(10))]);
+        let query = partitioned_frontier([(1, MzOffset::from(10))]);
         assert_eq!(
             Ok(Antichain::from_elem(2000.into())),
             follower.reclock_frontier(query.borrow())
@@ -910,17 +898,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_reclock() {
-        const PART_ID: PartitionId = PartitionId::None;
-
         let (mut operator, mut follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into()), false).await;
+            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
 
         // Reclock offsets 1 and 2 to timestamp 1000
         let batch = vec![
-            (1, Partitioned::with_partition(PART_ID, MzOffset::from(1))),
-            (2, Partitioned::with_partition(PART_ID, MzOffset::from(2))),
+            (1, Partitioned::with_partition(0, MzOffset::from(1))),
+            (2, Partitioned::with_partition(0, MzOffset::from(2))),
         ];
-        let source_upper = partitioned_frontier([(PART_ID, MzOffset::from(3))]);
+        let source_upper = partitioned_frontier([(0, MzOffset::from(3))]);
 
         follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
         let reclocked_msgs = follower
@@ -931,10 +917,10 @@ mod tests {
 
         // Reclock offsets 3 and 4 to timestamp 2000
         let batch = vec![
-            (3, Partitioned::with_partition(PART_ID, MzOffset::from(3))),
-            (4, Partitioned::with_partition(PART_ID, MzOffset::from(4))),
+            (3, Partitioned::with_partition(0, MzOffset::from(3))),
+            (4, Partitioned::with_partition(0, MzOffset::from(4))),
         ];
-        let source_upper = partitioned_frontier([(PART_ID, MzOffset::from(5))]);
+        let source_upper = partitioned_frontier([(0, MzOffset::from(5))]);
 
         follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
         let reclocked_msgs = follower
@@ -945,8 +931,8 @@ mod tests {
 
         // Reclock the same offsets again
         let batch = vec![
-            (1, Partitioned::with_partition(PART_ID, MzOffset::from(1))),
-            (2, Partitioned::with_partition(PART_ID, MzOffset::from(2))),
+            (1, Partitioned::with_partition(0, MzOffset::from(1))),
+            (2, Partitioned::with_partition(0, MzOffset::from(2))),
         ];
 
         let reclocked_msgs = follower
@@ -957,10 +943,10 @@ mod tests {
 
         // Reclock a batch with offsets that spans multiple bindings
         let batch = vec![
-            (1, Partitioned::with_partition(PART_ID, MzOffset::from(1))),
-            (2, Partitioned::with_partition(PART_ID, MzOffset::from(2))),
-            (3, Partitioned::with_partition(PART_ID, MzOffset::from(3))),
-            (4, Partitioned::with_partition(PART_ID, MzOffset::from(4))),
+            (1, Partitioned::with_partition(0, MzOffset::from(1))),
+            (2, Partitioned::with_partition(0, MzOffset::from(2))),
+            (3, Partitioned::with_partition(0, MzOffset::from(3))),
+            (4, Partitioned::with_partition(0, MzOffset::from(4))),
         ];
         let reclocked_msgs = follower
             .reclock(batch)
@@ -978,10 +964,10 @@ mod tests {
 
         // Reclock a batch that contains multiple messages having the same offset
         let batch = vec![
-            (1, Partitioned::with_partition(PART_ID, MzOffset::from(1))),
-            (1, Partitioned::with_partition(PART_ID, MzOffset::from(1))),
-            (3, Partitioned::with_partition(PART_ID, MzOffset::from(3))),
-            (3, Partitioned::with_partition(PART_ID, MzOffset::from(3))),
+            (1, Partitioned::with_partition(0, MzOffset::from(1))),
+            (1, Partitioned::with_partition(0, MzOffset::from(1))),
+            (3, Partitioned::with_partition(0, MzOffset::from(3))),
+            (3, Partitioned::with_partition(0, MzOffset::from(3))),
         ];
         let reclocked_msgs = follower
             .reclock(batch)
@@ -1000,28 +986,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_reclock_gh16318() {
-        const PART0: PartitionId = PartitionId::Kafka(0);
-        const PART1: PartitionId = PartitionId::Kafka(1);
         let (mut operator, mut follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into()), true).await;
+            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
 
-        // First mint bindings for PART0 at timestamp 1000
-        let source_upper = partitioned_frontier([(PART0, MzOffset::from(50))]);
+        // First mint bindings for 0 at timestamp 1000
+        let source_upper = partitioned_frontier([(0, MzOffset::from(50))]);
         follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
 
-        // Then only for PART1 at timestamp 2000
+        // Then only for 1 at timestamp 2000
+        let source_upper = partitioned_frontier([(0, MzOffset::from(50)), (1, MzOffset::from(50))]);
+        follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
+
+        // Then again only for 0 at timestamp 3000
         let source_upper =
-            partitioned_frontier([(PART0, MzOffset::from(50)), (PART1, MzOffset::from(50))]);
+            partitioned_frontier([(0, MzOffset::from(100)), (1, MzOffset::from(50))]);
         follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
 
-        // Then again only for PART0 at timestamp 3000
-        let source_upper =
-            partitioned_frontier([(PART0, MzOffset::from(100)), (PART1, MzOffset::from(50))]);
-        follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
-
-        // Reclockng (PART0, 50) must ignore the updates on the FromTime frontier that happened at
+        // Reclockng (0, 50) must ignore the updates on the FromTime frontier that happened at
         // timestamp 2000 since those are completely unrelated
-        let batch = vec![(50, Partitioned::with_partition(PART0, MzOffset::from(50)))];
+        let batch = vec![(50, Partitioned::with_partition(0, MzOffset::from(50)))];
         let reclocked_msgs = follower
             .reclock(batch)
             .map(|(m, ts)| (m, ts.unwrap()))
@@ -1033,16 +1016,15 @@ mod tests {
     async fn test_compaction() {
         let binding_shard = ShardId::new();
 
-        const PART_ID: PartitionId = PartitionId::None;
         let (mut operator, mut follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into()), false).await;
+            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
 
         // Reclock offsets 1 and 2 to timestamp 1000
         let batch = vec![
-            (1, Partitioned::with_partition(PART_ID, MzOffset::from(1))),
-            (2, Partitioned::with_partition(PART_ID, MzOffset::from(2))),
+            (1, Partitioned::with_partition(0, MzOffset::from(1))),
+            (2, Partitioned::with_partition(0, MzOffset::from(2))),
         ];
-        let source_upper = partitioned_frontier([(PART_ID, MzOffset::from(3))]);
+        let source_upper = partitioned_frontier([(0, MzOffset::from(3))]);
 
         follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
         let reclocked_msgs = follower
@@ -1053,10 +1035,10 @@ mod tests {
 
         // Reclock offsets 3 and 4 to timestamp 2000
         let batch = vec![
-            (3, Partitioned::with_partition(PART_ID, MzOffset::from(3))),
-            (4, Partitioned::with_partition(PART_ID, MzOffset::from(4))),
+            (3, Partitioned::with_partition(0, MzOffset::from(3))),
+            (4, Partitioned::with_partition(0, MzOffset::from(4))),
         ];
-        let source_upper = partitioned_frontier([(PART_ID, MzOffset::from(5))]);
+        let source_upper = partitioned_frontier([(0, MzOffset::from(5))]);
 
         follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
         let reclocked_msgs = follower
@@ -1071,8 +1053,8 @@ mod tests {
 
         // Reclock offsets 3 and 4 again to see we haven't lost the ability
         let batch = vec![
-            (3, Partitioned::with_partition(PART_ID, MzOffset::from(3))),
-            (4, Partitioned::with_partition(PART_ID, MzOffset::from(4))),
+            (3, Partitioned::with_partition(0, MzOffset::from(3))),
+            (4, Partitioned::with_partition(0, MzOffset::from(4))),
         ];
 
         let reclocked_msgs = follower
@@ -1082,7 +1064,7 @@ mod tests {
         assert_eq!(reclocked_msgs, &[(3, 2000.into()), (4, 2000.into())]);
 
         // Attempting to reclock offset 2 should return an error
-        let src_ts = Partitioned::with_partition(PART_ID, MzOffset::from(2));
+        let src_ts = Partitioned::with_partition(0, MzOffset::from(2));
         let batch = vec![(2, src_ts.clone())];
 
         let reclocked_msgs = follower.reclock(batch).collect_vec();
@@ -1093,12 +1075,12 @@ mod tests {
 
         // Starting a new operator with an `as_of` is the same as having compacted
         let (_operator, follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(1000.into()), false).await;
+            make_test_operator(binding_shard, Antichain::from_elem(1000.into())).await;
 
         // Reclocking offsets 3 and 4 should succeed
         let batch = vec![
-            (3, Partitioned::with_partition(PART_ID, MzOffset::from(3))),
-            (4, Partitioned::with_partition(PART_ID, MzOffset::from(4))),
+            (3, Partitioned::with_partition(0, MzOffset::from(3))),
+            (4, Partitioned::with_partition(0, MzOffset::from(4))),
         ];
 
         let reclocked_msgs = follower
@@ -1108,7 +1090,7 @@ mod tests {
         assert_eq!(reclocked_msgs, &[(3, 2000.into()), (4, 2000.into())]);
 
         // But attempting to reclock offset 2 should return an error
-        let src_ts = Partitioned::with_partition(PART_ID, MzOffset::from(2));
+        let src_ts = Partitioned::with_partition(0, MzOffset::from(2));
         let batch = vec![(2, src_ts.clone())];
 
         let reclocked_msgs = follower.reclock(batch).collect_vec();
@@ -1120,22 +1102,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrency() {
-        const PART_ID: PartitionId = PartitionId::None;
-
         // Create two operators pointing to the same shard
         let shared_shard = ShardId::new();
         let (mut op_a, mut follower_a) =
-            make_test_operator(shared_shard, Antichain::from_elem(0.into()), false).await;
+            make_test_operator(shared_shard, Antichain::from_elem(0.into())).await;
         let (mut op_b, mut follower_b) =
-            make_test_operator(shared_shard, Antichain::from_elem(0.into()), false).await;
+            make_test_operator(shared_shard, Antichain::from_elem(0.into())).await;
 
         // Reclock a batch from one of the operators
         // Reclock offsets 1 and 2 to timestamp 1000 from operator A
         let batch = vec![
-            (1, Partitioned::with_partition(PART_ID, MzOffset::from(1))),
-            (2, Partitioned::with_partition(PART_ID, MzOffset::from(2))),
+            (1, Partitioned::with_partition(0, MzOffset::from(1))),
+            (2, Partitioned::with_partition(0, MzOffset::from(2))),
         ];
-        let source_upper = partitioned_frontier([(PART_ID, MzOffset::from(3))]);
+        let source_upper = partitioned_frontier([(0, MzOffset::from(3))]);
 
         follower_a.push_trace_batch(op_a.mint(source_upper.borrow()).await);
         let reclocked_msgs = follower_a
@@ -1153,12 +1133,12 @@ mod tests {
 
         // Reclock a batch that includes messages from the bindings already minted
         let batch = vec![
-            (1, Partitioned::with_partition(PART_ID, MzOffset::from(1))),
-            (2, Partitioned::with_partition(PART_ID, MzOffset::from(2))),
-            (3, Partitioned::with_partition(PART_ID, MzOffset::from(3))),
-            (4, Partitioned::with_partition(PART_ID, MzOffset::from(4))),
+            (1, Partitioned::with_partition(0, MzOffset::from(1))),
+            (2, Partitioned::with_partition(0, MzOffset::from(2))),
+            (3, Partitioned::with_partition(0, MzOffset::from(3))),
+            (4, Partitioned::with_partition(0, MzOffset::from(4))),
         ];
-        let source_upper = partitioned_frontier([(PART_ID, MzOffset::from(5))]);
+        let source_upper = partitioned_frontier([(0, MzOffset::from(5))]);
         // This operator should attempt to mint in one go, fail, re-sync, and retry only for the
         // bindings that still need minting
         follower_b.push_trace_batch(op_b.mint(source_upper.borrow()).await);
@@ -1181,17 +1161,16 @@ mod tests {
     async fn test_inversion() {
         let binding_shard = ShardId::new();
 
-        const PART_ID: PartitionId = PartitionId::None;
         let (mut operator, mut follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into()), false).await;
+            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
 
         // SETUP
         // Reclock offsets 1 and 2 to timestamp 1000
         let batch = vec![
-            (1, Partitioned::with_partition(PART_ID, MzOffset::from(1))),
-            (2, Partitioned::with_partition(PART_ID, MzOffset::from(2))),
+            (1, Partitioned::with_partition(0, MzOffset::from(1))),
+            (2, Partitioned::with_partition(0, MzOffset::from(2))),
         ];
-        let source_upper = partitioned_frontier([(PART_ID, MzOffset::from(3))]);
+        let source_upper = partitioned_frontier([(0, MzOffset::from(3))]);
 
         follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
         let reclocked_msgs = follower
@@ -1201,10 +1180,10 @@ mod tests {
         assert_eq!(reclocked_msgs, &[(1, 1000.into()), (2, 1000.into())]);
         // Reclock offsets 3 and 4 to timestamp 2000
         let batch = vec![
-            (3, Partitioned::with_partition(PART_ID, MzOffset::from(3))),
-            (4, Partitioned::with_partition(PART_ID, MzOffset::from(4))),
+            (3, Partitioned::with_partition(0, MzOffset::from(3))),
+            (4, Partitioned::with_partition(0, MzOffset::from(4))),
         ];
-        let source_upper = partitioned_frontier([(PART_ID, MzOffset::from(5))]);
+        let source_upper = partitioned_frontier([(0, MzOffset::from(5))]);
 
         follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
         let reclocked_msgs = follower
@@ -1214,10 +1193,10 @@ mod tests {
         assert_eq!(reclocked_msgs, &[(3, 2000.into()), (4, 2000.into())]);
         // Reclock offsets 5 and 6 to timestamp 3000
         let batch = vec![
-            (5, Partitioned::with_partition(PART_ID, MzOffset::from(5))),
-            (6, Partitioned::with_partition(PART_ID, MzOffset::from(6))),
+            (5, Partitioned::with_partition(0, MzOffset::from(5))),
+            (6, Partitioned::with_partition(0, MzOffset::from(6))),
         ];
-        let source_upper = partitioned_frontier([(PART_ID, MzOffset::from(7))]);
+        let source_upper = partitioned_frontier([(0, MzOffset::from(7))]);
 
         follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
         let reclocked_msgs = follower
@@ -1235,7 +1214,7 @@ mod tests {
             follower
                 .source_upper_at_frontier(Antichain::from_elem(3001.into()).borrow())
                 .unwrap(),
-            partitioned_frontier([(PART_ID, MzOffset::from(7))])
+            partitioned_frontier([(0, MzOffset::from(7))])
         );
         // Check out "upper strictly greater is correct
         assert_eq!(
@@ -1244,7 +1223,7 @@ mod tests {
                 .unwrap(),
             // Note this is the UPPER offset for the previous part of
             // the trace.
-            partitioned_frontier([(PART_ID, MzOffset::from(5))])
+            partitioned_frontier([(0, MzOffset::from(5))])
         );
         // random time in the middle of 2 pieces of the trace
         assert_eq!(
@@ -1253,7 +1232,7 @@ mod tests {
                 .unwrap(),
             // Note this is the UPPER offset for the previous part of
             // the trace.
-            partitioned_frontier([(PART_ID, MzOffset::from(5))])
+            partitioned_frontier([(0, MzOffset::from(5))])
         );
 
         // Check startup edge-case (the since is still 0 here) doesn't panic.
@@ -1270,14 +1249,14 @@ mod tests {
             follower
                 .source_upper_at_frontier(Antichain::from_elem(2001.into()).borrow())
                 .unwrap(),
-            partitioned_frontier([(PART_ID, MzOffset::from(5))])
+            partitioned_frontier([(0, MzOffset::from(5))])
         );
         // upper logic, as before
         assert_eq!(
             follower
                 .source_upper_at_frontier(Antichain::from_elem(2000.into()).borrow())
                 .unwrap(),
-            partitioned_frontier([(PART_ID, MzOffset::from(3))])
+            partitioned_frontier([(0, MzOffset::from(3))])
         );
 
         // After compaction it should still work
@@ -1286,7 +1265,7 @@ mod tests {
             follower
                 .source_upper_at_frontier(Antichain::from_elem(2001.into()).borrow())
                 .unwrap(),
-            partitioned_frontier([(PART_ID, MzOffset::from(5))])
+            partitioned_frontier([(0, MzOffset::from(5))])
         );
         // compact as close as we can
         follower.compact(Antichain::from_elem(2000.into()));
@@ -1294,7 +1273,7 @@ mod tests {
             follower
                 .source_upper_at_frontier(Antichain::from_elem(2001.into()).borrow())
                 .unwrap(),
-            partitioned_frontier([(PART_ID, MzOffset::from(5))])
+            partitioned_frontier([(0, MzOffset::from(5))])
         );
 
         // If we compact too far, we get an error. Note we compact
@@ -1315,9 +1294,8 @@ mod tests {
     async fn test_since_hold() {
         let binding_shard = ShardId::new();
 
-        const PART_ID: PartitionId = PartitionId::None;
         let (mut operator, _follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into()), false).await;
+            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
 
         // We do multiple rounds of minting. This will downgrade the since of
         // the internal listen. If we didn't make sure to also heartbeat the
@@ -1329,11 +1307,11 @@ mod tests {
         // handle used for holding back the since will timeout.
 
         tokio::time::advance(PERSIST_READER_LEASE_TIMEOUT_MS / 2 + Duration::from_millis(1)).await;
-        let source_upper = partitioned_frontier([(PART_ID, MzOffset::from(3))]);
+        let source_upper = partitioned_frontier([(0, MzOffset::from(3))]);
         let _ = operator.mint(source_upper.borrow()).await;
 
         tokio::time::advance(PERSIST_READER_LEASE_TIMEOUT_MS / 2 + Duration::from_millis(1)).await;
-        let source_upper = partitioned_frontier([(PART_ID, MzOffset::from(5))]);
+        let source_upper = partitioned_frontier([(0, MzOffset::from(5))]);
         let _ = operator.mint(source_upper.borrow()).await;
 
         // Allow time for background maintenance work, which does lease
@@ -1344,7 +1322,7 @@ mod tests {
         // Starting a new operator with an `as_of` of `0`, to verify that
         // holding back the `since` of the remap shard works as expected.
         let (_operator, _follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into()), false).await;
+            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
 
         // Also manually assert the since of the remap shard.
         let persist_location = PersistLocation {

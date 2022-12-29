@@ -228,8 +228,8 @@ impl OffsetAntichain {
 /// the conversion here can fail. While it's non-standard to panic in From implementations this is
 /// fine here because it's just an interim step that will be removed shortly and all uses would
 /// have to panic on error anyway.
-impl From<Antichain<Partitioned<PartitionId, MzOffset>>> for OffsetAntichain {
-    fn from(frontier: Antichain<Partitioned<PartitionId, MzOffset>>) -> Self {
+impl From<Antichain<Partitioned<i32, MzOffset>>> for OffsetAntichain {
+    fn from(frontier: Antichain<Partitioned<i32, MzOffset>>) -> Self {
         use mz_timely_util::order::{Interval, RangeBound};
 
         // Extract the timestamps of this antichain and order them by partition
@@ -259,7 +259,7 @@ impl From<Antichain<Partitioned<PartitionId, MzOffset>>> for OffsetAntichain {
                 Interval::Point(pid) => {
                     let lower = RangeBound::Elem(pid.clone());
                     assert_eq!(prev_upper, &lower, "invalid frontier: {frontier:?}");
-                    antichain.insert(pid.clone(), *element.timestamp());
+                    antichain.insert(PartitionId::Kafka(pid.clone()), *element.timestamp());
                 }
             }
         }
@@ -275,13 +275,13 @@ impl From<Antichain<Partitioned<PartitionId, MzOffset>>> for OffsetAntichain {
 /// Implementation that converts from an OffsetAntichain to an Antichain. This translation code is
 /// here for compatibility and will be removed once the pipeline is switched to native timestamps
 /// throughout.
-impl From<OffsetAntichain> for Antichain<Partitioned<PartitionId, MzOffset>> {
+impl From<OffsetAntichain> for Antichain<Partitioned<i32, MzOffset>> {
     fn from(frontier: OffsetAntichain) -> Self {
         // Extract the timestamps of this frontier and order them by partition
         let mut elements = frontier
             .inner
             .into_iter()
-            .filter(|(pid, offset)| offset.offset != 0 || pid == &PartitionId::None)
+            .filter(|(_pid, offset)| offset.offset != 0)
             .collect::<Vec<_>>();
         elements.sort_unstable();
 
@@ -290,9 +290,13 @@ impl From<OffsetAntichain> for Antichain<Partitioned<PartitionId, MzOffset>> {
         let mut prev_pid = None;
         let mut antichain = Antichain::new();
         for (pid, offset) in elements {
+            let pid = match pid {
+                PartitionId::Kafka(pid) => pid,
+                PartitionId::None => panic!("invalid partitioned partition"),
+            };
             antichain.insert(Partitioned::with_range(
                 prev_pid,
-                Some(pid.clone()),
+                Some(pid),
                 MzOffset::from(0),
             ));
             prev_pid = Some(pid.clone());

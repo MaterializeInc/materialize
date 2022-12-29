@@ -33,6 +33,7 @@ use mz_repr::{adt::jsonb::Jsonb, GlobalId};
 use mz_storage_client::types::connections::{ConnectionContext, StringOrSecret};
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset};
+use mz_timely_util::order::Partitioned;
 
 use crate::source::commit::LogCommitter;
 
@@ -293,6 +294,7 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
 impl SourceReader for KafkaSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
+    type Time = Partitioned<i32, MzOffset>;
     type Diff = ();
 
     /// This function polls from the next consumer for which a message is available. This function

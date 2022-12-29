@@ -1896,7 +1896,7 @@ where
         let res = match connection {
             crate::types::sources::GenericSourceConnection::Kafka(_) => {
                 remap_migration::RemapHandleMigrator::<
-                    mz_timely_util::order::Partitioned<mz_expr::PartitionId, MzOffset>,
+                    mz_timely_util::order::Partitioned<i32, MzOffset>,
                     T,
                 >::migrate(
                     Arc::clone(&self.persist),

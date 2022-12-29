@@ -184,9 +184,6 @@ impl<D> Range<D> {
 
     /// Converts `self` from having bounds of type `D` to type `O`, converting
     /// the current bounds using `conv`.
-    // clippy's suggestion for avoiding redundant closures on `conv` moves `F`,
-    // which does not (and in most cases cannot) implement Copy.
-    #[allow(clippy::redundant_closure)]
     pub fn into_bounds<F, O>(self, conv: F) -> Range<O>
     where
         F: Fn(D) -> O,
@@ -197,19 +194,18 @@ impl<D> Range<D> {
                 .map(|RangeInner::<D> { lower, upper }| RangeInner::<O> {
                     lower: RangeLowerBound {
                         inclusive: lower.inclusive,
-                        bound: lower.bound.map(|d| conv(d)),
+                        bound: lower.bound.map(&conv),
                     },
                     upper: RangeUpperBound {
                         inclusive: upper.inclusive,
-                        bound: upper.bound.map(|d| conv(d)),
+                        bound: upper.bound.map(&conv),
                     },
                 }),
         }
     }
 }
 
-// Range implementations meant to work with `Range<Datum>` and
-// `Range<DatumNested>`.
+/// Range implementations meant to work with `Range<Datum>` and `Range<DatumNested>`.
 impl<'a, B: Copy> Range<B>
 where
     Datum<'a>: From<B>,
