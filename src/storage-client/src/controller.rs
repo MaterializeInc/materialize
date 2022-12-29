@@ -63,13 +63,14 @@ use crate::types::hosts::StorageHostConfig;
 use crate::types::sinks::{
     MetadataUnfilled, ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc,
 };
-use crate::types::sources::{IngestionDescription, SourceData, SourceExport};
+use crate::types::sources::{IngestionDescription, MzOffset, SourceData, SourceExport};
 
 mod collection_mgmt;
 mod hosts;
 mod metrics_scraper;
 mod persist_handles;
 mod rehydration;
+mod remap_migration;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
 
@@ -956,6 +957,9 @@ where
             self.state.persist_read_handles.register(id, since_handle);
 
             self.state.collections.insert(id, collection_state);
+
+            self.migrate_remap_shard(id, &description.data_source).await;
+
             self.register_shard_mapping(id).await;
 
             match description.data_source {
@@ -1865,6 +1869,72 @@ where
                 shard_id
             );
         }
+    }
+
+    /// For appropriate data sources, migrate the remap collection correlated
+    /// to `id` to one compatible with `Partitioned<PartitionId, MzOffset>`.
+    pub async fn migrate_remap_shard(&mut self, id: GlobalId, data_source: &DataSource) {
+        // We only want to migrate ingestion-based sources' remap collections
+        let connection = match data_source {
+            DataSource::Ingestion(IngestionDescription {
+                desc: crate::types::sources::SourceDesc { connection, .. },
+                ..
+            }) => connection,
+            _ => return,
+        };
+
+        let metadata = self
+            .state
+            .collections
+            .get(&id)
+            .expect("must have seen metadata inserted")
+            .collection_metadata
+            .clone();
+
+        let migrate_to_shard = ShardId::new();
+
+        let res = match connection {
+            crate::types::sources::GenericSourceConnection::Kafka(_) => {
+                remap_migration::RemapHandleMigrator::<
+                    mz_timely_util::order::Partitioned<mz_expr::PartitionId, MzOffset>,
+                    T,
+                >::migrate(
+                    Arc::clone(&self.persist),
+                    metadata.clone(),
+                    migrate_to_shard,
+                    id,
+                )
+                .await
+            }
+            _ => {
+                remap_migration::RemapHandleMigrator::<MzOffset, T>::migrate(
+                    Arc::clone(&self.persist),
+                    metadata.clone(),
+                    migrate_to_shard,
+                    id,
+                )
+                .await
+            }
+        };
+
+        let remap_shard = match res {
+            None => {
+                info!("remap shard migration({id:?}): unnecessary");
+                return;
+            }
+            Some(s) => s,
+        };
+
+        self.rewrite_collection_metadata(
+            id,
+            DurableCollectionMetadata {
+                data_shard: metadata.data_shard,
+                remap_shard,
+            },
+        )
+        .await;
+
+        info!("remap shard migration({id:?}): complete");
     }
 }
 
