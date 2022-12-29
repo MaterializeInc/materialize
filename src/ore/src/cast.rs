@@ -177,21 +177,48 @@ reinterpret_cast!(i32, u32);
 reinterpret_cast!(u64, i64);
 reinterpret_cast!(i64, u64);
 
-/// Returns `Some` if `f` can losslessly be converted to an i64.
-#[allow(clippy::as_conversions)]
-pub fn f64_to_i64(f: f64) -> Option<i64> {
-    let i = f as i64;
-    let i_as_f = i as f64;
-    if f == i_as_f {
-        Some(i)
-    } else {
-        None
-    }
+/// A trait for attempted casts.
+///
+/// `TryCast` is like `as`, but returns `None` if
+/// the conversion can't be round-tripped.
+///
+/// Note: there may be holes in the domain of `try_cast_from`,
+/// which is probably why `TryFrom` wasn't implemented for floats in the
+/// standard library. For example, `i64::MAX` can be converted to
+/// `f64`, but `i64::MAX - 1` can't.
+pub trait TryCastFrom<T>: Sized {
+    /// Attempts to perform the cast
+    fn try_cast_from(from: T) -> Option<Self>;
 }
 
+/// Implement `TryCastFrom` for the specified types.
+/// This is only necessary for types for which `as` exists,
+/// but `TryFrom` doesn't (notably floats).
+macro_rules! try_cast_from {
+    ($from:ty, $to:ty) => {
+        impl crate::cast::TryCastFrom<$from> for $to {
+            #[allow(clippy::as_conversions)]
+            fn try_cast_from(from: $from) -> Option<$to> {
+                let to = from as $to;
+                let inverse = to as $from;
+                if from == inverse {
+                    Some(to)
+                } else {
+                    None
+                }
+            }
+        }
+    };
+}
+
+try_cast_from!(f64, i64);
+try_cast_from!(i64, f64);
+try_cast_from!(f64, u64);
+try_cast_from!(u64, f64);
+
 #[test]
-fn test_f64_to_i64() {
-    let cases = vec![
+fn test_try_cast_from() {
+    let f64_i64_cases = vec![
         (0.0, Some(0)),
         (1.0, Some(1)),
         (1.5, None),
@@ -205,8 +232,48 @@ fn test_f64_to_i64() {
         (9223372036854775807f64 + 10_000f64, None),
         (-9223372036854775808f64 - 10_000f64, None),
     ];
-    for (f, expect) in cases {
-        let r = f64_to_i64(f);
+    let i64_f64_cases = vec![
+        (0, Some(0.0)),
+        (1, Some(1.0)),
+        (-1, Some(-1.0)),
+        (i64::MAX, Some(9223372036854775807f64)),
+        (i64::MIN, Some(-9223372036854775808f64)),
+        (i64::MAX - 1, None),
+        (i64::MIN + 1, None),
+    ];
+    let f64_u64_cases = vec![
+        (0.0, Some(0)),
+        (1.0, Some(1)),
+        (1.5, None),
+        (f64::INFINITY, None),
+        (f64::NAN, None),
+        (f64::EPSILON, None),
+        (f64::MAX, None),
+        (f64::MIN, None),
+        (-1.0, None),
+        (18446744073709551615f64, Some(u64::MAX)),
+        (18446744073709551615f64 + 10_000f64, None),
+    ];
+    let u64_f64_cases = vec![
+        (0, Some(0.0)),
+        (1, Some(1.0)),
+        (u64::MAX, Some(18446744073709551615f64)),
+        (u64::MAX - 1, None),
+    ];
+    for (f, expect) in f64_i64_cases {
+        let r = i64::try_cast_from(f);
         assert_eq!(r, expect, "input: {f}");
+    }
+    for (i, expect) in i64_f64_cases {
+        let r = f64::try_cast_from(i);
+        assert_eq!(r, expect, "input: {i}");
+    }
+    for (f, expect) in f64_u64_cases {
+        let r = u64::try_cast_from(f);
+        assert_eq!(r, expect, "input: {f}");
+    }
+    for (u, expect) in u64_f64_cases {
+        let r = f64::try_cast_from(u);
+        assert_eq!(r, expect, "input: {u}");
     }
 }
