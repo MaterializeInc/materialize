@@ -109,6 +109,9 @@ pub struct RawSourceCreationConfig {
     pub resume_upper: Antichain<Timestamp>,
     /// A handle to the persist client cache
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    /// Until we genericize reclocking, we need to understand if this data
+    /// should express or synthesize partition data.
+    pub partitioned_source: bool,
 }
 
 /// A batch of messages from a source reader, along with the batch upper, the
@@ -293,6 +296,7 @@ where
         base_metrics: _,
         now: _,
         persist_clients: _,
+        partitioned_source: _,
     } = config;
     Box::pin(async_stream::stream!({
         // Most recent batch upper frontier, does not regress.
@@ -511,6 +515,7 @@ where
         base_metrics,
         now: now_fn,
         persist_clients: _,
+        partitioned_source: _,
     } = config;
 
     let (stream, capability) = async_source(
@@ -1023,6 +1028,7 @@ where
         base_metrics: _,
         now,
         persist_clients,
+        partitioned_source,
     } = config;
 
     let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
@@ -1075,6 +1081,7 @@ where
             "remap",
             worker_id,
             worker_count,
+            partitioned_source,
         )
         .await
         .unwrap_or_else(|e| panic!("Failed to create remap handle for source {}: {:#}", name, e));
@@ -1248,6 +1255,7 @@ where
         base_metrics,
         now: _,
         persist_clients: _,
+        partitioned_source: _,
     } = config;
 
     let bytes_read_counter = base_metrics.bytes_read.clone();

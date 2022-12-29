@@ -14,12 +14,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
-use differential_dataflow::consolidation;
 use differential_dataflow::lattice::Lattice;
 use futures::{stream::LocalBoxStream, StreamExt};
-use itertools::Itertools;
 use timely::order::{PartialOrder, TotalOrder};
-use timely::progress::frontier::{Antichain, MutableAntichain};
+use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 
@@ -30,17 +28,15 @@ use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{PersistClient, Upper};
-use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::controller::PersistEpoch;
-use mz_storage_client::types::sources::{MzOffset, SourceData};
-use mz_storage_client::util::antichain::{MutableOffsetAntichain, OffsetAntichain};
-use mz_storage_client::util::remap_handle::RemapHandleReader;
+use mz_storage_client::types::sources::{MzOffset, PartitionedConversionError, SourceData};
+use mz_storage_client::util::antichain::OffsetAntichain;
+use mz_storage_client::util::remap_handle::{RemapHandle, RemapHandleReader};
 use mz_timely_util::order::Partitioned;
 
-use crate::source::reclock::{
-    ReclockBatch, ReclockError, ReclockFollower, ReclockOperator, RemapHandle,
-};
+use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
 
 impl ReclockFollower<Partitioned<PartitionId, MzOffset>, mz_repr::Timestamp> {
     pub fn reclock_compat<'a, M>(
@@ -110,12 +106,10 @@ pub struct PersistHandle {
     events: LocalBoxStream<'static, ListenEvent<SourceData, (), mz_repr::Timestamp, Diff>>,
     write_handle: WriteHandle<SourceData, (), mz_repr::Timestamp, Diff>,
     snapshot_produced: bool,
-    upper: Antichain<mz_repr::Timestamp>,
     as_of: Antichain<mz_repr::Timestamp>,
-    pending_batch: Vec<((PartitionId, MzOffset), mz_repr::Timestamp, Diff)>,
-    native_source_upper: MutableAntichain<Partitioned<PartitionId, MzOffset>>,
-    compat_source_upper: MutableOffsetAntichain,
-    minimum_produced: bool,
+    pending_batch: Vec<(Partitioned<PartitionId, MzOffset>, mz_repr::Timestamp, Diff)>,
+    synthesize_partition_minimums: bool,
+    partitioned_source: bool,
     // We hold on to this in case we need to create a `ReadHandle` for fetching
     // an up-to-date snapshot.
     persist_client: PersistClient,
@@ -131,6 +125,7 @@ impl PersistHandle {
         operator: &str,
         worker_id: usize,
         worker_count: usize,
+        partitioned_source: bool,
     ) -> anyhow::Result<Self> {
         let mut persist_clients = persist_clients.lock().await;
         let persist_client = persist_clients
@@ -198,44 +193,64 @@ impl PersistHandle {
             write_handle,
             as_of,
             snapshot_produced: false,
-            upper: Antichain::from_elem(mz_repr::Timestamp::minimum()),
             pending_batch: vec![],
-            native_source_upper: MutableAntichain::new(),
-            compat_source_upper: MutableOffsetAntichain::new(),
-            minimum_produced: false,
+            synthesize_partition_minimums: !partitioned_source,
+            partitioned_source,
             persist_client,
         })
     }
-}
 
-/// Packs a binding into a Row.
-///
-/// A binding of None partition is encoded as a single datum containing the offset.
-///
-/// A binding of a Kafka partition is encoded as the partition datum followed by the offset datum.
-fn pack_binding(pid: PartitionId, offset: MzOffset) -> SourceData {
-    let mut row = Row::with_capacity(2);
-    let mut packer = row.packer();
-    match pid {
-        PartitionId::None => {}
-        PartitionId::Kafka(pid) => packer.push(Datum::Int32(pid)),
+    /// Non-partitioned sources cannot have partitioned data in their remap
+    /// shards; however, we still need to handle minimum values to generate the
+    /// correct `Partitioned<PartitionId, MzOffset>` values. This function
+    /// generates those values the first time we see a value greater than
+    /// `Partitioned::<PartitionId, MzOffset>::minimum()`.
+    fn synthesize_partition_minimums(
+        &mut self,
+        mut native_frontier_updates: Vec<(
+            Partitioned<PartitionId, MzOffset>,
+            mz_repr::Timestamp,
+            i64,
+        )>,
+    ) -> Vec<(Partitioned<PartitionId, MzOffset>, mz_repr::Timestamp, i64)> {
+        assert!(self.synthesize_partition_minimums);
+
+        // If there are any items greater than the minimum partitioned value,
+        // find the minimum timestamp among them.
+        if let Some(min_ts) = native_frontier_updates
+            .iter()
+            .filter_map(|(p, ts, _)| {
+                if p == &Partitioned::<PartitionId, MzOffset>::minimum() {
+                    None
+                } else {
+                    Some(*ts)
+                }
+            })
+            .min()
+        {
+            // Pretend that we read the data that separates
+            // `Self::FromTime::minimum()` into a domain-covering
+            // set featuring a point, even though that data is never
+            // serialized in cases where
+            // `synthesize_partion_minimums` is true on boot.
+            self.synthesize_partition_minimums = false;
+            native_frontier_updates.extend([
+                (
+                    Partitioned::with_range(None, Some(PartitionId::None), MzOffset::from(0)),
+                    min_ts,
+                    1,
+                ),
+                (
+                    Partitioned::with_range(Some(PartitionId::None), None, MzOffset::from(0)),
+                    min_ts,
+                    1,
+                ),
+                (Partitioned::<PartitionId, MzOffset>::minimum(), min_ts, -1),
+            ]);
+        }
+
+        native_frontier_updates
     }
-    packer.push(Datum::UInt64(offset.offset));
-    SourceData(Ok(row))
-}
-
-/// Unpacks a binding from a Row
-/// See documentation of [pack_binding] for the encoded format
-fn unpack_binding(data: SourceData) -> (PartitionId, MzOffset) {
-    let row = data.0.expect("invalid binding");
-    let mut datums = row.iter();
-    let (pid, offset) = match (datums.next(), datums.next()) {
-        (Some(Datum::Int32(p)), Some(Datum::UInt64(offset))) => (PartitionId::Kafka(p), offset),
-        (Some(Datum::UInt64(offset)), None) => (PartitionId::None, offset),
-        _ => panic!("invalid binding"),
-    };
-
-    (pid, MzOffset::from(offset))
 }
 
 #[async_trait::async_trait(?Send)]
@@ -265,86 +280,62 @@ impl RemapHandleReader for PersistHandle {
                 .await
                 .expect("local since is not beyond read handle's since")
             {
-                let binding = unpack_binding(update.expect("invalid row"));
+                let binding = match Self::FromTime::try_from(update.expect("invalid row")) {
+                    Ok(b) => b,
+                    // Filter out empty ranges.
+                    Err(PartitionedConversionError::EmptyRange) if self.partitioned_source => {
+                        continue
+                    }
+                    e => e.expect("invalid binding"),
+                };
+                assert!(
+                    binding.partition().is_some() || self.partitioned_source,
+                    "invalid binding stored in persist {:?}",
+                    binding
+                );
                 self.pending_batch.push((binding, ts, diff));
             }
+
+            // Partitionless collections don't store FromTime::minimum() values
+            // in their remap collections, so we have to pretend that we read it
+            // on initialization. This must be read as long as we continue using
+            // OffsetAntichain because e.g. the empty antichain cannot be
+            // expressed as an OffsetAntichhain.
+            if !self.partitioned_source {
+                self.pending_batch.push((
+                    Self::FromTime::minimum(),
+                    *self.as_of.as_option().unwrap(),
+                    1,
+                ));
+            }
         }
+
         while let Some(event) = self.events.next().await {
             match event {
                 ListenEvent::Progress(new_upper) => {
-                    // Now it's the time to peel off a batch of pending data
-                    let mut updates = vec![];
+                    // Peel off a batch of pending data
+                    let mut native_frontier_updates = vec![];
+
                     self.pending_batch.retain(|(binding, ts, diff)| {
                         if !new_upper.less_equal(ts) {
-                            updates.push((binding.clone(), *ts, *diff));
+                            native_frontier_updates.push((binding.clone(), *ts, *diff));
                             false
                         } else {
                             true
                         }
                     });
 
-                    // The following section performs the opposite transalation as the one that
-                    // happened during compare_and_append.
-                    // Vector holding the result of the translation
-                    let mut native_frontier_updates = vec![];
-
-                    // First, we will sort the updates by time to be able to iterate over the groups
-                    updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
-
-                    // This is very subtle. An empty collection of native Antichain elements
-                    // represents something different than an empty collection of compat
-                    // OffsetAntichain elements. The former represents the empty antichain and the
-                    // latter the Antichain containing the minimum element. Therefore we need to
-                    // always synthesize a minimum timestamp element that happens once at the as_of
-                    // before processing any updates from the shard.
-                    if !std::mem::replace(&mut self.minimum_produced, true) {
-                        let mut first_ts = mz_repr::Timestamp::minimum();
-                        first_ts.advance_by(self.as_of.borrow());
-                        native_frontier_updates.push((Partitioned::minimum(), first_ts, 1));
+                    if self.synthesize_partition_minimums {
+                        native_frontier_updates =
+                            self.synthesize_partition_minimums(native_frontier_updates);
                     }
-
-                    // Then, we will iterate over the group of updates in time order and produce
-                    // the OffsetAntichain at each point, convert it to a normal Antichain, and
-                    // diff it with current Antichain representation.
-                    for (ts, updates) in &updates.into_iter().group_by(|update| update.1) {
-                        let prev_native_frontier =
-                            Antichain::from(self.compat_source_upper.frontier());
-                        native_frontier_updates.extend(
-                            prev_native_frontier
-                                .into_iter()
-                                .map(|src_ts| (src_ts, ts, -1)),
-                        );
-
-                        self.compat_source_upper.update_iter(
-                            updates
-                                .into_iter()
-                                .map(|(binding, _ts, diff)| (binding, diff)),
-                        );
-                        let new_native_frontier =
-                            Antichain::from(self.compat_source_upper.frontier());
-
-                        native_frontier_updates.extend(
-                            new_native_frontier
-                                .into_iter()
-                                .map(|src_ts| (src_ts, ts, 1)),
-                        );
-                    }
-                    // Then, consolidate the native updates and we're done
-                    consolidation::consolidate_updates(&mut native_frontier_updates);
-
-                    // Finally, apply the updates to our local view of the native frontier
-                    self.native_source_upper.update_iter(
-                        native_frontier_updates
-                            .iter()
-                            .map(|(src_ts, _ts, diff)| (src_ts.clone(), *diff)),
-                    );
-                    self.upper = new_upper.clone();
 
                     return Some((native_frontier_updates, new_upper));
                 }
                 ListenEvent::Updates(msgs) => {
                     for ((update, _), ts, diff) in msgs {
-                        let binding = unpack_binding(update.expect("invalid row"));
+                        let binding = Self::FromTime::try_from(update.expect("invalid row"))
+                            .expect("invalid binding");
                         self.pending_batch.push((binding, ts, diff));
                     }
                 }
@@ -358,74 +349,28 @@ impl RemapHandleReader for PersistHandle {
 impl RemapHandle for PersistHandle {
     async fn compare_and_append(
         &mut self,
-        mut updates: Vec<(Self::FromTime, Self::IntoTime, Diff)>,
+        updates: Vec<(Self::FromTime, Self::IntoTime, Diff)>,
         upper: Antichain<Self::IntoTime>,
         new_upper: Antichain<Self::IntoTime>,
     ) -> Result<(), Upper<Self::IntoTime>> {
-        // The following section performs a translation of the native timely timestamps to the
-        // progress format presented to users which at the moment is not compatible with how
-        // Antichians work. A proper migration and subsequent deletion of this section will happen
-        // soon.
-        //
-        // Now, we need to come up with the updates to the OffsetAntichain representation that is
-        // already in the shard. In our state we store the latest value of the source frontier in
-        // both the native format (Antichain<Partitioned<PartitionId, MzOffset>>) and the compat
-        // one (OffsetAntichain).
-        //
-        // In order to calculate the updates to the OffsetAntichain that correspond to the change
-        // in native timestamps we will accumulate the provided diffs into concrete Antichains for
-        // each time that the frontier changed, convert into an OffsetAntichain, and diff those
-        // with the OffsetAntichain.
-
-        // Vector holding the result of the translation
-        let mut compat_frontier_updates = vec![];
-
-        // First, we will sort the updates by time to be able to iterate over the groups
-        updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
-        let mut native_frontier = self.native_source_upper.clone();
-        let mut compat_frontier = self.compat_source_upper.frontier();
-
-        // Then, we will iterate over the group of updates in time order and produce the native
-        // Antichain at each point, convert it to a compat OffsetAntichain, and diff it with
-        // current OffsetAntichain representation.
-        for (ts, updates) in &updates.into_iter().group_by(|update| update.1) {
-            native_frontier.update_iter(
-                updates
-                    .into_iter()
-                    .map(|(src_ts, _ts, diff)| (src_ts, diff)),
-            );
-            let new_compat_frontier = OffsetAntichain::from(native_frontier.frontier().to_owned());
-
-            compat_frontier_updates.extend(
-                compat_frontier
-                    .iter()
-                    .map(|(pid, offset)| ((pid.clone(), *offset), ts, -1)),
-            );
-            compat_frontier_updates.extend(
-                new_compat_frontier
-                    .iter()
-                    .map(|(pid, offset)| ((pid.clone(), *offset), ts, 1)),
+        let row_updates = updates.into_iter().filter_map(|(partitioned, ts, diff)| {
+            assert!(
+                !self.partitioned_source
+                    || (partitioned.partition().is_some() ^ (partitioned.timestamp().offset == 0)),
+                "invalid partitioned {:?}",
+                partitioned
             );
 
-            compat_frontier = new_compat_frontier;
-        }
-        // Then, consolidate the compat updates and we're done
-        consolidation::consolidate_updates(&mut compat_frontier_updates);
+            if !self.partitioned_source && partitioned.partition().is_none() {
+                None
+            } else {
+                Some(((SourceData::from(partitioned), ()), ts, diff))
+            }
+        });
 
-        // And finally convert into rows and attempt to append to the shard
-        let mut row_updates = vec![];
-        for ((pid, offset), ts, diff) in compat_frontier_updates {
-            row_updates.push((pack_binding(pid, offset), ts, diff));
-        }
-
-        let updates = row_updates
-            .iter()
-            .map(|(data, time, diff)| ((data, ()), time, diff));
-        let upper = upper.clone();
-        let new_upper = new_upper.clone();
         match self
             .write_handle
-            .compare_and_append(updates, upper, new_upper)
+            .compare_and_append(row_updates, upper, new_upper)
             .await
         {
             Ok(result) => return result,
