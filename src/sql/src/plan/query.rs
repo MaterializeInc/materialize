@@ -114,11 +114,11 @@ pub fn plan_root_query(
     let mut qcx = QueryContext::root(scx, lifetime);
     let planned_query = plan_query(&mut qcx, query)?;
     transform_ast::expand_select(scx, query)?;
-    // debug_assert_eq!(
-    //     &planned_query,
-    //     &plan_query(&mut qcx, query).expect("re-planning query failed"),
-    //     "re-planning the expanded query resulted in a different plan"
-    // );
+    debug_assert_eq!(
+        &planned_query,
+        &plan_query(&mut qcx, query).expect("re-planning query failed"),
+        "re-planning the expanded query resulted in a different plan"
+    );
     let (mut expr, scope, mut finishing) = planned_query;
 
     // Attempt to push the finishing's ordering past its projection. This allows
