@@ -196,17 +196,15 @@ pub trait TryCastFrom<T>: Sized {
 /// but `TryFrom` doesn't (notably floats).
 macro_rules! try_cast_from {
     ($from:ty, $to:ty) => {
-        paste::paste! {
-            impl crate::cast::TryCastFrom<$from> for $to {
-                #[allow(clippy::as_conversions)]
-                fn try_cast_from(from: $from) -> Option<$to> {
-                    let to = from as $to;
-                    let inverse = to as $from;
-                    if from == inverse {
-                        Some(to)
-                    } else {
-                        None
-                    }
+        impl crate::cast::TryCastFrom<$from> for $to {
+            #[allow(clippy::as_conversions)]
+            fn try_cast_from(from: $from) -> Option<$to> {
+                let to = from as $to;
+                let inverse = to as $from;
+                if from == inverse {
+                    Some(to)
+                } else {
+                    None
                 }
             }
         }
