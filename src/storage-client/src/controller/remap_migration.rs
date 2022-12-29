@@ -17,7 +17,7 @@ use anyhow::Context;
 use differential_dataflow::consolidation;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
-use timely::order::TotalOrder;
+use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
 use tokio::sync::Mutex;
@@ -33,7 +33,7 @@ use mz_repr::{Datum, Diff, GlobalId};
 use mz_timely_util::order::Partitioned;
 
 use crate::types::sources::MzOffset;
-use crate::types::sources::SourceData;
+use crate::types::sources::{SourceData, SourceTimestamp};
 use crate::util::antichain::MutableOffsetAntichain;
 use crate::util::remap_handle::RemapHandleReader;
 
@@ -42,11 +42,9 @@ use super::CollectionMetadata;
 /// A struct capable of performing remap shard migrations. See comment on
 /// [`RemapHandleMigrator::migrate`].
 pub(super) struct RemapHandleMigrator<
-    FromTime: Timestamp + TryFrom<SourceData>,
+    FromTime: SourceTimestamp,
     IntoTime: Timestamp + Lattice + Codec64 + TotalOrder,
-> where
-    SourceData: From<FromTime>,
-{
+> {
     subscription: Subscribe<SourceData, (), IntoTime, Diff>,
     new_shard_write_handle: WriteHandle<SourceData, (), IntoTime, Diff>,
     since: Antichain<IntoTime>,
@@ -56,11 +54,12 @@ pub(super) struct RemapHandleMigrator<
 
 #[async_trait::async_trait(?Send)]
 /// Remap handle migration for partition sources, i.e. Kafka.
-impl<T: Timestamp + Lattice + Codec64 + TotalOrder> RemapHandleReader
-    for RemapHandleMigrator<Partitioned<PartitionId, MzOffset>, T>
+impl<IntoTime> RemapHandleReader for RemapHandleMigrator<Partitioned<i32, MzOffset>, IntoTime>
+where
+    IntoTime: Timestamp + Lattice + Codec64 + TotalOrder,
 {
-    type FromTime = Partitioned<PartitionId, MzOffset>;
-    type IntoTime = T;
+    type FromTime = Partitioned<i32, MzOffset>;
+    type IntoTime = IntoTime;
 
     async fn next(
         &mut self,
@@ -70,8 +69,8 @@ impl<T: Timestamp + Lattice + Codec64 + TotalOrder> RemapHandleReader
     )> {
         let mut updates = vec![];
 
-        let mut progress = Antichain::from_elem(T::minimum());
-        while !self.upper.less_equal(progress.as_option().unwrap()) {
+        let mut progress = Antichain::from_elem(IntoTime::minimum());
+        while PartialOrder::less_than(&progress, &self.upper) {
             let (bound_updates, progress_inner) = self.subscription.fetch_next().await;
 
             for ((update, _), ts, diff) in bound_updates.into_iter() {
@@ -85,10 +84,6 @@ impl<T: Timestamp + Lattice + Codec64 + TotalOrder> RemapHandleReader
                 updates.push((binding, ts, diff))
             }
 
-            // Progress is closing shard.
-            if progress_inner.elements().is_empty() {
-                break;
-            }
             progress = progress_inner;
         }
 
@@ -108,7 +103,7 @@ impl<T: Timestamp + Lattice + Codec64 + TotalOrder> RemapHandleReader
         // latter the Antichain containing the minimum element. Therefore we need to
         // always synthesize a minimum timestamp element that happens once at the as_of
         // before processing any updates from the shard.
-        let mut first_ts = T::minimum();
+        let mut first_ts = IntoTime::minimum();
         first_ts.advance_by(self.since.borrow());
         native_frontier_updates.push((Partitioned::minimum(), first_ts, 1));
 
@@ -146,11 +141,12 @@ impl<T: Timestamp + Lattice + Codec64 + TotalOrder> RemapHandleReader
 
 #[async_trait::async_trait(?Send)]
 /// Remap handle migration for partitionless sources, e.g. Postgres.
-impl<T: Timestamp + Lattice + Codec64 + TotalOrder> RemapHandleReader
-    for RemapHandleMigrator<MzOffset, T>
+impl<IntoTime> RemapHandleReader for RemapHandleMigrator<MzOffset, IntoTime>
+where
+    IntoTime: Timestamp + Lattice + Codec64 + TotalOrder,
 {
     type FromTime = MzOffset;
-    type IntoTime = T;
+    type IntoTime = IntoTime;
     /// Look through all of the shard's data and return a 0 offset to be written
     /// if the shard is otherwise empty.
     async fn next(
@@ -159,7 +155,7 @@ impl<T: Timestamp + Lattice + Codec64 + TotalOrder> RemapHandleReader
         Vec<(Self::FromTime, Self::IntoTime, Diff)>,
         Antichain<Self::IntoTime>,
     )> {
-        let mut progress = Antichain::from_elem(T::minimum());
+        let mut progress = Antichain::from_elem(IntoTime::minimum());
 
         let mut populated = false;
 
@@ -169,7 +165,7 @@ impl<T: Timestamp + Lattice + Codec64 + TotalOrder> RemapHandleReader
             let (bound_updates, progress_inner) = self.subscription.fetch_next().await;
             for ((update, _), _, _) in bound_updates.into_iter() {
                 populated = true;
-                MzOffset::try_from(update.expect("invalid row")).expect("invalid MzOffset data");
+                MzOffset::decode_row(&update.expect("invalid row").0.expect("invalid row"));
             }
             // Progress is closing shard.
             if progress_inner.elements().is_empty() {
@@ -193,11 +189,12 @@ impl<T: Timestamp + Lattice + Codec64 + TotalOrder> RemapHandleReader
     }
 }
 
-impl<F: Timestamp + TryFrom<SourceData>, T: Timestamp + Lattice + Codec64 + TotalOrder>
-    RemapHandleMigrator<F, T>
+impl<FromTime, IntoTime> RemapHandleMigrator<FromTime, IntoTime>
 where
-    RemapHandleMigrator<F, T>: RemapHandleReader<FromTime = F, IntoTime = T>,
-    SourceData: From<F>,
+    FromTime: SourceTimestamp,
+    IntoTime: Timestamp + Lattice + Codec64 + TotalOrder,
+    RemapHandleMigrator<FromTime, IntoTime>:
+        RemapHandleReader<FromTime = FromTime, IntoTime = IntoTime>,
 {
     /// Prior to this commit, remap shards contained data of schema (Int32?,
     /// Uint64). Int32 was present only for Kafka sources where it represented
@@ -265,7 +262,7 @@ where
         drop(persist_clients);
 
         let (current_shard_write_handle, current_shard_read_handle) = persist_client
-            .open::<crate::types::sources::SourceData, (), T, Diff>(
+            .open::<crate::types::sources::SourceData, (), IntoTime, Diff>(
                 read_metadata.remap_shard,
                 &format!("reclock {}", id),
             )
@@ -274,7 +271,7 @@ where
 
         let upper = current_shard_write_handle.upper().clone();
 
-        if upper.elements() == &[T::minimum()] {
+        if upper.elements() == &[IntoTime::minimum()] {
             // shard not written yet, can skip
             return Ok(None);
         }
@@ -295,7 +292,7 @@ where
             .expect("subscribing must succeed");
 
         let (new_shard_write_handle, mut new_shard_read_handle) = persist_client
-            .open::<crate::types::sources::SourceData, (), T, Diff>(
+            .open::<crate::types::sources::SourceData, (), IntoTime, Diff>(
                 write_shard,
                 "remap shard migration",
             )
@@ -315,15 +312,23 @@ where
 
     async fn write_to_new_shard(
         &mut self,
-        updates: Vec<(F, T, Diff)>,
-        new_upper: Antichain<T>,
-    ) -> Result<(), Upper<T>> {
-        let row_updates = updates.into_iter().map(|(reformatted_data, ts, diff)| {
-            ((SourceData::from(reformatted_data), ()), ts, diff)
+        updates: Vec<(FromTime, IntoTime, Diff)>,
+        new_upper: Antichain<IntoTime>,
+    ) -> Result<(), Upper<IntoTime>> {
+        let row_updates = updates.into_iter().map(|(from_ts, ts, diff)| {
+            (
+                (SourceData(Ok(FromTime::encode_row(&from_ts))), ()),
+                ts,
+                diff,
+            )
         });
 
         self.new_shard_write_handle
-            .append(row_updates, Antichain::from_elem(T::minimum()), new_upper)
+            .append(
+                row_updates,
+                Antichain::from_elem(IntoTime::minimum()),
+                new_upper,
+            )
             .await
             .expect("invalid usage")
     }

@@ -100,11 +100,6 @@ where
         resume_upper: resume_upper.clone(),
         storage_metadata: description.ingestion_metadata.clone(),
         persist_clients: Arc::clone(&storage_state.persist_clients),
-        // Only Kafka sources have partitions.
-        partitioned_source: matches!(
-            description.desc.connection,
-            GenericSourceConnection::Kafka(_)
-        ),
     };
 
     // TODO(petrosagg): put the description as-is in the RawSourceCreationConfig instead of cloning

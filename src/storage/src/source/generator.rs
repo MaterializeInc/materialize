@@ -136,6 +136,7 @@ impl SourceReader for LoadGeneratorSourceReader {
     type Key = ();
     type Value = Row;
     // LoadGenerator can produce deletes that cause retractions
+    type Time = MzOffset;
     type Diff = Diff;
 
     fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {

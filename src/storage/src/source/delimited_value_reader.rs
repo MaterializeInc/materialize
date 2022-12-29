@@ -72,13 +72,14 @@ where
     }
 }
 
-impl<S, D: timely::Data> SourceReader for DelimitedValueSourceReader<S>
+impl<S> SourceReader for DelimitedValueSourceReader<S>
 where
-    S: SourceReader<Key = (), Value = Option<Vec<u8>>, Diff = D>,
+    S: SourceReader<Key = (), Value = Option<Vec<u8>>>,
 {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
-    type Diff = D;
+    type Time = S::Time;
+    type Diff = S::Diff;
 
     fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {
         match self.0.get_next_message() {
