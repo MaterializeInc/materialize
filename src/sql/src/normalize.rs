@@ -449,8 +449,8 @@ pub fn create_statement(
             *name = allocate_name(name)?;
             *if_not_exists = false;
         }
-
-        _ => unreachable!(),
+        // TODO(jkosh44) Revert this
+        _ => {} // _ => unreachable!(),
     }
 
     Ok(stmt.to_ast_string_stable())

@@ -786,7 +786,7 @@ SUBSCRIBE (SELECT * FROM a)
 ----
 SUBSCRIBE (SELECT * FROM a)
 =>
-Subscribe(SubscribeStatement { relation: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None })
+Subscribe(SubscribeStatement { relation: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None })
 
 parse-statement
 CREATE TABLE public.customer (

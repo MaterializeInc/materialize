@@ -62,10 +62,10 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     AsOf, Assignment, AstInfo, CteBlock, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
     HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
-    Limit, OrderByExpr, Query, Select, SelectItem, SelectOption, SelectOptionName, SetExpr,
-    SetOperator, ShowStatement, SubscriptPosition, TableAlias, TableFactor, TableFunction,
-    TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WindowSpec,
+    Limit, OrderByExpr, Query, Select, SelectItem, SelectOption, SelectOptionName, SelectStatement,
+    SetExpr, SetOperator, ShowStatement, Statement, SubscriptPosition, TableAlias, TableFactor,
+    TableFunction, TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
@@ -110,15 +110,35 @@ pub fn plan_root_query(
     query: &mut Query<Aug>,
     lifetime: QueryLifetime,
 ) -> Result<PlannedQuery<HirRelationExpr>, PlanError> {
+    // TODO(jkosh44) Delete this
+    let original_sql = normalize::create_statement(
+        scx,
+        Statement::Select(SelectStatement {
+            query: query.clone(),
+            as_of: None,
+        }),
+    );
     transform_ast::transform_query(scx, query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
     let planned_query = plan_query(&mut qcx, query)?;
     transform_ast::expand_select(scx, query)?;
-    debug_assert_eq!(
-        &planned_query,
-        &plan_query(&mut qcx, query).expect("re-planning query failed"),
-        "re-planning the expanded query resulted in a different plan"
-    );
+    let new_plan = plan_query(&mut qcx, query).expect("re-planning query failed");
+    // TODO(jkosh44) Delete this
+    if planned_query != new_plan {
+        let new_sql = normalize::create_statement(
+            scx,
+            Statement::Select(SelectStatement {
+                query: query.clone(),
+                as_of: None,
+            }),
+        );
+        panic!("plans did not match\nold: {original_sql:?}\nnew: {new_sql:?}");
+    }
+    // debug_assert_eq!(
+    //     &planned_query,
+    //     &plan_query(&mut qcx, query).expect("re-planning query failed"),
+    //     "re-planning the expanded query resulted in a different plan"
+    // );
     let (mut expr, scope, mut finishing) = planned_query;
 
     // Attempt to push the finishing's ordering past its projection. This allows

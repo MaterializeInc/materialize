@@ -1,0 +1,1548 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode standard
+
+statement ok
+CREATE TABLE t (a INT, b INT);
+
+statement ok
+CREATE VIEW v AS SELECT * FROM t;
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "materialize"."public"."t"."a", "materialize"."public"."t"."b" FROM "materialize"."public"."t"
+
+statement ok
+DROP VIEW v
+
+statement ok
+CREATE VIEW v AS SELECT t.* FROM t;
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "materialize"."public"."t"."a", "materialize"."public"."t"."b" FROM "materialize"."public"."t"
+
+statement ok
+DROP VIEW v
+
+# statement ok
+# CREATE VIEW v AS SELECT (t).* FROM t;
+#
+# query TT
+# SHOW CREATE VIEW v
+# ----
+# materialize.public.v
+# CREATE VIEW "materialize"."public"."v" AS SELECT "materialize"."public"."t"."a", "materialize"."public"."t"."b" FROM "materialize"."public"."t"
+#
+# statement ok
+# DROP VIEW v
+
+statement ok
+CREATE VIEW v AS SELECT 1, * FROM t;
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT 1, "materialize"."public"."t"."a", "materialize"."public"."t"."b" FROM "materialize"."public"."t"
+
+statement ok
+DROP VIEW v
+
+statement ok
+CREATE SCHEMA foo
+
+statement ok
+CREATE TABLE foo.t(a INT, b INT)
+
+statement ok
+CREATE VIEW v AS SELECT 1 FROM (SELECT * FROM public.t, foo.t)
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT 1 FROM (SELECT "materialize"."public"."t"."a", "materialize"."public"."t"."b", "materialize"."foo"."t"."a", "materialize"."foo"."t"."b" FROM "materialize"."public"."t", "materialize"."foo"."t") AS "unamed_subquery" ("a", "b", "a_1", "b_1")
+
+statement ok
+DROP VIEW v
+
+statement ok
+DROP SCHEMA foo CASCADE
+
+statement ok
+CREATE VIEW v AS SELECT 1 FROM (SELECT * FROM (SELECT 1, 2));
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT 1 FROM (SELECT "unamed_subquery_1"."?column?" AS "?column?", "unamed_subquery_1"."?column?_1" AS "?column?" FROM (SELECT 1, 2) AS "unamed_subquery_1" ("?column?", "?column?_1")) AS "unamed_subquery" ("?column?", "?column?_1")
+
+statement ok
+DROP VIEW v
+
+
+
+statement ok
+CREATE VIEW v AS SELECT * FROM (SELECT * FROM (SELECT 1, 2) foo(a,b)) bar(c,d);
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "bar"."c", "bar"."d" FROM (SELECT "foo"."a", "foo"."b" FROM (SELECT 1, 2) AS "foo" ("a", "b")) AS "bar" ("c", "d")
+
+statement ok
+DROP VIEW v
+
+
+
+#statement ok
+#CREATE VIEW v AS SELECT (information_schema._pg_expandarray(ARRAY[100])).*;
+#
+#query TT
+#SHOW CREATE VIEW v
+#----
+#materialize.public.v
+#CREATE VIEW "materialize"."public"."v" AS SELECT information_schema._pg_expandarray(ARRAY[100])).x, (information_schema._pg_expandarray(ARRAY[100])).n
+#
+#statement ok
+#DROP VIEW v
+
+#statement ok
+#CREATE VIEW v AS SELECT 1 FROM (SELECT (information_schema._pg_expandarray(ARRAY[100])).*, (information_schema._pg_expandarray(ARRAY[100])).*);
+#
+#query TT
+#SHOW CREATE VIEW v
+#----
+#materialize.public.v
+#CREATE VIEW "materialize"."public"."v" AS SELECT 1 AS "?column?" FROM ( SELECT (information_schema._pg_expandarray(ARRAY[100])).x AS x, (information_schema._pg_expandarray(ARRAY[100])).n AS n, (information_schema._pg_expandarray(ARRAY[100])).x AS x, (information_schema._pg_expandarray(ARRAY[100])).n AS n) unnamed_subquery(x, n, x_1, n_1)
+#
+#statement ok
+#DROP VIEW v
+
+statement ok
+CREATE TABLE t1 (c INT, d INT)
+
+statement ok
+CREATE VIEW v AS SELECT * FROM (t CROSS JOIN t1) j(aa,bb,cc,dd)
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "j"."aa", "j"."bb", "j"."cc", "j"."dd" FROM ("materialize"."public"."t" CROSS JOIN "materialize"."public"."t1") AS "j" ("aa", "bb", "cc", "dd")
+
+statement ok
+DROP VIEW v
+
+statement ok
+CREATE VIEW v AS SELECT * FROM (t CROSS JOIN t1)
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "materialize"."public"."t"."a", "materialize"."public"."t"."b", "materialize"."public"."t1"."c", "materialize"."public"."t1"."d" FROM ("materialize"."public"."t" CROSS JOIN "materialize"."public"."t1")
+
+statement ok
+DROP VIEW v
+
+statement ok
+DROP TABLE t1
+
+statement ok
+CREATE VIEW v AS SELECT * FROM t NATURAL JOIN t AS a
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "materialize"."public"."t"."a", "materialize"."public"."t"."b" FROM ("materialize"."public"."t" CROSS JOIN "materialize"."public"."t1")
+
+statement ok
+DROP VIEW v
+
+statement ok
+DROP TABLE t
+
+statement ok
+CREATE TABLE t1 (a INT)
+
+statement ok
+CREATE TABLE t2 (b INT)
+
+statement ok
+CREATE VIEW v AS SELECT * FROM (SELECT a FROM t1) AS l JOIN (SELECT b FROM t2) AS r ON l.a = r.b
+
+# TODO(jkosh44) This unnecessarily assigns column aliases. That's probably fine but worth pointing out and looking into
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "l"."a" AS "a", "r"."b" AS "b" FROM (SELECT "a" FROM "materialize"."public"."t1") AS "l" ("a") JOIN (SELECT "b" FROM "materialize"."public"."t2") AS "r" ("b") ON "l"."a" = "r"."b"
+
+statement ok
+DROP VIEW v
+
+statement ok
+DROP TABLE t1
+
+statement ok
+DROP TABLE t2
+
+# TODO(jkosh44) sort through and convert these postgres tests (src/test/regress/expected/create_view.out)
+#create table tbl1a (a int, c int);
+#create view view_of_joins_2a as select * from tbl1 join tbl1a using (a);
+#create view view_of_joins_2b as select * from tbl1 join tbl1a using (a) as x;
+#create view view_of_joins_2c as select * from (tbl1 join tbl1a using (a)) as y;
+#create view view_of_joins_2d as select * from (tbl1 join tbl1a using (a) as x) as y;
+#select pg_get_viewdef('view_of_joins_2a', true);
+#       pg_get_viewdef
+#----------------------------
+#  SELECT tbl1.a,           +
+#     tbl1.b,               +
+#     tbl1a.c               +
+#    FROM tbl1              +
+#      JOIN tbl1a USING (a);
+#(1 row)
+#
+#select pg_get_viewdef('view_of_joins_2b', true);
+#         pg_get_viewdef
+#---------------------------------
+#  SELECT tbl1.a,                +
+#     tbl1.b,                    +
+#     tbl1a.c                    +
+#    FROM tbl1                   +
+#      JOIN tbl1a USING (a) AS x;
+#(1 row)
+#
+#select pg_get_viewdef('view_of_joins_2c', true);
+#        pg_get_viewdef
+#-------------------------------
+#  SELECT y.a,                 +
+#     y.b,                     +
+#     y.c                      +
+#    FROM (tbl1                +
+#      JOIN tbl1a USING (a)) y;
+#(1 row)
+#
+#select pg_get_viewdef('view_of_joins_2d', true);
+#           pg_get_viewdef
+#------------------------------------
+#  SELECT y.a,                      +
+#     y.b,                          +
+#     y.c                           +
+#    FROM (tbl1                     +
+#      JOIN tbl1a USING (a) AS x) y;
+#(1 row)
+#
+#-- Test view decompilation in the face of column addition/deletion/renaming
+#create table tt2 (a int, b int, c int);
+#create table tt3 (ax int8, b int2, c numeric);
+#create table tt4 (ay int, b int, q int);
+#create view v1 as select * from tt2 natural join tt3;
+#create view v1a as select * from (tt2 natural join tt3) j;
+#create view v2 as select * from tt2 join tt3 using (b,c) join tt4 using (b);
+#create view v2a as select * from (tt2 join tt3 using (b,c) join tt4 using (b)) j;
+#create view v3 as select * from tt2 join tt3 using (b,c) full join tt4 using (b);
+#select pg_get_viewdef('v1', true);
+#       pg_get_viewdef
+#-----------------------------
+#  SELECT tt2.b,             +
+#     tt3.c,                 +
+#     tt2.a,                 +
+#     tt3.ax                 +
+#    FROM tt2                +
+#      JOIN tt3 USING (b, c);
+#(1 row)
+#
+#select pg_get_viewdef('v1a', true);
+#         pg_get_viewdef
+#--------------------------------
+#  SELECT j.b,                  +
+#     j.c,                      +
+#     j.a,                      +
+#     j.ax                      +
+#    FROM (tt2                  +
+#      JOIN tt3 USING (b, c)) j;
+#(1 row)
+#
+#select pg_get_viewdef('v2', true);
+#       pg_get_viewdef
+#----------------------------
+#  SELECT tt2.b,            +
+#     tt3.c,                +
+#     tt2.a,                +
+#     tt3.ax,               +
+#     tt4.ay,               +
+#     tt4.q                 +
+#    FROM tt2               +
+#      JOIN tt3 USING (b, c)+
+#      JOIN tt4 USING (b);
+#(1 row)
+#
+#select pg_get_viewdef('v2a', true);
+#       pg_get_viewdef
+#-----------------------------
+#  SELECT j.b,               +
+#     j.c,                   +
+#     j.a,                   +
+#     j.ax,                  +
+#     j.ay,                  +
+#     j.q                    +
+#    FROM (tt2               +
+#      JOIN tt3 USING (b, c) +
+#      JOIN tt4 USING (b)) j;
+#(1 row)
+#
+#select pg_get_viewdef('v3', true);
+#        pg_get_viewdef
+#-------------------------------
+#  SELECT b,                   +
+#     tt3.c,                   +
+#     tt2.a,                   +
+#     tt3.ax,                  +
+#     tt4.ay,                  +
+#     tt4.q                    +
+#    FROM tt2                  +
+#      JOIN tt3 USING (b, c)   +
+#      FULL JOIN tt4 USING (b);
+#(1 row)
+#
+#alter table tt2 add column d int;
+#alter table tt2 add column e int;
+#select pg_get_viewdef('v1', true);
+#       pg_get_viewdef
+#-----------------------------
+#  SELECT tt2.b,             +
+#     tt3.c,                 +
+#     tt2.a,                 +
+#     tt3.ax                 +
+#    FROM tt2                +
+#      JOIN tt3 USING (b, c);
+#(1 row)
+#
+#select pg_get_viewdef('v1a', true);
+#         pg_get_viewdef
+#--------------------------------
+#  SELECT j.b,                  +
+#     j.c,                      +
+#     j.a,                      +
+#     j.ax                      +
+#    FROM (tt2                  +
+#      JOIN tt3 USING (b, c)) j;
+#(1 row)
+#
+#select pg_get_viewdef('v2', true);
+#       pg_get_viewdef
+#----------------------------
+#  SELECT tt2.b,            +
+#     tt3.c,                +
+#     tt2.a,                +
+#     tt3.ax,               +
+#     tt4.ay,               +
+#     tt4.q                 +
+#    FROM tt2               +
+#      JOIN tt3 USING (b, c)+
+#      JOIN tt4 USING (b);
+#(1 row)
+#
+#select pg_get_viewdef('v2a', true);
+#       pg_get_viewdef
+#-----------------------------
+#  SELECT j.b,               +
+#     j.c,                   +
+#     j.a,                   +
+#     j.ax,                  +
+#     j.ay,                  +
+#     j.q                    +
+#    FROM (tt2               +
+#      JOIN tt3 USING (b, c) +
+#      JOIN tt4 USING (b)) j;
+#(1 row)
+#
+#select pg_get_viewdef('v3', true);
+#        pg_get_viewdef
+#-------------------------------
+#  SELECT b,                   +
+#     tt3.c,                   +
+#     tt2.a,                   +
+#     tt3.ax,                  +
+#     tt4.ay,                  +
+#     tt4.q                    +
+#    FROM tt2                  +
+#      JOIN tt3 USING (b, c)   +
+#      FULL JOIN tt4 USING (b);
+#(1 row)
+#
+#alter table tt3 rename c to d;
+#select pg_get_viewdef('v1', true);
+#              pg_get_viewdef
+#-------------------------------------------
+#  SELECT tt2.b,                           +
+#     tt3.c,                               +
+#     tt2.a,                               +
+#     tt3.ax                               +
+#    FROM tt2                              +
+#      JOIN tt3 tt3(ax, b, c) USING (b, c);
+#(1 row)
+#
+#select pg_get_viewdef('v1a', true);
+#                pg_get_viewdef
+#----------------------------------------------
+#  SELECT j.b,                                +
+#     j.c,                                    +
+#     j.a,                                    +
+#     j.ax                                    +
+#    FROM (tt2                                +
+#      JOIN tt3 tt3(ax, b, c) USING (b, c)) j;
+#(1 row)
+#
+#select pg_get_viewdef('v2', true);
+#              pg_get_viewdef
+#------------------------------------------
+#  SELECT tt2.b,                          +
+#     tt3.c,                              +
+#     tt2.a,                              +
+#     tt3.ax,                             +
+#     tt4.ay,                             +
+#     tt4.q                               +
+#    FROM tt2                             +
+#      JOIN tt3 tt3(ax, b, c) USING (b, c)+
+#      JOIN tt4 USING (b);
+#(1 row)
+#
+#select pg_get_viewdef('v2a', true);
+#              pg_get_viewdef
+#------------------------------------------
+#  SELECT j.b,                            +
+#     j.c,                                +
+#     j.a,                                +
+#     j.ax,                               +
+#     j.ay,                               +
+#     j.q                                 +
+#    FROM (tt2                            +
+#      JOIN tt3 tt3(ax, b, c) USING (b, c)+
+#      JOIN tt4 USING (b)) j;
+#(1 row)
+#
+#select pg_get_viewdef('v3', true);
+#              pg_get_viewdef
+#------------------------------------------
+#  SELECT b,                              +
+#     tt3.c,                              +
+#     tt2.a,                              +
+#     tt3.ax,                             +
+#     tt4.ay,                             +
+#     tt4.q                               +
+#    FROM tt2                             +
+#      JOIN tt3 tt3(ax, b, c) USING (b, c)+
+#      FULL JOIN tt4 USING (b);
+#(1 row)
+#
+#alter table tt3 add column c int;
+#alter table tt3 add column e int;
+#select pg_get_viewdef('v1', true);
+#                  pg_get_viewdef
+#---------------------------------------------------
+#  SELECT tt2.b,                                   +
+#     tt3.c,                                       +
+#     tt2.a,                                       +
+#     tt3.ax                                       +
+#    FROM tt2                                      +
+#      JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c);
+#(1 row)
+#
+#select pg_get_viewdef('v1a', true);
+#                                  pg_get_viewdef
+#-----------------------------------------------------------------------------------
+#  SELECT j.b,                                                                     +
+#     j.c,                                                                         +
+#     j.a,                                                                         +
+#     j.ax                                                                         +
+#    FROM (tt2                                                                     +
+#      JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c)) j(b, c, a, d, e, ax, c_1, e_1);
+#(1 row)
+#
+#select pg_get_viewdef('v2', true);
+#                  pg_get_viewdef
+#--------------------------------------------------
+#  SELECT tt2.b,                                  +
+#     tt3.c,                                      +
+#     tt2.a,                                      +
+#     tt3.ax,                                     +
+#     tt4.ay,                                     +
+#     tt4.q                                       +
+#    FROM tt2                                     +
+#      JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c)+
+#      JOIN tt4 USING (b);
+#(1 row)
+#
+#select pg_get_viewdef('v2a', true);
+#                         pg_get_viewdef
+#-----------------------------------------------------------------
+#  SELECT j.b,                                                   +
+#     j.c,                                                       +
+#     j.a,                                                       +
+#     j.ax,                                                      +
+#     j.ay,                                                      +
+#     j.q                                                        +
+#    FROM (tt2                                                   +
+#      JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c)               +
+#      JOIN tt4 USING (b)) j(b, c, a, d, e, ax, c_1, e_1, ay, q);
+#(1 row)
+#
+#select pg_get_viewdef('v3', true);
+#                  pg_get_viewdef
+#--------------------------------------------------
+#  SELECT b,                                      +
+#     tt3.c,                                      +
+#     tt2.a,                                      +
+#     tt3.ax,                                     +
+#     tt4.ay,                                     +
+#     tt4.q                                       +
+#    FROM tt2                                     +
+#      JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c)+
+#      FULL JOIN tt4 USING (b);
+#(1 row)
+#
+#alter table tt2 drop column d;
+#select pg_get_viewdef('v1', true);
+#                  pg_get_viewdef
+#---------------------------------------------------
+#  SELECT tt2.b,                                   +
+#     tt3.c,                                       +
+#     tt2.a,                                       +
+#     tt3.ax                                       +
+#    FROM tt2                                      +
+#      JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c);
+#(1 row)
+#
+#select pg_get_viewdef('v1a', true);
+#                                 pg_get_viewdef
+#--------------------------------------------------------------------------------
+#  SELECT j.b,                                                                  +
+#     j.c,                                                                      +
+#     j.a,                                                                      +
+#     j.ax                                                                      +
+#    FROM (tt2                                                                  +
+#      JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c)) j(b, c, a, e, ax, c_1, e_1);
+#(1 row)
+#
+#select pg_get_viewdef('v2', true);
+#                  pg_get_viewdef
+#--------------------------------------------------
+#  SELECT tt2.b,                                  +
+#     tt3.c,                                      +
+#     tt2.a,                                      +
+#     tt3.ax,                                     +
+#     tt4.ay,                                     +
+#     tt4.q                                       +
+#    FROM tt2                                     +
+#      JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c)+
+#      JOIN tt4 USING (b);
+#(1 row)
+#
+#select pg_get_viewdef('v2a', true);
+#                        pg_get_viewdef
+#--------------------------------------------------------------
+#  SELECT j.b,                                                +
+#     j.c,                                                    +
+#     j.a,                                                    +
+#     j.ax,                                                   +
+#     j.ay,                                                   +
+#     j.q                                                     +
+#    FROM (tt2                                                +
+#      JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c)            +
+#      JOIN tt4 USING (b)) j(b, c, a, e, ax, c_1, e_1, ay, q);
+#(1 row)
+#
+#select pg_get_viewdef('v3', true);
+#                  pg_get_viewdef
+#--------------------------------------------------
+#  SELECT b,                                      +
+#     tt3.c,                                      +
+#     tt2.a,                                      +
+#     tt3.ax,                                     +
+#     tt4.ay,                                     +
+#     tt4.q                                       +
+#    FROM tt2                                     +
+#      JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c)+
+#      FULL JOIN tt4 USING (b);
+#(1 row)
+#
+#create table tt5 (a int, b int);
+#create table tt6 (c int, d int);
+#create view vv1 as select * from (tt5 cross join tt6) j(aa,bb,cc,dd);
+#select pg_get_viewdef('vv1', true);
+#             pg_get_viewdef
+#-----------------------------------------
+#  SELECT j.aa,                          +
+#     j.bb,                              +
+#     j.cc,                              +
+#     j.dd                               +
+#    FROM (tt5                           +
+#      CROSS JOIN tt6) j(aa, bb, cc, dd);
+#(1 row)
+#
+#alter table tt5 add column c int;
+#select pg_get_viewdef('vv1', true);
+#               pg_get_viewdef
+#--------------------------------------------
+#  SELECT j.aa,                             +
+#     j.bb,                                 +
+#     j.cc,                                 +
+#     j.dd                                  +
+#    FROM (tt5                              +
+#      CROSS JOIN tt6) j(aa, bb, c, cc, dd);
+#(1 row)
+#
+#alter table tt5 add column cc int;
+#select pg_get_viewdef('vv1', true);
+#                  pg_get_viewdef
+#--------------------------------------------------
+#  SELECT j.aa,                                   +
+#     j.bb,                                       +
+#     j.cc,                                       +
+#     j.dd                                        +
+#    FROM (tt5                                    +
+#      CROSS JOIN tt6) j(aa, bb, c, cc_1, cc, dd);
+#(1 row)
+#
+#alter table tt5 drop column c;
+#select pg_get_viewdef('vv1', true);
+#                pg_get_viewdef
+#-----------------------------------------------
+#  SELECT j.aa,                                +
+#     j.bb,                                    +
+#     j.cc,                                    +
+#     j.dd                                     +
+#    FROM (tt5                                 +
+#      CROSS JOIN tt6) j(aa, bb, cc_1, cc, dd);
+#(1 row)
+#
+#create view v4 as select * from v1;
+#alter view v1 rename column a to x;
+#select pg_get_viewdef('v1', true);
+#                  pg_get_viewdef
+#---------------------------------------------------
+#  SELECT tt2.b,                                   +
+#     tt3.c,                                       +
+#     tt2.a AS x,                                  +
+#     tt3.ax                                       +
+#    FROM tt2                                      +
+#      JOIN tt3 tt3(ax, b, c, c_1, e) USING (b, c);
+#(1 row)
+#
+#select pg_get_viewdef('v4', true);
+# pg_get_viewdef
+#----------------
+#  SELECT v1.b, +
+#     v1.c,     +
+#     v1.x AS a,+
+#     v1.ax     +
+#    FROM v1;
+#(1 row)
+#
+#-- Unnamed FULL JOIN USING is lots of fun too
+#create table tt7 (x int, xx int, y int);
+#alter table tt7 drop column xx;
+#create table tt8 (x int, z int);
+#create view vv2 as
+#select * from (values(1,2,3,4,5)) v(a,b,c,d,e)
+#union all
+#select * from tt7 full join tt8 using (x), tt8 tt8x;
+#select pg_get_viewdef('vv2', true);
+#                 pg_get_viewdef
+#------------------------------------------------
+#  SELECT v.a,                                  +
+#     v.b,                                      +
+#     v.c,                                      +
+#     v.d,                                      +
+#     v.e                                       +
+#    FROM ( VALUES (1,2,3,4,5)) v(a, b, c, d, e)+
+# UNION ALL                                     +
+#  SELECT x AS a,                               +
+#     tt7.y AS b,                               +
+#     tt8.z AS c,                               +
+#     tt8x.x_1 AS d,                            +
+#     tt8x.z AS e                               +
+#    FROM tt7                                   +
+#      FULL JOIN tt8 USING (x),                 +
+#     tt8 tt8x(x_1, z);
+#(1 row)
+#
+#create view vv3 as
+#select * from (values(1,2,3,4,5,6)) v(a,b,c,x,e,f)
+#union all
+#select * from
+#  tt7 full join tt8 using (x),
+#  tt7 tt7x full join tt8 tt8x using (x);
+#select pg_get_viewdef('vv3', true);
+#                   pg_get_viewdef
+#-----------------------------------------------------
+#  SELECT v.a,                                       +
+#     v.b,                                           +
+#     v.c,                                           +
+#     v.x,                                           +
+#     v.e,                                           +
+#     v.f                                            +
+#    FROM ( VALUES (1,2,3,4,5,6)) v(a, b, c, x, e, f)+
+# UNION ALL                                          +
+#  SELECT x AS a,                                    +
+#     tt7.y AS b,                                    +
+#     tt8.z AS c,                                    +
+#     x_1 AS x,                                      +
+#     tt7x.y AS e,                                   +
+#     tt8x.z AS f                                    +
+#    FROM tt7                                        +
+#      FULL JOIN tt8 USING (x),                      +
+#     tt7 tt7x(x_1, y)                               +
+#      FULL JOIN tt8 tt8x(x_1, z) USING (x_1);
+#(1 row)
+#
+#create view vv4 as
+#select * from (values(1,2,3,4,5,6,7)) v(a,b,c,x,e,f,g)
+#union all
+#select * from
+#  tt7 full join tt8 using (x),
+#  tt7 tt7x full join tt8 tt8x using (x) full join tt8 tt8y using (x);
+#select pg_get_viewdef('vv4', true);
+#                      pg_get_viewdef
+#----------------------------------------------------------
+#  SELECT v.a,                                            +
+#     v.b,                                                +
+#     v.c,                                                +
+#     v.x,                                                +
+#     v.e,                                                +
+#     v.f,                                                +
+#     v.g                                                 +
+#    FROM ( VALUES (1,2,3,4,5,6,7)) v(a, b, c, x, e, f, g)+
+# UNION ALL                                               +
+#  SELECT x AS a,                                         +
+#     tt7.y AS b,                                         +
+#     tt8.z AS c,                                         +
+#     x_1 AS x,                                           +
+#     tt7x.y AS e,                                        +
+#     tt8x.z AS f,                                        +
+#     tt8y.z AS g                                         +
+#    FROM tt7                                             +
+#      FULL JOIN tt8 USING (x),                           +
+#     tt7 tt7x(x_1, y)                                    +
+#      FULL JOIN tt8 tt8x(x_1, z) USING (x_1)             +
+#      FULL JOIN tt8 tt8y(x_1, z) USING (x_1);
+#(1 row)
+#
+#alter table tt7 add column zz int;
+#alter table tt7 add column z int;
+#alter table tt7 drop column zz;
+#alter table tt8 add column z2 int;
+#select pg_get_viewdef('vv2', true);
+#                 pg_get_viewdef
+#------------------------------------------------
+#  SELECT v.a,                                  +
+#     v.b,                                      +
+#     v.c,                                      +
+#     v.d,                                      +
+#     v.e                                       +
+#    FROM ( VALUES (1,2,3,4,5)) v(a, b, c, d, e)+
+# UNION ALL                                     +
+#  SELECT x AS a,                               +
+#     tt7.y AS b,                               +
+#     tt8.z AS c,                               +
+#     tt8x.x_1 AS d,                            +
+#     tt8x.z AS e                               +
+#    FROM tt7                                   +
+#      FULL JOIN tt8 USING (x),                 +
+#     tt8 tt8x(x_1, z, z2);
+#(1 row)
+#
+#select pg_get_viewdef('vv3', true);
+#                   pg_get_viewdef
+#-----------------------------------------------------
+#  SELECT v.a,                                       +
+#     v.b,                                           +
+#     v.c,                                           +
+#     v.x,                                           +
+#     v.e,                                           +
+#     v.f                                            +
+#    FROM ( VALUES (1,2,3,4,5,6)) v(a, b, c, x, e, f)+
+# UNION ALL                                          +
+#  SELECT x AS a,                                    +
+#     tt7.y AS b,                                    +
+#     tt8.z AS c,                                    +
+#     x_1 AS x,                                      +
+#     tt7x.y AS e,                                   +
+#     tt8x.z AS f                                    +
+#    FROM tt7                                        +
+#      FULL JOIN tt8 USING (x),                      +
+#     tt7 tt7x(x_1, y, z)                            +
+#      FULL JOIN tt8 tt8x(x_1, z, z2) USING (x_1);
+#(1 row)
+#
+#select pg_get_viewdef('vv4', true);
+#                      pg_get_viewdef
+#----------------------------------------------------------
+#  SELECT v.a,                                            +
+#     v.b,                                                +
+#     v.c,                                                +
+#     v.x,                                                +
+#     v.e,                                                +
+#     v.f,                                                +
+#     v.g                                                 +
+#    FROM ( VALUES (1,2,3,4,5,6,7)) v(a, b, c, x, e, f, g)+
+# UNION ALL                                               +
+#  SELECT x AS a,                                         +
+#     tt7.y AS b,                                         +
+#     tt8.z AS c,                                         +
+#     x_1 AS x,                                           +
+#     tt7x.y AS e,                                        +
+#     tt8x.z AS f,                                        +
+#     tt8y.z AS g                                         +
+#    FROM tt7                                             +
+#      FULL JOIN tt8 USING (x),                           +
+#     tt7 tt7x(x_1, y, z)                                 +
+#      FULL JOIN tt8 tt8x(x_1, z, z2) USING (x_1)         +
+#      FULL JOIN tt8 tt8y(x_1, z, z2) USING (x_1);
+#(1 row)
+#
+#-- Implicit coercions in a JOIN USING create issues similar to FULL JOIN
+#create table tt7a (x date, xx int, y int);
+#alter table tt7a drop column xx;
+#create table tt8a (x timestamptz, z int);
+#create view vv2a as
+#select * from (values(now(),2,3,now(),5)) v(a,b,c,d,e)
+#union all
+#select * from tt7a left join tt8a using (x), tt8a tt8ax;
+#select pg_get_viewdef('vv2a', true);
+#                     pg_get_viewdef
+#--------------------------------------------------------
+#  SELECT v.a,                                          +
+#     v.b,                                              +
+#     v.c,                                              +
+#     v.d,                                              +
+#     v.e                                               +
+#    FROM ( VALUES (now(),2,3,now(),5)) v(a, b, c, d, e)+
+# UNION ALL                                             +
+#  SELECT x AS a,                                       +
+#     tt7a.y AS b,                                      +
+#     tt8a.z AS c,                                      +
+#     tt8ax.x_1 AS d,                                   +
+#     tt8ax.z AS e                                      +
+#    FROM tt7a                                          +
+#      LEFT JOIN tt8a USING (x),                        +
+#     tt8a tt8ax(x_1, z);
+#(1 row)
+#
+#--
+#-- Also check dropping a column that existed when the view was made
+#--
+#create table tt9 (x int, xx int, y int);
+#create table tt10 (x int, z int);
+#create view vv5 as select x,y,z from tt9 join tt10 using(x);
+#select pg_get_viewdef('vv5', true);
+#      pg_get_viewdef
+#---------------------------
+#  SELECT tt9.x,           +
+#     tt9.y,               +
+#     tt10.z               +
+#    FROM tt9              +
+#      JOIN tt10 USING (x);
+#(1 row)
+#
+#alter table tt9 drop column xx;
+#select pg_get_viewdef('vv5', true);
+#      pg_get_viewdef
+#---------------------------
+#  SELECT tt9.x,           +
+#     tt9.y,               +
+#     tt10.z               +
+#    FROM tt9              +
+#      JOIN tt10 USING (x);
+#(1 row)
+#
+#--
+#-- Another corner case is that we might add a column to a table below a
+#-- JOIN USING, and thereby make the USING column name ambiguous
+#--
+#create table tt11 (x int, y int);
+#create table tt12 (x int, z int);
+#create table tt13 (z int, q int);
+#create view vv6 as select x,y,z,q from
+#  (tt11 join tt12 using(x)) join tt13 using(z);
+#select pg_get_viewdef('vv6', true);
+#      pg_get_viewdef
+#---------------------------
+#  SELECT tt11.x,          +
+#     tt11.y,              +
+#     tt12.z,              +
+#     tt13.q               +
+#    FROM tt11             +
+#      JOIN tt12 USING (x) +
+#      JOIN tt13 USING (z);
+#(1 row)
+#
+#alter table tt11 add column z int;
+#select pg_get_viewdef('vv6', true);
+#        pg_get_viewdef
+#------------------------------
+#  SELECT tt11.x,             +
+#     tt11.y,                 +
+#     tt12.z,                 +
+#     tt13.q                  +
+#    FROM tt11 tt11(x, y, z_1)+
+#      JOIN tt12 USING (x)    +
+#      JOIN tt13 USING (z);
+#(1 row)
+#
+#--
+#-- Check cases involving dropped/altered columns in a function's rowtype result
+#--
+#create table tt14t (f1 text, f2 text, f3 text, f4 text);
+#insert into tt14t values('foo', 'bar', 'baz', '42');
+#alter table tt14t drop column f2;
+#create function tt14f() returns setof tt14t as
+#$$
+#declare
+#    rec1 record;
+#begin
+#    for rec1 in select * from tt14t
+#    loop
+#        return next rec1;
+#    end loop;
+#end;
+#$$
+#language plpgsql;
+#create view tt14v as select t.* from tt14f() t;
+#select pg_get_viewdef('tt14v', true);
+#         pg_get_viewdef
+#--------------------------------
+#  SELECT t.f1,                 +
+#     t.f3,                     +
+#     t.f4                      +
+#    FROM tt14f() t(f1, f3, f4);
+#(1 row)
+#
+#select * from tt14v;
+# f1  | f3  | f4
+#-----+-----+----
+# foo | baz | 42
+#(1 row)
+#
+#alter table tt14t drop column f3;  -- fail, view has explicit reference to f3
+#ERROR:  cannot drop column f3 of table tt14t because other objects depend on it
+#DETAIL:  view tt14v depends on column f3 of table tt14t
+#HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+#-- We used to have a bug that would allow the above to succeed, posing
+#-- hazards for later execution of the view.  Check that the internal
+#-- defenses for those hazards haven't bit-rotted, in case some other
+#-- bug with similar symptoms emerges.
+#begin;
+#-- destroy the dependency entry that prevents the DROP:
+#delete from pg_depend where
+#  objid = (select oid from pg_rewrite
+#           where ev_class = 'tt14v'::regclass and rulename = '_RETURN')
+#  and refobjsubid = 3
+#returning pg_describe_object(classid, objid, objsubid) as obj,
+#          pg_describe_object(refclassid, refobjid, refobjsubid) as ref,
+#          deptype;
+#            obj             |           ref            | deptype
+#----------------------------+--------------------------+---------
+# rule _RETURN on view tt14v | column f3 of table tt14t | n
+#(1 row)
+#
+#-- this will now succeed:
+#alter table tt14t drop column f3;
+#-- column f3 is still in the view, sort of ...
+#select pg_get_viewdef('tt14v', true);
+#         pg_get_viewdef
+#---------------------------------
+#  SELECT t.f1,                  +
+#     t."?dropped?column?" AS f3,+
+#     t.f4                       +
+#    FROM tt14f() t(f1, f4);
+#(1 row)
+#
+#-- ... and you can even EXPLAIN it ...
+#explain (verbose, costs off) select * from tt14v;
+#               QUERY PLAN
+#----------------------------------------
+# Function Scan on testviewschm2.tt14f t
+#   Output: t.f1, t.f3, t.f4
+#   Function Call: tt14f()
+#(3 rows)
+#
+#-- but it will fail at execution
+#select f1, f4 from tt14v;
+# f1  | f4
+#-----+----
+# foo | 42
+#(1 row)
+#
+#select * from tt14v;
+#ERROR:  attribute 3 of type record has been dropped
+#rollback;
+#-- likewise, altering a referenced column's type is prohibited ...
+#alter table tt14t alter column f4 type integer using f4::integer;  -- fail
+#ERROR:  cannot alter type of a column used by a view or rule
+#DETAIL:  rule _RETURN on view tt14v depends on column "f4"
+#-- ... but some bug might let it happen, so check defenses
+#begin;
+#-- destroy the dependency entry that prevents the ALTER:
+#delete from pg_depend where
+#  objid = (select oid from pg_rewrite
+#           where ev_class = 'tt14v'::regclass and rulename = '_RETURN')
+#  and refobjsubid = 4
+#returning pg_describe_object(classid, objid, objsubid) as obj,
+#          pg_describe_object(refclassid, refobjid, refobjsubid) as ref,
+#          deptype;
+#            obj             |           ref            | deptype
+#----------------------------+--------------------------+---------
+# rule _RETURN on view tt14v | column f4 of table tt14t | n
+#(1 row)
+#
+#-- this will now succeed:
+#alter table tt14t alter column f4 type integer using f4::integer;
+#-- f4 is still in the view ...
+#select pg_get_viewdef('tt14v', true);
+#         pg_get_viewdef
+#--------------------------------
+#  SELECT t.f1,                 +
+#     t.f3,                     +
+#     t.f4                      +
+#    FROM tt14f() t(f1, f3, f4);
+#(1 row)
+#
+#-- but will fail at execution
+#select f1, f3 from tt14v;
+# f1  | f3
+#-----+-----
+# foo | baz
+#(1 row)
+#
+#select * from tt14v;
+#ERROR:  attribute 4 of type record has wrong type
+#DETAIL:  Table has type integer, but query expects text.
+#rollback;
+#drop view tt14v;
+#create view tt14v as select t.f1, t.f4 from tt14f() t;
+#select pg_get_viewdef('tt14v', true);
+#         pg_get_viewdef
+#--------------------------------
+#  SELECT t.f1,                 +
+#     t.f4                      +
+#    FROM tt14f() t(f1, f3, f4);
+#(1 row)
+#
+#select * from tt14v;
+# f1  | f4
+#-----+----
+# foo | 42
+#(1 row)
+#
+#alter table tt14t drop column f3;  -- ok
+#select pg_get_viewdef('tt14v', true);
+#       pg_get_viewdef
+#----------------------------
+#  SELECT t.f1,             +
+#     t.f4                  +
+#    FROM tt14f() t(f1, f4);
+#(1 row)
+#
+#explain (verbose, costs off) select * from tt14v;
+#               QUERY PLAN
+#----------------------------------------
+# Function Scan on testviewschm2.tt14f t
+#   Output: t.f1, t.f4
+#   Function Call: tt14f()
+#(3 rows)
+#
+#select * from tt14v;
+# f1  | f4
+#-----+----
+# foo | 42
+#(1 row)
+#
+#-- check display of whole-row variables in some corner cases
+#create type nestedcomposite as (x int8_tbl);
+#create view tt15v as select row(i)::nestedcomposite from int8_tbl i;
+#select * from tt15v;
+#                   row
+#------------------------------------------
+# ("(123,456)")
+# ("(123,4567890123456789)")
+# ("(4567890123456789,123)")
+# ("(4567890123456789,4567890123456789)")
+# ("(4567890123456789,-4567890123456789)")
+#(5 rows)
+#
+#select pg_get_viewdef('tt15v', true);
+#                    pg_get_viewdef
+#------------------------------------------------------
+#  SELECT ROW(i.*::int8_tbl)::nestedcomposite AS "row"+
+#    FROM int8_tbl i;
+#(1 row)
+#
+#select row(i.*::int8_tbl)::nestedcomposite from int8_tbl i;
+#                   row
+#------------------------------------------
+# ("(123,456)")
+# ("(123,4567890123456789)")
+# ("(4567890123456789,123)")
+# ("(4567890123456789,4567890123456789)")
+# ("(4567890123456789,-4567890123456789)")
+#(5 rows)
+#
+#create view tt16v as select * from int8_tbl i, lateral(values(i)) ss;
+#select * from tt16v;
+#        q1        |        q2         |               column1
+#------------------+-------------------+--------------------------------------
+#              123 |               456 | (123,456)
+#              123 |  4567890123456789 | (123,4567890123456789)
+# 4567890123456789 |               123 | (4567890123456789,123)
+# 4567890123456789 |  4567890123456789 | (4567890123456789,4567890123456789)
+# 4567890123456789 | -4567890123456789 | (4567890123456789,-4567890123456789)
+#(5 rows)
+#
+#select pg_get_viewdef('tt16v', true);
+#              pg_get_viewdef
+#-------------------------------------------
+#  SELECT i.q1,                            +
+#     i.q2,                                +
+#     ss.column1                           +
+#    FROM int8_tbl i,                      +
+#     LATERAL ( VALUES (i.*::int8_tbl)) ss;
+#(1 row)
+#
+#select * from int8_tbl i, lateral(values(i.*::int8_tbl)) ss;
+#        q1        |        q2         |               column1
+#------------------+-------------------+--------------------------------------
+#              123 |               456 | (123,456)
+#              123 |  4567890123456789 | (123,4567890123456789)
+# 4567890123456789 |               123 | (4567890123456789,123)
+# 4567890123456789 |  4567890123456789 | (4567890123456789,4567890123456789)
+# 4567890123456789 | -4567890123456789 | (4567890123456789,-4567890123456789)
+#(5 rows)
+#
+#create view tt17v as select * from int8_tbl i where i in (values(i));
+#select * from tt17v;
+#        q1        |        q2
+#------------------+-------------------
+#              123 |               456
+#              123 |  4567890123456789
+# 4567890123456789 |               123
+# 4567890123456789 |  4567890123456789
+# 4567890123456789 | -4567890123456789
+#(5 rows)
+#
+#select pg_get_viewdef('tt17v', true);
+#               pg_get_viewdef
+#---------------------------------------------
+#  SELECT i.q1,                              +
+#     i.q2                                   +
+#    FROM int8_tbl i                         +
+#   WHERE (i.* IN ( VALUES (i.*::int8_tbl)));
+#(1 row)
+#
+#select * from int8_tbl i where i.* in (values(i.*::int8_tbl));
+#        q1        |        q2
+#------------------+-------------------
+#              123 |               456
+#              123 |  4567890123456789
+# 4567890123456789 |               123
+# 4567890123456789 |  4567890123456789
+# 4567890123456789 | -4567890123456789
+#(5 rows)
+#
+#create table tt15v_log(o tt15v, n tt15v, incr bool);
+#create rule updlog as on update to tt15v do also
+#  insert into tt15v_log values(old, new, row(old,old) < row(new,new));
+#\d+ tt15v
+#                             View "testviewschm2.tt15v"
+# Column |      Type       | Collation | Nullable | Default | Storage  | Description
+#--------+-----------------+-----------+----------+---------+----------+-------------
+# row    | nestedcomposite |           |          |         | extended |
+#View definition:
+# SELECT ROW(i.*::int8_tbl)::nestedcomposite AS "row"
+#   FROM int8_tbl i;
+#Rules:
+# updlog AS
+#    ON UPDATE TO tt15v DO  INSERT INTO tt15v_log (o, n, incr)
+#  VALUES (old.*::tt15v, new.*::tt15v, (ROW(old.*::tt15v, old.*::tt15v) < ROW(new.*::tt15v, new.*::tt15v)))
+#
+#-- check unique-ification of overlength names
+#create view tt18v as
+#  select * from int8_tbl xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy
+#  union all
+#  select * from int8_tbl xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxz;
+#NOTICE:  identifier "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy" will be truncated to "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+#NOTICE:  identifier "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxz" will be truncated to "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+#select pg_get_viewdef('tt18v', true);
+#                                  pg_get_viewdef
+#-----------------------------------------------------------------------------------
+#  SELECT xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.q1,      +
+#     xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.q2           +
+#    FROM int8_tbl xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx +
+# UNION ALL                                                                        +
+#  SELECT xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.q1,      +
+#     xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.q2           +
+#    FROM int8_tbl xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx;
+#(1 row)
+#
+#explain (costs off) select * from tt18v;
+#                                         QUERY PLAN
+#--------------------------------------------------------------------------------------------
+# Append
+#   ->  Seq Scan on int8_tbl xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+#   ->  Seq Scan on int8_tbl xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_1
+#(3 rows)
+#
+#-- check display of ScalarArrayOp with a sub-select
+#select 'foo'::text = any(array['abc','def','foo']::text[]);
+# ?column?
+#----------
+# t
+#(1 row)
+#
+#select 'foo'::text = any((select array['abc','def','foo']::text[]));  -- fail
+#ERROR:  operator does not exist: text = text[]
+#LINE 1: select 'foo'::text = any((select array['abc','def','foo']::t...
+#                           ^
+#HINT:  No operator matches the given name and argument types. You might need to add explicit type casts.
+#select 'foo'::text = any((select array['abc','def','foo']::text[])::text[]);
+# ?column?
+#----------
+# t
+#(1 row)
+#
+#create view tt19v as
+#select 'foo'::text = any(array['abc','def','foo']::text[]) c1,
+#       'foo'::text = any((select array['abc','def','foo']::text[])::text[]) c2;
+#select pg_get_viewdef('tt19v', true);
+#                                               pg_get_viewdef
+#------------------------------------------------------------------------------------------------------------
+#  SELECT 'foo'::text = ANY (ARRAY['abc'::text, 'def'::text, 'foo'::text]) AS c1,                           +
+#     'foo'::text = ANY ((( SELECT ARRAY['abc'::text, 'def'::text, 'foo'::text] AS "array"))::text[]) AS c2;
+#(1 row)
+#
+#-- check display of assorted RTE_FUNCTION expressions
+#create view tt20v as
+#select * from
+#  coalesce(1,2) as c,
+#  collation for ('x'::text) col,
+#  current_date as d,
+#  localtimestamp(3) as t,
+#  cast(1+2 as int4) as i4,
+#  cast(1+2 as int8) as i8;
+#select pg_get_viewdef('tt20v', true);
+#               pg_get_viewdef
+#---------------------------------------------
+#  SELECT c.c,                               +
+#     col.col,                               +
+#     d.d,                                   +
+#     t.t,                                   +
+#     i4.i4,                                 +
+#     i8.i8                                  +
+#    FROM COALESCE(1, 2) c(c),               +
+#     COLLATION FOR ('x'::text) col(col),    +
+#     CURRENT_DATE d(d),                     +
+#     LOCALTIMESTAMP(3) t(t),                +
+#     CAST(1 + 2 AS integer) i4(i4),         +
+#     CAST((1 + 2)::bigint AS bigint) i8(i8);
+#(1 row)
+#
+#-- reverse-listing of various special function syntaxes required by SQL
+#create view tt201v as
+#select
+#  ('2022-12-01'::date + '1 day'::interval) at time zone 'UTC' as atz,
+#  extract(day from now()) as extr,
+#  (now(), '1 day'::interval) overlaps
+#    (current_timestamp(2), '1 day'::interval) as o,
+#  'foo' is normalized isn,
+#  'foo' is nfkc normalized isnn,
+#  normalize('foo') as n,
+#  normalize('foo', nfkd) as nfkd,
+#  overlay('foo' placing 'bar' from 2) as ovl,
+#  overlay('foo' placing 'bar' from 2 for 3) as ovl2,
+#  position('foo' in 'foobar') as p,
+#  substring('foo' from 2 for 3) as s,
+#  substring('foo' similar 'f' escape '#') as ss,
+#  substring('foo' from 'oo') as ssf,  -- historically-permitted abuse
+#  trim(' ' from ' foo ') as bt,
+#  trim(leading ' ' from ' foo ') as lt,
+#  trim(trailing ' foo ') as rt,
+#  trim(E'\\000'::bytea from E'\\000Tom\\000'::bytea) as btb,
+#  trim(leading E'\\000'::bytea from E'\\000Tom\\000'::bytea) as ltb,
+#  trim(trailing E'\\000'::bytea from E'\\000Tom\\000'::bytea) as rtb,
+#  CURRENT_DATE as cd,
+#  (select * from CURRENT_DATE) as cd2,
+#  CURRENT_TIME as ct,
+#  (select * from CURRENT_TIME) as ct2,
+#  CURRENT_TIME (1) as ct3,
+#  (select * from CURRENT_TIME (1)) as ct4,
+#  CURRENT_TIMESTAMP as ct5,
+#  (select * from CURRENT_TIMESTAMP) as ct6,
+#  CURRENT_TIMESTAMP (1) as ct7,
+#  (select * from CURRENT_TIMESTAMP (1)) as ct8,
+#  LOCALTIME as lt1,
+#  (select * from LOCALTIME) as lt2,
+#  LOCALTIME (1) as lt3,
+#  (select * from LOCALTIME (1)) as lt4,
+#  LOCALTIMESTAMP as lt5,
+#  (select * from LOCALTIMESTAMP) as lt6,
+#  LOCALTIMESTAMP (1) as lt7,
+#  (select * from LOCALTIMESTAMP (1)) as lt8,
+#  CURRENT_CATALOG as ca,
+#  (select * from CURRENT_CATALOG) as ca2,
+#  CURRENT_ROLE as cr,
+#  (select * from CURRENT_ROLE) as cr2,
+#  CURRENT_SCHEMA as cs,
+#  (select * from CURRENT_SCHEMA) as cs2,
+#  CURRENT_USER as cu,
+#  (select * from CURRENT_USER) as cu2,
+#  USER as us,
+#  (select * from USER) as us2,
+#  SESSION_USER seu,
+#  (select * from SESSION_USER) as seu2,
+#  SYSTEM_USER as su,
+#  (select * from SYSTEM_USER) as su2;
+#select pg_get_viewdef('tt201v', true);
+#                                        pg_get_viewdef
+#-----------------------------------------------------------------------------------------------
+#  SELECT (('12-01-2022'::date + '@ 1 day'::interval) AT TIME ZONE 'UTC'::text) AS atz,        +
+#     EXTRACT(day FROM now()) AS extr,                                                         +
+#     ((now(), '@ 1 day'::interval) OVERLAPS (CURRENT_TIMESTAMP(2), '@ 1 day'::interval)) AS o,+
+#     ('foo'::text IS NORMALIZED) AS isn,                                                      +
+#     ('foo'::text IS NFKC NORMALIZED) AS isnn,                                                +
+#     NORMALIZE('foo'::text) AS n,                                                             +
+#     NORMALIZE('foo'::text, NFKD) AS nfkd,                                                    +
+#     OVERLAY('foo'::text PLACING 'bar'::text FROM 2) AS ovl,                                  +
+#     OVERLAY('foo'::text PLACING 'bar'::text FROM 2 FOR 3) AS ovl2,                           +
+#     POSITION(('foo'::text) IN ('foobar'::text)) AS p,                                        +
+#     SUBSTRING('foo'::text FROM 2 FOR 3) AS s,                                                +
+#     SUBSTRING('foo'::text SIMILAR 'f'::text ESCAPE '#'::text) AS ss,                         +
+#     "substring"('foo'::text, 'oo'::text) AS ssf,                                             +
+#     TRIM(BOTH ' '::text FROM ' foo '::text) AS bt,                                           +
+#     TRIM(LEADING ' '::text FROM ' foo '::text) AS lt,                                        +
+#     TRIM(TRAILING FROM ' foo '::text) AS rt,                                                 +
+#     TRIM(BOTH '\x00'::bytea FROM '\x00546f6d00'::bytea) AS btb,                              +
+#     TRIM(LEADING '\x00'::bytea FROM '\x00546f6d00'::bytea) AS ltb,                           +
+#     TRIM(TRAILING '\x00'::bytea FROM '\x00546f6d00'::bytea) AS rtb,                          +
+#     CURRENT_DATE AS cd,                                                                      +
+#     ( SELECT "current_date"."current_date"                                                   +
+#            FROM CURRENT_DATE "current_date"("current_date")) AS cd2,                         +
+#     CURRENT_TIME AS ct,                                                                      +
+#     ( SELECT "current_time"."current_time"                                                   +
+#            FROM CURRENT_TIME "current_time"("current_time")) AS ct2,                         +
+#     CURRENT_TIME(1) AS ct3,                                                                  +
+#     ( SELECT "current_time"."current_time"                                                   +
+#            FROM CURRENT_TIME(1) "current_time"("current_time")) AS ct4,                      +
+#     CURRENT_TIMESTAMP AS ct5,                                                                +
+#     ( SELECT "current_timestamp"."current_timestamp"                                         +
+#            FROM CURRENT_TIMESTAMP "current_timestamp"("current_timestamp")) AS ct6,          +
+#     CURRENT_TIMESTAMP(1) AS ct7,                                                             +
+#     ( SELECT "current_timestamp"."current_timestamp"                                         +
+#            FROM CURRENT_TIMESTAMP(1) "current_timestamp"("current_timestamp")) AS ct8,       +
+#     LOCALTIME AS lt1,                                                                        +
+#     ( SELECT "localtime"."localtime"                                                         +
+#            FROM LOCALTIME "localtime"("localtime")) AS lt2,                                  +
+#     LOCALTIME(1) AS lt3,                                                                     +
+#     ( SELECT "localtime"."localtime"                                                         +
+#            FROM LOCALTIME(1) "localtime"("localtime")) AS lt4,                               +
+#     LOCALTIMESTAMP AS lt5,                                                                   +
+#     ( SELECT "localtimestamp"."localtimestamp"                                               +
+#            FROM LOCALTIMESTAMP "localtimestamp"("localtimestamp")) AS lt6,                   +
+#     LOCALTIMESTAMP(1) AS lt7,                                                                +
+#     ( SELECT "localtimestamp"."localtimestamp"                                               +
+#            FROM LOCALTIMESTAMP(1) "localtimestamp"("localtimestamp")) AS lt8,                +
+#     CURRENT_CATALOG AS ca,                                                                   +
+#     ( SELECT "current_catalog"."current_catalog"                                             +
+#            FROM CURRENT_CATALOG "current_catalog"("current_catalog")) AS ca2,                +
+#     CURRENT_ROLE AS cr,                                                                      +
+#     ( SELECT "current_role"."current_role"                                                   +
+#            FROM CURRENT_ROLE "current_role"("current_role")) AS cr2,                         +
+#     CURRENT_SCHEMA AS cs,                                                                    +
+#     ( SELECT "current_schema"."current_schema"                                               +
+#            FROM CURRENT_SCHEMA "current_schema"("current_schema")) AS cs2,                   +
+#     CURRENT_USER AS cu,                                                                      +
+#     ( SELECT "current_user"."current_user"                                                   +
+#            FROM CURRENT_USER "current_user"("current_user")) AS cu2,                         +
+#     USER AS us,                                                                              +
+#     ( SELECT "user"."user"                                                                   +
+#            FROM USER "user"("user")) AS us2,                                                 +
+#     SESSION_USER AS seu,                                                                     +
+#     ( SELECT "session_user"."session_user"                                                   +
+#            FROM SESSION_USER "session_user"("session_user")) AS seu2,                        +
+#     SYSTEM_USER AS su,                                                                       +
+#     ( SELECT "system_user"."system_user"                                                     +
+#            FROM SYSTEM_USER "system_user"("system_user")) AS su2;
+#(1 row)
+#
+#-- corner cases with empty join conditions
+#create view tt21v as
+#select * from tt5 natural inner join tt6;
+#select pg_get_viewdef('tt21v', true);
+#    pg_get_viewdef
+#----------------------
+#  SELECT tt5.a,      +
+#     tt5.b,          +
+#     tt5.cc,         +
+#     tt6.c,          +
+#     tt6.d           +
+#    FROM tt5         +
+#      CROSS JOIN tt6;
+#(1 row)
+#
+#create view tt22v as
+#select * from tt5 natural left join tt6;
+#select pg_get_viewdef('tt22v', true);
+#       pg_get_viewdef
+#-----------------------------
+#  SELECT tt5.a,             +
+#     tt5.b,                 +
+#     tt5.cc,                +
+#     tt6.c,                 +
+#     tt6.d                  +
+#    FROM tt5                +
+#      LEFT JOIN tt6 ON TRUE;
+#(1 row)
+#
+#-- check handling of views with immediately-renamed columns
+#create view tt23v (col_a, col_b) as
+#select q1 as other_name1, q2 as other_name2 from int8_tbl
+#union
+#select 42, 43;
+#select pg_get_viewdef('tt23v', true);
+#        pg_get_viewdef
+#-------------------------------
+#  SELECT int8_tbl.q1 AS col_a,+
+#     int8_tbl.q2 AS col_b     +
+#    FROM int8_tbl             +
+# UNION                        +
+#  SELECT 42 AS col_a,         +
+#     43 AS col_b;
+#(1 row)
+#
+#select pg_get_ruledef(oid, true) from pg_rewrite
+#  where ev_class = 'tt23v'::regclass and ev_type = '1';
+#                         pg_get_ruledef
+#-----------------------------------------------------------------
+# CREATE RULE "_RETURN" AS                                       +
+#     ON SELECT TO tt23v DO INSTEAD  SELECT int8_tbl.q1 AS col_a,+
+#     int8_tbl.q2 AS col_b                                       +
+#    FROM int8_tbl                                               +
+# UNION                                                          +
+#  SELECT 42 AS col_a,                                           +
+#     43 AS col_b;
+#(1 row)
+#
+#-- test extraction of FieldSelect field names (get_name_for_var_field)
+#create view tt24v as
+#with cte as materialized (select r from (values(1,2),(3,4)) r)
+#select (r).column2 as col_a, (rr).column2 as col_b from
+#  cte join (select rr from (values(1,7),(3,8)) rr limit 2) ss
+#  on (r).column1 = (rr).column1;
+#select pg_get_viewdef('tt24v', true);
+#                       pg_get_viewdef
+#------------------------------------------------------------
+#  WITH cte AS MATERIALIZED (                               +
+#          SELECT r.*::record AS r                          +
+#            FROM ( VALUES (1,2), (3,4)) r                  +
+#         )                                                 +
+#  SELECT (cte.r).column2 AS col_a,                         +
+#     (ss.rr).column2 AS col_b                              +
+#    FROM cte                                               +
+#      JOIN ( SELECT rr.*::record AS rr                     +
+#            FROM ( VALUES (1,7), (3,8)) rr                 +
+#          LIMIT 2) ss ON (cte.r).column1 = (ss.rr).column1;
+#(1 row)
+#
+#create view tt25v as
+#with cte as materialized (select pg_get_keywords() k)
+#select (k).word from cte;
+#select pg_get_viewdef('tt25v', true);
+#             pg_get_viewdef
+#----------------------------------------
+#  WITH cte AS MATERIALIZED (           +
+#          SELECT pg_get_keywords() AS k+
+#         )                             +
+#  SELECT (cte.k).word AS word          +
+#    FROM cte;
+#(1 row)
+#
+#-- also check cases seen only in EXPLAIN
+#explain (verbose, costs off)
+#select * from tt24v;
+#                                        QUERY PLAN
+#------------------------------------------------------------------------------------------
+# Hash Join
+#   Output: (cte.r).column2, ((ROW("*VALUES*".column1, "*VALUES*".column2))).column2
+#   Hash Cond: ((cte.r).column1 = ((ROW("*VALUES*".column1, "*VALUES*".column2))).column1)
+#   CTE cte
+#     ->  Values Scan on "*VALUES*_1"
+#           Output: ROW("*VALUES*_1".column1, "*VALUES*_1".column2)
+#   ->  CTE Scan on cte
+#         Output: cte.r
+#   ->  Hash
+#         Output: (ROW("*VALUES*".column1, "*VALUES*".column2))
+#         ->  Limit
+#               Output: (ROW("*VALUES*".column1, "*VALUES*".column2))
+#               ->  Values Scan on "*VALUES*"
+#                     Output: ROW("*VALUES*".column1, "*VALUES*".column2)
+#(14 rows)
+#
+#explain (verbose, costs off)
+#select (r).column2 from (select r from (values(1,2),(3,4)) r limit 1) ss;
+#                            QUERY PLAN
+#-------------------------------------------------------------------
+# Subquery Scan on ss
+#   Output: (ss.r).column2
+#   ->  Limit
+#         Output: (ROW("*VALUES*".column1, "*VALUES*".column2))
+#         ->  Values Scan on "*VALUES*"
+#               Output: ROW("*VALUES*".column1, "*VALUES*".column2)
+#(6 rows)
+#
+#-- test pretty-print parenthesization rules, and SubLink deparsing
+#create view tt26v as
+#select x + y + z as c1,
+#       (x * y) + z as c2,
+#       x + (y * z) as c3,
+#       (x + y) * z as c4,
+#       x * (y + z) as c5,
+#       x + (y + z) as c6,
+#       x + (y # z) as c7,
+#       (x > y) AND (y > z OR x > z) as c8,
+#       (x > y) OR (y > z AND NOT (x > z)) as c9,
+#       (x,y) <> ALL (values(1,2),(3,4)) as c10,
+#       (x,y) <= ANY (values(1,2),(3,4)) as c11
+#from (values(1,2,3)) v(x,y,z);
+#select pg_get_viewdef('tt26v', true);
+#                     pg_get_viewdef
+#--------------------------------------------------------
+#  SELECT v.x + v.y + v.z AS c1,                        +
+#     v.x * v.y + v.z AS c2,                            +
+#     v.x + v.y * v.z AS c3,                            +
+#     (v.x + v.y) * v.z AS c4,                          +
+#     v.x * (v.y + v.z) AS c5,                          +
+#     v.x + (v.y + v.z) AS c6,                          +
+#     v.x + (v.y # v.z) AS c7,                          +
+#     v.x > v.y AND (v.y > v.z OR v.x > v.z) AS c8,     +
+#     v.x > v.y OR v.y > v.z AND NOT v.x > v.z AS c9,   +
+#     ((v.x, v.y) <> ALL ( VALUES (1,2), (3,4))) AS c10,+
+#     ((v.x, v.y) <= ANY ( VALUES (1,2), (3,4))) AS c11 +
+#    FROM ( VALUES (1,2,3)) v(x, y, z);
+#(1 row)

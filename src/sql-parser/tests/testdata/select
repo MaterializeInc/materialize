@@ -237,14 +237,14 @@ SELECT * FROM foo
 ----
 SELECT * FROM foo
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT foo.* FROM foo
 ----
 SELECT foo.* FROM foo
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: QualifiedWildcard([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: QualifiedWildcard { qualifier: [Ident("foo")], id: 0 }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT (x).a, (x).a.b.c
@@ -265,7 +265,7 @@ SELECT (x).*.*
 ----
 SELECT (x).*.*
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: WildcardAccess(WildcardAccess(Nested(Identifier([Ident("x")])))), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: WildcardAccess { expr: WildcardAccess { expr: Nested(Identifier([Ident("x")])), id: 0 }, id: 1 }, alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement roundtrip
 SELECT count(employee.*) FROM "order" JOIN employee ON "order".employee = employee.id
@@ -413,42 +413,42 @@ SELECT * FROM customers WHERE segment IN (SELECT segm FROM bar)
 ----
 SELECT * FROM customers WHERE segment IN (SELECT segm FROM bar)
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customers")])), alias: None }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("segment")]), subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("segm")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, negated: false }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customers")])), alias: None }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("segment")]), subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("segm")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, negated: false }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM t WHERE x IN (VALUES (1))
 ----
 SELECT * FROM t WHERE x IN (VALUES (1))
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), alias: None }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("x")]), subquery: Query { ctes: Simple([]), body: Values(Values([[Value(Number("1"))]])), order_by: [], limit: None, offset: None }, negated: false }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), alias: None }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("x")]), subquery: Query { ctes: Simple([]), body: Values(Values([[Value(Number("1"))]])), order_by: [], limit: None, offset: None }, negated: false }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM customers WHERE age BETWEEN 25 AND 32
 ----
 SELECT * FROM customers WHERE age BETWEEN 25 AND 32
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customers")])), alias: None }, joins: [] }], selection: Some(Between { expr: Identifier([Ident("age")]), negated: false, low: Value(Number("25")), high: Value(Number("32")) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customers")])), alias: None }, joins: [] }], selection: Some(Between { expr: Identifier([Ident("age")]), negated: false, low: Value(Number("25")), high: Value(Number("32")) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM customers WHERE age NOT BETWEEN 25 AND 32
 ----
 SELECT * FROM customers WHERE age NOT BETWEEN 25 AND 32
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customers")])), alias: None }, joins: [] }], selection: Some(Between { expr: Identifier([Ident("age")]), negated: true, low: Value(Number("25")), high: Value(Number("32")) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customers")])), alias: None }, joins: [] }], selection: Some(Between { expr: Identifier([Ident("age")]), negated: true, low: Value(Number("25")), high: Value(Number("32")) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NULL
 ----
 SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NULL
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), alias: None }, joins: [] }], selection: Some(IsExpr { expr: Between { expr: Value(Number("1")), negated: false, low: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }, high: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("3")), expr2: Some(Value(Number("4"))) } }, construct: Null, negated: false }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), alias: None }, joins: [] }], selection: Some(IsExpr { expr: Between { expr: Value(Number("1")), negated: false, low: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }, high: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("3")), expr2: Some(Value(Number("4"))) } }, construct: Null, negated: false }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NOT FALSE
 ----
 SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NOT FALSE
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), alias: None }, joins: [] }], selection: Some(IsExpr { expr: Between { expr: Value(Number("1")), negated: false, low: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }, high: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("3")), expr2: Some(Value(Number("4"))) } }, construct: False, negated: true }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), alias: None }, joins: [] }], selection: Some(IsExpr { expr: Between { expr: Value(Number("1")), negated: false, low: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }, high: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("3")), expr2: Some(Value(Number("4"))) } }, construct: False, negated: true }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 
 parse-statement
@@ -456,14 +456,14 @@ SELECT * FROM t WHERE 1 = 1 AND 1 + x BETWEEN 1 AND 2
 ----
 SELECT * FROM t WHERE 1 = 1 AND 1 + x BETWEEN 1 AND 2
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), alias: None }, joins: [] }], selection: Some(And { left: Op { op: Op { namespace: [], op: "=" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, right: Between { expr: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Identifier([Ident("x")])) }, negated: false, low: Value(Number("1")), high: Value(Number("2")) } }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), alias: None }, joins: [] }], selection: Some(And { left: Op { op: Op { namespace: [], op: "=" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, right: Between { expr: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Identifier([Ident("x")])) }, negated: false, low: Value(Number("1")), high: Value(Number("2")) } }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM t WHERE 1 = 1 AND 1 + x BETWEEN 1 AND 2
 ----
 SELECT * FROM t WHERE 1 = 1 AND 1 + x BETWEEN 1 AND 2
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), alias: None }, joins: [] }], selection: Some(And { left: Op { op: Op { namespace: [], op: "=" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, right: Between { expr: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Identifier([Ident("x")])) }, negated: false, low: Value(Number("1")), high: Value(Number("2")) } }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), alias: None }, joins: [] }], selection: Some(And { left: Op { op: Op { namespace: [], op: "=" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, right: Between { expr: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Identifier([Ident("x")])) }, negated: false, low: Value(Number("1")), high: Value(Number("2")) } }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT id, fname, lname FROM customer WHERE id < 5 ORDER BY lname ASC, fname DESC, id
@@ -576,63 +576,63 @@ SELECT * FROM t1, t2
 ----
 SELECT * FROM t1, t2
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1")])), alias: None }, joins: [] }, TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t2")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1")])), alias: None }, joins: [] }, TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t2")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM t1a NATURAL JOIN t1b, t2a NATURAL JOIN t2b
 ----
 SELECT * FROM t1a NATURAL JOIN t1b, t2a NATURAL JOIN t2b
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1a")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t1b")])), alias: None }, join_operator: Inner(Natural) }] }, TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t2a")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t2b")])), alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1a")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t1b")])), alias: None }, join_operator: Inner(Natural) }] }, TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t2a")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t2b")])), alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM t1 CROSS JOIN t2
 ----
 SELECT * FROM t1 CROSS JOIN t2
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t2")])), alias: None }, join_operator: CrossJoin }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t2")])), alias: None }, join_operator: CrossJoin }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM t1 JOIN t2 AS foo USING (c1)
 ----
 SELECT * FROM t1 JOIN t2 AS foo USING (c1)
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t2")])), alias: Some(TableAlias { name: Ident("foo"), columns: [], strict: false }) }, join_operator: Inner(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t2")])), alias: Some(TableAlias { name: Ident("foo"), columns: [], strict: false }) }, join_operator: Inner(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM t1 JOIN t2 foo USING (c1)
 ----
 SELECT * FROM t1 JOIN t2 AS foo USING (c1)
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t2")])), alias: Some(TableAlias { name: Ident("foo"), columns: [], strict: false }) }, join_operator: Inner(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t2")])), alias: Some(TableAlias { name: Ident("foo"), columns: [], strict: false }) }, join_operator: Inner(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM t1 NATURAL JOIN t2
 ----
 SELECT * FROM t1 NATURAL JOIN t2
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t2")])), alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t2")])), alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM t1 NATURAL LEFT JOIN t2
 ----
 SELECT * FROM t1 NATURAL LEFT JOIN t2
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t2")])), alias: None }, join_operator: LeftOuter(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t2")])), alias: None }, join_operator: LeftOuter(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM t1 NATURAL RIGHT JOIN t2
 ----
 SELECT * FROM t1 NATURAL RIGHT JOIN t2
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t2")])), alias: None }, join_operator: RightOuter(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t2")])), alias: None }, join_operator: RightOuter(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM t1 NATURAL FULL JOIN t2
 ----
 SELECT * FROM t1 NATURAL FULL JOIN t2
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t2")])), alias: None }, join_operator: FullOuter(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("t2")])), alias: None }, join_operator: FullOuter(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM t1 natural
@@ -653,35 +653,35 @@ SELECT * FROM a NATURAL JOIN (b NATURAL JOIN (c NATURAL JOIN d NATURAL JOIN e)) 
 ----
 SELECT * FROM a NATURAL JOIN (b NATURAL JOIN (c NATURAL JOIN d NATURAL JOIN e)) NATURAL JOIN (f NATURAL JOIN (g NATURAL JOIN h))
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [Join { relation: NestedJoin { join: TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("b")])), alias: None }, joins: [Join { relation: NestedJoin { join: TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("c")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("d")])), alias: None }, join_operator: Inner(Natural) }, Join { relation: Table { name: Name(UnresolvedObjectName([Ident("e")])), alias: None }, join_operator: Inner(Natural) }] }, alias: None }, join_operator: Inner(Natural) }] }, alias: None }, join_operator: Inner(Natural) }, Join { relation: NestedJoin { join: TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("f")])), alias: None }, joins: [Join { relation: NestedJoin { join: TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("g")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("h")])), alias: None }, join_operator: Inner(Natural) }] }, alias: None }, join_operator: Inner(Natural) }] }, alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [Join { relation: NestedJoin { join: TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("b")])), alias: None }, joins: [Join { relation: NestedJoin { join: TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("c")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("d")])), alias: None }, join_operator: Inner(Natural) }, Join { relation: Table { name: Name(UnresolvedObjectName([Ident("e")])), alias: None }, join_operator: Inner(Natural) }] }, alias: None }, join_operator: Inner(Natural) }] }, alias: None }, join_operator: Inner(Natural) }, Join { relation: NestedJoin { join: TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("f")])), alias: None }, joins: [Join { relation: NestedJoin { join: TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("g")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("h")])), alias: None }, join_operator: Inner(Natural) }] }, alias: None }, join_operator: Inner(Natural) }] }, alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM (a NATURAL JOIN b) NATURAL JOIN c
 ----
 SELECT * FROM (a NATURAL JOIN b) NATURAL JOIN c
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("b")])), alias: None }, join_operator: Inner(Natural) }] }, alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("c")])), alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("b")])), alias: None }, join_operator: Inner(Natural) }] }, alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("c")])), alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM (a NATURAL JOIN b) c NATURAL JOIN d
 ----
 SELECT * FROM (a NATURAL JOIN b) AS c NATURAL JOIN d
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("b")])), alias: None }, join_operator: Inner(Natural) }] }, alias: Some(TableAlias { name: Ident("c"), columns: [], strict: false }) }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("d")])), alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("b")])), alias: None }, join_operator: Inner(Natural) }] }, alias: Some(TableAlias { name: Ident("c"), columns: [], strict: false }) }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("d")])), alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM (((a NATURAL JOIN b)))
 ----
 SELECT * FROM (((a NATURAL JOIN b)))
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("b")])), alias: None }, join_operator: Inner(Natural) }] }, alias: None }, joins: [] }, alias: None }, joins: [] }, alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("b")])), alias: None }, join_operator: Inner(Natural) }] }, alias: None }, joins: [] }, alias: None }, joins: [] }, alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM a NATURAL JOIN (((b NATURAL JOIN c)))
 ----
 SELECT * FROM a NATURAL JOIN (((b NATURAL JOIN c)))
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [Join { relation: NestedJoin { join: TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("b")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("c")])), alias: None }, join_operator: Inner(Natural) }] }, alias: None }, joins: [] }, alias: None }, joins: [] }, alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [Join { relation: NestedJoin { join: TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("b")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedObjectName([Ident("c")])), alias: None }, join_operator: Inner(Natural) }] }, alias: None }, joins: [] }, alias: None }, joins: [] }, alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM (a NATURAL JOIN (b))
@@ -851,7 +851,7 @@ SELECT foo FROM (SELECT * FROM bar OFFSET 2 ROWS) OFFSET 2 ROWS
 ----
 SELECT foo FROM (SELECT * FROM bar OFFSET 2) OFFSET 2
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: Some(Value(Number("2"))) }, alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: Some(Value(Number("2"))) }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: Some(Value(Number("2"))) }, alias: None, id: 0 }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: Some(Value(Number("2"))) }, as_of: None })
 
 parse-statement
 SELECT foo FROM LATERAL bar(1)
@@ -907,21 +907,21 @@ SELECT foo FROM (SELECT * FROM bar OFFSET 2) OFFSET 2
 ----
 SELECT foo FROM (SELECT * FROM bar OFFSET 2) OFFSET 2
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: Some(Value(Number("2"))) }, alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: Some(Value(Number("2"))) }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: Some(Value(Number("2"))) }, alias: None, id: 0 }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: Some(Value(Number("2"))) }, as_of: None })
 
 parse-statement
 SELECT foo FROM (SELECT * FROM bar OFFSET 2 ROWS) OFFSET 2
 ----
 SELECT foo FROM (SELECT * FROM bar OFFSET 2) OFFSET 2
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: Some(Value(Number("2"))) }, alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: Some(Value(Number("2"))) }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: Some(Value(Number("2"))) }, alias: None, id: 0 }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: Some(Value(Number("2"))) }, as_of: None })
 
 parse-statement
 SELECT foo FROM (SELECT * FROM bar OFFSET 2) OFFSET 2 ROWS
 ----
 SELECT foo FROM (SELECT * FROM bar OFFSET 2) OFFSET 2
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: Some(Value(Number("2"))) }, alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: Some(Value(Number("2"))) }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: Some(Value(Number("2"))) }, alias: None, id: 0 }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: Some(Value(Number("2"))) }, as_of: None })
 
 parse-statement
 SELECT 'foo' OFFSET 0
@@ -996,14 +996,14 @@ SELECT foo FROM (SELECT * FROM bar FETCH FIRST 2 ROWS ONLY) FETCH FIRST 2 ROWS O
 ----
 SELECT foo FROM (SELECT * FROM bar LIMIT 2) LIMIT 2
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: Some(Limit { with_ties: false, quantity: Value(Number("2")) }), offset: None }, alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: Some(Limit { with_ties: false, quantity: Value(Number("2")) }), offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: Some(Limit { with_ties: false, quantity: Value(Number("2")) }), offset: None }, alias: None, id: 0 }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: Some(Limit { with_ties: false, quantity: Value(Number("2")) }), offset: None }, as_of: None })
 
 parse-statement
 SELECT foo FROM (SELECT * FROM bar OFFSET 2 ROWS FETCH FIRST 2 ROWS ONLY) OFFSET 2 ROWS FETCH FIRST 2 ROWS ONLY
 ----
 SELECT foo FROM (SELECT * FROM bar LIMIT 2 OFFSET 2) LIMIT 2 OFFSET 2
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: Some(Limit { with_ties: false, quantity: Value(Number("2")) }), offset: Some(Value(Number("2"))) }, alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: Some(Limit { with_ties: false, quantity: Value(Number("2")) }), offset: Some(Value(Number("2"))) }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: Some(Limit { with_ties: false, quantity: Value(Number("2")) }), offset: Some(Value(Number("2"))) }, alias: None, id: 0 }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: Some(Limit { with_ties: false, quantity: Value(Number("2")) }), offset: Some(Value(Number("2"))) }, as_of: None })
 
 parse-statement
 SELECT foo FROM bar FETCH FIRST 10 ROW ONLY
@@ -1045,42 +1045,42 @@ SELECT * FROM customer LEFT JOIN (SELECT * FROM "order" WHERE "order".customer =
 ----
 SELECT * FROM customer LEFT JOIN (SELECT * FROM "order" WHERE "order".customer = customer.id LIMIT 3) AS "order" ON true
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [Join { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("order")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("order"), Ident("customer")]), expr2: Some(Identifier([Ident("customer"), Ident("id")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: Some(Limit { with_ties: false, quantity: Value(Number("3")) }), offset: None }, alias: Some(TableAlias { name: Ident("order"), columns: [], strict: false }) }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [Join { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 1 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("order")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("order"), Ident("customer")]), expr2: Some(Identifier([Ident("customer"), Ident("id")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: Some(Limit { with_ties: false, quantity: Value(Number("3")) }), offset: None }, alias: Some(TableAlias { name: Ident("order"), columns: [], strict: false }), id: 0 }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM customer LEFT JOIN LATERAL (SELECT * FROM "order" WHERE "order".customer = customer.id LIMIT 3) AS "order" ON true
 ----
 SELECT * FROM customer LEFT JOIN LATERAL (SELECT * FROM "order" WHERE "order".customer = customer.id LIMIT 3) AS "order" ON true
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [Join { relation: Derived { lateral: true, subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("order")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("order"), Ident("customer")]), expr2: Some(Identifier([Ident("customer"), Ident("id")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: Some(Limit { with_ties: false, quantity: Value(Number("3")) }), offset: None }, alias: Some(TableAlias { name: Ident("order"), columns: [], strict: false }) }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [Join { relation: Derived { lateral: true, subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 1 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("order")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("order"), Ident("customer")]), expr2: Some(Identifier([Ident("customer"), Ident("id")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: Some(Limit { with_ties: false, quantity: Value(Number("3")) }), offset: None }, alias: Some(TableAlias { name: Ident("order"), columns: [], strict: false }), id: 0 }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM customer LEFT JOIN LATERAL generate_series(1, customer.id) ON true
 ----
 SELECT * FROM customer LEFT JOIN generate_series(1, customer.id) ON true
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [Join { relation: Function { function: TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("1")), Identifier([Ident("customer"), Ident("id")])], order_by: [] } }, alias: None, with_ordinality: false }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [Join { relation: Function { function: TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("1")), Identifier([Ident("customer"), Ident("id")])], order_by: [] } }, alias: None, with_ordinality: false }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM LATERAL ROWS FROM (generate_series(1, 2), generate_series(3, 5))
 ----
 SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5))
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: RowsFrom { functions: [TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] } }, TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] } }], alias: None, with_ordinality: false }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: RowsFrom { functions: [TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] } }, TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] } }], alias: None, with_ordinality: false }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM LATERAL ROWS FROM (generate_series(1, 2), generate_series(3, 5)) AS alias
 ----
 SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) AS alias
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: RowsFrom { functions: [TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] } }, TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] } }], alias: Some(TableAlias { name: Ident("alias"), columns: [], strict: false }), with_ordinality: false }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: RowsFrom { functions: [TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] } }, TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] } }], alias: Some(TableAlias { name: Ident("alias"), columns: [], strict: false }), with_ordinality: false }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM generate_series(1, 2) WITH ORDINALITY
 ----
 SELECT * FROM generate_series(1, 2) WITH ORDINALITY
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Function { function: TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] } }, alias: None, with_ordinality: true }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Function { function: TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] } }, alias: None, with_ordinality: true }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM ROWS FROM (generate_series(1, 2) WITH ORDINALITY)
@@ -1094,14 +1094,14 @@ SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDI
 ----
 SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDINALITY
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: RowsFrom { functions: [TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] } }, TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] } }], alias: None, with_ordinality: true }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: RowsFrom { functions: [TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] } }, TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] } }], alias: None, with_ordinality: true }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5))
 ----
 SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5))
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: RowsFrom { functions: [TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] } }, TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] } }], alias: None, with_ordinality: false }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: RowsFrom { functions: [TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] } }, TableFunction { name: UnresolvedObjectName([Ident("generate_series")]), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] } }], alias: None, with_ordinality: false }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 # Ensure parsing AS OF is case-insensitive
 parse-statement
@@ -1109,14 +1109,14 @@ SELECT * FROM data as of now()
 ----
 SELECT * FROM data AS OF now()
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("data")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))) })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("data")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))) })
 
 parse-statement
 SELECT * FROM data AS OF now()
 ----
 SELECT * FROM data AS OF now()
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("data")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))) })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("data")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))) })
 
 
 parse-statement
@@ -1124,7 +1124,7 @@ SELECT * FROM data AS OF AT LEAST 5
 ----
 SELECT * FROM data AS OF AT LEAST 5
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("data")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: Some(AtLeast(Value(Number("5")))) })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("data")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: Some(AtLeast(Value(Number("5")))) })
 
 # Query hints
 parse-statement
@@ -1215,7 +1215,7 @@ SELECT LIST(
 ----
 SELECT LIST(WITH usps AS (SELECT 42) SELECT * FROM usps)
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: ListSubquery(Query { ctes: Simple([Cte { alias: TableAlias { name: Ident("usps"), columns: [], strict: false }, id: (), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("42")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("usps")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: ListSubquery(Query { ctes: Simple([Cte { alias: TableAlias { name: Ident("usps"), columns: [], strict: false }, id: (), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("42")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("usps")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 # Array subqueries
 parse-statement
@@ -1270,7 +1270,7 @@ SELECT ARRAY(
 ----
 SELECT ARRAY(WITH usps AS (SELECT 42) SELECT * FROM usps)
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: ArraySubquery(Query { ctes: Simple([Cte { alias: TableAlias { name: Ident("usps"), columns: [], strict: false }, id: (), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("42")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("usps")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: ArraySubquery(Query { ctes: Simple([Cte { alias: TableAlias { name: Ident("usps"), columns: [], strict: false }, id: (), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("42")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("usps")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement roundtrip
 SELECT count(DISTINCT *) FROM foo
@@ -1284,7 +1284,7 @@ SELECT * FROM (SHOW TABLES)
 ----
 SELECT * FROM (SHOW TABLES)
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Show(ShowObjects(ShowObjectsStatement { object_type: Table, from: None, filter: None })), order_by: [], limit: None, offset: None }, alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: 0 }], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Show(ShowObjects(ShowObjectsStatement { object_type: Table, from: None, filter: None })), order_by: [], limit: None, offset: None }, alias: None, id: 0 }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT NULLIF(x, '')

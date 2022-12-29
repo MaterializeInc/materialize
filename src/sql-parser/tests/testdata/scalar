@@ -688,12 +688,12 @@ error: Expected right parenthesis, found identifier "a"
 parse-scalar
 (x).*.*
 ----
-WildcardAccess(WildcardAccess(Nested(Identifier([Ident("x")]))))
+WildcardAccess { expr: WildcardAccess { expr: Nested(Identifier([Ident("x")])), id: 0 }, id: 1 }
 
 parse-scalar
 ((x).*.*)
 ----
-Nested(WildcardAccess(WildcardAccess(Nested(Identifier([Ident("x")])))))
+Nested(WildcardAccess { expr: WildcardAccess { expr: Nested(Identifier([Ident("x")])), id: 0 }, id: 1 })
 
 # Special position syntax
 
