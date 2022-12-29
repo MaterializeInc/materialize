@@ -175,6 +175,7 @@ struct Parser<'a> {
     index: usize,
     recursion_guard: RecursionGuard,
     next_wildcard_id: u64,
+    next_derived_table_id: u64,
 }
 
 /// Defines a number of precedence classes operators follow. Since this enum derives Ord, the
@@ -213,6 +214,7 @@ impl<'a> Parser<'a> {
             index: 0,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
             next_wildcard_id: 0,
+            next_derived_table_id: 0,
         }
     }
 
@@ -5225,6 +5227,7 @@ impl<'a> Parser<'a> {
             },
             subquery,
             alias,
+            id: self.derived_table_id(),
         })
     }
 
@@ -5735,6 +5738,13 @@ impl<'a> Parser<'a> {
     fn wildcard_id(&mut self) -> u64 {
         let id = self.next_wildcard_id;
         self.next_wildcard_id += 1;
+        id
+    }
+
+    /// TODO(jkosh44)
+    fn derived_table_id(&mut self) -> u64 {
+        let id = self.next_derived_table_id;
+        self.next_derived_table_id += 1;
         id
     }
 }

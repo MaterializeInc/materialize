@@ -59,6 +59,8 @@ pub struct ScopeItem {
     pub table_name: Option<PartialObjectName>,
     /// The name of the column.
     pub column_name: ColumnName,
+    /// TODO(jkosh44)
+    pub column_alias: Option<ColumnName>,
     /// The expressions from which this scope item is derived. Used by `GROUP
     /// BY`.
     pub exprs: HashSet<Expr<Aug>>,
@@ -127,6 +129,7 @@ impl ScopeItem {
         ScopeItem {
             table_name: None,
             column_name: "?column?".into(),
+            column_alias: None,
             exprs: HashSet::new(),
             from_single_column_function: false,
             allow_unqualified_references: true,

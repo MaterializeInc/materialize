@@ -474,6 +474,8 @@ impl<T: AstInfo> TableWithJoins<T> {
                 lateral: false,
                 subquery: Box::new(query),
                 alias: Some(alias),
+                // TODO(jkosh44) This is wrong
+                id: 0,
             },
             joins: vec![],
         }
@@ -501,6 +503,7 @@ pub enum TableFactor<T: AstInfo> {
         lateral: bool,
         subquery: Box<Query<T>>,
         alias: Option<TableAlias>,
+        id: u64,
     },
     /// Represents a parenthesized join expression, such as
     /// `(foo <JOIN> bar [ <JOIN> baz ... ])`.
@@ -568,6 +571,7 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
                 lateral,
                 subquery,
                 alias,
+                ..
             } => {
                 if *lateral {
                     f.write_str("LATERAL ");

@@ -685,6 +685,21 @@ impl<'a> StarExpander<'a> {
 // TODO(jkosh44) TEST CREATE VIEW v AS SELECT 1 FROM (SELECT * FROM (SELECT 1, 1)); Try repeatedly nesting this same pattern.
 // TODO(jkosh44) We also need to disambiguate duplicate columns, does that change the actual definition??? I think not because it's only allowed in nested queries and not in the final output??
 impl<'ast> VisitMut<'ast, Aug> for StarExpander<'_> {
+    fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Aug>) {
+        visit_mut::visit_table_factor_mut(self, table_factor);
+        if let TableFactor::Derived { alias, id, .. } = table_factor {
+            if let Some(column_aliases) = self.scx.derived_table_factor_aliases.borrow().get(id) {
+                let alias = alias
+                    .as_mut()
+                    .expect("subqueries are all given aliases by `SubqueryAliaser`");
+                alias.columns = column_aliases
+                    .iter()
+                    .map(|col_name| Ident::new(col_name.as_str()))
+                    .collect();
+            }
+        }
+    }
+
     fn visit_select_mut(&mut self, select: &'ast mut Select<Aug>) {
         visit_mut::visit_select_mut(self, select);
         let mut projection = Vec::new();
@@ -707,7 +722,7 @@ impl<'ast> VisitMut<'ast, Aug> for StarExpander<'_> {
                         .get(&id)
                         .cloned()
                         .expect("jkosh44");
-                    for (table_name, col_name) in expansion {
+                    for (table_name, col_name, col_alias) in expansion {
                         let mut ident = Vec::new();
                         if let Some(table_name) = table_name {
                             // PostgreSQL only uses the table name to qualify the column and
@@ -723,11 +738,22 @@ impl<'ast> VisitMut<'ast, Aug> for StarExpander<'_> {
                             }
                             ident.push(Ident::new(table_name.item));
                         }
-                        ident.push(Ident::new(col_name.as_str()));
-                        projection.push(SelectItem::Expr {
-                            expr: Expr::Identifier(ident),
-                            alias: None,
-                        });
+                        match col_alias {
+                            Some(col_alias) => {
+                                ident.push(Ident::new(col_alias.as_str()));
+                                projection.push(SelectItem::Expr {
+                                    expr: Expr::Identifier(ident),
+                                    alias: Some(Ident::new(col_name.as_str())),
+                                });
+                            }
+                            None => {
+                                ident.push(Ident::new(col_name.as_str()));
+                                projection.push(SelectItem::Expr {
+                                    expr: Expr::Identifier(ident),
+                                    alias: None,
+                                });
+                            }
+                        }
                     }
                 }
                 item @ SelectItem::Expr { .. } => projection.push(item),

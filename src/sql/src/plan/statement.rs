@@ -106,6 +106,7 @@ pub fn describe(
         catalog,
         param_types: RefCell::new(param_types),
         wildcard_expansions: Default::default(),
+        derived_table_factor_aliases: Default::default(),
     };
 
     let desc = match stmt {
@@ -245,6 +246,7 @@ pub fn plan(
         catalog,
         param_types: RefCell::new(param_types),
         wildcard_expansions: Default::default(),
+        derived_table_factor_aliases: Default::default(),
     };
 
     let plan = match stmt {
@@ -406,7 +408,10 @@ pub struct StatementContext<'a> {
     /// occurs.
     pub param_types: RefCell<BTreeMap<usize, ScalarType>>,
     /// TODO(jkosh44)
-    pub wildcard_expansions: RefCell<BTreeMap<u64, Vec<(Option<PartialObjectName>, ColumnName)>>>,
+    pub wildcard_expansions:
+        RefCell<BTreeMap<u64, Vec<(Option<PartialObjectName>, ColumnName, Option<ColumnName>)>>>,
+    /// TODO(jkosh44)
+    pub derived_table_factor_aliases: RefCell<BTreeMap<u64, Vec<ColumnName>>>,
 }
 
 impl<'a> StatementContext<'a> {
@@ -419,6 +424,7 @@ impl<'a> StatementContext<'a> {
             catalog,
             param_types: Default::default(),
             wildcard_expansions: Default::default(),
+            derived_table_factor_aliases: Default::default(),
         }
     }
 
