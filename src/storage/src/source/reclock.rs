@@ -28,13 +28,13 @@ use differential_dataflow::consolidation;
 use differential_dataflow::difference::Abelian;
 use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
+use mz_storage_client::util::remap_handle::RemapHandle;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp;
 
 use mz_persist_client::Upper;
 use mz_repr::Diff;
-use mz_storage_client::util::remap_handle::RemapHandle;
 
 pub mod compat;
 
@@ -616,6 +616,7 @@ mod tests {
     use mz_repr::{GlobalId, Timestamp};
     use mz_storage_client::controller::CollectionMetadata;
     use mz_storage_client::types::sources::{MzOffset, SourceData};
+    use mz_storage_client::util::remap_handle::RemapHandle;
     use mz_timely_util::order::Partitioned;
 
     // 15 minutes
@@ -634,6 +635,7 @@ mod tests {
     async fn make_test_operator(
         shard: ShardId,
         as_of: Antichain<Timestamp>,
+        partitioned_source: bool,
     ) -> (
         ReclockOperator<
             Partitioned<PartitionId, MzOffset>,
@@ -667,6 +669,7 @@ mod tests {
             "unittest",
             0,
             1,
+            partitioned_source,
         )
         .await
         .unwrap();
@@ -704,7 +707,7 @@ mod tests {
     async fn test_basic_usage() {
         const PART_ID: PartitionId = PartitionId::None;
         let (mut operator, mut follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+            make_test_operator(ShardId::new(), Antichain::from_elem(0.into()), false).await;
 
         // Reclock offsets 1 and 3 to timestamp 1000
         let batch = vec![
@@ -759,7 +762,7 @@ mod tests {
         const PART2: PartitionId = PartitionId::Kafka(2);
 
         let (mut operator, mut follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+            make_test_operator(ShardId::new(), Antichain::from_elem(0.into()), true).await;
 
         let query = Antichain::from_elem(Partitioned::minimum());
         // This is the initial source frontier so we should get the initial ts upper
@@ -910,7 +913,7 @@ mod tests {
         const PART_ID: PartitionId = PartitionId::None;
 
         let (mut operator, mut follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+            make_test_operator(ShardId::new(), Antichain::from_elem(0.into()), false).await;
 
         // Reclock offsets 1 and 2 to timestamp 1000
         let batch = vec![
@@ -1000,7 +1003,7 @@ mod tests {
         const PART0: PartitionId = PartitionId::Kafka(0);
         const PART1: PartitionId = PartitionId::Kafka(1);
         let (mut operator, mut follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+            make_test_operator(ShardId::new(), Antichain::from_elem(0.into()), true).await;
 
         // First mint bindings for PART0 at timestamp 1000
         let source_upper = partitioned_frontier([(PART0, MzOffset::from(50))]);
@@ -1032,7 +1035,7 @@ mod tests {
 
         const PART_ID: PartitionId = PartitionId::None;
         let (mut operator, mut follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(binding_shard, Antichain::from_elem(0.into()), false).await;
 
         // Reclock offsets 1 and 2 to timestamp 1000
         let batch = vec![
@@ -1090,7 +1093,7 @@ mod tests {
 
         // Starting a new operator with an `as_of` is the same as having compacted
         let (_operator, follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(1000.into())).await;
+            make_test_operator(binding_shard, Antichain::from_elem(1000.into()), false).await;
 
         // Reclocking offsets 3 and 4 should succeed
         let batch = vec![
@@ -1122,9 +1125,9 @@ mod tests {
         // Create two operators pointing to the same shard
         let shared_shard = ShardId::new();
         let (mut op_a, mut follower_a) =
-            make_test_operator(shared_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(shared_shard, Antichain::from_elem(0.into()), false).await;
         let (mut op_b, mut follower_b) =
-            make_test_operator(shared_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(shared_shard, Antichain::from_elem(0.into()), false).await;
 
         // Reclock a batch from one of the operators
         // Reclock offsets 1 and 2 to timestamp 1000 from operator A
@@ -1180,7 +1183,7 @@ mod tests {
 
         const PART_ID: PartitionId = PartitionId::None;
         let (mut operator, mut follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(binding_shard, Antichain::from_elem(0.into()), false).await;
 
         // SETUP
         // Reclock offsets 1 and 2 to timestamp 1000
@@ -1314,7 +1317,7 @@ mod tests {
 
         const PART_ID: PartitionId = PartitionId::None;
         let (mut operator, _follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(binding_shard, Antichain::from_elem(0.into()), false).await;
 
         // We do multiple rounds of minting. This will downgrade the since of
         // the internal listen. If we didn't make sure to also heartbeat the
@@ -1341,7 +1344,7 @@ mod tests {
         // Starting a new operator with an `as_of` of `0`, to verify that
         // holding back the `since` of the remap shard works as expected.
         let (_operator, _follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(binding_shard, Antichain::from_elem(0.into()), false).await;
 
         // Also manually assert the since of the remap shard.
         let persist_location = PersistLocation {

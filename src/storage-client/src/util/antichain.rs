@@ -281,7 +281,7 @@ impl From<OffsetAntichain> for Antichain<Partitioned<PartitionId, MzOffset>> {
         let mut elements = frontier
             .inner
             .into_iter()
-            .filter(|(_pid, offset)| offset.offset != 0)
+            .filter(|(pid, offset)| offset.offset != 0 || pid == &PartitionId::None)
             .collect::<Vec<_>>();
         elements.sort_unstable();
 
