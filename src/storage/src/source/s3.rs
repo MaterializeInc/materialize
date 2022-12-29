@@ -926,6 +926,7 @@ impl SourceConnectionBuilder for S3SourceConnection {
 impl SourceReader for S3SourceReader {
     type Key = ();
     type Value = Option<Vec<u8>>;
+    type Time = MzOffset;
     type Diff = ();
 
     fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {

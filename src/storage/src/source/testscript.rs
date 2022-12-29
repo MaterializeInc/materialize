@@ -84,6 +84,7 @@ impl SourceConnectionBuilder for TestScriptSourceConnection {
 impl SourceReader for TestScriptSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
+    type Time = MzOffset;
     type Diff = ();
 
     async fn next(

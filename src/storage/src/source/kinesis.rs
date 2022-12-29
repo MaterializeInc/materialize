@@ -188,6 +188,7 @@ impl SourceConnectionBuilder for KinesisSourceConnection {
 impl SourceReader for KinesisSourceReader {
     type Key = ();
     type Value = Option<Vec<u8>>;
+    type Time = MzOffset;
     type Diff = ();
 
     fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {

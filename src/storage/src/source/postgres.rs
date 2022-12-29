@@ -320,6 +320,7 @@ impl SourceReader for PostgresSourceReader {
     type Key = ();
     type Value = Row;
     // Postgres can produce deletes that cause retractions
+    type Time = MzOffset;
     type Diff = Diff;
 
     // TODO(guswynn): use `next` instead of using a channel
