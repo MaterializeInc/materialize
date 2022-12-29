@@ -381,6 +381,7 @@ mod api {
 mod types {
     use bytes::BufMut;
     use differential_dataflow::lattice::Lattice;
+    use mz_persist_types::codec_impls::TodoSchema;
     use serde::{Deserialize, Serialize};
     use timely::progress::PathSummary;
 
@@ -399,6 +400,8 @@ mod types {
     }
 
     impl Codec for PartitionOffset {
+        type Schema = TodoSchema<PartitionOffset>;
+
         fn codec_name() -> String {
             "partition_offset[u64,u64]".to_owned()
         }
@@ -467,6 +470,8 @@ mod types {
     }
 
     impl Codec for Timestamp {
+        type Schema = TodoSchema<Timestamp>;
+
         fn codec_name() -> String {
             "timestamp[u64]".to_owned()
         }

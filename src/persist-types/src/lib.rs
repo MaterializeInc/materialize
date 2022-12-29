@@ -85,11 +85,23 @@
 
 use bytes::BufMut;
 
-mod codec_impls;
+use crate::columnar::Schema;
+
+pub mod codec_impls;
+pub mod columnar;
+pub mod parquet;
+pub mod part;
 
 /// Encoding and decoding operations for a type usable as a persisted key or
 /// value.
 pub trait Codec: Sized + 'static {
+    /// The type of the associated schema for [Self].
+    ///
+    /// This is a separate type because Row is not self-describing. For Row, you
+    /// need a RelationDesc to determine the types of any columns that are
+    /// Datum::Null.
+    type Schema: Schema<Self>;
+
     /// Name of the codec.
     ///
     /// This name is stored for the key and value when a stream is first created

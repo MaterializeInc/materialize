@@ -18,6 +18,7 @@ use anyhow::anyhow;
 use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::Description;
+use mz_persist_types::codec_impls::TodoSchema;
 use prost::Message;
 
 use mz_build_info::BuildInfo;
@@ -619,6 +620,8 @@ pub(crate) static KVTD_CODECS: Mutex<(String, String, String, String)> =
     Mutex::new((String::new(), String::new(), String::new(), String::new()));
 
 impl Codec for K {
+    type Schema = TodoSchema<K>;
+
     fn codec_name() -> String {
         KVTD_CODECS.lock().expect("lockable").0.clone()
     }
@@ -635,6 +638,8 @@ impl Codec for K {
 }
 
 impl Codec for V {
+    type Schema = TodoSchema<V>;
+
     fn codec_name() -> String {
         KVTD_CODECS.lock().expect("lockable").1.clone()
     }
@@ -651,6 +656,8 @@ impl Codec for V {
 }
 
 impl Codec for T {
+    type Schema = TodoSchema<T>;
+
     fn codec_name() -> String {
         KVTD_CODECS.lock().expect("lockable").2.clone()
     }

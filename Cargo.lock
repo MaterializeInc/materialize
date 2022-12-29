@@ -4205,6 +4205,8 @@ dependencies = [
 name = "mz-persist-types"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
+ "arrow2",
  "bytes",
  "workspace-hack",
 ]
@@ -4383,6 +4385,7 @@ dependencies = [
  "itertools",
  "mz-lowertest",
  "mz-ore",
+ "mz-persist",
  "mz-persist-types",
  "mz-proto",
  "num-traits",

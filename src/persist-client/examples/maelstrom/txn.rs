@@ -692,11 +692,14 @@ impl Service for TransactorService {
 }
 
 mod codec_impls {
+    use mz_persist_types::codec_impls::TodoSchema;
     use mz_persist_types::Codec;
 
     use crate::maelstrom::txn::{MaelstromKey, MaelstromVal};
 
     impl Codec for MaelstromKey {
+        type Schema = TodoSchema<MaelstromKey>;
+
         fn codec_name() -> String {
             "MaelstromKey".into()
         }
@@ -717,6 +720,8 @@ mod codec_impls {
     }
 
     impl Codec for MaelstromVal {
+        type Schema = TodoSchema<MaelstromVal>;
+
         fn codec_name() -> String {
             "MaelstromVal".into()
         }

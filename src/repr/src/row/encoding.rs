@@ -14,6 +14,11 @@
 use bytes::BufMut;
 use chrono::Timelike;
 use dec::Decimal;
+use mz_persist_types::columnar::{
+    ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
+};
+use mz_persist_types::part::{ColumnsMut, ColumnsRef};
+use mz_persist_types::Codec;
 use prost::Message;
 use uuid::Uuid;
 
@@ -29,15 +34,21 @@ use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
     ProtoNumeric, ProtoRange, ProtoRangeInner, ProtoRow,
 };
-use crate::{Datum, Row, RowPacker};
+use crate::{Datum, RelationDesc, Row, RowPacker, ScalarType};
 
-impl Row {
+impl Codec for Row {
+    type Schema = RelationDesc;
+
+    fn codec_name() -> String {
+        "protobuf[Row]".into()
+    }
+
     /// Encodes a row into the permanent storage format.
     ///
     /// This perfectly round-trips through [Row::decode]. It's guaranteed to be
     /// readable by future versions of Materialize through v(TODO: Figure out
     /// our policy).
-    pub fn encode<B>(&self, buf: &mut B)
+    fn encode<B>(&self, buf: &mut B)
     where
         B: BufMut,
     {
@@ -51,9 +62,192 @@ impl Row {
     /// This perfectly round-trips through [Row::encode]. It can read rows
     /// encoded by historical versions of Materialize back to v(TODO: Figure out
     /// our policy).
-    pub fn decode(buf: &[u8]) -> Result<Row, String> {
+    fn decode(buf: &[u8]) -> Result<Row, String> {
         let proto_row = ProtoRow::decode(buf).map_err(|err| err.to_string())?;
         Row::try_from(&proto_row)
+    }
+}
+
+impl From<&ScalarType> for ColumnFormat {
+    fn from(value: &ScalarType) -> Self {
+        match value {
+            ScalarType::Bool => ColumnFormat::Bool,
+            ScalarType::Int16 => ColumnFormat::I16,
+            ScalarType::Int32 => ColumnFormat::I32,
+            ScalarType::Int64 => ColumnFormat::I64,
+            ScalarType::UInt16 => ColumnFormat::U16,
+            ScalarType::UInt32 => ColumnFormat::U32,
+            ScalarType::UInt64 => ColumnFormat::U64,
+            ScalarType::Float32 => ColumnFormat::F32,
+            ScalarType::Float64 => ColumnFormat::F64,
+            ScalarType::Bytes => ColumnFormat::Bytes,
+            ScalarType::String => ColumnFormat::String,
+            _ => panic!("TODO: finish implementing all the ScalarType variants"),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum DatumEncoder<'a> {
+    Bool(&'a mut <bool as Data>::Mut),
+    BoolOpt(&'a mut <Option<bool> as Data>::Mut),
+    String(&'a mut <String as Data>::Mut),
+    StringOpt(&'a mut <Option<String> as Data>::Mut),
+}
+
+impl<'a> DatumEncoder<'a> {
+    fn encode(&mut self, datum: Datum) {
+        match self {
+            DatumEncoder::Bool(col) => {
+                let x = match datum {
+                    Datum::True => true,
+                    Datum::False => false,
+                    _ => panic!("Datum cannot be converted into bool: {}", datum),
+                };
+                col.push(x);
+            }
+            DatumEncoder::BoolOpt(col) => {
+                let x = match datum {
+                    Datum::True => Some(true),
+                    Datum::False => Some(false),
+                    Datum::Null => None,
+                    _ => panic!("Datum cannot be converted into Option<bool>: {}", datum),
+                };
+                col.push(x)
+            }
+            DatumEncoder::String(col) => {
+                let x = match datum {
+                    Datum::String(x) => x,
+                    _ => panic!("Datum cannot be converted into String: {}", datum),
+                };
+                ColumnPush::<String>::push(*col, x);
+            }
+            DatumEncoder::StringOpt(col) => {
+                let x = match datum {
+                    Datum::String(x) => Some(x),
+                    Datum::Null => None,
+                    _ => panic!("Datum cannot be converted into Option<String>: {}", datum),
+                };
+                ColumnPush::<Option<String>>::push(*col, x);
+            }
+        }
+    }
+}
+
+/// An implementation of [PartEncoder] for [Row].
+#[derive(Debug)]
+pub struct RowEncoder<'a>(Vec<DatumEncoder<'a>>);
+
+impl<'a> PartEncoder<'a, Row> for RowEncoder<'a> {
+    fn encode(&mut self, val: &Row) {
+        for (encoder, datum) in self.0.iter_mut().zip(val.iter()) {
+            encoder.encode(datum);
+        }
+    }
+}
+
+#[derive(Debug)]
+enum DatumDecoder<'a> {
+    Bool(&'a <bool as Data>::Col),
+    BoolOpt(&'a <Option<bool> as Data>::Col),
+    String(&'a <String as Data>::Col),
+    StringOpt(&'a <Option<String> as Data>::Col),
+}
+
+impl<'a> DatumDecoder<'a> {
+    fn decode(&self, idx: usize) -> Datum<'a> {
+        match self {
+            DatumDecoder::Bool(col) => Datum::from(col.get(idx)),
+            DatumDecoder::BoolOpt(col) => Datum::from(col.get(idx)),
+            DatumDecoder::String(col) => Datum::from(ColumnGet::<String>::get(*col, idx)),
+            DatumDecoder::StringOpt(col) => {
+                Datum::from(ColumnGet::<Option<String>>::get(*col, idx))
+            }
+        }
+    }
+}
+
+/// An implementation of [PartDecoder] for [Row].
+#[derive(Debug)]
+pub struct RowDecoder<'a>(Vec<DatumDecoder<'a>>);
+
+impl<'a> PartDecoder<'a, Row> for RowDecoder<'a> {
+    fn decode(&self, idx: usize, val: &mut Row) {
+        let mut packer = val.packer();
+        for decoder in self.0.iter() {
+            packer.push(decoder.decode(idx));
+        }
+    }
+}
+
+impl Schema<Row> for RelationDesc {
+    type Encoder<'a> = RowEncoder<'a>;
+    type Decoder<'a> = RowDecoder<'a>;
+
+    fn columns(&self) -> Vec<(String, DataType)> {
+        self.iter()
+            .map(|(name, typ)| {
+                let data_type = DataType {
+                    optional: typ.nullable,
+                    format: ColumnFormat::from(&typ.scalar_type),
+                };
+                (name.0.clone(), data_type)
+            })
+            .collect()
+    }
+
+    fn decoder<'a>(&self, mut part: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+        let mut decoders = Vec::new();
+        for (name, typ) in self.iter() {
+            match (typ.nullable, &typ.scalar_type) {
+                (false, ScalarType::Bool) => {
+                    decoders.push(DatumDecoder::Bool(part.col::<bool>(name.as_str())?));
+                }
+                (true, ScalarType::Bool) => {
+                    decoders.push(DatumDecoder::BoolOpt(
+                        part.col::<Option<bool>>(name.as_str())?,
+                    ));
+                }
+                (false, ScalarType::String) => {
+                    decoders.push(DatumDecoder::String(part.col::<String>(name.as_str())?));
+                }
+                (true, ScalarType::String) => {
+                    decoders.push(DatumDecoder::StringOpt(
+                        part.col::<Option<String>>(name.as_str())?,
+                    ));
+                }
+                _ => panic!("TODO: finish implementing all the Datum variants"),
+            };
+        }
+        let () = part.finish()?;
+        Ok(RowDecoder(decoders))
+    }
+
+    fn encoder<'a>(&self, mut part: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+        let mut encoders = Vec::new();
+        for (name, typ) in self.iter() {
+            match (typ.nullable, &typ.scalar_type) {
+                (false, ScalarType::Bool) => {
+                    encoders.push(DatumEncoder::Bool(part.col::<bool>(name.as_str())?));
+                }
+                (true, ScalarType::Bool) => {
+                    encoders.push(DatumEncoder::BoolOpt(
+                        part.col::<Option<bool>>(name.as_str())?,
+                    ));
+                }
+                (false, ScalarType::String) => {
+                    encoders.push(DatumEncoder::String(part.col::<String>(name.as_str())?));
+                }
+                (true, ScalarType::String) => {
+                    encoders.push(DatumEncoder::StringOpt(
+                        part.col::<Option<String>>(name.as_str())?,
+                    ));
+                }
+                _ => panic!("TODO: finish implementing all the Datum variants"),
+            }
+        }
+        let () = part.finish()?;
+        Ok(RowEncoder(encoders))
     }
 }
 
@@ -328,13 +522,14 @@ impl RustType<ProtoRow> for Row {
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+    use mz_persist_types::Codec;
     use uuid::Uuid;
 
     use crate::adt::array::ArrayDimension;
     use crate::adt::interval::Interval;
     use crate::adt::numeric::Numeric;
     use crate::adt::timestamp::CheckedTimestamp;
-    use crate::{Datum, Row};
+    use crate::{ColumnType, Datum, RelationDesc, Row, ScalarType};
 
     // TODO: datadriven golden tests for various interesting Datums and Rows to
     // catch any changes in the encoding.
@@ -423,5 +618,71 @@ mod tests {
         let mut encoded = Vec::new();
         row.encode(&mut encoded);
         assert_eq!(Row::decode(&encoded), Ok(row));
+    }
+
+    fn schema_and_row() -> (RelationDesc, Row) {
+        let row = Row::pack(vec![
+            Datum::True,
+            Datum::False,
+            Datum::True,
+            Datum::False,
+            Datum::Null,
+        ]);
+        let schema = RelationDesc::from_names_and_types(vec![
+            (
+                "a",
+                ColumnType {
+                    nullable: false,
+                    scalar_type: ScalarType::Bool,
+                },
+            ),
+            (
+                "b",
+                ColumnType {
+                    nullable: false,
+                    scalar_type: ScalarType::Bool,
+                },
+            ),
+            (
+                "c",
+                ColumnType {
+                    nullable: true,
+                    scalar_type: ScalarType::Bool,
+                },
+            ),
+            (
+                "d",
+                ColumnType {
+                    nullable: true,
+                    scalar_type: ScalarType::Bool,
+                },
+            ),
+            (
+                "e",
+                ColumnType {
+                    nullable: true,
+                    scalar_type: ScalarType::Bool,
+                },
+            ),
+        ]);
+        (schema, row)
+    }
+
+    #[test]
+    fn columnar_roundtrip() {
+        let (schema, row) = schema_and_row();
+        assert_eq!(
+            mz_persist_types::columnar::validate_roundtrip(&schema, &row),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn parquet_roundtrip() {
+        let (schema, row) = schema_and_row();
+        assert_eq!(
+            mz_persist_types::parquet::validate_roundtrip(&schema, &row),
+            Ok(())
+        );
     }
 }

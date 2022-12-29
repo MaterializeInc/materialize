@@ -22,6 +22,7 @@ use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
 use globset::{Glob, GlobBuilder};
 use itertools::Itertools;
+use mz_persist_types::codec_impls::TodoSchema;
 use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -2514,6 +2515,8 @@ impl RustType<ProtoSourceData> for SourceData {
 }
 
 impl Codec for SourceData {
+    type Schema = TodoSchema<SourceData>;
+
     fn codec_name() -> String {
         "protobuf[SourceData]".into()
     }
