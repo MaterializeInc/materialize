@@ -58,6 +58,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     let mut session = cmd_output.session(&cap);
                     session.give(cmd);
 
+                    // TODO(aljoscha): This will not work when we have more than
+                    // one worker. They will have to use something like
+                    // wall-clock time, which advances roughly in lock-step on
+                    // all workers instead of workers just counting the number
+                    // of commands.
+                    //
+                    // Also, though, the above is only true if we care about
+                    // frontiers. Which I think we do because we will need to
+                    // get commands into a deterministic order before working
+                    // them off. And we can only do this once we know that we
+                    // have seen all commands before a certain time.
                     cap.downgrade(&(time + 1));
                 }
             });
