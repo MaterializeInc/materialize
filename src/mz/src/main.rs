@@ -169,11 +169,11 @@ enum Commands {
 #[derive(Debug, Args)]
 struct AppPasswordCommand {
     #[clap(subcommand)]
-    command: AppPasswordSubommand,
+    command: AppPasswordSubcommand,
 }
 
 #[derive(Debug, Subcommand)]
-enum AppPasswordSubommand {
+enum AppPasswordSubcommand {
     /// Create a password.
     Create {
         /// Name for the password.
@@ -265,7 +265,7 @@ async fn main() -> Result<()> {
             let valid_profile = profile.validate(&profile_name, &client).await?;
 
             match password_cmd.command {
-                AppPasswordSubommand::Create { name } => {
+                AppPasswordSubcommand::Create { name } => {
                     let api_token = generate_api_token(
                         profile.endpoint(),
                         &client,
@@ -277,7 +277,7 @@ async fn main() -> Result<()> {
 
                     println!("{}", api_token)
                 }
-                AppPasswordSubommand::List => {
+                AppPasswordSubcommand::List => {
                     let app_passwords = list_passwords(&client, &valid_profile)
                         .await
                         .with_context(|| "failed to retrieve app passwords")?;
