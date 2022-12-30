@@ -164,7 +164,6 @@ def main() -> int:
                 *args.args,
             ]
         elif args.program == "sqllogictest":
-            _handle_lingering_services(kill=True)
             command += [f"--postgres-url={args.postgres}"]
     elif args.program == "test":
         build_retcode = _build(args)
