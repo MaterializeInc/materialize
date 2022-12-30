@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use mz_expr::EvalError;
-use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 
@@ -51,12 +50,8 @@ impl RustType<ProtoDecodeError> for DecodeError {
     }
 }
 
-impl Codec for DecodeError {
-    fn codec_name() -> String {
-        "protobuf[DecodeError]".into()
-    }
-
-    fn encode<B>(&self, buf: &mut B)
+impl DecodeError {
+    pub fn encode<B>(&self, buf: &mut B)
     where
         B: BufMut,
     {
@@ -65,7 +60,7 @@ impl Codec for DecodeError {
             .expect("no required fields means no initialization errors")
     }
 
-    fn decode(buf: &[u8]) -> Result<Self, String> {
+    pub fn decode(buf: &[u8]) -> Result<Self, String> {
         let proto = ProtoDecodeError::decode(buf).map_err(|err| err.to_string())?;
         proto.into_rust().map_err(|err| err.to_string())
     }
@@ -388,23 +383,6 @@ impl RustType<ProtoDataflowError> for DataflowError {
     }
 }
 
-impl Codec for DataflowError {
-    fn codec_name() -> String {
-        "protobuf[DataflowError]".into()
-    }
-
-    fn encode<B: BufMut>(&self, buf: &mut B) {
-        self.into_proto()
-            .encode(buf)
-            .expect("no required fields means no initialization errors");
-    }
-
-    fn decode(buf: &[u8]) -> Result<Self, String> {
-        let proto = ProtoDataflowError::decode(buf).map_err(|err| err.to_string())?;
-        proto.into_rust().map_err(|err| err.to_string())
-    }
-}
-
 impl Display for DataflowError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -442,8 +420,6 @@ impl From<EnvelopeError> for DataflowError {
 
 #[cfg(test)]
 mod tests {
-    use mz_persist_types::Codec;
-
     use crate::types::errors::DecodeErrorKind;
 
     use super::DecodeError;

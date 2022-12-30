@@ -11,15 +11,12 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::{anyhow, Error};
-use bytes::BufMut;
-use mz_persist_types::Codec;
 use proptest_derive::Arbitrary;
-use prost::Message;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.global_id.rs"));
 
@@ -116,21 +113,5 @@ impl RustType<ProtoGlobalId> for GlobalId {
             Some(Explain(_)) => Ok(GlobalId::Explain),
             None => Err(TryFromProtoError::missing_field("ProtoGlobalId::kind")),
         }
-    }
-}
-
-impl Codec for GlobalId {
-    fn codec_name() -> String {
-        "GlobalId".into()
-    }
-
-    fn encode<B: BufMut>(&self, buf: &mut B) {
-        let proto: ProtoGlobalId = self.into_proto();
-        Message::encode(&proto, buf).expect("provided buffer had sufficient capacity")
-    }
-
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        let proto: ProtoGlobalId = Message::decode(buf).map_err(|err| err.to_string())?;
-        proto.into_rust().map_err(|err| err.to_string())
     }
 }

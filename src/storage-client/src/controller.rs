@@ -48,7 +48,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
-use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, PostgresFactory, StashError, TypedCollection};
@@ -451,23 +451,6 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
     }
 }
 
-impl Codec for CollectionMetadata {
-    fn codec_name() -> String {
-        "protobuf[CollectionMetadata]".into()
-    }
-
-    fn encode<B: BufMut>(&self, buf: &mut B) {
-        self.into_proto()
-            .encode(buf)
-            .expect("no required fields means no initialization errors");
-    }
-
-    fn decode(buf: &[u8]) -> Result<Self, String> {
-        let proto = ProtoCollectionMetadata::decode(buf).map_err(|err| err.to_string())?;
-        proto.into_rust().map_err(|err| err.to_string())
-    }
-}
-
 /// A trait that is used to calculate safe _resumption frontiers_ for a source.
 ///
 /// Use [`ResumptionFrontierCalculator::initialize_state`] for creating an
@@ -518,23 +501,6 @@ impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
     }
 }
 
-impl Codec for DurableCollectionMetadata {
-    fn codec_name() -> String {
-        "protobuf[DurableCollectionMetadata]".into()
-    }
-
-    fn encode<B: BufMut>(&self, buf: &mut B) {
-        self.into_proto()
-            .encode(buf)
-            .expect("no required fields means no initialization errors");
-    }
-
-    fn decode(buf: &[u8]) -> Result<Self, String> {
-        let proto = ProtoDurableCollectionMetadata::decode(buf).map_err(|err| err.to_string())?;
-        proto.into_rust().map_err(|err| err.to_string())
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DurableExportMetadata<T> {
     pub initial_as_of: SinkAsOf<T>,
@@ -572,18 +538,14 @@ impl RustType<ProtoDurableExportMetadata> for DurableExportMetadata<mz_repr::Tim
     }
 }
 
-impl Codec for DurableExportMetadata<mz_repr::Timestamp> {
-    fn codec_name() -> String {
-        "protobuf[DurableExportMetadata]".into()
-    }
-
-    fn encode<B: BufMut>(&self, buf: &mut B) {
+impl DurableExportMetadata<mz_repr::Timestamp> {
+    pub fn encode<B: BufMut>(&self, buf: &mut B) {
         self.into_proto()
             .encode(buf)
             .expect("no required fields means no initialization errors");
     }
 
-    fn decode(buf: &[u8]) -> Result<Self, String> {
+    pub fn decode(buf: &[u8]) -> Result<Self, String> {
         let proto = ProtoDurableExportMetadata::decode(buf).map_err(|err| err.to_string())?;
         proto.into_rust().map_err(|err| err.to_string())
     }
