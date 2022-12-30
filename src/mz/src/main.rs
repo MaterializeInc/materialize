@@ -83,11 +83,14 @@
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use clap::{Args, Parser, Subcommand};
+use once_cell::sync::Lazy;
 use secrets::SecretCommand;
 use serde::Deserialize;
 use utils::new_client;
 use vault::Vault;
+
+use mz_build_info::{build_info, BuildInfo};
+use mz_ore::cli::CliConfig;
 
 use crate::configuration::{Configuration, Endpoint, WEB_DOCS_URL};
 use crate::login::{generate_api_token, login_with_browser, login_with_console};
@@ -109,11 +112,17 @@ mod shell;
 mod utils;
 mod vault;
 
+pub const BUILD_INFO: BuildInfo = build_info!();
+
+static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.semver_version().to_string());
+
 /// Command-line interface for Materialize.
-#[derive(Debug, Parser)]
-#[clap(name = "Materialize CLI")]
-#[clap(about = "Command-line interface for Materialize.", long_about = None)]
-struct Cli {
+#[derive(Debug, clap::Parser)]
+#[clap(
+    long_about = None,
+    version = VERSION.as_str(),
+)]
+struct Args {
     /// The configuration profile to use.
     #[clap(long)]
     profile: Option<String>,
@@ -121,7 +130,7 @@ struct Cli {
     command: Commands,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, clap::Subcommand)]
 enum Commands {
     /// Show commands to interact with passwords
     AppPassword(AppPasswordCommand),
@@ -166,13 +175,13 @@ enum Commands {
     },
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, clap::Args)]
 struct AppPasswordCommand {
     #[clap(subcommand)]
     command: AppPasswordSubcommand,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, clap::Subcommand)]
 enum AppPasswordSubcommand {
     /// Create a password.
     Create {
@@ -183,7 +192,7 @@ enum AppPasswordSubcommand {
     List,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, clap::Subcommand)]
 enum RegionCommand {
     /// Enable a region.
     Enable {
@@ -253,7 +262,10 @@ struct CloudProviderAndRegion {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Cli::parse();
+    let args: Args = mz_ore::cli::parse_args(CliConfig {
+        env_prefix: Some("mz"),
+        enable_version_flag: true,
+    });
     let client = new_client()?;
     let mut config = Configuration::load(args.profile.as_deref())?;
     let profile_name = config.current_profile();
