@@ -30,7 +30,7 @@ use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
 use crate::batch::{validate_truncate_batch, Added, Batch, BatchBuilder};
-use crate::error::InvalidUsage;
+use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
 use crate::internal::encoding::SerdeWriterEnrichedHollowBatch;
 use crate::internal::machine::Machine;
@@ -233,7 +233,7 @@ where
         updates: I,
         lower: Antichain<T>,
         upper: Antichain<T>,
-    ) -> Result<Result<(), Upper<T>>, InvalidUsage<T>>
+    ) -> Result<Result<(), UpperMismatch<T>>, InvalidUsage<T>>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
         KB: Borrow<K>,
@@ -281,7 +281,7 @@ where
         updates: I,
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
-    ) -> Result<Result<(), Upper<T>>, InvalidUsage<T>>
+    ) -> Result<Result<(), UpperMismatch<T>>, InvalidUsage<T>>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
         KB: Borrow<K>,
@@ -341,7 +341,7 @@ where
         mut batch: Batch<K, V, T, D>,
         mut lower: Antichain<T>,
         upper: Antichain<T>,
-    ) -> Result<Result<(), Upper<T>>, InvalidUsage<T>>
+    ) -> Result<Result<(), UpperMismatch<T>>, InvalidUsage<T>>
     where
         D: Send + Sync,
     {
@@ -354,9 +354,7 @@ where
                     self.upper = upper;
                     return Ok(Ok(()));
                 }
-                Err(current_upper) => {
-                    let Upper(current_upper) = current_upper;
-
+                Err(mismatch) => {
                     // it's possible a client using `append_batch` continually fails if
                     // it's racing with another writer. that's perfectly fine, but we should
                     // be sure to heartbeat our writer explicitly if it's not getting a
@@ -364,23 +362,23 @@ where
                     self.maybe_heartbeat_writer().await;
 
                     // We tried to to a non-contiguous append, that won't work.
-                    if PartialOrder::less_than(&current_upper, &lower) {
-                        self.upper = current_upper.clone();
+                    if PartialOrder::less_than(&mismatch.current, &lower) {
+                        self.upper = mismatch.current.clone();
 
                         batch.delete().await;
 
-                        return Ok(Err(Upper(current_upper)));
-                    } else if PartialOrder::less_than(&current_upper, &upper) {
+                        return Ok(Err(mismatch));
+                    } else if PartialOrder::less_than(&mismatch.current, &upper) {
                         // Cut down the Description by advancing its lower to the current shard
                         // upper and try again. IMPORTANT: We can only advance the lower, meaning
                         // we cut updates away, we must not "extend" the batch by changing to a
                         // lower that is not beyond the current lower. This invariant is checked by
                         // the first if branch: if `!(current_upper < lower)` then it holds that
                         // `lower <= current_upper`.
-                        lower = current_upper;
+                        lower = mismatch.current;
                     } else {
                         // We already have updates past this batch's upper, the append is a no-op.
-                        self.upper = current_upper;
+                        self.upper = mismatch.current;
 
                         // Because we return a success result, the caller will
                         // think that the batch was consumed or otherwise used,
@@ -425,7 +423,7 @@ where
         batches: &mut [&mut Batch<K, V, T, D>],
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
-    ) -> Result<Result<(), Upper<T>>, InvalidUsage<T>>
+    ) -> Result<Result<(), UpperMismatch<T>>, InvalidUsage<T>>
     where
         D: Send + Sync,
     {
@@ -475,11 +473,14 @@ where
                 maintenance
             }
             Ok(Err(invalid_usage)) => return Err(invalid_usage),
-            Err(current_upper) => {
+            Err(Upper(current_upper)) => {
                 // We tried to to a compare_and_append with the wrong expected upper, that
                 // won't work. Update the cached upper to the current upper.
-                self.upper = current_upper.0.clone();
-                return Ok(Err(current_upper));
+                self.upper = current_upper.clone();
+                return Ok(Err(UpperMismatch {
+                    current: current_upper,
+                    expected: expected_upper,
+                }));
             }
         };
 

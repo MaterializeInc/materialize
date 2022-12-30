@@ -16,6 +16,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use differential_dataflow::lattice::Lattice;
 use futures::{stream::LocalBoxStream, StreamExt};
+use mz_persist_client::error::UpperMismatch;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
@@ -28,7 +29,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistClient, Upper};
+use mz_persist_client::PersistClient;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId};
 use mz_storage_client::controller::CollectionMetadata;
@@ -253,7 +254,7 @@ where
         updates: Vec<(Self::FromTime, Self::IntoTime, Diff)>,
         upper: Antichain<Self::IntoTime>,
         new_upper: Antichain<Self::IntoTime>,
-    ) -> Result<(), Upper<Self::IntoTime>> {
+    ) -> Result<(), UpperMismatch<Self::IntoTime>> {
         let row_updates = updates.into_iter().map(|(from_ts, into_ts, diff)| {
             ((SourceData(Ok(from_ts.encode_row())), ()), into_ts, diff)
         });

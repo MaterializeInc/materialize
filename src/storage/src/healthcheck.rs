@@ -14,7 +14,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_ore::now::NowFn;
 use timely::progress::Antichain;
 
-use mz_persist_client::{PersistClient, ShardId, Upper};
+use mz_persist_client::{PersistClient, ShardId};
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_storage_client::types::sources::SourceData;
 
@@ -73,8 +73,8 @@ pub async fn write_to_persist(
             .await;
         match cas_result {
             Ok(Ok(())) => break 'retry_loop,
-            Ok(Err(Upper(upper))) => {
-                recent_upper = upper;
+            Ok(Err(mismatch)) => {
+                recent_upper = mismatch.current;
             }
             Err(e) => {
                 panic!("Invalid usage of the persist client for collection {collection_id} status history shard: {e:?}");

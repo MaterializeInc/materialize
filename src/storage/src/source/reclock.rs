@@ -28,12 +28,12 @@ use differential_dataflow::consolidation;
 use differential_dataflow::difference::Abelian;
 use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
+use mz_persist_client::error::UpperMismatch;
 use mz_storage_client::util::remap_handle::RemapHandle;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp;
 
-use mz_persist_client::Upper;
 use mz_repr::Diff;
 
 pub mod compat;
@@ -455,7 +455,7 @@ where
             let batch = vec![(FromTime::minimum(), IntoTime::minimum(), 1)];
             match operator.append_batch(batch, upper.clone()).await {
                 Ok(trace_batch) => trace_batch,
-                Err(Upper(actual_upper)) => operator.sync(actual_upper.borrow()).await,
+                Err(UpperMismatch { current, .. }) => operator.sync(current.borrow()).await,
             }
         } else {
             operator.sync(upper.borrow()).await
@@ -472,7 +472,7 @@ where
                 let (_, upper) = tick.expect("end of time");
                 match self.append_batch(vec![], upper.clone()).await {
                     Ok(trace_batch) => trace_batch,
-                    Err(Upper(actual_upper)) => self.sync(actual_upper.borrow()).await,
+                    Err(UpperMismatch { current, .. }) => self.sync(current.borrow()).await,
                 }
             }
             None => ReclockBatch {
@@ -555,7 +555,7 @@ where
 
             let new_batch = match self.append_batch(updates, upper).await {
                 Ok(trace_batch) => trace_batch,
-                Err(Upper(actual_upper)) => self.sync(actual_upper.borrow()).await,
+                Err(UpperMismatch { current, .. }) => self.sync(current.borrow()).await,
             };
             batch.updates.extend(new_batch.updates);
             batch.upper = new_batch.upper;
@@ -575,7 +575,7 @@ where
         &mut self,
         updates: Vec<(FromTime, IntoTime, Diff)>,
         new_upper: Antichain<IntoTime>,
-    ) -> Result<ReclockBatch<FromTime, IntoTime>, Upper<IntoTime>> {
+    ) -> Result<ReclockBatch<FromTime, IntoTime>, UpperMismatch<IntoTime>> {
         match self
             .remap_handle
             .compare_and_append(updates, self.upper.clone(), new_upper.clone())
@@ -584,7 +584,7 @@ where
             // We have successfully produced data in the remap collection so let's read back what
             // we wrote to update our local state
             Ok(()) => Ok(self.sync(new_upper.borrow()).await),
-            Err(actual_upper) => Err(actual_upper),
+            Err(mismatch) => Err(mismatch),
         }
     }
 
