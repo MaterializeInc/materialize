@@ -18,6 +18,7 @@ use differential_dataflow::consolidation;
 use differential_dataflow::lattice::Lattice;
 use futures::{stream::LocalBoxStream, StreamExt};
 use itertools::Itertools;
+use mz_ore::halt;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::progress::Timestamp;
@@ -25,11 +26,13 @@ use tokio::sync::Mutex;
 
 use mz_expr::PartitionId;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::read::{ListenEvent, ReadHandle};
+use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::Upper;
+use mz_persist_client::{PersistClient, Upper};
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::controller::PersistEpoch;
 use mz_storage_client::types::sources::{MzOffset, SourceData};
 use mz_timely_util::order::Partitioned;
 
@@ -99,7 +102,10 @@ where
 
 /// A handle to a persist shard that stores remap bindings
 pub struct PersistHandle {
-    read_handle: ReadHandle<SourceData, (), mz_repr::Timestamp, Diff>,
+    // Hold on to additional information to improve logging.
+    id: GlobalId,
+    metadata: CollectionMetadata,
+    since_handle: SinceHandle<SourceData, (), mz_repr::Timestamp, Diff, PersistEpoch>,
     events: LocalBoxStream<'static, ListenEvent<SourceData, (), mz_repr::Timestamp, Diff>>,
     write_handle: WriteHandle<SourceData, (), mz_repr::Timestamp, Diff>,
     snapshot_produced: bool,
@@ -109,6 +115,9 @@ pub struct PersistHandle {
     native_source_upper: MutableAntichain<Partitioned<PartitionId, MzOffset>>,
     compat_source_upper: MutableOffsetAntichain,
     minimum_produced: bool,
+    // We hold on to this in case we need to create a `ReadHandle` for fetching
+    // an up-to-date snapshot.
+    persist_client: PersistClient,
 }
 
 impl PersistHandle {
@@ -124,17 +133,28 @@ impl PersistHandle {
     ) -> anyhow::Result<Self> {
         let mut persist_clients = persist_clients.lock().await;
         let persist_client = persist_clients
-            .open(metadata.persist_location)
+            .open(metadata.persist_location.clone())
             .await
             .context("error creating persist client")?;
         drop(persist_clients);
 
+        let since_handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
+            .open_critical_since(
+                metadata.remap_shard.clone(),
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                &format!("reclock {}", id),
+            )
+            .await
+            .expect("invalid persist usage");
+
+        let since = since_handle.since();
+
         let (write_handle, read_handle) = persist_client
-            .open(metadata.remap_shard, &format!("reclock {}", id))
+            .open(metadata.remap_shard.clone(), &format!("reclock {}", id))
             .await
             .context("error opening persist shard")?;
 
-        let (since, upper) = (read_handle.since(), write_handle.upper().clone());
+        let upper = write_handle.upper();
 
         assert!(
             PartialOrder::less_equal(since, &as_of),
@@ -146,13 +166,11 @@ impl PersistHandle {
 
         assert!(
             as_of.elements() == [mz_repr::Timestamp::minimum()]
-                || PartialOrder::less_than(&as_of, &upper),
+                || PartialOrder::less_than(&as_of, upper),
             "invalid as_of: upper({upper:?}) <= as_of({as_of:?})",
         );
 
         let listener = read_handle
-            .clone(&format!("reclock::listener {}", id))
-            .await
             .listen(as_of.clone())
             .await
             .expect("since <= as_of asserted");
@@ -172,7 +190,9 @@ impl PersistHandle {
         .boxed_local();
 
         Ok(Self {
-            read_handle,
+            id,
+            metadata,
+            since_handle,
             events,
             write_handle,
             as_of,
@@ -182,6 +202,7 @@ impl PersistHandle {
             native_source_upper: MutableAntichain::new(),
             compat_source_upper: MutableOffsetAntichain::new(),
             minimum_produced: false,
+            persist_client,
         })
     }
 }
@@ -305,8 +326,17 @@ impl RemapHandle for PersistHandle {
         Antichain<Self::IntoTime>,
     )> {
         if !std::mem::replace(&mut self.snapshot_produced, true) {
-            for ((update, _), ts, diff) in self
-                .read_handle
+            let mut read_handle = self
+                .persist_client
+                .open_leased_reader::<SourceData, (), mz_repr::Timestamp, Diff>(
+                    self.metadata.remap_shard.clone(),
+                    &format!("reclock snapshot reader {}", self.id),
+                )
+                .await
+                .context("error opening persist shard")
+                .expect("invalid usage");
+
+            for ((update, _), ts, diff) in read_handle
                 .snapshot_and_fetch(self.as_of.clone())
                 .await
                 .expect("local since is not beyond read handle's since")
@@ -400,15 +430,46 @@ impl RemapHandle for PersistHandle {
     }
 
     async fn compact(&mut self, new_since: Antichain<Self::IntoTime>) {
-        if !PartialOrder::less_equal(self.read_handle.since(), &new_since) {
+        if !PartialOrder::less_equal(self.since_handle.since(), &new_since) {
             panic!(
                 "ReclockFollower: `new_since` ({:?}) is not beyond \
                 `self.since` ({:?}).",
                 new_since,
-                self.read_handle.since(),
+                self.since_handle.since(),
             );
         }
-        self.read_handle.maybe_downgrade_since(&new_since).await;
+        let epoch = self.since_handle.opaque().clone();
+        let result = self
+            .since_handle
+            .maybe_compare_and_downgrade_since(&epoch, (&epoch, &new_since))
+            .await;
+
+        if let Some(result) = result {
+            match result {
+                Ok(_) => {
+                    // All's well!
+                }
+                Err(current_epoch) => {
+                    // TODO(aljoscha): In the future, we might want to be
+                    // smarter about being fenced off. Or maybe not? For now,
+                    // halting seems to be the only option, but we want to get
+                    // rid of halting in sources/sinks. On the other hand, when
+                    // we have been fenced off, it seems fine to halt the whole
+                    // process?
+                    //
+                    // SUBTLE: It's fine if multiple/concurrent remap
+                    // operators/source advance the since of the remap shard.
+                    // They would only do that once both the data shard and
+                    // remap shard are sufficiently advanced, meaning we will
+                    // always be in a state from which we can safely restart.
+                    halt!(
+                        "We have been fenced off! source_id: {}, current epoch: {:?}",
+                        self.id,
+                        current_epoch
+                    );
+                }
+            }
+        }
     }
 
     fn upper(&self) -> &Antichain<Self::IntoTime> {
@@ -416,6 +477,6 @@ impl RemapHandle for PersistHandle {
     }
 
     fn since(&self) -> &Antichain<Self::IntoTime> {
-        self.read_handle.since()
+        self.since_handle.since()
     }
 }

@@ -1486,8 +1486,10 @@ where
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
 /// and also allows us to differentiate between a token being present versus being set for the
 /// first time.
+// TODO(aljoscha): Make this crate-public again once the remap operator doesn't
+// hold a critical handle anymore.
 #[derive(PartialEq, Clone, Debug)]
-pub(crate) struct PersistEpoch(Option<NonZeroI64>);
+pub struct PersistEpoch(Option<NonZeroI64>);
 
 impl Opaque for PersistEpoch {
     fn initial() -> Self {
