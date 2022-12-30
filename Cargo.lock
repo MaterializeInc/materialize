@@ -3315,13 +3315,14 @@ dependencies = [
 
 [[package]]
 name = "mz"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
  "clap",
  "dirs",
  "indicatif",
+ "mz-build-info",
  "mz-ore",
  "once_cell",
  "open",
