@@ -35,7 +35,7 @@ use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::{IngestionDescription, SourceData};
 
 use crate::decode::metrics::DecodeMetrics;
-use crate::internal_control;
+use crate::internal_control::{self, InternalStorageCommand};
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 
@@ -263,8 +263,64 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 }
             }
 
+            // TODO(aljoscha): Obviously, we should put this in a function
+            // before moving this PoC to production.
+            //
+            // NOTE: This is wrong _as is_, for very subtle reasons. Timely
+            // relies on dataflow creation in a deterministic order, across all
+            // workers of a cluster. We're potentially interleaving internal
+            // commands with `StorageCommands` that we get from the controller.
+            //
+            // To solve this, we need to let controller-issued commands go
+            // through the same internal dataflow, and put in place a
+            // deterministic order that will be obeyed by all workers that act
+            // on this combined stream of commands.
             for internal_cmd in internal_cmds.drain(..) {
-                tracing::info!("internal cmd: {:?}", internal_cmd);
+                match internal_cmd {
+                    InternalStorageCommand::Message(msg) => {
+                        tracing::info!("internal command message: {:?}", msg);
+                    }
+                    InternalStorageCommand::SuspendAndRestart(id) => {
+                        tracing::info!("we need to suspend and restart dataflow {:?}", id);
+
+                        let maybe_ingestion = self.storage_state.ingestions.get(&id).cloned();
+
+                        if let Some(ingestion_description) = maybe_ingestion {
+                            // We don't need to initialize shared frontier
+                            // tracking. That should still be initialized from
+                            // the initial creation of the ingestion.
+
+                            // This is almost certainly wrong! A first, naive
+                            // idea, would be to just record the latest resume
+                            // upper in storage state from resumption_operator.
+                            let resume_upper = self
+                                .storage_state
+                                .source_uppers
+                                .get(&id)
+                                .expect("missing source upper")
+                                .borrow()
+                                .clone();
+
+                            // Yank the token of the previously existing source
+                            // dataflow.
+                            self.storage_state.source_tokens.remove(&id);
+
+                            // And then create it afresh.
+                            crate::render::build_ingestion_dataflow(
+                                self.timely_worker,
+                                &mut self.storage_state,
+                                id,
+                                ingestion_description,
+                                resume_upper,
+                            );
+
+                            // Continue with other commands.
+                            continue;
+                        }
+
+                        panic!("got SuspendAndRestart for something that is not a source, this is still TBD");
+                    }
+                }
             }
 
             // Handle any received commands.

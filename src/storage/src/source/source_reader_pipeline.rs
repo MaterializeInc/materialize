@@ -219,7 +219,6 @@ where
         connection_context,
         reclock_follower.share(),
         &resume_stream,
-        internal_cmd_tx,
     );
 
     let (remap_stream, remap_token) =
@@ -233,7 +232,7 @@ where
         remap_stream,
     );
 
-    let health_token = health_operator(scope, config, health_stream);
+    let health_token = health_operator(scope, config, health_stream, internal_cmd_tx);
 
     let token = Rc::new((source_reader_token, remap_token, resume_token, health_token));
 
@@ -494,7 +493,6 @@ fn source_reader_operator<G, C>(
     connection_context: ConnectionContext,
     mut reclock_follower: ReclockFollower<Partitioned<PartitionId, MzOffset>, Timestamp>,
     resume_stream: &Stream<G, ()>,
-    internal_cmd_tx: InternalCommandSender,
 ) -> (SourceConnectionStreams<G, C>, Option<Rc<dyn Any>>)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -694,12 +692,6 @@ where
                         }
                     };
 
-                    if !messages.is_empty() {
-                        let _ = internal_cmd_tx.send(InternalStorageCommand::MessageReceived(
-                            format!("got a message",),
-                        ));
-                    }
-
                     trace!(
                         "create_source_raw({id}) {worker_id}/\
                         {worker_count}: message_batch.len(): {:?}",
@@ -862,6 +854,7 @@ fn health_operator<G>(
     scope: &G,
     config: RawSourceCreationConfig,
     health_stream: Stream<G, (usize, HealthStatusUpdate)>,
+    internal_cmd_tx: InternalCommandSender,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -944,8 +937,20 @@ where
 
                     last_reported_status = new_status.clone();
                 }
+                // TODO(aljoscha): Instead of threading through the
+                // `should_halt` bit, we can give an internal command sender
+                // directly to the places where `should_halt = true` originates.
+                // We should definitely do that, but this is okay for a PoC.
                 if let Some(halt_with) = halt_with {
-                    halt!("halting with status {halt_with:?}");
+                    let res = internal_cmd_tx.send(InternalStorageCommand::SuspendAndRestart(source_id));
+                    match res {
+                        Ok(_) => {
+                            // All's well!
+                             }
+                        Err(_err) => {
+                            halt!("halting with status {halt_with:?} because we could not send internal control message");
+                        }
+                    }
                 }
             }
         }
