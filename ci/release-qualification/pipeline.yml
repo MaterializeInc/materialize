@@ -50,7 +50,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaSourcesLarge, --actions=100000]
+          args: [--scenario=KafkaSourcesLarge, --actions=40000]
 
   - id: zippy-dataflows-large
     label: "Long running Zippy with complex dataflows"
