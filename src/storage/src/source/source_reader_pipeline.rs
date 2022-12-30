@@ -68,8 +68,8 @@ use mz_timely_util::operator::StreamExt as _;
 use mz_timely_util::order::Partitioned;
 
 use crate::healthcheck::write_to_persist;
+use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
 use crate::source::antichain::{MutableOffsetAntichain, OffsetAntichain};
-
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
 use crate::source::types::{
@@ -165,6 +165,7 @@ pub fn create_raw_source<G, C, R>(
     source_connection: C,
     connection_context: ConnectionContext,
     calc: R,
+    internal_cmd_tx: InternalCommandSender,
 ) -> (
     (
         Vec<
@@ -218,6 +219,7 @@ where
         connection_context,
         reclock_follower.share(),
         &resume_stream,
+        internal_cmd_tx,
     );
 
     let (remap_stream, remap_token) =
@@ -492,6 +494,7 @@ fn source_reader_operator<G, C>(
     connection_context: ConnectionContext,
     mut reclock_follower: ReclockFollower<Partitioned<PartitionId, MzOffset>, Timestamp>,
     resume_stream: &Stream<G, ()>,
+    internal_cmd_tx: InternalCommandSender,
 ) -> (SourceConnectionStreams<G, C>, Option<Rc<dyn Any>>)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -673,6 +676,7 @@ where
                             return;
                         }
                     };
+
                     let SourceReaderOperatorOutput {
                         messages,
                         status_update,
@@ -689,6 +693,12 @@ where
                             return;
                         }
                     };
+
+                    if !messages.is_empty() {
+                        let _ = internal_cmd_tx.send(InternalStorageCommand::MessageReceived(
+                            format!("got a message",),
+                        ));
+                    }
 
                     trace!(
                         "create_source_raw({id}) {worker_id}/\

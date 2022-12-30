@@ -84,6 +84,9 @@ pub fn serve(
             .unwrap();
         let (source_metrics, sink_metrics, decode_metrics) = metrics_bundle.clone();
         let persist_clients = Arc::clone(&config.persist_clients);
+
+        let (internal_cmd_tx, internal_cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+
         Worker {
             timely_worker,
             client_rx,
@@ -105,6 +108,8 @@ pub fn serve(
                 sink_write_frontiers: HashMap::new(),
                 sink_handles: HashMap::new(),
                 dropped_ids: Vec::new(),
+                internal_cmd_tx,
+                internal_cmd_rx: Some(internal_cmd_rx),
             },
         }
         .run()

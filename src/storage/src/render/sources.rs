@@ -116,6 +116,7 @@ where
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
+                storage_state.internal_cmd_tx.clone(),
             );
             let oks: Vec<_> = oks.into_iter().map(SourceType::Delimited).collect();
             ((oks, err), cap)
@@ -127,6 +128,7 @@ where
                 DelimitedValueSourceConnection(connection),
                 storage_state.connection_context.clone(),
                 resumption_calculator,
+                storage_state.internal_cmd_tx.clone(),
             );
             let oks = oks.into_iter().map(SourceType::Delimited).collect();
             ((oks, err), cap)
@@ -138,6 +140,7 @@ where
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
+                storage_state.internal_cmd_tx.clone(),
             );
             let oks = oks.into_iter().map(SourceType::ByteStream).collect();
             ((oks, err), cap)
@@ -149,6 +152,7 @@ where
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
+                storage_state.internal_cmd_tx.clone(),
             );
             let oks = oks.into_iter().map(SourceType::Row).collect();
             ((oks, err), cap)
@@ -160,6 +164,7 @@ where
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
+                storage_state.internal_cmd_tx.clone(),
             );
             let oks = oks.into_iter().map(SourceType::Row).collect();
             ((oks, err), cap)
@@ -171,6 +176,7 @@ where
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
+                storage_state.internal_cmd_tx.clone(),
             );
             let oks: Vec<_> = oks.into_iter().map(SourceType::Delimited).collect();
             ((oks, err), cap)

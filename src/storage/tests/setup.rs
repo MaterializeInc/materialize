@@ -209,6 +209,8 @@ where
 
             let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_cache));
 
+            let (internal_cmd_tx, internal_cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+
             let storage_state = mz_storage::storage_state::StorageState {
                 source_uppers: HashMap::new(),
                 source_tokens: HashMap::new(),
@@ -231,6 +233,8 @@ where
                 sink_write_frontiers: HashMap::new(),
                 sink_handles: HashMap::new(),
                 dropped_ids: Vec::new(),
+                internal_cmd_tx,
+                internal_cmd_rx: Some(internal_cmd_rx),
             };
 
             let (_fake_tx, fake_rx) = crossbeam_channel::bounded(1);

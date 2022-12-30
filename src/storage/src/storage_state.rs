@@ -35,6 +35,7 @@ use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::{IngestionDescription, SourceData};
 
 use crate::decode::metrics::DecodeMetrics;
+use crate::internal_control;
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 
@@ -99,6 +100,17 @@ pub struct StorageState {
     pub sink_handles: HashMap<GlobalId, SinkHandle>,
     /// Collection ids that have been dropped but not yet reported as dropped
     pub dropped_ids: Vec<GlobalId>,
+
+    /// Sender for cluster-internal storage commands. These can be sent from
+    /// within workers/operators and will be distributed to all workers. For
+    /// example, for shutting down an entire dataflow from within a
+    /// operator/worker.
+    pub internal_cmd_tx: internal_control::InternalCommandSender,
+
+    /// Receiving end for cluster-internal storage commands. We have an internal
+    /// dataflow that will receive these and broadcast them to all timely
+    /// workers.
+    pub internal_cmd_rx: Option<internal_control::InternalCommandReceiver>,
 }
 
 /// This maintains an additional read hold on the source data for a sink, alongside
@@ -203,6 +215,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
     fn run_client(&mut self, command_rx: CommandReceiver, response_tx: ResponseSender) {
         self.reconcile(&command_rx);
 
+        let internal_cmd_rx = self
+            .storage_state
+            .internal_cmd_rx
+            .take()
+            .expect("someone else took our internal command receiver");
+        let internal_cmd_rx = self.setup_internal_command_pump(internal_cmd_rx);
+
         let mut disconnected = false;
         while !disconnected {
             // Ask Timely to execute a unit of work.
@@ -230,8 +249,27 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
             self.report_frontier_progress(&response_tx);
 
+            // Handle internal commands.
+            let mut internal_cmds = vec![];
+            let mut empty = false;
+            while !empty {
+                match internal_cmd_rx.try_recv() {
+                    Ok(cmd) => internal_cmds.push(cmd),
+                    Err(TryRecvError::Empty) => empty = true,
+                    Err(TryRecvError::Disconnected) => {
+                        empty = true;
+                        disconnected = true;
+                    }
+                }
+            }
+
+            for internal_cmd in internal_cmds.drain(..) {
+                tracing::info!("internal cmd: {:?}", internal_cmd);
+            }
+
             // Handle any received commands.
             let mut cmds = vec![];
+
             let mut empty = false;
             while !empty {
                 match command_rx.try_recv() {
