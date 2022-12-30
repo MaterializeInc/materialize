@@ -142,9 +142,6 @@ impl PersistHandle {
             .open_critical_since(
                 metadata.remap_shard.clone(),
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
-                // TODO(aljoscha): Use a different purpose? We should be fine,
-                // though, because this handle is separate from the read/write
-                // handles.
                 &format!("reclock {}", id),
             )
             .await
