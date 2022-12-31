@@ -38,6 +38,7 @@ _interval
 _jsonb
 _mz_timestamp
 _numeric
+_numrange
 _oid
 _record
 _regclass
@@ -83,6 +84,7 @@ list
 map
 mz_timestamp
 numeric
+numrange
 oid
 regclass
 regproc

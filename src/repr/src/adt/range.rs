@@ -14,16 +14,19 @@ use std::fmt::{self, Debug, Display};
 use std::hash::{Hash, Hasher};
 
 use bitflags::bitflags;
+use dec::OrderedDecimal;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+
 use mz_lowertest::MzReflect;
 use mz_ore::soft_assert;
 use mz_proto::{RustType, TryFromProtoError};
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
 
 use crate::scalar::DatumKind;
 use crate::Datum;
 
 use super::date::Date;
+use super::numeric::Numeric;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.range.rs"));
 
@@ -157,6 +160,12 @@ impl<'a> RangeOps<'a> for Date {
 
     fn err_type_name() -> &'static str {
         "date"
+    }
+}
+
+impl<'a> RangeOps<'a> for OrderedDecimal<Numeric> {
+    fn err_type_name() -> &'static str {
+        "numeric"
     }
 }
 
@@ -417,6 +426,7 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
                 d @ Datum::Int32(_) => self.canonicalize_inner::<i32>(d)?,
                 d @ Datum::Int64(_) => self.canonicalize_inner::<i64>(d)?,
                 d @ Datum::Date(_) => self.canonicalize_inner::<Date>(d)?,
+                Datum::Numeric(..) => {}
                 d => unreachable!("{d:?} not yet supported in ranges"),
             },
         })

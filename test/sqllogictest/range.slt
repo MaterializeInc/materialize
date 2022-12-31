@@ -1841,3 +1841,705 @@ empty
 false
 false
 false
+
+#
+# numrange
+
+query T
+select '[0,100)'::numrange::text;
+----
+[0,100)
+
+query T
+select pg_typeof('[0,100)'::numrange);
+----
+numrange
+
+query T
+select 'empty'::numrange::text;
+----
+empty
+
+query T
+select pg_typeof('empty'::numrange);
+----
+numrange
+
+query T
+select null::numrange::text
+----
+NULL
+
+# Parameterized input on
+#   xjoin(["(","["],
+#       xjoin([null,-1,0,1],
+#           xjoin(
+#               [null,-1,0,1],
+#               ["),"]"]
+#           )
+#       )
+#   )
+
+query T
+SELECT '(,)'::numrange::text;
+----
+(,)
+
+query T
+SELECT '(,-1)'::numrange::text;
+----
+(,-1)
+
+query T
+SELECT '(,0)'::numrange::text;
+----
+(,0)
+
+query T
+SELECT '(,1)'::numrange::text;
+----
+(,1)
+
+query T
+SELECT '(,]'::numrange::text;
+----
+(,)
+
+query T
+SELECT '(,-1]'::numrange::text;
+----
+(,-1]
+
+query T
+SELECT '(,0]'::numrange::text;
+----
+(,0]
+
+query T
+SELECT '(,1]'::numrange::text;
+----
+(,1]
+
+query T
+SELECT '(-1,)'::numrange::text;
+----
+(-1,)
+
+query T
+SELECT '(-1,-1)'::numrange::text;
+----
+empty
+
+query T
+SELECT '(-1,0)'::numrange::text;
+----
+(-1,0)
+
+query T
+SELECT '(-1,1)'::numrange::text;
+----
+(-1,1)
+
+query T
+SELECT '(-1,]'::numrange::text;
+----
+(-1,)
+
+query T
+SELECT '(-1,-1]'::numrange::text;
+----
+empty
+
+query T
+SELECT '(-1,0]'::numrange::text;
+----
+(-1,0]
+
+query T
+SELECT '(-1,1]'::numrange::text;
+----
+(-1,1]
+
+query T
+SELECT '(0,)'::numrange::text;
+----
+(0,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(0,-1)'::numrange::text;
+
+query T
+SELECT '(0,0)'::numrange::text;
+----
+empty
+
+query T
+SELECT '(0,1)'::numrange::text;
+----
+(0,1)
+
+query T
+SELECT '(0,]'::numrange::text;
+----
+(0,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(0,-1]'::numrange::text;
+
+query T
+SELECT '(0,0]'::numrange::text;
+----
+empty
+
+query T
+SELECT '(0,1]'::numrange::text;
+----
+(0,1]
+
+query T
+SELECT '(1,)'::numrange::text;
+----
+(1,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(1,-1)'::numrange::text;
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(1,0)'::numrange::text;
+
+query T
+SELECT '(1,1)'::numrange::text;
+----
+empty
+
+query T
+SELECT '(1,]'::numrange::text;
+----
+(1,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(1,-1]'::numrange::text;
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '(1,0]'::numrange::text;
+
+query T
+SELECT '(1,1]'::numrange::text;
+----
+empty
+
+query T
+SELECT '[,)'::numrange::text;
+----
+(,)
+
+query T
+SELECT '[,-1)'::numrange::text;
+----
+(,-1)
+
+query T
+SELECT '[,0)'::numrange::text;
+----
+(,0)
+
+query T
+SELECT '[,1)'::numrange::text;
+----
+(,1)
+
+query T
+SELECT '[,]'::numrange::text;
+----
+(,)
+
+query T
+SELECT '[,-1]'::numrange::text;
+----
+(,-1]
+
+query T
+SELECT '[,0]'::numrange::text;
+----
+(,0]
+
+query T
+SELECT '[,1]'::numrange::text;
+----
+(,1]
+
+query T
+SELECT '[-1,)'::numrange::text;
+----
+[-1,)
+
+query T
+SELECT '[-1,-1)'::numrange::text;
+----
+empty
+
+query T
+SELECT '[-1,0)'::numrange::text;
+----
+[-1,0)
+
+query T
+SELECT '[-1,1)'::numrange::text;
+----
+[-1,1)
+
+query T
+SELECT '[-1,]'::numrange::text;
+----
+[-1,)
+
+query T
+SELECT '[-1,-1]'::numrange::text;
+----
+[-1,-1]
+
+query T
+SELECT '[-1,0]'::numrange::text;
+----
+[-1,0]
+
+query T
+SELECT '[-1,1]'::numrange::text;
+----
+[-1,1]
+
+query T
+SELECT '[0,)'::numrange::text;
+----
+[0,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[0,-1)'::numrange::text;
+
+query T
+SELECT '[0,0)'::numrange::text;
+----
+empty
+
+query T
+SELECT '[0,1)'::numrange::text;
+----
+[0,1)
+
+query T
+SELECT '[0,]'::numrange::text;
+----
+[0,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[0,-1]'::numrange::text;
+
+query T
+SELECT '[0,0]'::numrange::text;
+----
+[0,0]
+
+query T
+SELECT '[0,1]'::numrange::text;
+----
+[0,1]
+
+query T
+SELECT '[1,)'::numrange::text;
+----
+[1,)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[1,-1)'::numrange::text;
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[1,0)'::numrange::text;
+
+query T
+SELECT '[1,1)'::numrange::text;
+----
+empty
+
+query T
+SELECT '[1,]'::numrange::text;
+----
+[1,)
+
+# Range bound errors
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[1,-1]'::numrange::text;
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT '[1,0]'::numrange::text;
+
+# Whitespace handling
+query T
+SELECT
+	DISTINCT column1::numrange::text
+FROM
+	(
+		VALUES
+			('   empty'),
+			('empty  '),
+			('  [1,)'),
+			('[  1,)'),
+			('[1  ,)'),
+			('[  1  ,)'),
+            ('[1,  2)'),
+			('[1,2  )'),
+			('[1,  2  )'),
+			('[1,)  '),
+			('  (,1)'),
+			('(,  1)'),
+			('  (,)  ')
+	) t;
+----
+(,)
+(,1)
+[1,)
+[1,2)
+empty
+
+# Input errors
+query error invalid input syntax for type range
+SELECT '[1,  )'::numrange
+
+query error invalid input syntax for type range
+SELECT '(  ,1)'::numrange
+
+query error invalid input syntax for type range
+SELECT '(  ,  )'::numrange
+
+query error invalid input syntax for type range
+SELECT 'emptyy'::numrange;
+
+query error invalid input syntax for type range
+SELECT ''::numrange;
+
+query error invalid input syntax for type range
+SELECT '1'::numrange;
+
+query error invalid input syntax for type range
+SELECT 'd'::numrange;
+
+query error invalid input syntax for type range
+SELECT ','::numrange;
+
+query error invalid input syntax for type range
+SELECT ')'::numrange;
+
+query error invalid input syntax for type range
+SELECT '{'::numrange;
+
+query error invalid input syntax for type range
+SELECT '('::numrange;
+
+query error invalid input syntax for type range
+SELECT '['::numrange;
+
+query error invalid input syntax for type range
+SELECT '(1)'::numrange;
+
+query error invalid input syntax for type range
+SELECT '[1]'::numrange;
+
+query error invalid input syntax for type range
+SELECT '(1,'::numrange;
+
+query error invalid input syntax for type range
+SELECT '[1,'::numrange;
+
+query error invalid input syntax for type range
+SELECT '(1,1'::numrange;
+
+query error invalid input syntax for type range
+SELECT '[1,1'::numrange;
+
+query error invalid input syntax for type range
+SELECT '(1,1]1'::numrange;
+
+query error invalid input syntax for type range
+SELECT '[1,1]a'::numrange;
+
+query error invalid input syntax for type range
+SELECT '(1,1]]'::numrange;
+
+query error invalid input syntax for type range
+SELECT '[1,1]}'::numrange;
+
+query error invalid input syntax for type range
+SELECT '(1,1]  ]'::numrange;
+
+query error invalid input syntax for type range
+SELECT '[1,1]  }'::numrange;
+
+statement ok
+CREATE TABLE numrange_values (a numrange);
+
+statement ok
+INSERT INTO numrange_values VALUES
+    (null),
+    ('[,1)'::numrange),
+    ('[,1]'::numrange),
+    ('[,)'::numrange),
+    ('[,]'::numrange),
+    ('(,1)'::numrange),
+    ('(,1]'::numrange),
+    ('(,)'::numrange),
+    ('(,]'::numrange),
+    ('[-1,1)'::numrange),
+    ('[-1,1]'::numrange),
+    ('(-1,1)'::numrange),
+    ('(-1,1]'::numrange),
+    ('[0,0)'::numrange),
+    ('[0,0]'::numrange),
+    ('(0,0)'::numrange),
+    ('(0,0]'::numrange),
+    ('[1,)'::numrange),
+    ('[1,]'::numrange),
+    ('(1,)'::numrange),
+    ('(1,]'::numrange);
+
+query T
+SELECT a::text AS t FROM numrange_values ORDER BY a;
+----
+empty
+empty
+empty
+(,1)
+(,1)
+(,1]
+(,1]
+(,)
+(,)
+(,)
+(,)
+[-1,1)
+[-1,1]
+(-1,1)
+(-1,1]
+[0,0]
+[1,)
+[1,)
+(1,)
+(1,)
+NULL
+
+query T
+SELECT a::text AS t FROM numrange_values EXCEPT SELECT column1::text FROM (VALUES
+    (numrange(null,1)),
+    (numrange(null,1, '[]')),
+    (numrange(null,null)),
+    (numrange(null,null, '[]')),
+    (numrange(null,1, '()')),
+    (numrange(null,1, '(]')),
+    (numrange(null,null, '()')),
+    (numrange(null,null,'(]')),
+    (numrange(-1,1)),
+    (numrange(-1,1, '[]')),
+    (numrange(-1,1, '()')),
+    (numrange(-1,1,'(]')),
+    (numrange(0,0)),
+    (numrange(0,0, '[]')),
+    (numrange(0,0,'()')),
+    (numrange(0,0,'(]')),
+    (numrange(1,null)),
+    (numrange(1,null, '[]')),
+    (numrange(1,null,'()')),
+    (numrange(1,null,'(]'))
+) t;
+----
+NULL
+
+query error invalid range bound flags
+SELECT numrange(null,null,' (]');
+
+query error invalid range bound flags
+SELECT numrange(null,null,'(] ');
+
+query error invalid range bound flags
+SELECT numrange(null,null,'( ]');
+
+query error invalid range bound flags
+SELECT numrange(null,null,'(,]');
+
+query error invalid range bound flags
+SELECT numrange(null,null,'a()');
+
+query error invalid range bound flags
+SELECT numrange(null,null,'(a)');
+
+query error invalid range bound flags
+SELECT numrange(null,null,'()a');
+
+query error invalid range bound flags
+SELECT numrange(null,null,'(()');
+
+query error invalid range bound flags
+SELECT numrange(null,null,'())');
+
+# Test range in list
+query T
+SELECT (LIST['(,)', 'empty', '[-1,1]']::numrange list)::text;
+----
+{(,),empty,[-1,1]}
+
+query T
+SELECT ('{"(,)","empty","[-1,1]"}'::numrange list)::text;
+----
+{(,),empty,[-1,1]}
+
+# Test range in array
+query T
+SELECT (ARRAY['(,)', 'empty', '[-1,1]']::_numrange)::text;
+----
+{(,),empty,[-1,1]}
+
+query T
+SELECT ('{"(,)","empty","[-1,1]"}'::_numrange)::text;
+----
+{(,),empty,[-1,1]}
+
+# Test builtin functions
+
+query B
+select '(,)'::numrange = '(,)'::numrange;
+----
+true
+
+query B
+select '(,)'::numrange != 'empty'::numrange;
+----
+false
+
+query B
+select '(,)'::numrange > 'empty'::numrange;
+----
+false
+
+query B
+select '(,)'::numrange >= 'empty'::numrange;
+----
+false
+
+query B
+select '(,)'::numrange < 'empty'::numrange;
+----
+false
+
+query B
+select '(,)'::numrange <= 'empty'::numrange;
+----
+false
+
+# Results from PG
+# (,)|t|t|t
+# [0,0]|f|t|f
+# (,1)|t|t|f
+# (,1]|t|t|t
+# (1,)|f|f|f
+# [1,)|f|f|t
+# (-1,1)|f|t|f
+# (-1,1]|f|t|t
+# [-1,1)|t|t|f
+# [-1,1]|t|t|t
+# empty|f|f|f
+# Note that the predicate also ensures equality between @> and <@
+query TTTT
+SELECT
+	DISTINCT
+	a::TEXT,
+	a @> -1::numeric AS contains_neg_1,
+	a @> 0::numeric AS contains_0,
+	a @> 1::numeric AS contains_1
+FROM
+	numrange_values
+WHERE
+	(a @> -1::numeric = -1::numeric <@ a)
+	AND (a @> 0::numeric = 0::numeric <@ a)
+	AND (a @> 1::numeric = 1::numeric <@ a)
+ORDER BY
+	a;
+----
+(,)
+true
+true
+true
+(,1)
+true
+true
+false
+(,1]
+true
+true
+true
+(-1,1)
+false
+true
+false
+(-1,1]
+false
+true
+true
+(1,)
+false
+false
+false
+[-1,1)
+true
+true
+false
+[-1,1]
+true
+true
+true
+[0,0]
+false
+true
+false
+[1,)
+false
+false
+true
+empty
+false
+false
+false
+
+query T
+SELECT '[1.1,1.1]'::numrange::text;
+----
+[1.1,1.1]
+
+query T
+SELECT '[1.1,1.2]'::numrange::text;
+----
+[1.1,1.2]
+
+query T
+SELECT '[1.1,1.1)'::numrange::text;
+----
+empty
+
+query T
+SELECT numrange(1.1::numeric(38,1),1.2::numeric(38,2))::text;
+----
+[1.1,1.2)
+
+query T
+SELECT numrange(1.1::numeric(38,2),1.2::numeric(38,1))::text;
+----
+[1.1,1.2)
+
+query T
+SELECT numrange(-1.1::numeric(38,10),1.2::numeric(38,0))::text;
+----
+[-1.1,1)
+
+query T
+SELECT numrange(-1.1::numeric(38,0),1.2::numeric(38,10))::text;
+----
+[-1,1.2)
+
+query error range lower bound must be less than or equal to range upper bound
+SELECT numrange(1.1::numeric(38,2),1.2::numeric(38,0))::text;
