@@ -2167,6 +2167,21 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         "now" => Scalar {
             params!() => UnmaterializableFunc::CurrentTimestamp, 1299;
         },
+        "numrange" => Scalar {
+            params!(Numeric, Numeric) => Operation::variadic(|_ecx, mut exprs| {
+                exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Numeric { max_scale: None } },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Int32)}, 3844;
+            params!(Numeric, Numeric, String) => Operation::variadic(|_ecx, exprs| {
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Numeric { max_scale: None } },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Numeric { max_scale: None })}, 3845;
+        },
         "octet_length" => Scalar {
             params!(Bytes) => UnaryFunc::ByteLengthBytes(func::ByteLengthBytes), 720;
             params!(String) => UnaryFunc::ByteLengthString(func::ByteLengthString), 1374;

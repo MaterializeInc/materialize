@@ -18,6 +18,7 @@ use std::str::FromStr;
 use ::encoding::label::encoding_from_whatwg_label;
 use ::encoding::DecoderTrap;
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
+use dec::OrderedDecimal;
 use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
@@ -2206,6 +2207,9 @@ impl BinaryFunc {
                 ScalarType::Int32 => eager!(contains_range_elem::<i32>),
                 ScalarType::Int64 => eager!(contains_range_elem::<i64>),
                 ScalarType::Date => eager!(contains_range_elem::<Date>),
+                ScalarType::Numeric { .. } => {
+                    eager!(contains_range_elem::<OrderedDecimal<Numeric>>)
+                }
                 _ => unreachable!(),
             }),
         }
@@ -6520,6 +6524,7 @@ impl fmt::Display for VariadicFunc {
                 ScalarType::Int32 => "int4range",
                 ScalarType::Int64 => "int8range",
                 ScalarType::Date => "daterange",
+                ScalarType::Numeric { .. } => "numrange",
                 _ => unreachable!(),
             }),
         }

@@ -380,6 +380,27 @@ impl TryFrom<Datum<'_>> for Date {
     }
 }
 
+impl TryFrom<Datum<'_>> for OrderedDecimal<Numeric> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Numeric(n) => Ok(n),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<OrderedDecimal<Numeric>> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::Numeric(n) => Ok(Some(n)),
+            _ => Err(()),
+        }
+    }
+}
+
 impl<'a> Datum<'a> {
     /// Reports whether this datum is null (i.e., is [`Datum::Null`]).
     pub fn is_null(&self) -> bool {
@@ -932,6 +953,12 @@ impl<'a> From<u128> for Datum<'a> {
 impl<'a> From<Numeric> for Datum<'a> {
     fn from(n: Numeric) -> Datum<'a> {
         Datum::Numeric(OrderedDecimal(n))
+    }
+}
+
+impl<'a> From<OrderedDecimal<Numeric>> for Datum<'a> {
+    fn from(n: OrderedDecimal<Numeric>) -> Datum<'a> {
+        Datum::Numeric(n)
     }
 }
 
