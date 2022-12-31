@@ -22,14 +22,13 @@ versioned_mz = [
     Materialized(
         name=f"materialized_{version}",
         image=f"materialize/materialized:{version}",
-        hostname="materialized",
     )
     for version in ["v0.7.0", "v0.8.0"]
 ]
 
 mz_with_options = [
-    Materialized(name="mz_2_workers", hostname="materialized"),
-    Materialized(name="mz_4_workers", hostname="materialized"),
+    Materialized(name="mz_2_workers"),
+    Materialized(name="mz_4_workers"),
 ]
 
 SERVICES = [

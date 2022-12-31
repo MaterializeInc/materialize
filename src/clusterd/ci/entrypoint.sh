@@ -11,6 +11,14 @@
 
 set -euo pipefail
 
-args=(--storage-controller-listen-addr=0.0.0.0:2100 --compute-controller-listen-addr=0.0.0.0:2101 --internal-http-listen-addr=0.0.0.0:6878)
+# We pass default arguments as environment variables, and only if those
+# environment variables do not already exist, to allow users to override these
+# arguments when running the container via either environment variables or
+# command-line arguments.
+export CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=${CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR:-0.0.0.0:2100}
+export CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=${CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR:-0.0.0.0:2101}
+export CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=${CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR:-0.0.0.0:6878}
+export CLUSTERD_SECRETS_READER=${CLUSTERD_SECRETS_READER:-process}
+export CLUSTERD_SECRETS_READER_PROCESS_DIR=${CLUSTERD_SECRETS_READER_PROCESS_DIR:-/mzdata/secrets}
 
-exec clusterd "${args[@]}" "$@"
+exec clusterd "$@"
