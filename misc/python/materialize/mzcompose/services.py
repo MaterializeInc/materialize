@@ -11,8 +11,6 @@ import os
 import random
 from typing import Dict, List, Optional, Tuple, Union
 
-from packaging import version
-
 from materialize.mzcompose import Service, ServiceConfig
 
 DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.5"
@@ -41,128 +39,96 @@ class Materialized(Service):
     def __init__(
         self,
         name: str = "materialized",
-        hostname: Optional[str] = None,
         image: Optional[str] = None,
-        ports: Optional[List[str]] = None,
-        extra_ports: List[int] = [],
-        memory: Optional[str] = None,
-        persist_blob_url: Optional[str] = None,
-        data_directory: str = "/mzdata",
-        default_size: int = Size.DEFAULT_SIZE,
-        options: Optional[Union[str, List[str]]] = "",
-        environment: Optional[List[str]] = None,
-        environment_extra: Optional[List[str]] = None,
-        forward_aws_credentials: bool = True,
-        volumes: Optional[List[str]] = None,
-        volumes_extra: Optional[List[str]] = None,
+        environment_extra: List[str] = [],
+        volumes_extra: List[str] = [],
         depends_on: Optional[List[str]] = None,
-        allow_host_ports: bool = False,
+        memory: Optional[str] = None,
+        options: Optional[Union[str, List[str]]] = "",
+        persist_blob_url: Optional[str] = None,
+        default_size: int = Size.DEFAULT_SIZE,
         environment_id: Optional[str] = None,
         propagate_crashes: bool = True,
     ) -> None:
-        if persist_blob_url is None:
-            persist_blob_url = f"file://{data_directory}/persist/blob"
+        environment = [
+            "MZ_SOFT_ASSERTIONS=1",
+            # TODO(benesch): remove the following environment variables
+            # after v0.38 ships, since these environment variables will be
+            # baked into the Docker image.
+            f"MZ_ORCHESTRATOR=process",
+            # Please think twice before forwarding additional environment
+            # variables from the host, as it's easy to write tests that are
+            # then accidentally dependent on the state of the host machine.
+            #
+            # To dynamically change the environment during a workflow run,
+            # use Composition.override.
+            "MZ_LOG_FILTER",
+            "CLUSTERD_LOG_FILTER",
+            *environment_extra,
+        ]
 
-        if environment is None:
-            environment = [
-                "MZ_SOFT_ASSERTIONS=1",
-                "MZ_UNSAFE_MODE=1",
-                "MZ_EXPERIMENTAL=1",
-                # TODO(benesch): remove the following environment variables
-                # after v0.38 ships, since these environment variables will be
-                # baked into the Docker image.
-                f"MZ_ORCHESTRATOR=process",
-                f"MZ_PERSIST_BLOB_URL={persist_blob_url}",
-                f"MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY={data_directory}/secrets",
-                # Please think twice before forwarding additional environment
-                # variables from the host, as it's easy to write tests that are
-                # then accidentally dependent on the state of the host machine.
-                #
-                # To dynamically change the environment during a workflow run,
-                # use Composition.override.
-                "MZ_LOG_FILTER",
-                "CLUSTERD_LOG_FILTER",
-            ]
+        command = ["--unsafe-mode"]
 
-        if forward_aws_credentials:
-            environment += [
-                "AWS_ACCESS_KEY_ID",
-                "AWS_SECRET_ACCESS_KEY",
-                "AWS_SESSION_TOKEN",
-            ]
+        # TODO(benesch): remove this special case when v0.38 ships.
+        is_old_version = image is not None and (
+            image.endswith("v0.36.2") or image.endswith("v0.37.1")
+        )
+        if is_old_version:
+            persist_blob_url = "file:///mzdata/persist/blob"
+            command.append("--orchestrator=process")
+            command.append("--orchestrator-process-secrets-directory=/mzdata/secrets")
 
         if not environment_id:
-            # TODO(benesch): remove this special case when v0.39 ships, since
-            # the legacy upgrade tests will no longer be testing v0.37.1.
-            if image is not None and image.endswith("v0.37.1"):
+            if is_old_version:
                 environment_id = "mzcompose-test-00000000-0000-0000-0000-000000000000-0"
             else:
                 environment_id = DEFAULT_MZ_ENVIRONMENT_ID
-        environment += [f"MZ_ENVIRONMENT_ID={environment_id}"]
+        command += [f"--environment-id={environment_id}"]
+
+        if persist_blob_url:
+            command.append(f"--persist-blob-url={persist_blob_url}")
 
         if propagate_crashes:
-            environment += ["MZ_ORCHESTRATOR_PROCESS_PROPAGATE_CRASHES=1"]
+            command += ["--orchestrator-process-propagate-crashes"]
 
         self.default_storage_size = default_size
         self.default_replica_size = (
             "1" if default_size == 1 else f"{default_size}-{default_size}"
         )
-
-        environment += [
-            # Issue #15858 prevents the habitual use of large introspection clusters,
-            # so we are leaving MZ_BOOTSTRAP_BUILTIN_CLUSTER_REPLICA_SIZE as is.
-            # f"MZ_BOOTSTRAP_BUILTIN_CLUSTER_REPLICA_SIZE={self.default_replica_size}",
-            f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE={self.default_replica_size}",
-            f"MZ_DEFAULT_STORAGE_HOST_SIZE={self.default_storage_size}",
+        command += [
+            # Issue #15858 prevents the habitual use of large introspection
+            # clusters, so we leave the builtin cluster replica size as is.
+            # f"--bootstrap-builtin-cluster-replica-size={self.default_replica_size}",
+            f"--bootstrap-default-cluster-replica-size={self.default_replica_size}",
+            f"--default-storage-host-size={self.default_storage_size}",
         ]
-
-        if environment_extra:
-            environment.extend(environment_extra)
-
-        if volumes is None:
-            volumes = [*DEFAULT_MZ_VOLUMES]
-        if volumes_extra:
-            volumes.extend(volumes_extra)
-
-        config_ports: List[Union[str, int]] = (
-            [*ports, *extra_ports]
-            if ports
-            else [6875, 26257, *extra_ports, 6876, 6877, 6878]
-        )
-
-        if isinstance(image, str) and ":v" in image:
-            requested_version = image.split(":v")[1]
-            if version.parse(requested_version) < version.parse("0.27.0"):
-                # HTTP and SQL ports in older versions of Materialize are the same
-                config_ports.pop()
-
-        command_list = []
 
         if options:
             if isinstance(options, str):
-                command_list.append(options)
+                command.append(options)
             else:
-                command_list.extend(options)
+                command.extend(options)
 
-        config: ServiceConfig = (
-            {"image": image} if image else {"mzbuild": "materialized"}
-        )
+        config: ServiceConfig = {}
 
-        config["hostname"] = hostname or name
+        if image:
+            config["image"] = image
+        else:
+            config["mzbuild"] = "materialized"
 
-        # Depending on the docker-compose version, this may either work or be ignored with a warning
-        # Unfortunately no portable way of setting the memory limit is known
+        # Depending on the Docker Compose version, this may either work or be
+        # ignored with a warning. Unfortunately no portable way of setting the
+        # memory limit is known.
         if memory:
             config["deploy"] = {"resources": {"limits": {"memory": memory}}}
 
         config.update(
             {
                 "depends_on": depends_on or [],
-                "command": " ".join(command_list),
-                "ports": config_ports,
+                "command": " ".join(command),
+                "ports": [6875, 6876, 6877, 6878, 26257],
                 "environment": environment,
-                "volumes": volumes,
-                "allow_host_ports": allow_host_ports,
+                "volumes": [*DEFAULT_MZ_VOLUMES, *volumes_extra],
                 "tmpfs": ["/tmp"],
             }
         )
@@ -174,59 +140,47 @@ class Clusterd(Service):
     def __init__(
         self,
         name: str = "clusterd",
-        hostname: Optional[str] = None,
         image: Optional[str] = None,
-        ports: List[int] = [2100, 2101],
+        environment_extra: List[str] = [],
         memory: Optional[str] = None,
         options: Optional[Union[str, List[str]]] = "",
-        environment: Optional[List[str]] = None,
-        volumes: Optional[List[str]] = None,
         storage_workers: Optional[int] = Materialized.Size.DEFAULT_SIZE,
-        secrets_reader: str = "process",
-        secrets_reader_process_dir: str = "mzdata/secrets",
     ) -> None:
-        if environment is None:
-            environment = [
-                "CLUSTERD_LOG_FILTER",
-                "MZ_SOFT_ASSERTIONS=1",
-            ]
+        environment = [
+            "CLUSTERD_LOG_FILTER",
+            "MZ_SOFT_ASSERTIONS=1",
+            *environment_extra,
+        ]
 
-        if volumes is None:
-            # We currently give clusterd access to /tmp so that it can load CSV files
-            # but this requirement is expected to go away in the future.
-            volumes = DEFAULT_MZ_VOLUMES
+        command = []
+        if options:
+            if isinstance(options, str):
+                command.append(options)
+            else:
+                command.extend(options)
 
-        config: ServiceConfig = {"image": image} if image else {"mzbuild": "clusterd"}
+        if storage_workers:
+            command.append(f"--storage-workers {storage_workers}")
 
-        if hostname:
-            config["hostname"] = hostname
+        config: ServiceConfig = {}
 
-        # Depending on the docker-compose version, this may either work or be ignored with a warning
-        # Unfortunately no portable way of setting the memory limit is known
+        if image:
+            config["image"] = image
+        else:
+            config["mzbuild"] = "clusterd"
+
+        # Depending on the Docker Compose version, this may either work or be
+        # ignored with a warning. Unfortunately no portable way of setting the
+        # memory limit is known.
         if memory:
             config["deploy"] = {"resources": {"limits": {"memory": memory}}}
 
-        command_list = []
-        if options:
-            if isinstance(options, str):
-                command_list.append(options)
-            else:
-                command_list.extend(options)
-
-        if storage_workers:
-            command_list.append(f"--storage-workers {storage_workers}")
-
-        command_list.append(f"--secrets-reader {secrets_reader}")
-        command_list.append(
-            f"--secrets-reader-process-dir {secrets_reader_process_dir}"
-        )
-
         config.update(
             {
-                "command": " ".join(command_list),
-                "ports": ports,
+                "command": " ".join(command),
+                "ports": [2100, 2101],
                 "environment": environment,
-                "volumes": volumes,
+                "volumes": DEFAULT_MZ_VOLUMES,
             }
         )
 

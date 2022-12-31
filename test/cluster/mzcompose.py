@@ -24,6 +24,7 @@ from materialize.mzcompose.services import (
     Postgres,
     Redpanda,
     SchemaRegistry,
+    Service,
     Testdrive,
     Zookeeper,
 )
@@ -615,9 +616,17 @@ def workflow_test_builtin_migration(c: Composition) -> None:
     c.down(destroy_volumes=True)
     with c.override(
         # Random commit before the migrations that we are testing.
-        Materialized(
-            image="materialize/materialized:devel-aa4128c9c485322f90ab0af2b9cb4d16e1c470c0",
-            default_size=1,
+        Service(
+            name="materialized",
+            config={
+                "image": "materialize/materialized:devel-aa4128c9c485322f90ab0af2b9cb4d16e1c470c0",
+                "command": "--persist-blob-url=file:///mzdata/persist/blob",
+                "ports": [6875],
+                "volumes": [
+                    "mzdata:/mzdata",
+                    "pgdata:/cockroach-data",
+                ],
+            },
         ),
         Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
     ):
@@ -782,7 +791,9 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
         # Start postgres for the pg source
         Postgres(),
         Testdrive(no_reset=True),
-        Clusterd(name="storage", environment=["FAILPOINTS=pg_snapshot_failure=return"]),
+        Clusterd(
+            name="storage", environment_extra=["FAILPOINTS=pg_snapshot_failure=return"]
+        ),
     ):
         dependencies = [
             "materialized",

@@ -7,8 +7,34 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized
+from typing import List, Optional
+
+from materialize.mzcompose import (
+    Composition,
+    Service,
+    ServiceConfig,
+    WorkflowArgumentParser,
+)
+
+
+class StandaloneMaterialized(Service):
+    def __init__(
+        self,
+        name: str,
+        image: Optional[str] = None,
+        ports: List[str] = [],
+    ) -> None:
+        config: ServiceConfig = {
+            "allow_host_ports": True,
+            "ports": ports,
+        }
+
+        if image:
+            config["image"] = image
+        else:
+            config["mzbuild"] = "materialized"
+
+        super().__init__(name=name, config=config)
 
 
 def workflow_start_two_mzs(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -25,22 +51,18 @@ def workflow_start_two_mzs(c: Composition, parser: WorkflowArgumentParser) -> No
     args = parser.parse_args()
 
     with c.override(
-        Materialized(
+        StandaloneMaterialized(
             name="mz_this",
             image=f"materialize/materialized:{args.this_tag}"
             if args.this_tag
             else None,
-            volumes=[],  # Keep the mzdata, pgdata, etc. private to the container
-            allow_host_ports=True,
             ports=["6875:6875"],
         ),
-        Materialized(
+        StandaloneMaterialized(
             name="mz_other",
             image=f"materialize/materialized:{args.other_tag}"
             if args.other_tag
             else None,
-            volumes=[],
-            allow_host_ports=True,
             ports=["16875:6875"],
         ),
     ):
