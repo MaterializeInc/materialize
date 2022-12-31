@@ -50,6 +50,11 @@ Delete this section if no tips.
 
 - [ ] This PR has adequate test coverage / QA involvement has been duly considered.
 - [ ] This PR evolves [an existing `$T ⇔ Proto$T` mapping](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/command-and-response-binary-encoding.md) (possibly in a backwards-incompatible way) and therefore is tagged with a `T-proto` label.
+<!--
+If you don't have access to our Slack, e.g.,
+because you're an external contributor and not a Materialize
+employee, don't worry about the following checkbox.
+-->
 - [ ] I have informed #team-cloud on Slack of any incompatible changes to the Cloud/DB interface (e.g., new required `environmentd` command line arguments)
 - [ ] This PR includes the following [user-facing behavior changes](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/guide-changes.md#what-changes-require-a-release-note):
 
