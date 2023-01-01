@@ -60,7 +60,7 @@ lru = { version = "0.8.1", features = ["hashbrown"] }
 memchr = { version = "2.5.0", features = ["std", "use_std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1", features = ["acct", "aio", "dir", "env", "event", "feature", "fs", "hostname", "inotify", "ioctl", "kmod", "memoffset", "mman", "mount", "mqueue", "net", "personality", "pin-utils", "poll", "process", "pthread", "ptrace", "quota", "reboot", "resource", "sched", "signal", "socket", "term", "time", "ucontext", "uio", "user", "zerocopy"] }
-nom = { version = "7.1.0", features = ["alloc", "std"] }
+nom = { version = "7.1.2", features = ["alloc", "std"] }
 num-bigint = { version = "0.4.3", features = ["std"] }
 num-integer = { version = "0.1.44", features = ["i128", "std"] }
 num-traits = { version = "0.2.15", features = ["i128", "libm", "std"] }
@@ -160,7 +160,7 @@ lru = { version = "0.8.1", features = ["hashbrown"] }
 memchr = { version = "2.5.0", features = ["std", "use_std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1", features = ["acct", "aio", "dir", "env", "event", "feature", "fs", "hostname", "inotify", "ioctl", "kmod", "memoffset", "mman", "mount", "mqueue", "net", "personality", "pin-utils", "poll", "process", "pthread", "ptrace", "quota", "reboot", "resource", "sched", "signal", "socket", "term", "time", "ucontext", "uio", "user", "zerocopy"] }
-nom = { version = "7.1.0", features = ["alloc", "std"] }
+nom = { version = "7.1.2", features = ["alloc", "std"] }
 num-bigint = { version = "0.4.3", features = ["std"] }
 num-integer = { version = "0.1.44", features = ["i128", "std"] }
 num-traits = { version = "0.2.15", features = ["i128", "libm", "std"] }
