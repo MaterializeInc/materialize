@@ -68,3 +68,109 @@ impl fmt::Display for CastRangeToString {
         f.write_str("rangetostr")
     }
 }
+
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub struct RangeLower;
+
+impl LazyUnaryFunc for RangeLower {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        let a = a.eval(datums, temp_storage)?;
+        if a.is_null() {
+            return Ok(Datum::Null);
+        }
+        let r = a.unwrap_range();
+        Ok(Datum::from(
+            r.inner.map(|inner| inner.lower.bound).flatten(),
+        ))
+    }
+
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        input_type
+            .scalar_type
+            .unwrap_range_element_type()
+            .clone()
+            .nullable(input_type.nullable)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        true
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        None
+    }
+}
+
+impl fmt::Display for RangeLower {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("rangelower")
+    }
+}
+
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub struct RangeUpper;
+
+impl LazyUnaryFunc for RangeUpper {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        let a = a.eval(datums, temp_storage)?;
+        if a.is_null() {
+            return Ok(Datum::Null);
+        }
+        let r = a.unwrap_range();
+        Ok(Datum::from(
+            r.inner.map(|inner| inner.upper.bound).flatten(),
+        ))
+    }
+
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        input_type
+            .scalar_type
+            .unwrap_range_element_type()
+            .clone()
+            .nullable(input_type.nullable)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        true
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        None
+    }
+}
+
+impl fmt::Display for RangeUpper {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("rangeupper")
+    }
+}

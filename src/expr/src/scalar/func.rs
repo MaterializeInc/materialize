@@ -3871,7 +3871,9 @@ derive_unary!(
     PgColumnSize,
     MzRowSize,
     MzTypeName,
-    StepMzTimestamp
+    StepMzTimestamp,
+    RangeLower,
+    RangeUpper
 );
 
 impl UnaryFunc {
@@ -4256,6 +4258,8 @@ impl Arbitrary for UnaryFunc {
             PgColumnSize::arbitrary().prop_map_into().boxed(),
             MzRowSize::arbitrary().prop_map_into().boxed(),
             MzTypeName::arbitrary().prop_map_into().boxed(),
+            RangeLower::arbitrary().prop_map_into().boxed(),
+            RangeUpper::arbitrary().prop_map_into().boxed(),
         ])
     }
 }
@@ -4588,6 +4592,8 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastTimestampToMzTimestamp(_) => CastTimestampToMzTimestamp(()),
             UnaryFunc::CastTimestampTzToMzTimestamp(_) => CastTimestampTzToMzTimestamp(()),
             UnaryFunc::StepMzTimestamp(_) => StepMzTimestamp(()),
+            UnaryFunc::RangeLower(_) => RangeLower(()),
+            UnaryFunc::RangeUpper(_) => RangeUpper(()),
         };
         ProtoUnaryFunc { kind: Some(kind) }
     }
@@ -4987,6 +4993,8 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastTimestampToMzTimestamp(()) => Ok(impls::CastTimestampToMzTimestamp.into()),
                 CastTimestampTzToMzTimestamp(()) => Ok(impls::CastTimestampTzToMzTimestamp.into()),
                 StepMzTimestamp(()) => Ok(impls::StepMzTimestamp.into()),
+                RangeLower(()) => Ok(impls::RangeLower.into()),
+                RangeUpper(()) => Ok(impls::RangeUpper.into()),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoUnaryFunc::kind"))

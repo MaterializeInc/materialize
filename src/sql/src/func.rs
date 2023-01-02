@@ -2131,6 +2131,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         },
         "lower" => Scalar {
             params!(String) => UnaryFunc::Lower(func::Lower), 870;
+            params!(RangeAny) => UnaryFunc::RangeLower(func::RangeLower) => AnyElement, 3848;
         },
         "lpad" => Scalar {
             params!(String, Int64) => VariadicFunc::PadLeading, 879;
@@ -2510,6 +2511,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         },
         "upper" => Scalar {
             params!(String) => UnaryFunc::Upper(func::Upper), 871;
+            params!(RangeAny) => UnaryFunc::RangeUpper(func::RangeUpper) => AnyElement, 3849;
         },
         "variance" => Scalar {
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Float64, 2151;
@@ -3764,8 +3766,8 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::NotEq, 3241;
             params!(ArrayAny, ArrayAny) => BinaryFunc::NotEq => Bool, 1071;
             params!(RecordAny, RecordAny) => BinaryFunc::NotEq => Bool, 2989;
-            params!(MzTimestamp, MzTimestamp) => BinaryFunc::NotEq=>Bool, oid::FUNC_MZ_TIMESTAMP_NOT_EQ_MZ_TIMESTAMP_OID;
-            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3883;
+            params!(MzTimestamp, MzTimestamp) => BinaryFunc::NotEq => Bool, oid::FUNC_MZ_TIMESTAMP_NOT_EQ_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BinaryFunc::NotEq => Bool, 3883;
         }
     }
 });
