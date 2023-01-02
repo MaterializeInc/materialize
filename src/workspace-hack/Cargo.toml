@@ -92,7 +92,7 @@ serde_json = { version = "1.0.89", features = ["alloc", "arbitrary_precision", "
 sha2 = { version = "0.10.6", features = ["std"] }
 smallvec = { version = "1.10.0", default-features = false, features = ["serde", "union", "write"] }
 socket2 = { version = "0.4.7", default-features = false, features = ["all"] }
-syn = { version = "1.0.105", features = ["clone-impls", "derive", "extra-traits", "full", "parsing", "printing", "proc-macro", "quote", "visit", "visit-mut"] }
+syn = { version = "1.0.107", features = ["clone-impls", "derive", "extra-traits", "full", "parsing", "printing", "proc-macro", "quote", "visit", "visit-mut"] }
 textwrap = { version = "0.15.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["alloc", "formatting", "macros", "parsing", "quickcheck", "serde", "serde-well-known", "std"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode", "getopts", "getopts-dep"] }
@@ -192,7 +192,7 @@ serde_json = { version = "1.0.89", features = ["alloc", "arbitrary_precision", "
 sha2 = { version = "0.10.6", features = ["std"] }
 smallvec = { version = "1.10.0", default-features = false, features = ["serde", "union", "write"] }
 socket2 = { version = "0.4.7", default-features = false, features = ["all"] }
-syn = { version = "1.0.105", features = ["clone-impls", "derive", "extra-traits", "full", "parsing", "printing", "proc-macro", "quote", "visit", "visit-mut"] }
+syn = { version = "1.0.107", features = ["clone-impls", "derive", "extra-traits", "full", "parsing", "printing", "proc-macro", "quote", "visit", "visit-mut"] }
 textwrap = { version = "0.15.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["alloc", "formatting", "macros", "parsing", "quickcheck", "serde", "serde-well-known", "std"] }
 time-macros = { version = "0.2.6", default-features = false, features = ["formatting", "parsing", "serde"] }
