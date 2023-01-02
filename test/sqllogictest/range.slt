@@ -460,6 +460,7 @@ CREATE TABLE int4range_values (a int4range);
 statement ok
 INSERT INTO int4range_values VALUES
     (null),
+    ('empty'),
     ('[,1)'::int4range),
     ('[,1]'::int4range),
     ('[,)'::int4range),
@@ -484,6 +485,7 @@ INSERT INTO int4range_values VALUES
 query T
 SELECT a::text AS t FROM int4range_values ORDER BY a;
 ----
+empty
 empty
 empty
 empty
@@ -531,6 +533,12 @@ SELECT a::text AS t FROM int4range_values EXCEPT SELECT column1::text FROM (VALU
 ) t;
 ----
 NULL
+
+# test that lower and upper roundtrip through range constructor function
+query T
+SELECT a::text FROM int4range_values WHERE (a::text <> 'empty') AND (a <> int4range(lower(a), upper(a)));
+----
+
 
 query error invalid range bound flags
 SELECT int4range(null,null,' (]');
@@ -591,7 +599,7 @@ true
 query B
 select '(,)'::int4range != 'empty'::int4range;
 ----
-false
+true
 
 query B
 select '(,)'::int4range > 'empty'::int4range;
@@ -1097,6 +1105,7 @@ CREATE TABLE int8range_values (a int8range);
 statement ok
 INSERT INTO int8range_values VALUES
     (null),
+    ('empty'),
     ('[,1)'::int8range),
     ('[,1]'::int8range),
     ('[,)'::int8range),
@@ -1121,6 +1130,7 @@ INSERT INTO int8range_values VALUES
 query T
 SELECT a::text AS t FROM int8range_values ORDER BY a;
 ----
+empty
 empty
 empty
 empty
@@ -1169,6 +1179,11 @@ SELECT a::text AS t FROM int8range_values EXCEPT SELECT column1::text FROM (VALU
 ----
 NULL
 
+# test that lower and upper roundtrip through range constructor function
+query T
+SELECT a::text FROM int8range_values WHERE (a::text <> 'empty') AND (a <> int8range(lower(a), upper(a)));
+----
+
 
 # Test range in list
 query T
@@ -1202,7 +1217,7 @@ true
 query B
 select '(,)'::int8range != 'empty'::int8range;
 ----
-false
+true
 
 query B
 select '(,)'::int8range > 'empty'::int8range;
@@ -1663,6 +1678,7 @@ CREATE TABLE daterange_values (a daterange);
 statement ok
 INSERT INTO daterange_values VALUES
     (null),
+    ('empty'),
     ('[,)'::daterange),
     ('[,1970-01-01]'::daterange),
     ('[,)'::daterange),
@@ -1684,6 +1700,7 @@ query T
 SELECT a::text AS t FROM daterange_values ORDER BY a;
 ----
 empty
+empty
 (,1970-01-01)
 (,1970-01-02)
 (,1970-01-02)
@@ -1700,6 +1717,12 @@ empty
 [1970-01-02,)
 [1970-01-02,)
 NULL
+
+# test that lower and upper roundtrip through range constructor function
+query T
+SELECT a::text FROM daterange_values WHERE (a::text <> 'empty') AND (a <> daterange(lower(a), upper(a)));
+----
+
 
 query T
 SELECT a::text AS t FROM daterange_values EXCEPT SELECT column1::text FROM (VALUES
@@ -1756,7 +1779,7 @@ true
 query B
 select '(,)'::daterange != 'empty'::daterange;
 ----
-false
+true
 
 query B
 select '(,)'::daterange > 'empty'::daterange;
@@ -2279,6 +2302,7 @@ CREATE TABLE numrange_values (a numrange);
 statement ok
 INSERT INTO numrange_values VALUES
     (null),
+    ('empty'),
     ('[,1)'::numrange),
     ('[,1]'::numrange),
     ('[,)'::numrange),
@@ -2303,6 +2327,7 @@ INSERT INTO numrange_values VALUES
 query T
 SELECT a::text AS t FROM numrange_values ORDER BY a;
 ----
+empty
 empty
 empty
 empty
@@ -2350,6 +2375,19 @@ SELECT a::text AS t FROM numrange_values EXCEPT SELECT column1::text FROM (VALUE
 ) t;
 ----
 NULL
+
+# test that lower and upper roundtrip through range constructor function
+query T
+SELECT a::text FROM numrange_values WHERE (a::text <> 'empty') AND (a <> numrange(lower(a), upper(a)));
+----
+(,1]
+(,1]
+(1,)
+(1,)
+[0,0]
+(-1,1)
+(-1,1]
+[-1,1]
 
 query error invalid range bound flags
 SELECT numrange(null,null,' (]');
@@ -2410,7 +2448,7 @@ true
 query B
 select '(,)'::numrange != 'empty'::numrange;
 ----
-false
+true
 
 query B
 select '(,)'::numrange > 'empty'::numrange;
