@@ -11,7 +11,7 @@ anyhow = "1.0.66"
 itertools = "0.10.5"
 mz-ore = { path = "../ore", default-features = false }
 quote = "1.0.23"
-syn = { version = "1.0.103", features = ["extra-traits", "full", "parsing"] }
+syn = { version = "1.0.107", features = ["extra-traits", "full", "parsing"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
