@@ -1814,6 +1814,26 @@ impl RowArena {
         }
     }
 
+    /// Equivalent to `push_unary_row` but returns a `DatumNested` rather than a
+    /// `Datum`.
+    fn push_unary_row_datum_nested<'a>(&'a self, row: Row) -> DatumNested<'a> {
+        let mut inner = self.inner.borrow_mut();
+        inner.push(row.data.into_vec());
+        unsafe {
+            // This is safe because:
+            //   * We only ever append to self.inner, so the row data will live
+            //     as long as the arena.
+            //   * We force the row data into its own heap allocation--
+            //     importantly, we do NOT store the SmallVec, which might be
+            //     storing data inline--so it's okay if self.inner reallocates
+            //     and moves the row.
+            //   * We don't allow access to the byte vector itself, so it will
+            //     never reallocate.
+            let nested = DatumNested::extract(&inner[inner.len() - 1], &mut 0);
+            transmute::<DatumNested<'_>, DatumNested<'a>>(nested)
+        }
+    }
+
     /// Convenience function to make a new `Row` containing a single datum, and
     /// take ownership of it for the lifetime of the arena
     ///
@@ -1832,6 +1852,17 @@ impl RowArena {
         let mut row = Row::default();
         f(&mut row.packer());
         self.push_unary_row(row)
+    }
+
+    /// Convenience function identical to `make_datum` but instead returns a
+    /// `DatumNested`.
+    pub fn make_datum_nested<'a, F>(&'a self, f: F) -> DatumNested<'a>
+    where
+        F: FnOnce(&mut RowPacker),
+    {
+        let mut row = Row::default();
+        f(&mut row.packer());
+        self.push_unary_row_datum_nested(row)
     }
 
     /// Like [`RowArena::make_datum`], but the provided closure can return an error.

@@ -1613,6 +1613,25 @@ impl<'a, E> DatumType<'a, E> for Range<DatumNested<'a>> {
     }
 }
 
+impl<'a, E> DatumType<'a, E> for Range<Datum<'a>> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(r @ Datum::Range(..)) => Ok(r.unwrap_range()),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        let d =
+            self.into_bounds(|bound| temp_storage.make_datum_nested(|packer| packer.push(bound)));
+        Ok(Datum::Range(d))
+    }
+}
+
 impl AsColumnType for bool {
     fn as_column_type() -> ColumnType {
         ScalarType::Bool.nullable(false)
