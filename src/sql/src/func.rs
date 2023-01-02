@@ -2060,6 +2060,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
                 })
             }) => ScalarType::Range { element_type: Box::new(ScalarType::Int64)}, 3946;
         },
+        "isempty" => Scalar {
+            params!(RangeAny) => UnaryFunc::RangeEmpty(func::RangeEmpty) => Bool, 3850;
+        },
         "jsonb_array_length" => Scalar {
             params!(Jsonb) => UnaryFunc::JsonbArrayLength(func::JsonbArrayLength) => Int32, 3207;
         },

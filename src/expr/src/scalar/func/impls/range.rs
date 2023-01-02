@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use mz_repr::adt::range::Range;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -174,3 +175,10 @@ impl fmt::Display for RangeUpper {
         f.write_str("rangeupper")
     }
 }
+
+sqlfunc!(
+    #[sqlname = "range_empty"]
+    fn range_empty(a: Range<Datum<'a>>) -> bool {
+        a.inner.is_none()
+    }
+);

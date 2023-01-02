@@ -405,6 +405,7 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_uint64_to_int16 = 280;
         google.protobuf.Empty range_lower = 283;
         google.protobuf.Empty range_upper = 284;
+        google.protobuf.Empty range_empty = 285;
     }
 }
 

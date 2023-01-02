@@ -3873,7 +3873,8 @@ derive_unary!(
     MzTypeName,
     StepMzTimestamp,
     RangeLower,
-    RangeUpper
+    RangeUpper,
+    RangeEmpty
 );
 
 impl UnaryFunc {
@@ -4260,6 +4261,7 @@ impl Arbitrary for UnaryFunc {
             MzTypeName::arbitrary().prop_map_into().boxed(),
             RangeLower::arbitrary().prop_map_into().boxed(),
             RangeUpper::arbitrary().prop_map_into().boxed(),
+            RangeEmpty::arbitrary().prop_map_into().boxed(),
         ])
     }
 }
@@ -4594,6 +4596,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::StepMzTimestamp(_) => StepMzTimestamp(()),
             UnaryFunc::RangeLower(_) => RangeLower(()),
             UnaryFunc::RangeUpper(_) => RangeUpper(()),
+            UnaryFunc::RangeEmpty(_) => RangeEmpty(()),
         };
         ProtoUnaryFunc { kind: Some(kind) }
     }
@@ -4995,6 +4998,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 StepMzTimestamp(()) => Ok(impls::StepMzTimestamp.into()),
                 RangeLower(()) => Ok(impls::RangeLower.into()),
                 RangeUpper(()) => Ok(impls::RangeUpper.into()),
+                RangeEmpty(()) => Ok(impls::RangeEmpty.into()),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoUnaryFunc::kind"))
