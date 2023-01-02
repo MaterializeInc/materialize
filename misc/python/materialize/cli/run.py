@@ -180,11 +180,8 @@ def main() -> int:
         os.environ["COCKROACH_URL"] = args.postgres
     else:
         raise UIError(f"unknown program {args.program}")
-    command += args.args
 
-    print(f"!!!$ {' '.join(command)}")
-
-    print(args.args)
+    print(f"$ {' '.join(command)}")
     os.execvp(command[0], command)
 
 
