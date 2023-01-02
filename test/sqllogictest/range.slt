@@ -536,8 +536,26 @@ NULL
 
 # test that lower and upper roundtrip through range constructor function
 query T
-SELECT a::text FROM int4range_values WHERE (NOT isempty(a)) AND (a <> int4range(lower(a), upper(a)));
+SELECT
+	a::STRING
+FROM
+	int4range_values
+WHERE
+	(NOT isempty(a))
+	AND (
+			a
+			!= int4range(
+					lower(a),
+					upper(a),
+					CASE
+					WHEN lower_inc(a) THEN '['
+					ELSE '('
+					END
+					|| CASE WHEN upper_inc(a) THEN ']' ELSE ')' END
+				)
+		);
 ----
+
 
 
 query error invalid range bound flags
@@ -1181,7 +1199,24 @@ NULL
 
 # test that lower and upper roundtrip through range constructor function
 query T
-SELECT a::text FROM int8range_values WHERE (NOT isempty(a)) AND (a <> int8range(lower(a), upper(a)));
+SELECT
+	a::STRING
+FROM
+	int8range_values
+WHERE
+	(NOT isempty(a))
+	AND (
+			a
+			!= int8range(
+					lower(a),
+					upper(a),
+					CASE
+					WHEN lower_inc(a) THEN '['
+					ELSE '('
+					END
+					|| CASE WHEN upper_inc(a) THEN ']' ELSE ')' END
+				)
+		);
 ----
 
 
@@ -1720,7 +1755,24 @@ NULL
 
 # test that lower and upper roundtrip through range constructor function
 query T
-SELECT a::text FROM daterange_values WHERE (NOT isempty(a)) AND (a <> daterange(lower(a), upper(a)));
+SELECT
+	a::STRING
+FROM
+	daterange_values
+WHERE
+	(NOT isempty(a))
+	AND (
+			a
+			!= daterange(
+					lower(a),
+					upper(a),
+					CASE
+					WHEN lower_inc(a) THEN '['
+					ELSE '('
+					END
+					|| CASE WHEN upper_inc(a) THEN ']' ELSE ')' END
+				)
+		);
 ----
 
 
@@ -2378,16 +2430,25 @@ NULL
 
 # test that lower and upper roundtrip through range constructor function
 query T
-SELECT a::text FROM numrange_values WHERE (NOT isempty(a)) AND (a <> numrange(lower(a), upper(a)));
+SELECT
+	a::STRING
+FROM
+	numrange_values
+WHERE
+	(NOT isempty(a))
+	AND (
+			a
+			!= numrange(
+					lower(a),
+					upper(a),
+					CASE
+					WHEN lower_inc(a) THEN '['
+					ELSE '('
+					END
+					|| CASE WHEN upper_inc(a) THEN ']' ELSE ')' END
+				)
+		);
 ----
-(,1]
-(,1]
-(1,)
-(1,)
-[0,0]
-(-1,1)
-(-1,1]
-[-1,1]
 
 query error invalid range bound flags
 SELECT numrange(null,null,' (]');

@@ -3874,7 +3874,9 @@ derive_unary!(
     StepMzTimestamp,
     RangeLower,
     RangeUpper,
-    RangeEmpty
+    RangeEmpty,
+    RangeLowerInc,
+    RangeUpperInc
 );
 
 impl UnaryFunc {
@@ -4262,6 +4264,8 @@ impl Arbitrary for UnaryFunc {
             RangeLower::arbitrary().prop_map_into().boxed(),
             RangeUpper::arbitrary().prop_map_into().boxed(),
             RangeEmpty::arbitrary().prop_map_into().boxed(),
+            RangeLowerInc::arbitrary().prop_map_into().boxed(),
+            RangeUpperInc::arbitrary().prop_map_into().boxed(),
         ])
     }
 }
@@ -4597,6 +4601,8 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::RangeLower(_) => RangeLower(()),
             UnaryFunc::RangeUpper(_) => RangeUpper(()),
             UnaryFunc::RangeEmpty(_) => RangeEmpty(()),
+            UnaryFunc::RangeLowerInc(_) => RangeLowerInc(()),
+            UnaryFunc::RangeUpperInc(_) => RangeUpperInc(()),
         };
         ProtoUnaryFunc { kind: Some(kind) }
     }
@@ -4999,6 +5005,8 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 RangeLower(()) => Ok(impls::RangeLower.into()),
                 RangeUpper(()) => Ok(impls::RangeUpper.into()),
                 RangeEmpty(()) => Ok(impls::RangeEmpty.into()),
+                RangeLowerInc(_) => Ok(impls::RangeLowerInc.into()),
+                RangeUpperInc(_) => Ok(impls::RangeUpperInc.into()),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoUnaryFunc::kind"))
