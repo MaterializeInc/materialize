@@ -15,6 +15,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 use tracing::debug;
 
+use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::task;
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::read::ListenEvent;

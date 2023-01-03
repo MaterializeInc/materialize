@@ -246,6 +246,7 @@ mod enabled {
 
     use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
     use mz_build_info::BuildInfo;
+    use mz_ore::cast::CastFrom;
 
     #[derive(Deserialize)]
     pub struct ProfForm {
@@ -269,17 +270,23 @@ mod enabled {
 
         fn render_jemalloc_stats(stats: &JemallocStats) -> Vec<(&str, String)> {
             vec![
-                ("Allocated", ByteSize(stats.allocated).to_string_as(true)),
-                ("In active pages", ByteSize(stats.active).to_string_as(true)),
+                (
+                    "Allocated",
+                    ByteSize(u64::cast_from(stats.allocated)).to_string_as(true),
+                ),
+                (
+                    "In active pages",
+                    ByteSize(u64::cast_from(stats.active)).to_string_as(true),
+                ),
                 (
                     "Allocated for allocator metadata",
-                    ByteSize(stats.metadata).to_string_as(true),
+                    ByteSize(u64::cast_from(stats.metadata)).to_string_as(true),
                 ),
                 // Don't print `stats.resident` since it is a bit hard to interpret;
                 // see `man jemalloc` for details.
                 (
                     "Bytes unused, but retained by allocator",
-                    ByteSize(stats.retained).to_string_as(),
+                    ByteSize(u64::cast_from(stats.retained)).to_string_as(true),
                 ),
             ]
         }

@@ -48,7 +48,7 @@ impl NowFn {
         let millis: u64 = (self)();
         // Justification for `unwrap`:
         // Any u64, when divided by 1000, is a valid i64.
-        i64::try_from(millis / 1_000).unwrap();
+        i64::try_from(millis / 1_000).unwrap()
     }
 }
 

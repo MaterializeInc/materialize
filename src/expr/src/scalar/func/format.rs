@@ -19,6 +19,8 @@ use aho_corasick::AhoCorasickBuilder;
 use enum_iterator::Sequence;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
+use mz_ore::cast::CastFrom;
+
 use crate::scalar::func::TimestampLike;
 
 /// The raw tokens that can appear in a format string. Many of these tokens
