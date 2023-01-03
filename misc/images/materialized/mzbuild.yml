@@ -10,5 +10,5 @@
 name: materialized
 pre-image:
   - type: cargo-build
-    bin: [storaged, computed, environmentd]
+    bin: [clusterd, environmentd]
     strip: false

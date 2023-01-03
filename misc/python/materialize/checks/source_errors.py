@@ -89,7 +89,7 @@ class SourceErrors(Check):
             dedent(
                 """
                 > SELECT status, error ~* 'publication .+ does not exist'
-                  FROM mz_internal.mz_source_status
+                  FROM mz_internal.mz_source_statuses
                   WHERE name LIKE 'source_errors_source%'
                 stalled true
                 stalled true

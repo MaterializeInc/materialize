@@ -681,6 +681,16 @@ pub const TYPE_ANYNONARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
+pub const TYPE_ANYRANGE: BuiltinType<NameReference> = BuiltinType {
+    name: "anyrange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::TYPE_ANYRANGE_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
+};
+
 pub const TYPE_CHAR: BuiltinType<NameReference> = BuiltinType {
     name: "char",
     schema: PG_CATALOG_SCHEMA,
@@ -887,6 +897,16 @@ pub const TYPE_ANYCOMPATIBLENONARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
+pub const TYPE_ANYCOMPATIBLERANGE: BuiltinType<NameReference> = BuiltinType {
+    name: "anycompatiblerange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: oid::TYPE_ANYCOMPATIBLERANGE_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Pseudo,
+        array_id: None,
+    },
+};
+
 pub const TYPE_LIST: BuiltinType<NameReference> = BuiltinType {
     name: "list",
     schema: PG_CATALOG_SCHEMA,
@@ -1010,6 +1030,102 @@ pub const TYPE_MZ_TIMESTAMP_ARRAY: BuiltinType<NameReference> = BuiltinType {
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
             element_reference: TYPE_MZ_TIMESTAMP.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_INT4_RANGE: BuiltinType<NameReference> = BuiltinType {
+    name: "int4range",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_INT4RANGE_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Range {
+            element_reference: TYPE_INT4.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_INT4_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_int4range",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_INT4RANGE_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_INT4_RANGE.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_INT8_RANGE: BuiltinType<NameReference> = BuiltinType {
+    name: "int8range",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_INT8RANGE_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Range {
+            element_reference: TYPE_INT8.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_INT8_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_int8range",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_INT8RANGE_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_INT8_RANGE.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_DATE_RANGE: BuiltinType<NameReference> = BuiltinType {
+    name: "daterange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_DATERANGE_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Range {
+            element_reference: TYPE_DATE.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_DATE_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_daterange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_DATERANGE_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_DATE_RANGE.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_NUM_RANGE: BuiltinType<NameReference> = BuiltinType {
+    name: "numrange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_NUMRANGE_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Range {
+            element_reference: TYPE_NUMERIC.name,
+        },
+        array_id: None,
+    },
+};
+
+pub const TYPE_NUM_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
+    name: "_numrange",
+    schema: PG_CATALOG_SCHEMA,
+    oid: mz_pgrepr::oid::TYPE_NUMRANGE_ARRAY_OID,
+    details: CatalogTypeDetails {
+        typ: CatalogType::Array {
+            element_reference: TYPE_NUM_RANGE.name,
         },
         array_id: None,
     },
@@ -1482,48 +1598,6 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
     is_retained_metrics_relation: false,
 });
 
-pub const MZ_SOURCE_STATUS: BuiltinView = BuiltinView {
-    name: "mz_source_status",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_source_status AS
-WITH ordered_events AS (
-    SELECT
-        source_id,
-        occurred_at,
-        status,
-        error,
-        details,
-        row_number() over (partition by source_id order by occurred_at desc) as row_number
-    FROM
-        mz_internal.mz_source_status_history
-),
-latest_events AS (
-    SELECT
-        source_id,
-        occurred_at,
-        status,
-        error,
-        details
-    FROM
-        ordered_events
-    WHERE
-        row_number = 1
-)
-SELECT
-    mz_sources.id,
-    name,
-    mz_sources.type,
-    occurred_at as last_status_change_at,
-    coalesce(status, 'created') as status,
-    error,
-    details
-FROM mz_sources
-LEFT JOIN latest_events ON mz_sources.id = latest_events.source_id
-WHERE
-    -- This is a convenient way to filter out system sources, like the status_history table itself.
-    mz_sources.size IS NOT NULL",
-};
-
 pub const MZ_SOURCE_STATUSES: BuiltinView = BuiltinView {
     name: "mz_source_statuses",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1560,48 +1634,6 @@ pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSou
         .with_column("details", ScalarType::Jsonb.nullable(true)),
     is_retained_metrics_relation: false,
 });
-
-pub const MZ_SINK_STATUS: BuiltinView = BuiltinView {
-    name: "mz_sink_status",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_sink_status AS
-WITH ordered_events AS (
-    SELECT
-        sink_id,
-        occurred_at,
-        status,
-        error,
-        details,
-        row_number() over (partition by sink_id order by occurred_at desc) as row_number
-    FROM
-        mz_internal.mz_sink_status_history
-),
-latest_events AS (
-    SELECT
-        sink_id,
-        occurred_at,
-        status,
-        error,
-        details
-    FROM
-        ordered_events
-    WHERE
-        row_number = 1
-)
-SELECT
-    mz_sinks.id,
-    name,
-    mz_sinks.type,
-    occurred_at as last_status_change_at,
-    coalesce(status, 'created') as status,
-    error,
-    details
-FROM mz_sinks
-LEFT JOIN latest_events ON mz_sinks.id = latest_events.sink_id
-WHERE
-    -- This is a convenient way to filter out system sinks, like the status_history table itself.
-    mz_sinks.size IS NOT NULL",
-};
 
 pub const MZ_SINK_STATUSES: BuiltinView = BuiltinView {
     name: "mz_sink_statuses",
@@ -2339,6 +2371,7 @@ SELECT
     r.id AS replica_id,
     m.process_id,
     m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
+    m.cpu_nano_cores::float8 / (s.workers * 10000000) AS cpu_percent_normalized,
     m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent
 FROM
     mz_cluster_replicas AS r
@@ -2353,6 +2386,7 @@ pub const MZ_SOURCE_UTILIZATION: BuiltinView = BuiltinView {
 SELECT
     sources.id AS source_id,
     m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
+    m.cpu_nano_cores::float8 / (s.workers * 10000000) AS cpu_percent_normalized,
     m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent
 FROM
     mz_sources AS sources
@@ -2367,6 +2401,7 @@ pub const MZ_SINK_UTILIZATION: BuiltinView = BuiltinView {
 SELECT
     sinks.id AS sink_id,
     m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
+    m.cpu_nano_cores::float8 / (s.workers * 10000000) AS cpu_percent_normalized,
     m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent
 FROM
     mz_sinks AS sinks
@@ -2825,6 +2860,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_ANYARRAY),
         Builtin::Type(&TYPE_ANYELEMENT),
         Builtin::Type(&TYPE_ANYNONARRAY),
+        Builtin::Type(&TYPE_ANYRANGE),
         Builtin::Type(&TYPE_BOOL),
         Builtin::Type(&TYPE_BOOL_ARRAY),
         Builtin::Type(&TYPE_BYTEA),
@@ -2882,6 +2918,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_ANYCOMPATIBLENONARRAY),
         Builtin::Type(&TYPE_ANYCOMPATIBLELIST),
         Builtin::Type(&TYPE_ANYCOMPATIBLEMAP),
+        Builtin::Type(&TYPE_ANYCOMPATIBLERANGE),
         Builtin::Type(&TYPE_UINT2),
         Builtin::Type(&TYPE_UINT2_ARRAY),
         Builtin::Type(&TYPE_UINT4),
@@ -2890,6 +2927,14 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Type(&TYPE_UINT8_ARRAY),
         Builtin::Type(&TYPE_MZ_TIMESTAMP),
         Builtin::Type(&TYPE_MZ_TIMESTAMP_ARRAY),
+        Builtin::Type(&TYPE_INT4_RANGE),
+        Builtin::Type(&TYPE_INT4_RANGE_ARRAY),
+        Builtin::Type(&TYPE_INT8_RANGE),
+        Builtin::Type(&TYPE_INT8_RANGE_ARRAY),
+        Builtin::Type(&TYPE_DATE_RANGE),
+        Builtin::Type(&TYPE_DATE_RANGE_ARRAY),
+        Builtin::Type(&TYPE_NUM_RANGE),
+        Builtin::Type(&TYPE_NUM_RANGE_ARRAY),
     ];
     for (schema, funcs) in &[
         (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),
@@ -3012,10 +3057,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
-        Builtin::View(&MZ_SINK_STATUS),
         Builtin::View(&MZ_SINK_STATUSES),
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
-        Builtin::View(&MZ_SOURCE_STATUS),
         Builtin::View(&MZ_SOURCE_STATUSES),
         Builtin::Source(&MZ_STORAGE_SHARDS),
         Builtin::Source(&MZ_STORAGE_HOST_METRICS),
@@ -3279,6 +3322,13 @@ mod tests {
                                 ty.name
                             )
                         }
+                        CatalogType::Range { .. } => {
+                            assert_eq!(
+                                pg_ty.ty, "r",
+                                "type {} is not a range type as expected",
+                                ty.name
+                            );
+                        }
                         _ => {
                             assert_eq!(
                                 pg_ty.ty, "b",
@@ -3449,7 +3499,8 @@ mod tests {
                     | ScalarType::RegProc
                     | ScalarType::RegType
                     | ScalarType::RegClass
-                    | ScalarType::Int2Vector => {}
+                    | ScalarType::Int2Vector
+                    | ScalarType::Range { .. } => {}
                 }
             }
         }

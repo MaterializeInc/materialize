@@ -45,9 +45,9 @@ def assert_notice(conn: Connection, contains: bytes) -> None:
         time.sleep(0.2)
 
 
-# Test that a crashed (and restarted) computed replica generates expected notice
+# Test that a crashed (and restarted) cluster replica generates expected notice
 # events.
-def test_crash_computed(mz: MaterializeApplication) -> None:
+def test_crash_clusterd(mz: MaterializeApplication) -> None:
     mz.environmentd.sql("DROP TABLE IF EXISTS t1 CASCADE")
     mz.environmentd.sql("CREATE TABLE t1 (f1 TEXT)")
 
@@ -93,7 +93,7 @@ def test_crash_computed(mz: MaterializeApplication) -> None:
     c_subscribe.notices.clear()
     c_copy.notices.clear()
 
-    # Simulate an unexpected computed crash.
+    # Simulate an unexpected clusterd crash.
     pods = mz.kubectl("get", "pods", "-o", "custom-columns=:metadata.name")
     podcount = 0
     for pod in pods.splitlines():

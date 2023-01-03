@@ -260,13 +260,13 @@ ts
 contains:Unsupported binary temporal operation: NotEq
 
 !CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE mz_now() + 1 = ts;
-contains:no overload for mz_timestamp + integer
+contains:operator does not exist: mz_timestamp + integer
 
 !CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE mz_now() > ts OR ts = 1;
 contains:Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a non-temporal expression of mz_timestamp-castable type. Expression found: ((#0 = 1) OR (mz_now() > #0))
 
 !CREATE MATERIALIZED VIEW v1 AS SELECT * FROM first_ts WHERE ts BETWEEN mz_now() AND mz_now() + 1;
-contains:no overload for mz_timestamp + integer
+contains:operator does not exist: mz_timestamp + integer
 
 #
 # Numeric comparisons

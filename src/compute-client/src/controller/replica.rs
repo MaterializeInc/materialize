@@ -140,7 +140,7 @@ struct ReplicaTask<T> {
     command_rx: UnboundedReceiver<ComputeCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
     response_tx: UnboundedSender<ReplicaResponse<T>>,
-    /// Orchestrator responsible for setting up computeds
+    /// Orchestrator responsible for setting up clusterds
     orchestrator: ComputeOrchestrator,
     /// A number (technically, pair of numbers) identifying this incarnation of the replica.
     /// The semantics of this don't matter, except that it must strictly increase.

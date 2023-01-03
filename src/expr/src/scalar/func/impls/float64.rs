@@ -14,7 +14,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
-use mz_ore::cast::f64_to_i64;
+use mz_ore::cast::TryCastFrom;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::{strconv, ColumnType, ScalarType};
 
@@ -443,7 +443,7 @@ sqlfunc!(
             // TODO(jkosh44) implement infinite timestamps
             Err(EvalError::TimestampOutOfRange)
         } else {
-            let mut secs = f64_to_i64(f.trunc()).ok_or(EvalError::TimestampOutOfRange)?;
+            let mut secs = i64::try_cast_from(f.trunc()).ok_or(EvalError::TimestampOutOfRange)?;
             // NOTE(benesch): PostgreSQL has microsecond precision in its timestamps,
             // while chrono has nanosecond precision. While we normally accept
             // nanosecond precision, here we round to the nearest microsecond because
@@ -451,7 +451,7 @@ sqlfunc!(
             // with common Unix timestamp values (> 1 billion).
             let microsecs = (f.fract() * 1_000_000.0).round();
             let mut nanosecs =
-                f64_to_i64(microsecs * 1_000.0).ok_or(EvalError::TimestampOutOfRange)?;
+                i64::try_cast_from(microsecs * 1_000.0).ok_or(EvalError::TimestampOutOfRange)?;
             if nanosecs < 0 {
                 secs = secs.checked_sub(1).ok_or(EvalError::TimestampOutOfRange)?;
                 nanosecs = NANO_SECONDS_PER_SECOND

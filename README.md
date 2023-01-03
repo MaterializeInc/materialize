@@ -4,7 +4,7 @@
 
 [<img src="https://user-images.githubusercontent.com/23521087/168297221-5d346edc-3a55-4055-b355-281b4bd76963.png" width=55%>](https://materialize.com)
 
-Materialize is a streaming database powered by [Timely](https://github.com/TimelyDataflow/timely-dataflow#timely-dataflow) and [Differential Dataflow](https://github.com/timelydataflow/differential-dataflow#differential-dataflow), purpose-built for low-latency applications. It lets you ask complex questions about your data using SQL, and maintains the results of these SQL queries incrementally up-to-date as the underlying data changes.
+Materialize is a streaming database powered by [Timely](https://github.com/TimelyDataflow/timely-dataflow#timely-dataflow) and [Differential Dataflow](https://github.com/timelydataflow/differential-dataflow#differential-dataflow), purpose-built for low-latency applications. It lets you use SQL to ask complex questions about your data, and then updates the results of your SQL queries incrementally as the underlying data changes.
 
 ## Sign up for Early Access
 
@@ -12,11 +12,11 @@ We are rolling out Early Access to the new, cloud-native version of Materialize.
 
 ## About
 
-Materialize is designed to help you interactively explore your streaming data, perform analytics against live relational data, or just increase the freshness *and* reduce the load of your dashboard and monitoring tasks. The moment you need a refreshed answer, you can get it in milliseconds.
+Materialize is designed to help you interactively explore your streaming data, perform analytics against live relational data, or increase data freshness while reducing the load of your dashboard and monitoring tasks. The moment you need a refreshed answer, you can get it in milliseconds.
 
 It focuses on providing correct and [consistent](https://materialize.com/docs/overview/isolation-level/) answers with minimal latency, and does not ask you to accept either approximate answers or eventual consistency. Whenever Materialize answers a query, that answer is the correct result on some specific (and recent) version of your data. Materialize does all of this by recasting your SQL queries as *dataflows*, which can react efficiently to changes in your data as they happen.
 
-We support a large fraction of PostgreSQL, and are actively working on supporting more builtin PostgreSQL functions. Please file an issue if there's something that you expected to work that didn't!
+We support a large fraction of PostgreSQL, and are actively working on supporting more built-in PostgreSQL functions. Please file an issue if something doesn't work as expected!
 
 ## Get data in
 

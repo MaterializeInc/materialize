@@ -39,7 +39,7 @@ impl CgroupEntry {
     }
 }
 
-/// Parses /proc/self/cgroup into a Vec<CgroupEntry>, if the file exists.
+/// Parses /proc/self/cgroup into a `Vec<CgroupEntry>`, if the file exists.
 pub fn parse_proc_self_cgroup() -> Option<Vec<CgroupEntry>> {
     let file = File::open("/proc/self/cgroup").ok()?;
     let file = BufReader::new(file);

@@ -55,10 +55,10 @@ pub async fn run_ingest(
                     .await
                 {
                     Ok(_output) => Ok(()),
-                    Err(SdkError::ServiceError { err, .. })
-                        if err.is_resource_not_found_exception() =>
+                    Err(SdkError::ServiceError(err))
+                        if err.err().is_resource_not_found_exception() =>
                     {
-                        bail!("resource not found: {}", err)
+                        bail!("resource not found: {}", SdkError::ServiceError(err))
                     }
                     Err(err) => Err(err).context("putting Kinesis record"),
                 }

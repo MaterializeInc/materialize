@@ -2915,6 +2915,9 @@ impl<S: Append> Catalog<S> {
                 key_reference: name_to_id_map[key_reference],
                 value_reference: name_to_id_map[value_reference],
             },
+            CatalogType::Range { element_reference } => CatalogType::Range {
+                element_reference: name_to_id_map[element_reference],
+            },
             CatalogType::Record { fields } => CatalogType::Record {
                 fields: fields
                     .into_iter()

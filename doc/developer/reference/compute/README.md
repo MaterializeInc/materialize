@@ -9,4 +9,4 @@ The COMPUTE layer is responsible for:
 -   Dataflow execution
 -   Optimization
 -   Horizontal scaling
--   Active replication
+-   [Active replication](active-replication.md)

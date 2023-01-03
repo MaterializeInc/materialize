@@ -61,6 +61,9 @@ pub enum AdapterNotice {
     QueryTimestamp {
         timestamp: mz_repr::Timestamp,
     },
+    EqualSubscribeBounds {
+        bound: mz_repr::Timestamp,
+    },
     QueryTrace {
         trace_id: opentelemetry::trace::TraceId,
     },
@@ -141,6 +144,9 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::QueryTimestamp { timestamp } => {
                 write!(f, "query timestamp: {}", timestamp)
+            }
+            AdapterNotice::EqualSubscribeBounds { bound } => {
+                write!(f, "subscribe as of {bound} (inclusive) up to the same bound {bound} (exclusive) is guaranteed to be empty")
             }
             AdapterNotice::QueryTrace { trace_id } => {
                 write!(f, "trace id: {}", trace_id)

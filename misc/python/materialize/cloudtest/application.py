@@ -17,13 +17,13 @@ from pg8000.exceptions import InterfaceError
 
 from materialize import ROOT, mzbuild
 from materialize.cloudtest.k8s import K8sResource
+from materialize.cloudtest.k8s.cockroach import COCKROACH_RESOURCES
 from materialize.cloudtest.k8s.debezium import DEBEZIUM_RESOURCES
 from materialize.cloudtest.k8s.environmentd import (
     EnvironmentdService,
     EnvironmentdStatefulSet,
 )
 from materialize.cloudtest.k8s.minio import Minio
-from materialize.cloudtest.k8s.postgres import POSTGRES_RESOURCES
 from materialize.cloudtest.k8s.postgres_source import POSTGRES_SOURCE_RESOURCES
 from materialize.cloudtest.k8s.redpanda import REDPANDA_RESOURCES
 from materialize.cloudtest.k8s.role_binding import AdminRoleBinding
@@ -58,6 +58,7 @@ class Application:
                         "kind",
                         "load",
                         "docker-image",
+                        "--name=cloudtest",
                         dep.spec(),
                     ]
                 )
@@ -68,7 +69,7 @@ class Application:
         ).decode("ascii")
 
     def context(self) -> str:
-        return "kind-kind"
+        return "kind-cloudtest"
 
 
 class MaterializeApplication(Application):
@@ -84,7 +85,7 @@ class MaterializeApplication(Application):
         self.release_mode = release_mode
         self.aws_region = aws_region
 
-        # Register the VpcEndpoint CRD
+        # Register the VpcEndpoint CRD.
         self.kubectl(
             "apply",
             "-f",
@@ -94,7 +95,7 @@ class MaterializeApplication(Application):
             ),
         )
 
-        # Start metrics-server
+        # Start metrics-server.
         self.kubectl(
             "apply",
             "-f",
@@ -114,7 +115,7 @@ class MaterializeApplication(Application):
         )
 
         self.resources = [
-            *POSTGRES_RESOURCES,
+            *COCKROACH_RESOURCES,
             *POSTGRES_SOURCE_RESOURCES,
             *REDPANDA_RESOURCES,
             *DEBEZIUM_RESOURCES,
@@ -129,14 +130,14 @@ class MaterializeApplication(Application):
             self.testdrive,
         ]
 
-        self.images = ["environmentd", "computed", "storaged", "testdrive", "postgres"]
+        self.images = ["environmentd", "clusterd", "testdrive", "postgres"]
 
-        # Label the minicube nodes in a way that mimics Materialize cloud
+        # Label the kind nodes in a way that mimics production.
         for node in [
-            "kind-control-plane",
-            "kind-worker",
-            "kind-worker2",
-            "kind-worker3",
+            "cloudtest-control-plane",
+            "cloudtest-worker",
+            "cloudtest-worker2",
+            "cloudtest-worker3",
         ]:
             self.kubectl(
                 "label",

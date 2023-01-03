@@ -130,6 +130,21 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                     Ok(())
                 })?;
             }
+            LetRec { ids, values, body } => {
+                let bindings = ids.iter().zip(values).collect::<Vec<_>>();
+                let head = body.as_ref();
+
+                writeln!(f, "{}Return", ctx.indent)?;
+                ctx.indented(|ctx| Displayable::from(head).fmt_text(f, ctx))?;
+                writeln!(f, "{}Where Mutually Recursive", ctx.indent)?;
+                ctx.indented(|ctx| {
+                    for (id, value) in bindings.iter().rev() {
+                        writeln!(f, "{}cte {} =", ctx.indent, *id)?;
+                        ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
+                    }
+                    Ok(())
+                })?;
+            }
             Mfp {
                 input,
                 mfp,

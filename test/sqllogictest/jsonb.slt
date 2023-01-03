@@ -1906,7 +1906,7 @@ SELECT jsonb_agg(a) FILTER (WHERE a IS NOT NULL) FROM t1
 ----
 [1,2,3]
 
-query error arguments cannot be implicitly cast to any implementation's parameters
+query error db error: ERROR: function jsonb_agg\(integer, integer\) does not exist
 SELECT jsonb_agg(1, 2)
 
 statement ok

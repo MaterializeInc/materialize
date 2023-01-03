@@ -35,7 +35,7 @@ use crate::ast::{
 /// trait), but later on, we replace them with both the name along with the ID
 /// that it gets resolved to.
 ///
-/// Currently this process brings an Ast<Raw> to Ast<Aug>, and lives in
+/// Currently this process brings an `Ast<Raw>` to `Ast<Aug>`, and lives in
 /// sql/src/names.rs:resolve.
 pub trait AstInfo: Clone {
     /// The type used for nested statements.

@@ -11,12 +11,12 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 use anyhow::{bail, ensure, Context, Result};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::{Client, Error};
 use serde::de::{Unexpected, Visitor};
 use serde::{Deserialize, Serialize};
 
 use crate::configuration::ValidProfile;
+use crate::utils::RequestBuilderExt;
 use crate::{CloudProvider, CloudProviderAndRegion, Environment, Region};
 
 /// Cloud providers and regions available.
@@ -102,16 +102,6 @@ impl Serialize for CloudProviderRegion {
     }
 }
 
-/// Build the headers for reqwest request with the frontegg authorization.
-fn build_region_request_headers(authorization: &str) -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static("reqwest"));
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(AUTHORIZATION, HeaderValue::from_str(authorization).unwrap());
-
-    headers
-}
-
 /// Enables a particular cloud provider's region
 pub(crate) async fn enable_region_environment(
     client: &Client,
@@ -129,9 +119,6 @@ pub(crate) async fn enable_region_environment(
         environmentd_extra_args: Vec<String>,
     }
 
-    let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
-    let headers = build_region_request_headers(&authorization);
-
     let body = Body {
         environmentd_image_ref: version.map(|v| match v.split_once(':') {
             None => format!("materialize/environmentd:{v}"),
@@ -148,7 +135,7 @@ pub(crate) async fn enable_region_environment(
             )
             .as_str(),
         )
-        .headers(headers)
+        .authenticate(&valid_profile.frontegg_auth)
         .json(&body)
         .send()
         .await?
@@ -162,9 +149,6 @@ pub(crate) async fn disable_region_environment(
     cloud_provider: &CloudProvider,
     valid_profile: &ValidProfile<'_>,
 ) -> Result<(), reqwest::Error> {
-    let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
-    let headers = build_region_request_headers(&authorization);
-
     client
         .delete(
             format!(
@@ -173,7 +157,7 @@ pub(crate) async fn disable_region_environment(
             )
             .as_str(),
         )
-        .headers(headers)
+        .authenticate(&valid_profile.frontegg_auth)
         .send()
         .await?
         .error_for_status()?;
@@ -186,12 +170,14 @@ pub(crate) async fn get_cloud_provider_region_details(
     cloud_provider_region: &CloudProvider,
     valid_profile: &ValidProfile<'_>,
 ) -> Result<Vec<Region>, anyhow::Error> {
-    let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
-    let headers = build_region_request_headers(&authorization);
     let mut region_api_url = cloud_provider_region.region_controller_url.clone();
     region_api_url.push_str("/api/environmentassignment");
 
-    let response = client.get(region_api_url).headers(headers).send().await?;
+    let response = client
+        .get(region_api_url)
+        .authenticate(&valid_profile.frontegg_auth)
+        .send()
+        .await?;
     ensure!(response.status().is_success());
     Ok(response.json::<Vec<Region>>().await?)
 }
@@ -202,14 +188,16 @@ pub(crate) async fn region_environment_details(
     region: &Region,
     valid_profile: &ValidProfile<'_>,
 ) -> Result<Option<Vec<Environment>>, Error> {
-    let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
-    let headers = build_region_request_headers(authorization.as_str());
     let mut region_api_url = region.environment_controller_url
         [0..region.environment_controller_url.len() - 4]
         .to_string();
     region_api_url.push_str("/api/environment");
 
-    let response = client.get(region_api_url).headers(headers).send().await?;
+    let response = client
+        .get(region_api_url)
+        .authenticate(&valid_profile.frontegg_auth)
+        .send()
+        .await?;
     match response.content_length() {
         Some(length) => {
             if length > 0 {
@@ -258,13 +246,9 @@ pub(crate) async fn list_cloud_providers(
     client: &Client,
     valid_profile: &ValidProfile<'_>,
 ) -> Result<Vec<CloudProvider>, Error> {
-    let authorization: String = format!("Bearer {}", valid_profile.frontegg_auth.access_token);
-
-    let headers = build_region_request_headers(&authorization);
-
     client
         .get(valid_profile.profile.endpoint().cloud_regions_url())
-        .headers(headers)
+        .authenticate(&valid_profile.frontegg_auth)
         .send()
         .await?
         .json::<Vec<CloudProvider>>()

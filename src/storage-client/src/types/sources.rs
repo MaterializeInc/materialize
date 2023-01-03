@@ -18,6 +18,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use bytes::BufMut;
+use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
 use globset::{Glob, GlobBuilder};
 use itertools::Itertools;
@@ -25,25 +26,28 @@ use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
-use timely::order::PartialOrder;
-use timely::progress::{Antichain, PathSummary, Timestamp};
+use timely::order::{PartialOrder, TotalOrder};
+use timely::progress::frontier::{Antichain, AntichainRef};
+use timely::progress::{PathSummary, Timestamp};
 use timely::scheduling::ActivateOnDrop;
 use uuid::Uuid;
 
-use mz_expr::MirScalarExpr;
+use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::{ColumnType, Diff, GlobalId, RelationDesc, RelationType, Row, ScalarType};
+use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
+use mz_repr::{ColumnType, Datum, Diff, GlobalId, RelationDesc, RelationType, Row, ScalarType};
+use mz_timely_util::order::{Interval, Partitioned, RangeBound};
 
 use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::types::connections::aws::AwsConfig;
 use crate::types::connections::{KafkaConnection, PostgresConnection};
 use crate::types::errors::DataflowError;
 use crate::types::hosts::StorageHostConfig;
+use crate::util::antichain::OffsetAntichain;
 
 use self::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
 use proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
@@ -67,7 +71,7 @@ pub struct IngestionDescription<S = ()> {
     pub ingestion_metadata: S,
     /// Collections to be exported by this ingestion.
     pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
-    /// The address of a `storaged` process on which to install the source.
+    /// The address of a `clusterd` process on which to install the source.
     pub host_config: StorageHostConfig,
 }
 
@@ -274,6 +278,143 @@ where
     }
 }
 
+pub trait SourceTimestamp: timely::progress::Timestamp {
+    fn from_compat_ts(pid: PartitionId, offset: MzOffset) -> Self;
+    fn from_compat_frontier(frontier: OffsetAntichain) -> Antichain<Self>;
+    fn into_compat_frontier(frontier: AntichainRef<'_, Self>) -> OffsetAntichain;
+    fn encode_row(&self) -> Row;
+    fn decode_row(row: &Row) -> Self;
+}
+
+impl SourceTimestamp for MzOffset {
+    fn from_compat_ts(pid: PartitionId, offset: MzOffset) -> Self {
+        assert_eq!(
+            pid,
+            PartitionId::None,
+            "invalid non-partitioned partition {pid}"
+        );
+        offset
+    }
+
+    fn from_compat_frontier(frontier: OffsetAntichain) -> Antichain<Self> {
+        let mut times = frontier.iter();
+        match (times.next(), times.next()) {
+            (Some((PartitionId::None, offset)), None) => Antichain::from_elem(*offset),
+            (None, None) => Antichain::from_elem(Self::minimum()),
+            _ => panic!("invalid non-partitioned compat frontier: {frontier:?}"),
+        }
+    }
+
+    fn into_compat_frontier(frontier: AntichainRef<'_, Self>) -> OffsetAntichain {
+        let mut ret = OffsetAntichain::new();
+        if let Some(offset) = frontier.as_option() {
+            if offset.offset > 0 {
+                ret.insert(PartitionId::None, *offset);
+            }
+        }
+        ret
+    }
+
+    fn encode_row(&self) -> Row {
+        Row::pack([Datum::UInt64(self.offset)])
+    }
+
+    fn decode_row(row: &Row) -> Self {
+        let mut datums = row.iter();
+        match (datums.next(), datums.next()) {
+            (Some(Datum::UInt64(offset)), None) => MzOffset::from(offset),
+            _ => panic!("invalid row {row:?}"),
+        }
+    }
+}
+
+impl SourceTimestamp for Partitioned<i32, MzOffset> {
+    fn from_compat_ts(pid: PartitionId, offset: MzOffset) -> Self {
+        match pid {
+            PartitionId::Kafka(pid) => Partitioned::with_partition(pid, offset),
+            PartitionId::None => panic!("invalid partitioned partition {pid}"),
+        }
+    }
+
+    fn from_compat_frontier(frontier: OffsetAntichain) -> Antichain<Self> {
+        frontier.into()
+    }
+
+    fn into_compat_frontier(frontier: AntichainRef<'_, Self>) -> OffsetAntichain {
+        frontier.to_owned().into()
+    }
+
+    fn encode_row(&self) -> Row {
+        use mz_repr::adt::range;
+        let mut row = Row::with_capacity(2);
+        let mut packer = row.packer();
+
+        let to_numeric = |p: i32| Datum::from(OrderedDecimal(Numeric::from(p)));
+
+        let (lower, upper) = match self.interval() {
+            Interval::Range(l, u) => match (l, u) {
+                (RangeBound::Bottom, RangeBound::Top) => {
+                    ((Datum::Null, false), (Datum::Null, false))
+                }
+                (RangeBound::Bottom, RangeBound::Elem(pid)) => {
+                    ((Datum::Null, false), (to_numeric(*pid), false))
+                }
+                (RangeBound::Elem(pid), RangeBound::Top) => {
+                    ((to_numeric(*pid), false), (Datum::Null, false))
+                }
+                (RangeBound::Elem(l_pid), RangeBound::Elem(u_pid)) => {
+                    ((to_numeric(*l_pid), false), (to_numeric(*u_pid), false))
+                }
+                o => unreachable!("don't know how to handle this partition {o:?}"),
+            },
+            Interval::Point(pid) => ((to_numeric(*pid), true), (to_numeric(*pid), true)),
+        };
+
+        let offset = self.timestamp().offset;
+
+        packer
+            .push_range(range::Range::new(Some((
+                range::RangeBound::new(lower.0, lower.1),
+                range::RangeBound::new(upper.0, upper.1),
+            ))))
+            .expect("pushing range must not generate errors");
+
+        packer.push(Datum::UInt64(offset));
+        row
+    }
+    fn decode_row(row: &Row) -> Self {
+        let mut datums = row.iter();
+
+        match (datums.next(), datums.next(), datums.next()) {
+            (Some(Datum::Range(range)), Some(Datum::UInt64(offset)), None) => {
+                let mut range = range.into_bounds(|b| b.datum());
+                //XXX: why do we have to canonicalize on read?
+                range.canonicalize().expect("ranges must be valid");
+                let range = range.inner.expect("empty range");
+
+                let lower = range.lower.bound.map(|row| {
+                    i32::try_from(row.unwrap_numeric().0)
+                        .expect("only i32 values converted to ranges")
+                });
+                let upper = range.upper.bound.map(|row| {
+                    i32::try_from(row.unwrap_numeric().0)
+                        .expect("only i32 values converted to ranges")
+                });
+
+                match (range.lower.inclusive, range.upper.inclusive) {
+                    (true, true) => {
+                        assert_eq!(lower, upper);
+                        Partitioned::with_partition(lower.unwrap(), MzOffset::from(offset))
+                    }
+                    (false, false) => Partitioned::with_range(lower, upper, MzOffset::from(offset)),
+                    _ => panic!("invalid timestamp"),
+                }
+            }
+            invalid_binding => unreachable!("invalid binding {:?}", invalid_binding),
+        }
+    }
+}
+
 /// Universal language for describing message positions in Materialize, in a source independent
 /// way. Individual sources like Kafka or File sources should explicitly implement their own offset
 /// type that converts to/From MzOffsets. A 0-MzOffset denotes an empty stream.
@@ -422,6 +563,8 @@ impl PartialOrder for MzOffset {
         self.offset.less_equal(&other.offset)
     }
 }
+
+impl TotalOrder for MzOffset {}
 
 /// Which piece of metadata a column corresponds to
 #[derive(Arbitrary, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

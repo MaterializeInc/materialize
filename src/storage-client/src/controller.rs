@@ -40,7 +40,7 @@ use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::Mutex;
 use tokio_stream::{StreamExt, StreamMap};
-use tracing::debug;
+use tracing::{debug, info};
 
 use mz_build_info::BuildInfo;
 use mz_orchestrator::NamespacedOrchestrator;
@@ -48,7 +48,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
-use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, PostgresFactory, StashError, TypedCollection};
@@ -63,13 +63,14 @@ use crate::types::hosts::StorageHostConfig;
 use crate::types::sinks::{
     MetadataUnfilled, ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc,
 };
-use crate::types::sources::{IngestionDescription, SourceData, SourceExport};
+use crate::types::sources::{IngestionDescription, MzOffset, SourceData, SourceExport};
 
 mod collection_mgmt;
 mod hosts;
 mod metrics_scraper;
 mod persist_handles;
 mod rehydration;
+mod remap_migration;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
 
@@ -81,7 +82,7 @@ pub static METADATA_EXPORT: TypedCollection<GlobalId, DurableExportMetadata<mz_r
 
 pub static ALL_COLLECTIONS: &[&str] = &[METADATA_COLLECTION.name(), METADATA_EXPORT.name()];
 
-// Do this dance so that we keep the storaged controller expressed in terms of a generic timestamp `T`.
+// Do this dance so that we keep the storage controller expressed in terms of a generic timestamp `T`.
 struct MetadataExportFetcher;
 trait MetadataExport<T>
 where
@@ -150,7 +151,7 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportDescription<T = mz_repr::Timestamp> {
     pub sink: StorageSinkDesc<MetadataUnfilled, T>,
-    /// The address of a `storaged` process on which to install the sink or the
+    /// The address of a `clusterd` process on which to install the sink or the
     /// settings for spinning up a controller-managed process.
     pub host_config: StorageHostConfig,
 }
@@ -296,7 +297,7 @@ pub trait StorageController: Debug + Send {
     /// the collection, and in turn advancing its `upper` (aka
     /// `write_frontier`). The most common such "writers" are:
     ///
-    /// * `storaged` instances, for source ingestions
+    /// * `clusterd` instances, for source ingestions
     ///
     /// * introspection collections (which this controller writes to)
     ///
@@ -451,23 +452,6 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
     }
 }
 
-impl Codec for CollectionMetadata {
-    fn codec_name() -> String {
-        "protobuf[CollectionMetadata]".into()
-    }
-
-    fn encode<B: BufMut>(&self, buf: &mut B) {
-        self.into_proto()
-            .encode(buf)
-            .expect("no required fields means no initialization errors");
-    }
-
-    fn decode(buf: &[u8]) -> Result<Self, String> {
-        let proto = ProtoCollectionMetadata::decode(buf).map_err(|err| err.to_string())?;
-        proto.into_rust().map_err(|err| err.to_string())
-    }
-}
-
 /// A trait that is used to calculate safe _resumption frontiers_ for a source.
 ///
 /// Use [`ResumptionFrontierCalculator::initialize_state`] for creating an
@@ -518,23 +502,6 @@ impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
     }
 }
 
-impl Codec for DurableCollectionMetadata {
-    fn codec_name() -> String {
-        "protobuf[DurableCollectionMetadata]".into()
-    }
-
-    fn encode<B: BufMut>(&self, buf: &mut B) {
-        self.into_proto()
-            .encode(buf)
-            .expect("no required fields means no initialization errors");
-    }
-
-    fn decode(buf: &[u8]) -> Result<Self, String> {
-        let proto = ProtoDurableCollectionMetadata::decode(buf).map_err(|err| err.to_string())?;
-        proto.into_rust().map_err(|err| err.to_string())
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DurableExportMetadata<T> {
     pub initial_as_of: SinkAsOf<T>,
@@ -572,18 +539,14 @@ impl RustType<ProtoDurableExportMetadata> for DurableExportMetadata<mz_repr::Tim
     }
 }
 
-impl Codec for DurableExportMetadata<mz_repr::Timestamp> {
-    fn codec_name() -> String {
-        "protobuf[DurableExportMetadata]".into()
-    }
-
-    fn encode<B: BufMut>(&self, buf: &mut B) {
+impl DurableExportMetadata<mz_repr::Timestamp> {
+    pub fn encode<B: BufMut>(&self, buf: &mut B) {
         self.into_proto()
             .encode(buf)
             .expect("no required fields means no initialization errors");
     }
 
-    fn decode(buf: &[u8]) -> Result<Self, String> {
+    pub fn decode(buf: &[u8]) -> Result<Self, String> {
         let proto = ProtoDurableExportMetadata::decode(buf).map_err(|err| err.to_string())?;
         proto.into_rust().map_err(|err| err.to_string())
     }
@@ -791,11 +754,8 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
 impl<T> StorageController for Controller<T>
 where
     T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
-
-    // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-
     MetadataExportFetcher: MetadataExport<T>,
     DurableExportMetadata<T>: mz_stash::Data,
 {
@@ -959,6 +919,9 @@ where
             self.state.persist_read_handles.register(id, since_handle);
 
             self.state.collections.insert(id, collection_state);
+
+            self.migrate_remap_shard(id, &description.data_source).await;
+
             self.register_shard_mapping(id).await;
 
             match description.data_source {
@@ -1058,7 +1021,7 @@ where
                         }
                         IntrospectionType::SourceStatusHistory
                         | IntrospectionType::SinkStatusHistory => {
-                            // nothing to do: only storaged writes rows to these collections
+                            // nothing to do: only clusterd writes rows to these collections
                         }
                     }
                 }
@@ -1489,8 +1452,10 @@ where
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
 /// and also allows us to differentiate between a token being present versus being set for the
 /// first time.
+// TODO(aljoscha): Make this crate-public again once the remap operator doesn't
+// hold a critical handle anymore.
 #[derive(PartialEq, Clone, Debug)]
-pub(crate) struct PersistEpoch(Option<NonZeroI64>);
+pub struct PersistEpoch(Option<NonZeroI64>);
 
 impl Opaque for PersistEpoch {
     fn initial() -> Self {
@@ -1521,10 +1486,10 @@ impl From<NonZeroI64> for PersistEpoch {
 impl<T> Controller<T>
 where
     T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
-
-    // Required to setup grpc clients for new storaged instances.
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
+
+    Self: StorageController<Timestamp = T>,
 {
     /// Create a new storage controller from a client it should wrap.
     pub async fn new(
@@ -1533,7 +1498,7 @@ where
         persist_location: PersistLocation,
         persist_clients: Arc<Mutex<PersistClientCache>>,
         orchestrator: Arc<dyn NamespacedOrchestrator>,
-        storaged_image: String,
+        clusterd_image: String,
         init_container_image: Option<String>,
         now: NowFn,
         postgres_factory: &PostgresFactory,
@@ -1545,7 +1510,7 @@ where
             StorageHostsConfig {
                 build_info,
                 orchestrator,
-                storaged_image,
+                clusterd_image,
                 init_container_image,
             },
             Arc::clone(&persist_clients),
@@ -1560,18 +1525,7 @@ where
             persist: persist_clients,
         }
     }
-}
 
-impl<T> Controller<T>
-where
-    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
-
-    // Required to setup grpc clients for new storaged instances.
-    StorageCommand<T>: RustType<ProtoStorageCommand>,
-    StorageResponse<T>: RustType<ProtoStorageResponse>,
-
-    Self: StorageController<Timestamp = T>,
-{
     /// Validate that a collection exists for all identifiers, and error if any do not.
     fn validate_collection_ids(
         &self,
@@ -1650,99 +1604,9 @@ where
 
         Ok(update)
     }
-}
 
-/// State maintained about individual collections.
-#[derive(Debug)]
-pub struct CollectionState<T> {
-    /// Description with which the collection was created
-    pub description: CollectionDescription<T>,
-
-    /// Accumulation of read capabilities for the collection.
-    ///
-    /// This accumulation will always contain `self.implied_capability`, but may also contain
-    /// capabilities held by others who have read dependencies on this collection.
-    pub read_capabilities: MutableAntichain<T>,
-    /// The implicit capability associated with collection creation.  This should never be less
-    /// than the since of the associated persist collection.
-    pub implied_capability: Antichain<T>,
-    /// The policy to use to downgrade `self.implied_capability`.
-    pub read_policy: ReadPolicy<T>,
-
-    /// Reported write frontier.
-    pub write_frontier: Antichain<T>,
-
-    pub collection_metadata: CollectionMetadata,
-}
-
-impl<T: Timestamp> CollectionState<T> {
-    /// Creates a new collection state, with an initial read policy valid from `since`.
-    pub fn new(
-        description: CollectionDescription<T>,
-        since: Antichain<T>,
-        write_frontier: Antichain<T>,
-        metadata: CollectionMetadata,
-    ) -> Self {
-        let mut read_capabilities = MutableAntichain::new();
-        read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
-        Self {
-            description,
-            read_capabilities,
-            implied_capability: since.clone(),
-            read_policy: ReadPolicy::ValidFrom(since),
-            write_frontier,
-            collection_metadata: metadata,
-        }
-    }
-}
-
-/// State maintained about individual exports.
-#[derive(Debug)]
-pub struct ExportState<T> {
-    /// Description with which the export was created
-    pub description: ExportDescription<T>,
-
-    /// Reported write frontier.
-    pub write_frontier: Antichain<T>,
-}
-impl<T: Timestamp> ExportState<T> {
-    fn new(description: ExportDescription<T>) -> Self {
-        Self {
-            description,
-            write_frontier: Antichain::from_elem(Timestamp::minimum()),
-        }
-    }
-    fn from(&self) -> GlobalId {
-        self.description.sink.from
-    }
-}
-
-impl<T> Controller<T>
-where
-    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
-
-    // Required to setup grpc clients for new storaged instances.
-    StorageCommand<T>: RustType<ProtoStorageCommand>,
-    StorageResponse<T>: RustType<ProtoStorageResponse>,
-
-    Self: StorageController<Timestamp = T>,
-{
-    /// Reconciles the current state of the collection identified by `id` with
-    /// `updates`.
-    ///
-    /// To do this, for each row, we determine the sum of the diffs in updates
-    /// and the negative of the diffs in the current state. If any updates
-    /// remain, we append them to the identified collection.
-    ///
-    /// ## Notes
-    /// - Using this logic, it's possible to truncate a collection by
-    ///   reconciling its current state with an empty set of updates.
-    /// - As of this commit, an alternative to this approach is to issue a full
-    ///   retraction for tables' contents unioned with the desired values. If
-    ///   persist receives that in a single batch, it would have similar
-    ///   behavior as this. This comment's here to highlight that reconciliation
-    ///   is less important for persist than is writing all potentially
-    ///   reconciliable updates in a single batch.
+    /// Effectively truncates the `data_shard` associated with `global_id`
+    /// effective as of the system time.
     ///
     /// # Panics
     /// - If `id` does not belong to a collection or is not registered as a
@@ -1860,6 +1724,244 @@ where
         let updates = vec![(row_buf.clone(), 1)];
 
         self.append_to_managed_collection(id, updates).await;
+    }
+
+    /// Updates the `DurableCollectionMetadata` associated with `id` to
+    /// `new_metadata`.
+    ///
+    /// Any shards changed between the old and the new version will be
+    /// decommissioned/eventually deleted.
+    async fn rewrite_collection_metadata(
+        &mut self,
+        id: GlobalId,
+        new_metadata: DurableCollectionMetadata,
+    ) {
+        let current_metadata = METADATA_COLLECTION
+            .peek_key_one(&mut self.state.stash, &id)
+            .await
+            .expect("connect to stash");
+
+        let to_delete_shards = match current_metadata {
+            None => {
+                // If this ID has not yet been written, nothing to update.
+                return;
+            }
+            Some(metadata) => {
+                if metadata == new_metadata {
+                    return;
+                }
+
+                let mut to_delete_shards = vec![];
+                for (old, new, desc) in [
+                    (metadata.data_shard, new_metadata.data_shard, "data"),
+                    (metadata.remap_shard, new_metadata.remap_shard, "remap"),
+                ] {
+                    if old != new {
+                        info!(
+                            "replacing {:?}'s {} shard {:?} with {:?}",
+                            id, desc, old, new
+                        );
+                        to_delete_shards
+                            .push((old, format!("retired {} shard for {:?}", desc, id)));
+                    }
+                }
+
+                to_delete_shards
+            }
+        };
+
+        // Perform the update.
+        METADATA_COLLECTION
+            .upsert(&mut self.state.stash, vec![(id, new_metadata.clone())])
+            .await
+            .expect("connect to stash");
+
+        // ???: If we crash after this do we have any means of reaping the
+        // leaked shards?
+
+        self.truncate_shards(&to_delete_shards).await;
+
+        let DurableCollectionMetadata {
+            remap_shard,
+            data_shard,
+        } = new_metadata;
+
+        // Update in memory collection metadata.
+        let metadata = self
+            .state
+            .collections
+            .get_mut(&id)
+            .expect("id {:?} must exist");
+        metadata.collection_metadata.data_shard = data_shard;
+        metadata.collection_metadata.remap_shard = remap_shard;
+    }
+
+    async fn truncate_shards(&mut self, shards: &[(ShardId, String)]) {
+        // Open a persist client to delete unused shards.
+        let persist_client = self
+            .persist
+            .lock()
+            .await
+            .open(self.persist_location.clone())
+            .await
+            .unwrap();
+
+        for (shard_id, shard_purpose) in shards {
+            let (mut write, mut read) = persist_client
+                .open::<crate::types::sources::SourceData, (), T, Diff>(
+                    *shard_id,
+                    shard_purpose.as_str(),
+                )
+                .await
+                .expect("invalid persist usage");
+
+            read.downgrade_since(&Antichain::new()).await;
+            write
+                .append(
+                    Vec::<((crate::types::sources::SourceData, ()), T, Diff)>::new(),
+                    write.upper().clone(),
+                    Antichain::new(),
+                )
+                .await
+                .expect("failed to connect")
+                .expect("failed to truncate write handle");
+
+            info!(
+                "successfully truncated shard's write handle for {:?}",
+                shard_id
+            );
+        }
+    }
+
+    /// For appropriate data sources, migrate the remap collection correlated
+    /// to `id` to one compatible with `Partitioned<PartitionId, MzOffset>`.
+    pub async fn migrate_remap_shard(&mut self, id: GlobalId, data_source: &DataSource) {
+        // We only want to migrate ingestion-based sources' remap collections
+        let connection = match data_source {
+            DataSource::Ingestion(IngestionDescription {
+                desc: crate::types::sources::SourceDesc { connection, .. },
+                ..
+            }) => connection,
+            _ => return,
+        };
+
+        let metadata = self
+            .state
+            .collections
+            .get(&id)
+            .expect("must have seen metadata inserted")
+            .collection_metadata
+            .clone();
+
+        let migrate_to_shard = ShardId::new();
+
+        let res = match connection {
+            crate::types::sources::GenericSourceConnection::Kafka(_) => {
+                remap_migration::RemapHandleMigrator::<
+                    mz_timely_util::order::Partitioned<i32, MzOffset>,
+                    T,
+                >::migrate(
+                    Arc::clone(&self.persist),
+                    metadata.clone(),
+                    migrate_to_shard,
+                    id,
+                )
+                .await
+            }
+            _ => {
+                remap_migration::RemapHandleMigrator::<MzOffset, T>::migrate(
+                    Arc::clone(&self.persist),
+                    metadata.clone(),
+                    migrate_to_shard,
+                    id,
+                )
+                .await
+            }
+        };
+
+        let remap_shard = match res {
+            None => {
+                info!("remap shard migration({id:?}): unnecessary");
+                return;
+            }
+            Some(s) => s,
+        };
+
+        self.rewrite_collection_metadata(
+            id,
+            DurableCollectionMetadata {
+                data_shard: metadata.data_shard,
+                remap_shard,
+            },
+        )
+        .await;
+
+        info!("remap shard migration({id:?}): complete");
+    }
+}
+
+/// State maintained about individual collections.
+#[derive(Debug)]
+pub struct CollectionState<T> {
+    /// Description with which the collection was created
+    pub description: CollectionDescription<T>,
+
+    /// Accumulation of read capabilities for the collection.
+    ///
+    /// This accumulation will always contain `self.implied_capability`, but may also contain
+    /// capabilities held by others who have read dependencies on this collection.
+    pub read_capabilities: MutableAntichain<T>,
+    /// The implicit capability associated with collection creation.  This should never be less
+    /// than the since of the associated persist collection.
+    pub implied_capability: Antichain<T>,
+    /// The policy to use to downgrade `self.implied_capability`.
+    pub read_policy: ReadPolicy<T>,
+
+    /// Reported write frontier.
+    pub write_frontier: Antichain<T>,
+
+    pub collection_metadata: CollectionMetadata,
+}
+
+impl<T: Timestamp> CollectionState<T> {
+    /// Creates a new collection state, with an initial read policy valid from `since`.
+    pub fn new(
+        description: CollectionDescription<T>,
+        since: Antichain<T>,
+        write_frontier: Antichain<T>,
+        metadata: CollectionMetadata,
+    ) -> Self {
+        let mut read_capabilities = MutableAntichain::new();
+        read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
+        Self {
+            description,
+            read_capabilities,
+            implied_capability: since.clone(),
+            read_policy: ReadPolicy::ValidFrom(since),
+            write_frontier,
+            collection_metadata: metadata,
+        }
+    }
+}
+
+/// State maintained about individual exports.
+#[derive(Debug)]
+pub struct ExportState<T> {
+    /// Description with which the export was created
+    pub description: ExportDescription<T>,
+
+    /// Reported write frontier.
+    pub write_frontier: Antichain<T>,
+}
+impl<T: Timestamp> ExportState<T> {
+    fn new(description: ExportDescription<T>) -> Self {
+        Self {
+            description,
+            write_frontier: Antichain::from_elem(Timestamp::minimum()),
+        }
+    }
+    fn from(&self) -> GlobalId {
+        self.description.sink.from
     }
 }
 

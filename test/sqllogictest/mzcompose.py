@@ -9,9 +9,9 @@
 
 from materialize import ROOT, ci_util
 from materialize.mzcompose import Composition
-from materialize.mzcompose.services import Postgres, SqlLogicTest
+from materialize.mzcompose.services import Cockroach, SqlLogicTest
 
-SERVICES = [Postgres(), SqlLogicTest()]
+SERVICES = [Cockroach(), SqlLogicTest()]
 
 
 def workflow_default(c: Composition) -> None:
@@ -25,15 +25,16 @@ def workflow_sqllogictest(c: Composition) -> None:
 
 
 def run_sqllogictest(c: Composition, command: str) -> None:
-    c.up("postgres")
-    c.wait_for_postgres(dbname="postgres")
+    c.up("cockroach")
+    c.wait_for_cockroach()
+
     try:
         junit_report = ci_util.junit_report_filename(c.name)
         c.run(
-            "sqllogictest-svc",
+            "sqllogictest",
             command,
             f"--junit-report={junit_report}",
-            "--postgres-url=postgres://postgres:postgres@postgres",
+            "--postgres-url=postgres://root@cockroach:26257",
         )
     finally:
         ci_util.upload_junit_report(c.name, ROOT / junit_report)

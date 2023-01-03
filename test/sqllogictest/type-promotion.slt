@@ -38,10 +38,10 @@ FROM t
 6.7  2.7  9.4  2.35  0.7000000000000002  false  false  true  true  false  true
 
 # Do not allow int4 text comparisons
-query error no overload for text < integer
+query error db error: ERROR: operator does not exist: text < integer
 SELECT 'foo'::text < 5::int;
 
-query error no overload for integer < text
+query error db error: ERROR: operator does not exist: integer < text
 SELECT 1 < ALL(VALUES(NULL))
 
 # But string *literals* can coerce to anything.
@@ -199,11 +199,11 @@ Map (floorf64(integer_to_double(1)))
 EOF
 
 # Cannot implicitly cast int4 to string
-query error Cannot call function char_length\(integer\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: function char_length\(integer\) does not exist
 SELECT char_length(321);
 
 # Cannot implicitly cast double precision to numeric
-query error Cannot call function round\(double precision, integer\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: function round\(double precision, integer\) does not exist
 SELECT round(1.23::float, 1);
 
 # Check that float8 is the most common type

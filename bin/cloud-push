@@ -23,7 +23,7 @@ fi
 username=$1
 shift
 
-for image in environmentd storaged computed; do
+for image in environmentd clusterd; do
     bin/mzimage acquire --arch=x86_64 "$image" "$@"
     docker tag "$(bin/mzimage spec --arch=x86_64 "$image" "$@")" "$username/$image"
     docker push "$username/$image"

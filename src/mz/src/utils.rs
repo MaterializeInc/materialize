@@ -7,8 +7,39 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
+use reqwest::{Client, ClientBuilder, RequestBuilder};
 use std::time::Duration;
+
+use crate::configuration::FronteggAuth;
+
+/// Create a standard client with common
+/// header values for all requests.
+pub fn new_client() -> Result<Client> {
+    let mut headers = HeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_static("reqwest"));
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+    ClientBuilder::new()
+        .default_headers(headers)
+        .build()
+        .context("failed to create client")
+}
+
+/// Extgension methods for building API requests
+pub(crate) trait RequestBuilderExt {
+    /// Authenticate the client with frontegg
+    fn authenticate(self, auth: &FronteggAuth) -> Self;
+}
+
+impl RequestBuilderExt for RequestBuilder {
+    fn authenticate(self, auth: &FronteggAuth) -> Self {
+        let authorization = format!("Bearer {}", auth.access_token);
+        self.header(AUTHORIZATION, &authorization)
+    }
+}
 
 /// Trim lines. Useful when reading input data.
 pub(crate) fn trim_newline(s: &mut String) {

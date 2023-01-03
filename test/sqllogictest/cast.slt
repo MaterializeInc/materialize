@@ -123,5 +123,5 @@ SELECT date('2020-01-01'), date('2020-01-01'::timestamp), date('2020-01-01'::tim
 query error invalid input syntax for type date
 SELECT date('2000')
 
-query error Cannot call function date\(unknown, unknown\): arguments cannot be implicitly cast to any implementation's parameters
+query error db error: ERROR: function date\(unknown, unknown\) does not exist
 SELECT date('2000', 'a')

@@ -19,7 +19,7 @@ def wait(
     condition: str,
     resource: str,
     timeout_secs: int = 300,
-    context: str = "kind-kind",
+    context: str = "kind-cloudtest",
     *,
     label: Optional[str] = None,
 ) -> None:

@@ -575,7 +575,7 @@ where
 ///
 /// For more details see documentation and comments on:
 /// - [`LeasedBatchPart`]
-/// - From<SerdeLeasedBatchPart> for LeasedBatchPart<T>
+/// - `From<SerdeLeasedBatchPart>` for `LeasedBatchPart<T>`
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SerdeLeasedBatchPart {
     shard_id: ShardId,

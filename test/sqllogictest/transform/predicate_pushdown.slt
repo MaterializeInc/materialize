@@ -98,29 +98,22 @@ query T multiline
 EXPLAIN DECORRELATED PLAN WITH(arity) FOR
 SELECT a FROM (SELECT DISTINCT a FROM x UNION ALL SELECT a FROM y) WHERE a = 3
 ----
-Return // { arity: 1 }
-  Filter (#0 = 3) // { arity: 1 }
-    Union // { arity: 1 }
-      Project (#1) // { arity: 1 }
-        Map (#0) // { arity: 2 }
-          Get l1 // { arity: 1 }
-      Project (#1) // { arity: 1 }
-        Map (#0) // { arity: 2 }
-          Get l2 // { arity: 1 }
-With
-  cte l2 =
-    CrossJoin // { arity: 1 }
-      Get l0 // { arity: 0 }
-      Get materialize.public.y // { arity: 1 }
-  cte l1 =
-    Distinct group_by=[#0] // { arity: 1 }
-      Project (#0) // { arity: 1 }
-        CrossJoin // { arity: 3 }
-          Get l0 // { arity: 0 }
-          Get materialize.public.x // { arity: 3 }
-  cte l0 =
-    Constant // { arity: 0 }
-      - ()
+Filter (#0 = 3) // { arity: 1 }
+  Union // { arity: 1 }
+    Project (#1) // { arity: 1 }
+      Map (#0) // { arity: 2 }
+        Distinct group_by=[#0] // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            CrossJoin // { arity: 3 }
+              Constant // { arity: 0 }
+                - ()
+              Get materialize.public.x // { arity: 3 }
+    Project (#1) // { arity: 1 }
+      Map (#0) // { arity: 2 }
+        CrossJoin // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
+          Get materialize.public.y // { arity: 1 }
 
 EOF
 

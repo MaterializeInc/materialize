@@ -9,6 +9,10 @@
 
 # Test mz_internal.cluster_replica_frontiers
 
+# The expected number of rows in mz_cluster_replica_frontiers depends on the number of replicas
+$ skip-if
+SELECT ${arg.replicas} > 1;
+
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
 > CREATE TABLE t1 (a int)

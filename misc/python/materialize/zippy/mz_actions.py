@@ -10,13 +10,19 @@
 from typing import List, Set, Type
 
 from materialize.mzcompose import Composition
+from materialize.zippy.crdb_capabilities import CockroachIsRunning
 from materialize.zippy.framework import Action, Capability
+from materialize.zippy.minio_capabilities import MinioIsRunning
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.view_capabilities import ViewExists
 
 
 class MzStart(Action):
     """Starts a Mz instance (all components are running in the same container)."""
+
+    @classmethod
+    def requires(self) -> Set[Type[Capability]]:
+        return {CockroachIsRunning, MinioIsRunning}
 
     def run(self, c: Composition) -> None:
         c.up("materialized")
@@ -55,25 +61,26 @@ class MzStop(Action):
         return {MzIsRunning}
 
 
-class KillStoraged(Action):
-    """Kills the storaged processes in the environmentd container. The process orchestrator will restart them."""
+class MzRestart(Action):
+    """Restarts the entire Mz instance (all components are running in the same container)."""
 
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
         return {MzIsRunning}
 
     def run(self, c: Composition) -> None:
-        # Depending on the workload, storaged may not be running, hence the || true
-        c.exec("materialized", "bash", "-c", "kill -9 `pidof storaged` || true")
+        c.kill("materialized")
+        c.up("materialized")
+        c.wait_for_materialized(timeout_secs=300)
 
 
-class KillComputed(Action):
-    """Kills the computed processes in the environmentd container. The process orchestrator will restart them."""
+class KillClusterd(Action):
+    """Kills the clusterd processes in the environmentd container. The process orchestrator will restart them."""
 
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
         return {MzIsRunning, ViewExists}
 
     def run(self, c: Composition) -> None:
-        # Depending on the workload, computed may not be running, hence the || true
-        c.exec("materialized", "bash", "-c", "kill -9 `pidof computed` || true")
+        # Depending on the workload, clusterd may not be running, hence the || true
+        c.exec("materialized", "bash", "-c", "kill -9 `pidof clusterd` || true")

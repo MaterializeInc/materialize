@@ -518,13 +518,13 @@ impl ColumnarRecordsBuilder {
     }
 }
 
-/// A new-type so we can impl FromIterator for Vec<ColumnarRecords>.
+/// A new-type so we can impl FromIterator for `Vec<ColumnarRecords>`.
 #[derive(Debug)]
 pub struct ColumnarRecordsVec(pub Vec<ColumnarRecords>);
 
 impl ColumnarRecordsVec {
     /// Unwraps this ColumnarRecordsVec, returning the underlying
-    /// Vec<ColumnarRecords>.
+    /// `Vec<ColumnarRecords>`.
     pub fn into_inner(self) -> Vec<ColumnarRecords> {
         self.0
     }
@@ -614,7 +614,7 @@ impl ColumnarRecordsVecBuilder {
         }
     }
 
-    /// Finalize constructing a [Vec<ColumnarRecords>].
+    /// Finalize constructing a `Vec<ColumnarRecords>`.
     pub fn finish(self) -> Vec<ColumnarRecords> {
         let mut ret = self.filled;
         if self.current.len > 0 {

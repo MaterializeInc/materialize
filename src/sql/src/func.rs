@@ -105,12 +105,14 @@ impl TypeCategory {
             }
             ScalarType::Map { .. } => Self::Pseudo,
             ScalarType::MzTimestamp => Self::Numeric,
+            ScalarType::Range { .. } => Self::Range,
         }
     }
 
     pub fn from_param(param: &ParamType) -> Self {
         match param {
             ParamType::Any
+            | ParamType::AnyElement
             | ParamType::ArrayAny
             | ParamType::ArrayAnyCompatible
             | ParamType::AnyCompatible
@@ -121,6 +123,7 @@ impl TypeCategory {
             | ParamType::MapAny
             | ParamType::MapAnyCompatible
             | ParamType::RecordAny => Self::Pseudo,
+            ParamType::RangeAnyCompatible | ParamType::RangeAny => Self::Range,
             ParamType::Plain(t) => Self::from_type(t),
         }
     }
@@ -163,6 +166,7 @@ impl TypeCategory {
             CatalogType::Record { .. } => TypeCategory::Composite,
             CatalogType::Map { .. } | CatalogType::Pseudo => Self::Pseudo,
             CatalogType::MzTimestamp => Self::String,
+            CatalogType::Range { .. } => Self::Range,
         }
     }
 
@@ -674,6 +678,9 @@ pub enum ParamType {
     /// A pseudotype permitting any type, permitting other "Compatibility"-type
     /// parameters to find the best common type.
     AnyCompatible,
+    /// An pseudotype permitting any type, requiring other "Any"-type parameters
+    /// to be of the same type.
+    AnyElement,
     /// An pseudotype permitting any array type, requiring other "Any"-type
     /// parameters to be of the same type.
     ArrayAny,
@@ -707,6 +714,12 @@ pub enum ParamType {
     /// A polymorphic pseudotype permitting a `ScalarType::Record` of any type,
     /// but all records must be structurally equal.
     RecordAny,
+    /// An pseudotype permitting any range type, requiring other "Any"-type
+    /// parameters to be of the same type.
+    RangeAny,
+    /// A pseudotype permitting any range type, permitting other "Compatibility"-type
+    /// parameters to find the best common type.
+    RangeAnyCompatible,
 }
 
 impl ParamType {
@@ -716,10 +729,11 @@ impl ParamType {
         use ScalarType::*;
 
         match self {
-            Any | AnyCompatible | ListElementAnyCompatible => true,
+            Any | AnyElement | AnyCompatible | ListElementAnyCompatible => true,
             ArrayAny | ArrayAnyCompatible => matches!(t, Array(..) | Int2Vector),
             ListAny | ListAnyCompatible => matches!(t, List { .. }),
             MapAny | MapAnyCompatible => matches!(t, Map { .. }),
+            RangeAny | RangeAnyCompatible => matches!(t, Range { .. }),
             NonVecAny => !t.is_vec(),
             Plain(to) => typeconv::can_cast(ecx, CastContext::Implicit, t, to),
             RecordAny => matches!(t, Record { .. }),
@@ -758,7 +772,8 @@ impl ParamType {
     fn is_polymorphic(&self) -> bool {
         use ParamType::*;
         match self {
-            ArrayAny
+            AnyElement
+            | ArrayAny
             | ArrayAnyCompatible
             | AnyCompatible
             | ListAny
@@ -770,8 +785,10 @@ impl ParamType {
             // In PG, RecordAny isn't polymorphic even though it offers
             // polymorphic behavior. For more detail, see
             // `PolymorphicCompatClass::StructuralEq`.
-            | RecordAny => true,
-            Any | Plain(_) => false,
+            | RecordAny
+            | RangeAny
+            | RangeAnyCompatible => true,
+            Any | Plain(_)  => false,
         }
     }
 
@@ -786,6 +803,7 @@ impl ParamType {
             }
             ParamType::Any => "any",
             ParamType::AnyCompatible => "anycompatible",
+            ParamType::AnyElement => "anyelement",
             ParamType::ArrayAny => "anyarray",
             ParamType::ArrayAnyCompatible => "anycompatiblearray",
             ParamType::ListAny => "list",
@@ -796,6 +814,8 @@ impl ParamType {
             ParamType::MapAnyCompatible => "anycompatiblemap",
             ParamType::NonVecAny => "anynonarray",
             ParamType::RecordAny => "record",
+            ParamType::RangeAny => "anyrange",
+            ParamType::RangeAnyCompatible => "anycompatiblerange",
         }
     }
 }
@@ -826,7 +846,7 @@ impl From<ScalarBaseType> for ParamType {
     fn from(s: ScalarBaseType) -> ParamType {
         use ScalarBaseType::*;
         let s = match s {
-            Array | List | Map | Record => {
+            Array | List | Map | Record | Range => {
                 panic!("use polymorphic parameters rather than {:?}", s);
             }
             Bool => ScalarType::Bool,
@@ -1056,50 +1076,52 @@ where
     let name = spec.to_string();
     let ecx = &ecx.with_name(&name);
     let types: Vec<_> = args.iter().map(|e| ecx.scalar_type(e)).collect();
-    select_impl_inner(ecx, impls, args, &types, order_by).map_err(|e| {
-        let types: Vec<_> = types
-            .into_iter()
-            .map(|ty| match ty {
-                Some(ty) => ecx.humanize_scalar_type(&ty),
-                None => "unknown".to_string(),
-            })
-            .collect();
-        let context = match (spec, types.as_slice()) {
-            (FuncSpec::Func(name), _) => {
-                format!("Cannot call function {}({})", name, types.join(", "))
-            }
-            (FuncSpec::Op(name), [typ]) => format!("no overload for {} {}", name, typ),
-            (FuncSpec::Op(name), [ltyp, rtyp]) => {
-                format!("no overload for {} {} {}", ltyp, name, rtyp)
-            }
-            (FuncSpec::Op(_), [..]) => unreachable!("non-unary non-binary operator"),
-        };
-        sql_err!("{}: {}", context, e)
-    })
-}
 
-fn select_impl_inner<R>(
-    ecx: &ExprContext,
-    impls: &[FuncImpl<R>],
-    cexprs: Vec<CoercibleScalarExpr>,
-    types: &[Option<ScalarType>],
-    order_by: Vec<ColumnOrder>,
-) -> Result<R, PlanError>
-where
-    R: fmt::Debug,
-{
     // 4.a. Discard candidate functions for which the input types do not
     // match and cannot be converted (using an implicit conversion) to
     // match. unknown literals are assumed to be convertible to anything for
     // this purpose.
     let impls: Vec<_> = impls
         .iter()
-        .filter(|i| i.params.matches_argtypes(ecx, types))
+        .filter(|i| i.params.matches_argtypes(ecx, &types))
         .collect();
 
-    let f = find_match(ecx, types, impls)?;
+    let f = find_match(ecx, &types, impls).map_err(|candidates| {
+        let arg_types: Vec<_> = types
+            .into_iter()
+            .map(|ty| match ty {
+                Some(ty) => ecx.humanize_scalar_type(&ty),
+                None => "unknown".to_string(),
+            })
+            .collect();
 
-    (f.op.0)(ecx, cexprs, &f.params, order_by)
+        if candidates == 0 {
+            match spec {
+                FuncSpec::Func(name) => PlanError::UnknownFunction {
+                    name: name.to_string(),
+                    arg_types,
+                    alternative_hint: None,
+                },
+                FuncSpec::Op(name) => PlanError::UnknownOperator {
+                    name: name.to_string(),
+                    arg_types,
+                },
+            }
+        } else {
+            match spec {
+                FuncSpec::Func(name) => PlanError::IndistinctFunction {
+                    name: name.to_string(),
+                    arg_types,
+                },
+                FuncSpec::Op(name) => PlanError::IndistinctOperator {
+                    name: name.to_string(),
+                    arg_types,
+                },
+            }
+        }
+    })?;
+
+    (f.op.0)(ecx, args, &f.params, order_by)
 }
 
 /// Finds an exact match based on the arguments, or, if no exact match, finds
@@ -1111,7 +1133,7 @@ fn find_match<'a, R: std::fmt::Debug>(
     ecx: &ExprContext,
     types: &[Option<ScalarType>],
     impls: Vec<&'a FuncImpl<R>>,
-) -> Result<&'a FuncImpl<R>, PlanError> {
+) -> Result<&'a FuncImpl<R>, usize> {
     let all_types_known = types.iter().all(|t| t.is_some());
 
     // Check for exact match.
@@ -1183,10 +1205,7 @@ fn find_match<'a, R: std::fmt::Debug>(
     }
 
     if candidates.is_empty() {
-        sql_bail!(
-            "arguments cannot be implicitly cast to any implementation's parameters; \
-        try providing explicit casts"
-        )
+        return Err(0);
     }
 
     maybe_get_last_candidate!();
@@ -1219,10 +1238,7 @@ fn find_match<'a, R: std::fmt::Debug>(
     maybe_get_last_candidate!();
 
     if all_types_known {
-        sql_bail!(
-            "unable to determine which implementation to use; try providing \
-            explicit casts to match parameter types"
-        )
+        return Err(candidates.len());
     }
 
     let mut found_known = false;
@@ -1321,10 +1337,7 @@ fn find_match<'a, R: std::fmt::Debug>(
         maybe_get_last_candidate!();
     }
 
-    sql_bail!(
-        "unable to determine which implementation to use; try providing \
-        explicit casts to match parameter types"
-    )
+    Err(candidates.len())
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -1332,7 +1345,7 @@ enum PolymorphicCompatClass {
     /// Represents the older "Any"-style matching of PG polymorphic types, which
     /// constrains all types to be of the same type, i.e. does not attempt to
     /// promote parameters to a best common type.
-    BaseEq,
+    Any,
     /// Represent's Postgres' "anycompatible"-type polymorphic resolution.
     ///
     /// > Selection of the common type considers the actual types of
@@ -1380,8 +1393,12 @@ impl TryFrom<&ParamType> for PolymorphicCompatClass {
         use ParamType::*;
 
         Ok(match param {
-            ArrayAny | ListAny | MapAny | NonVecAny => PolymorphicCompatClass::BaseEq,
-            ArrayAnyCompatible | AnyCompatible => PolymorphicCompatClass::BestCommonAny,
+            AnyElement | ArrayAny | ListAny | MapAny | NonVecAny | RangeAny => {
+                PolymorphicCompatClass::Any
+            }
+            ArrayAnyCompatible | AnyCompatible | RangeAnyCompatible => {
+                PolymorphicCompatClass::BestCommonAny
+            }
             ListAnyCompatible | ListElementAnyCompatible => PolymorphicCompatClass::BestCommonList,
             MapAnyCompatible => PolymorphicCompatClass::BestCommonMap,
             RecordAny => PolymorphicCompatClass::StructuralEq,
@@ -1395,7 +1412,7 @@ impl PolymorphicCompatClass {
         use PolymorphicCompatClass::*;
         match self {
             StructuralEq => from.structural_eq(to),
-            BaseEq => from.base_eq(to),
+            Any => from.base_eq(to),
             _ => typeconv::can_cast(ecx, CastContext::Implicit, from, to),
         }
     }
@@ -1448,9 +1465,12 @@ impl PolymorphicSolution {
         use ParamType::*;
 
         self.seen.push(match param {
-            AnyCompatible | ArrayAny | ListAny | ListAnyCompatible | MapAny | MapAnyCompatible
-            | NonVecAny | RecordAny => seen,
-            ArrayAnyCompatible => seen.map(|array| array.unwrap_array_element_type().clone()),
+            // These represent the keys of their respective compatibility classes.
+            AnyElement | AnyCompatible | ListAnyCompatible |  MapAnyCompatible | NonVecAny | RecordAny => seen,
+            MapAny => seen.map(|array| array.unwrap_map_value_type().clone()),
+            ListAny => seen.map(|array| array.unwrap_list_element_type().clone()),
+            ArrayAny | ArrayAnyCompatible => seen.map(|array| array.unwrap_array_element_type().clone()),
+            RangeAny | RangeAnyCompatible => seen.map(|range| range.unwrap_range_element_type().clone()),
             ListElementAnyCompatible => seen.map(|el| ScalarType::List {
                 custom_id: None,
                 element_type: Box::new(el),
@@ -1503,16 +1523,33 @@ impl PolymorphicSolution {
                         custom_id: None,
                     }),
                     // Do not infer type.
-                    PolymorphicCompatClass::StructuralEq | PolymorphicCompatClass::BaseEq => None,
+                    PolymorphicCompatClass::StructuralEq | PolymorphicCompatClass::Any => None,
                 },
             }
         } else {
             // If we saw any polymorphic parameters, we must have determined the
             // compatibility type.
             let compat = self.compat.as_ref().unwrap();
-            let r = match typeconv::guess_best_common_type(ecx, &self.seen) {
-                Ok(r) => r,
-                Err(_) => return false,
+
+            let r = match compat {
+                PolymorphicCompatClass::Any => {
+                    let mut s = self
+                        .seen
+                        .iter()
+                        .filter_map(|f| f.clone())
+                        .collect::<Vec<_>>();
+                    let (candiate, remaining) =
+                        s.split_first().expect("have at least one non-None element");
+                    if remaining.iter().all(|r| r.base_eq(candiate)) {
+                        s.remove(0)
+                    } else {
+                        return false;
+                    }
+                }
+                _ => match typeconv::guess_best_common_type(ecx, &self.seen) {
+                    Ok(r) => r,
+                    Err(_) => return false,
+                },
             };
 
             // Ensure the best common type is compatible.
@@ -1549,12 +1586,24 @@ impl PolymorphicSolution {
         );
 
         match param {
-            AnyCompatible | ArrayAny | ListAny | ListAnyCompatible | MapAny | MapAnyCompatible
-            | NonVecAny => self.key.clone(),
-            ArrayAnyCompatible => self
+            AnyElement | AnyCompatible | ListAnyCompatible | MapAnyCompatible | NonVecAny => {
+                self.key.clone()
+            }
+            ArrayAny | ArrayAnyCompatible => self
                 .key
                 .as_ref()
                 .map(|key| ScalarType::Array(Box::new(key.clone()))),
+            ListAny => self.key.as_ref().map(|key| ScalarType::List {
+                element_type: Box::new(key.clone()),
+                custom_id: None,
+            }),
+            MapAny => self.key.as_ref().map(|key| ScalarType::Map {
+                value_type: Box::new(key.clone()),
+                custom_id: None,
+            }),
+            RangeAny | RangeAnyCompatible => self.key.as_ref().map(|key| ScalarType::Range {
+                element_type: Box::new(key.clone()),
+            }),
             ListElementAnyCompatible => self
                 .key
                 .as_ref()
@@ -1591,7 +1640,7 @@ fn coerce_args_to_types(
                 }
                 _ => cexpr.type_as_any(ecx)?,
             },
-            p @ (ArrayAny | ListAny | MapAny) => {
+            p @ (ArrayAny | ListAny | MapAny | RangeAny) => {
                 let target = polymorphic_solution
                     .target_for_param_type(p)
                     .ok_or_else(|| {
@@ -1708,7 +1757,7 @@ macro_rules! builtins {
         $(
             let impls = vec![$(impl_def!($params, $op $(,$return_type)?, $oid)),+];
             let old = builtins.insert($name, Func::$ty(impls));
-            assert!(old.is_none(), "duplicate entry in builtins list");
+            assert!(old.is_none(), "duplicate entry in builtins list {:?}", old);
         )+
         builtins
     }};
@@ -1935,6 +1984,21 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(String, TimestampTz) => BinaryFunc::DateTruncTimestampTz, 1217;
             params!(String, Interval) => BinaryFunc::DateTruncInterval, 1218;
         },
+        "daterange" => Scalar {
+            params!(Date, Date) => Operation::variadic(|_ecx, mut exprs| {
+                exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Date },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Date)}, 3941;
+            params!(Date, Date, String) => Operation::variadic(|_ecx, exprs| {
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Date },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Date)}, 3942;
+        },
         "degrees" => Scalar {
             params!(Float64) => UnaryFunc::Degrees(func::Degrees), 1608;
         },
@@ -1965,6 +2029,39 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         "hmac" => Scalar {
             params!(String, String, String) => VariadicFunc::HmacString, 44156;
             params!(Bytes, Bytes, String) => VariadicFunc::HmacBytes, 44157;
+        },
+        "int4range" => Scalar {
+            params!(Int32, Int32) => Operation::variadic(|_ecx, mut exprs| {
+                exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Int32 },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Int32)}, 3840;
+            params!(Int32, Int32, String) => Operation::variadic(|_ecx, exprs| {
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Int32 },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Int32)}, 3841;
+        },
+        "int8range" => Scalar {
+            params!(Int64, Int64) => Operation::variadic(|_ecx, mut exprs| {
+                exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Int64 },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Int64)}, 3945;
+            params!(Int64, Int64, String) => Operation::variadic(|_ecx, exprs| {
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Int64 },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Int64)}, 3946;
+        },
+        "isempty" => Scalar {
+            params!(RangeAny) => UnaryFunc::RangeEmpty(func::RangeEmpty) => Bool, 3850;
         },
         "jsonb_array_length" => Scalar {
             params!(Jsonb) => UnaryFunc::JsonbArrayLength(func::JsonbArrayLength) => Int32, 3207;
@@ -2037,6 +2134,13 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         },
         "lower" => Scalar {
             params!(String) => UnaryFunc::Lower(func::Lower), 870;
+            params!(RangeAny) => UnaryFunc::RangeLower(func::RangeLower) => AnyElement, 3848;
+        },
+        "lower_inc" => Scalar {
+            params!(RangeAny) => UnaryFunc::RangeLowerInc(func::RangeLowerInc) => Bool, 3851;
+        },
+        "lower_inf" => Scalar {
+            params!(RangeAny) => UnaryFunc::RangeLowerInf(func::RangeLowerInf) => Bool, 3853;
         },
         "lpad" => Scalar {
             params!(String, Int64) => VariadicFunc::PadLeading, 879;
@@ -2072,6 +2176,21 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         },
         "now" => Scalar {
             params!() => UnmaterializableFunc::CurrentTimestamp, 1299;
+        },
+        "numrange" => Scalar {
+            params!(Numeric, Numeric) => Operation::variadic(|_ecx, mut exprs| {
+                exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Numeric { max_scale: None } },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Int32)}, 3844;
+            params!(Numeric, Numeric, String) => Operation::variadic(|_ecx, exprs| {
+                Ok(HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Numeric { max_scale: None } },
+                    exprs
+                })
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Numeric { max_scale: None })}, 3845;
         },
         "octet_length" => Scalar {
             params!(Bytes) => UnaryFunc::ByteLengthBytes(func::ByteLengthBytes), 720;
@@ -2401,6 +2520,13 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         },
         "upper" => Scalar {
             params!(String) => UnaryFunc::Upper(func::Upper), 871;
+            params!(RangeAny) => UnaryFunc::RangeUpper(func::RangeUpper) => AnyElement, 3849;
+        },
+        "upper_inc" => Scalar {
+            params!(RangeAny) => UnaryFunc::RangeUpperInc(func::RangeUpperInc) => Bool, 3852;
+        },
+        "upper_inf" => Scalar {
+            params!(RangeAny) => UnaryFunc::RangeUpperInf(func::RangeUpperInf) => Bool, 3854;
         },
         "variance" => Scalar {
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Float64, 2151;
@@ -2503,9 +2629,6 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
             params!(Timestamp) => AggregateFunc::MinTimestamp, 2142;
             params!(TimestampTz) => AggregateFunc::MinTimestampTz, 2143;
             params!(Numeric) => AggregateFunc::MinNumeric, oid::FUNC_MIN_NUMERIC_OID;
-        },
-        "json_agg" => Aggregate {
-            params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("json_agg")) => Jsonb, 3175;
         },
         "jsonb_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
@@ -3442,6 +3565,10 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
                       .call_binary(rhs, JsonbContainsJsonb))
             }), oid::OP_CONTAINS_STRING_JSONB_OID;
             params!(MapAnyCompatible, MapAnyCompatible) => MapContainsMap => Bool, oid::OP_CONTAINS_MAP_MAP_OID;
+            params!(RangeAnyCompatible, AnyCompatible) => Operation::binary(|ecx, lhs, rhs| {
+                let elem_type = ecx.scalar_type(&lhs).unwrap_range_element_type().clone();
+                Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsElem { elem_type, rev: false }))
+            }) => Bool, 3889;
         },
         "<@" => Scalar {
             params!(Jsonb, Jsonb) => Operation::binary(|_ecx, lhs, rhs| {
@@ -3463,6 +3590,10 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(MapAnyCompatible, MapAnyCompatible) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(rhs.call_binary(lhs, MapContainsMap))
             }) => Bool, oid::OP_CONTAINED_MAP_MAP_OID;
+            params!(AnyCompatible, RangeAnyCompatible) => Operation::binary(|ecx, lhs, rhs| {
+                let elem_type = ecx.scalar_type(&rhs).unwrap_range_element_type().clone();
+                Ok(rhs.call_binary(lhs, BinaryFunc::RangeContainsElem { elem_type, rev: true }))
+            }) => Bool, 3891;
         },
         "?" => Scalar {
             params!(Jsonb, String) => JsonbContainsString, 3247;
@@ -3501,6 +3632,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(ArrayAny, ArrayAny) => BinaryFunc::Lt => Bool, 1072;
             params!(RecordAny, RecordAny) => BinaryFunc::Lt => Bool, 2990;
             params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Lt =>Bool, oid::FUNC_MZ_TIMESTAMP_LT_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3884;
         },
         "<=" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Lte, 1755;
@@ -3528,6 +3660,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(ArrayAny, ArrayAny) => BinaryFunc::Lte => Bool, 1074;
             params!(RecordAny, RecordAny) => BinaryFunc::Lte => Bool, 2992;
             params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Lte =>Bool, oid::FUNC_MZ_TIMESTAMP_LTE_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3885;
         },
         ">" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Gt, 1756;
@@ -3555,6 +3688,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(ArrayAny, ArrayAny) => BinaryFunc::Gt => Bool, 1073;
             params!(RecordAny, RecordAny) => BinaryFunc::Gt => Bool, 2991;
             params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gt =>Bool, oid::FUNC_MZ_TIMESTAMP_GT_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3887;
         },
         ">=" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Gte, 1757;
@@ -3582,6 +3716,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(ArrayAny, ArrayAny) => BinaryFunc::Gte => Bool, 1075;
             params!(RecordAny, RecordAny) => BinaryFunc::Gte => Bool, 2993;
             params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gte =>Bool, oid::FUNC_MZ_TIMESTAMP_GTE_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3886;
         },
         // Warning!
         // - If you are writing functions here that do not simply use
@@ -3619,6 +3754,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(ArrayAny, ArrayAny) => BinaryFunc::Eq => Bool, 1070;
             params!(RecordAny, RecordAny) => BinaryFunc::Eq => Bool, 2988;
             params!(MzTimestamp, MzTimestamp) => BinaryFunc::Eq => Bool, oid::FUNC_MZ_TIMESTAMP_EQ_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3882;
         },
         "<>" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::NotEq, 1753;
@@ -3645,7 +3781,8 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(Jsonb, Jsonb) => BinaryFunc::NotEq, 3241;
             params!(ArrayAny, ArrayAny) => BinaryFunc::NotEq => Bool, 1071;
             params!(RecordAny, RecordAny) => BinaryFunc::NotEq => Bool, 2989;
-            params!(MzTimestamp, MzTimestamp) => BinaryFunc::NotEq=>Bool, oid::FUNC_MZ_TIMESTAMP_NOT_EQ_MZ_TIMESTAMP_OID;
+            params!(MzTimestamp, MzTimestamp) => BinaryFunc::NotEq => Bool, oid::FUNC_MZ_TIMESTAMP_NOT_EQ_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BinaryFunc::NotEq => Bool, 3883;
         }
     }
 });

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/../.."
+
+. misc/shlib/shlib.bash
+
+if ! kind get clusters | grep -q cloudtest; then
+    run kind create cluster --name=cloudtest --config=misc/kind/cluster.yaml --wait=60s
+fi
+
+for f in misc/kind/configmaps/*; do
+    run kubectl --context=kind-cloudtest apply -f "$f"
+done
+
+run kubectl --context=kind-cloudtest rollout restart -n kube-system deployment/coredns

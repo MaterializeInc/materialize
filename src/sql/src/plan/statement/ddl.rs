@@ -20,13 +20,13 @@ use std::str::FromStr;
 use aws_arn::ResourceName as AmazonResourceName;
 use globset::GlobBuilder;
 use itertools::Itertools;
-use mz_ore::cast::f64_to_i64;
 use prost::Message;
 use regex::Regex;
 use tracing::warn;
 
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
+use mz_ore::cast::TryCastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
@@ -1216,8 +1216,8 @@ pub(crate) fn load_generator_ast_to_generator(
 
             let f_to_i = |multiplier: f64| -> Result<i64, PlanError> {
                 let total = (sf * multiplier).floor();
-                let mut i =
-                    f64_to_i64(total).ok_or_else(|| sql_err!("unsupported scale factor {sf}"))?;
+                let mut i = i64::try_cast_from(total)
+                    .ok_or_else(|| sql_err!("unsupported scale factor {sf}"))?;
                 if i < 1 {
                     i = 1;
                 }

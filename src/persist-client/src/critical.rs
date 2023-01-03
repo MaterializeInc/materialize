@@ -22,7 +22,8 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::internal::machine::Machine;
-use crate::{parse_id, GarbageCollector, Since};
+use crate::internal::state::Since;
+use crate::{parse_id, GarbageCollector};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -239,7 +240,7 @@ where
         &mut self,
         expected: &O,
         new: (&O, &Antichain<T>),
-    ) -> Option<Result<Since<T>, O>> {
+    ) -> Option<Result<Antichain<T>, O>> {
         let elapsed_since_last_downgrade = Duration::from_millis(
             (self.machine.cfg.now)().saturating_sub(self.last_downgrade_since),
         );
@@ -272,7 +273,7 @@ where
         &mut self,
         expected: &O,
         new: (&O, &Antichain<T>),
-    ) -> Result<Since<T>, O> {
+    ) -> Result<Antichain<T>, O> {
         let (res, maintenance) = self
             .machine
             .compare_and_downgrade_since(&self.reader_id, expected, new)
@@ -280,8 +281,8 @@ where
         self.last_downgrade_since = (self.machine.cfg.now)();
         maintenance.start_performing(&self.machine, &self.gc);
         match res {
-            Ok(since) => {
-                self.since = since.0.clone();
+            Ok(Since(since)) => {
+                self.since = since.clone();
                 self.opaque = new.0.clone();
                 Ok(since)
             }

@@ -7,5 +7,5 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-aws-sdk-kinesis = { version = "0.21.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-kinesis = { version = "0.22.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

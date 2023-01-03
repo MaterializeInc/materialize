@@ -565,7 +565,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     /// Disables timely dataflow logging.
     ///
     /// This does not unpublish views and is only useful to terminate logging streams to ensure that
-    /// computed can terminate cleanly.
+    /// clusterd can terminate cleanly.
     pub fn shutdown_logging(&mut self) {
         self.timely_worker.log_register().remove("timely");
         self.timely_worker

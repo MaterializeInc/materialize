@@ -65,7 +65,7 @@ impl CollectionManager {
                         }).collect::<Vec<_>>();
 
                         // Failures don't matter when advancing collections'
-                        // uppers. This might fail when a storaged happens
+                        // uppers. This might fail when a clusterd happens
                         // to be writing to this concurrently. Advancing
                         // uppers here is best-effort and only needs to
                         // succeed if no one else is advancing it;

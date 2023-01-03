@@ -8,7 +8,7 @@ First, install `tokio-console`. We require support for Unix domain sockets, [whi
 upstream][uds-pr], so we need to install from a fork for now.
 
 ```text
-cargo install tokio-console --git https://github.com/MaterializeInc/console.git
+cargo install tokio-console --git https://github.com/MaterializeInc/tokio-console.git
 ```
 
 Then run `environmentd`:

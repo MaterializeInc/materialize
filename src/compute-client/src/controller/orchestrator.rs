@@ -31,19 +31,19 @@ use super::{
 #[derive(Clone, Debug)]
 pub(super) struct ComputeOrchestrator {
     inner: Arc<dyn NamespacedOrchestrator>,
-    computed_image: String,
+    clusterd_image: String,
     init_container_image: Option<String>,
 }
 
 impl ComputeOrchestrator {
     pub(super) fn new(
         inner: Arc<dyn NamespacedOrchestrator>,
-        computed_image: String,
+        clusterd_image: String,
         init_container_image: Option<String>,
     ) -> Self {
         Self {
             inner,
-            computed_image,
+            clusterd_image,
             init_container_image,
         }
     }
@@ -76,7 +76,7 @@ impl ComputeOrchestrator {
                     .ensure_replica(instance_id, replica_id, allocation, availability_zone)
                     .await?;
 
-                let addrs = service.addresses("controller");
+                let addrs = service.addresses("computectl");
                 let comm_config = CommunicationConfig {
                     workers: allocation.workers.get(),
                     process: 0,
@@ -103,11 +103,18 @@ impl ComputeOrchestrator {
             .ensure_service(
                 &service_name,
                 ServiceConfig {
-                    image: self.computed_image.clone(),
+                    image: self.clusterd_image.clone(),
                     init_container_image: self.init_container_image.clone(),
                     args: &|assigned| {
                         vec![
-                            format!("--controller-listen-addr={}", assigned["controller"]),
+                            format!(
+                                "--storage-controller-listen-addr={}",
+                                assigned["storagectl"]
+                            ),
+                            format!(
+                                "--compute-controller-listen-addr={}",
+                                assigned["computectl"]
+                            ),
                             format!("--internal-http-listen-addr={}", assigned["internal-http"]),
                             format!("--opentelemetry-resource=instance_id={}", instance_id),
                             format!("--opentelemetry-resource=replica_id={}", replica_id),
@@ -115,8 +122,12 @@ impl ComputeOrchestrator {
                     },
                     ports: vec![
                         ServicePort {
-                            name: "controller".into(),
+                            name: "storagectl".into(),
                             port_hint: 2100,
+                        },
+                        ServicePort {
+                            name: "computectl".into(),
+                            port_hint: 2101,
                         },
                         ServicePort {
                             name: "compute".into(),

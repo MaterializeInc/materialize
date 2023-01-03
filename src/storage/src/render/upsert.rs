@@ -304,7 +304,7 @@ where
     // updates.
     //
     // Also: this problem was only showing up when trying to use upsert-style
-    // sources with multiple storaged workers.
+    // sources with multiple clusterd workers.
     let result_stream = stream.binary_frontier(
         &previous_ok.inner,
         Exchange::new(move |DecodeResult { key, .. }| {

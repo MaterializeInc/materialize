@@ -9,7 +9,7 @@
 
 //! Provisioning and assignment of storage hosts.
 //!
-//! A storage host is a single `storaged` process. It may host any number of
+//! A storage host is a single `clusterd` process. It may host any number of
 //! storage objects, where a storage object is either an ingestion (i.e., a
 //! source) or a sink.
 //!
@@ -51,9 +51,9 @@ pub struct StorageHostsConfig {
     pub build_info: &'static BuildInfo,
     /// An orchestrator to start and stop storage hosts.
     pub orchestrator: Arc<dyn NamespacedOrchestrator>,
-    /// The storaged image to use when starting new storage hosts.
-    pub storaged_image: String,
-    /// The init container image to use for storaged.
+    /// The clusterd image to use when starting new storage hosts.
+    pub clusterd_image: String,
+    /// The init container image to use for clusterd.
     pub init_container_image: Option<String>,
 }
 
@@ -67,9 +67,9 @@ pub struct StorageHosts<T> {
     pub build_info: &'static BuildInfo,
     /// An orchestrator to start and stop storage hosts.
     orchestrator: Arc<dyn NamespacedOrchestrator>,
-    /// The storaged image to use when starting new storage hosts.
-    storaged_image: String,
-    /// The init container image to use for storaged.
+    /// The clusterd image to use when starting new storage hosts.
+    clusterd_image: String,
+    /// The init container image to use for clusterd.
     init_container_image: Option<String>,
     /// The known storage hosts, identified by network address.
     hosts: HashMap<StorageHostAddr, StorageHost<T>>,
@@ -105,7 +105,7 @@ where
         StorageHosts {
             build_info: config.build_info,
             orchestrator: config.orchestrator,
-            storaged_image: config.storaged_image,
+            clusterd_image: config.clusterd_image,
             init_container_image: config.init_container_image,
             objects: Arc::new(std::sync::Mutex::new(HashMap::new())),
             hosts: HashMap::new(),
@@ -136,7 +136,7 @@ where
     /// Provisions a storage host for the storage object with the specified ID.
     /// If the storage host is managed, this will ensure that the backing orchestrator
     /// allocates resources, either by creating or updating the existing service.
-    /// (For 'remote' storaged instances, the user is required to independently make
+    /// (For 'remote' clusterd instances, the user is required to independently make
     /// sure that any resources exist -- if the orchestrator had provisioned a service
     /// for this host in the past, it will be dropped.)
     ///
@@ -252,20 +252,31 @@ where
             .ensure_service(
                 &id.to_string(),
                 ServiceConfig {
-                    image: self.storaged_image.clone(),
+                    image: self.clusterd_image.clone(),
                     init_container_image: self.init_container_image.clone(),
                     args: &|assigned| {
                         vec![
-                            format!("--workers={}", allocation.workers),
-                            format!("--controller-listen-addr={}", assigned["controller"]),
+                            format!("--storage-workers={}", allocation.workers),
+                            format!(
+                                "--storage-controller-listen-addr={}",
+                                assigned["storagectl"]
+                            ),
+                            format!(
+                                "--compute-controller-listen-addr={}",
+                                assigned["computectl"]
+                            ),
                             format!("--internal-http-listen-addr={}", assigned["internal-http"]),
                             format!("--opentelemetry-resource=storage_id={}", id),
                         ]
                     },
                     ports: vec![
                         ServicePort {
-                            name: "controller".into(),
+                            name: "storagectl".into(),
                             port_hint: 2100,
+                        },
+                        ServicePort {
+                            name: "computectl".into(),
+                            port_hint: 2101,
                         },
                         ServicePort {
                             name: "internal-http".into(),
@@ -285,7 +296,7 @@ where
                 },
             )
             .await?;
-        Ok(storage_service.addresses("controller").into_element())
+        Ok(storage_service.addresses("storagectl").into_element())
     }
 
     /// Drops an orchestrated storage host for the specified ID.
@@ -293,11 +304,11 @@ where
         self.orchestrator.drop_service(&id.to_string()).await
     }
 
-    /// Removes orphaned storageds from the orchestrator.
+    /// Removes orphaned storage hosts from the orchestrator.
     ///
-    /// A storaged is considered orphaned if it is present in the orchestrator but not in the
-    /// controller and the storaged id is less than `next_id`. We assume that the controller knows
-    /// all storageds with ids [0..next_id).
+    /// A storage host is considered orphaned if it is present in the orchestrator but not in the
+    /// controller and the storage host id is less than `next_id`. We assume that the controller knows
+    /// all storage hosts with ids [0..next_id).
     pub async fn remove_orphans(&self, next_id: GlobalId) -> Result<(), anyhow::Error> {
         // Parse GlobalId and return contained user id, if any
         fn user_id(id: &String) -> Option<u64> {
@@ -307,7 +318,7 @@ where
             })
         }
 
-        tracing::debug!("Removing storaged orphans. next_id = {}", next_id);
+        tracing::debug!("Removing storage clusterd orphans. next_id = {}", next_id);
 
         let next_id = match next_id {
             GlobalId::User(x) => x,
@@ -337,17 +348,17 @@ where
 
         for id in service_ids {
             if id >= next_id {
-                // Found a storaged in kubernetes with a higher id than what we are aware of. This
+                // Found a storage host in kubernetes with a higher id than what we are aware of. This
                 // must have been created by an environmentd with a higher epoch number.
                 halt!(
-                    "Found storaged id ({}) in orchestrator >= than next_id ({})",
+                    "Found storage host id ({}) in orchestrator >= than next_id ({})",
                     id,
                     next_id
                 );
             }
             if !catalog_ids.contains(&id) && id < next_id {
                 let gid = GlobalId::User(id);
-                tracing::warn!("Removing storaged orphan {}", gid);
+                tracing::warn!("Removing storage host orphan {}", gid);
                 self.orchestrator.drop_service(&gid.to_string()).await?;
             }
         }

@@ -19,6 +19,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::metrics::Metrics;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -31,7 +32,7 @@ use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHand
 use mz_persist_client::async_runtime::CpuHeavyRuntime;
 use mz_persist_client::read::{Listen, ListenEvent};
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{Metrics, PersistClient, PersistConfig, ShardId};
+use mz_persist_client::{PersistClient, PersistConfig, ShardId};
 
 use crate::maelstrom::api::{Body, ErrorCode, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
@@ -183,7 +184,7 @@ impl Transactor {
             .await;
         let read_ts = match cas_res? {
             Ok(()) => 0,
-            Err(current) => Self::extract_ts(&current.0)? - 1,
+            Err(mismatch) => Self::extract_ts(&mismatch.current)? - 1,
         };
         Ok(read_ts)
     }
@@ -217,12 +218,12 @@ impl Transactor {
                     return Ok(res_ops);
                 }
                 // We lost the CaS race, try again.
-                Err(current) => {
+                Err(mismatch) => {
                     info!(
                         "transact lost the CaS race, retrying: {:?} vs {:?}",
-                        expected_upper, current
+                        mismatch.expected, mismatch.current
                     );
-                    self.read_ts = Self::extract_ts(&current.0)? - 1;
+                    self.read_ts = Self::extract_ts(&mismatch.current)? - 1;
                     continue;
                 }
             }
@@ -528,7 +529,7 @@ impl Transactor {
                     // only then, it might have advanced past our read_ts, so
                     // forward read_ts to since_ts.
                     if expected_token != self.cads_token {
-                        let since_ts = Self::extract_ts(&latest_since.0)?;
+                        let since_ts = Self::extract_ts(&latest_since)?;
                         if since_ts > self.read_ts {
                             info!(
                                 "since was last updated by {}, forwarding our read_ts from {} to {}",

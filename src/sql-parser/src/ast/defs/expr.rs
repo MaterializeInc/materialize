@@ -112,7 +112,7 @@ pub enum Expr<T: AstInfo> {
         expr: Box<Expr<T>>,
         collation: UnresolvedObjectName,
     },
-    /// COALESCE(<expr>, ...) or GREATEST(<expr>, ...) or LEAST(<expr>, ...)
+    /// `COALESCE(<expr>, ...)` or `GREATEST(<expr>, ...)` or `LEAST(<expr>`, ...)
     ///
     /// While COALESCE/GREATEST/LEAST have the same syntax as a function call,
     /// their semantics are extremely unusual, and are better captured with a

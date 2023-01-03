@@ -466,13 +466,13 @@ SELECT round((SELECT * FROM nums));
 ----
 NULL
 
-query error Cannot call function round\(double precision, integer\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: function round\(double precision, integer\) does not exist
 SELECT round((SELECT * FROM nums), 2)
 
-query error Cannot call function round\(double precision, double precision\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: function round\(double precision, double precision\) does not exist
 SELECT round((SELECT * FROM nums), (SELECT * FROM nums))
 
-query error Cannot call function round\(numeric, double precision\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: function round\(numeric, double precision\) does not exist
 SELECT round(5.0, (SELECT * FROM nums))
 
 query R
@@ -480,22 +480,22 @@ SELECT round(5.0, CAST ((SELECT * FROM nums) AS integer))
 ----
 NULL
 
-query error Cannot call function round\(double precision, integer\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: function round\(double precision, integer\) does not exist
 SELECT round(CAST (5.0 AS double precision), 3)
 
-query error Cannot call function round\(double precision, integer\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: function round\(double precision, integer\) does not exist
 SELECT round(CAST (5.0 AS float), 3)
 
-query error Cannot call function round\(boolean, integer\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: function round\(boolean, integer\) does not exist
 SELECT round(true, 3)
 
 query error
 SELECT round(true)
 
-query error Cannot call function round\(double precision, numeric\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: function round\(double precision, numeric\) does not exist
 SELECT round(CAST (5.0 AS float), 3.0)
 
-query error Cannot call function round\(double precision, double precision\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error db error: ERROR: function round\(double precision, double precision\) does not exist
 SELECT round(CAST (5.0 AS float), CAST (3.0 AS float))
 
 query R
@@ -573,7 +573,7 @@ SELECT trunc(1.5678)
 statement ok
 DROP TABLE nums
 
-query error arguments cannot be implicitly cast to any implementation's parameters
+query error db error: ERROR: function trunc\(boolean\) does not exist
 SELECT trunc(true)
 
 query I

@@ -9,12 +9,12 @@ aliases:
   - /integrations/postgres-bastion/
 ---
 
-Materialize can connect to a Kafka broker, or a PostgreSQL database through a
-secure SSH bastion server. In this guide, we'll cover how to create `SSH
-TUNNEL` connections and retrieve the Materialize public keys needed to
-configure the bastion server.
+Materialize can connect to a Kafka broker, a Confluent Schema Registry server or a
+PostgreSQL database through a secure SSH bastion server. In this guide, we'll
+cover how to create `SSH TUNNEL` connections and retrieve the Materialize
+public keys needed to configure the bastion server.
 
-### Create an SSH tunnel connection
+## Create an SSH tunnel connection
 
 In Materialize, create an [SSH tunnel connection](/sql/create-connection/#ssh-tunnel) to the bastion server:
 
@@ -26,7 +26,7 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
 );
 ```
 
-### Configure the SSH bastion server
+## Configure the SSH bastion server
 
 1. Retrieve the **public keys** for the SSH tunnel connection you just created:
 
@@ -51,7 +51,7 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
     ```
 
-### Create a source connection
+## Create a source connection
 
 In Materialize, create a source connection that uses the SSH tunnel connection you just configured:
 
