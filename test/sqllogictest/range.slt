@@ -557,6 +557,10 @@ WHERE
 ----
 
 
+query T
+SELECT DISTINCT a::text FROM int4range_values WHERE lower_inf(a) AND upper_inf(a);
+----
+(,)
 
 query error invalid range bound flags
 SELECT int4range(null,null,' (]');
@@ -1220,6 +1224,11 @@ WHERE
 ----
 
 
+query T
+SELECT DISTINCT a::text FROM int8range_values WHERE lower_inf(a) AND upper_inf(a);
+----
+(,)
+
 # Test range in list
 query T
 SELECT (LIST['(,)', 'empty', '[-1,1]']::int8range list)::text;
@@ -1775,6 +1784,11 @@ WHERE
 		);
 ----
 
+
+query T
+SELECT DISTINCT a::text FROM daterange_values WHERE lower_inf(a) AND upper_inf(a);
+----
+(,)
 
 query T
 SELECT a::text AS t FROM daterange_values EXCEPT SELECT column1::text FROM (VALUES
@@ -2449,6 +2463,12 @@ WHERE
 				)
 		);
 ----
+
+
+query T
+SELECT DISTINCT a::text FROM numrange_values WHERE lower_inf(a) AND upper_inf(a);
+----
+(,)
 
 query error invalid range bound flags
 SELECT numrange(null,null,' (]');

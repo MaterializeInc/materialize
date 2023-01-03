@@ -3876,7 +3876,9 @@ derive_unary!(
     RangeUpper,
     RangeEmpty,
     RangeLowerInc,
-    RangeUpperInc
+    RangeUpperInc,
+    RangeLowerInf,
+    RangeUpperInf
 );
 
 impl UnaryFunc {
@@ -4266,6 +4268,8 @@ impl Arbitrary for UnaryFunc {
             RangeEmpty::arbitrary().prop_map_into().boxed(),
             RangeLowerInc::arbitrary().prop_map_into().boxed(),
             RangeUpperInc::arbitrary().prop_map_into().boxed(),
+            RangeLowerInf::arbitrary().prop_map_into().boxed(),
+            RangeUpperInf::arbitrary().prop_map_into().boxed(),
         ])
     }
 }
@@ -4603,6 +4607,8 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::RangeEmpty(_) => RangeEmpty(()),
             UnaryFunc::RangeLowerInc(_) => RangeLowerInc(()),
             UnaryFunc::RangeUpperInc(_) => RangeUpperInc(()),
+            UnaryFunc::RangeLowerInf(_) => RangeLowerInf(()),
+            UnaryFunc::RangeUpperInf(_) => RangeUpperInf(()),
         };
         ProtoUnaryFunc { kind: Some(kind) }
     }
@@ -5007,6 +5013,8 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 RangeEmpty(()) => Ok(impls::RangeEmpty.into()),
                 RangeLowerInc(_) => Ok(impls::RangeLowerInc.into()),
                 RangeUpperInc(_) => Ok(impls::RangeUpperInc.into()),
+                RangeLowerInf(_) => Ok(impls::RangeLowerInf.into()),
+                RangeUpperInf(_) => Ok(impls::RangeUpperInf.into()),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoUnaryFunc::kind"))

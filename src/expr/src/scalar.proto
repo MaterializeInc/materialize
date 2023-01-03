@@ -408,6 +408,8 @@ message ProtoUnaryFunc {
         google.protobuf.Empty range_empty = 285;
         google.protobuf.Empty range_lower_inc = 286;
         google.protobuf.Empty range_upper_inc = 287;
+        google.protobuf.Empty range_lower_inf = 288;
+        google.protobuf.Empty range_upper_inf = 289;
     }
 }
 

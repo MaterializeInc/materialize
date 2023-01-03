@@ -2139,6 +2139,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         "lower_inc" => Scalar {
             params!(RangeAny) => UnaryFunc::RangeLowerInc(func::RangeLowerInc) => Bool, 3851;
         },
+        "lower_inf" => Scalar {
+            params!(RangeAny) => UnaryFunc::RangeLowerInf(func::RangeLowerInf) => Bool, 3853;
+        },
         "lpad" => Scalar {
             params!(String, Int64) => VariadicFunc::PadLeading, 879;
             params!(String, Int64, String) => VariadicFunc::PadLeading, 873;
@@ -2521,6 +2524,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         },
         "upper_inc" => Scalar {
             params!(RangeAny) => UnaryFunc::RangeUpperInc(func::RangeUpperInc) => Bool, 3852;
+        },
+        "upper_inf" => Scalar {
+            params!(RangeAny) => UnaryFunc::RangeUpperInf(func::RangeUpperInf) => Bool, 3854;
         },
         "variance" => Scalar {
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Float64, 2151;
