@@ -488,9 +488,9 @@ them for any kind of capacity planning.
 | `cpu_nano_cores` | [`uint8`] | The CPU allocation per process, in billionths of a vCPU core. |
 | `memory_bytes`   | [`uint8`] | The RAM allocation per process, in billionths of a vCPU core. |
 
-### `mz_source_status`
+### `mz_source_statuses`
 
-The `mz_source_status` view provides the current state for each source in the
+The `mz_source_statuses` view provides the current state for each source in the
 system, including potential error messages and additional metadata helpful for
 debugging.
 
@@ -518,9 +518,9 @@ Field         | Type                          | Meaning
 `error`       | [`text`]                      | If the source is in an error state, the error message.
 `details`     | [`jsonb`]                     | Additional metadata provided by the source.
 
-### `mz_sink_status`
+### `mz_sink_statuses`
 
-The `mz_sink_status` view provides the current state for each sink in the
+The `mz_sink_statuses` view provides the current state for each sink in the
 system, including potential error messages and additional metadata helpful for
 debugging.
 

@@ -557,10 +557,8 @@ mz_records_per_dataflow_global
 mz_records_per_dataflow_operator
 mz_scheduling_elapsed
 mz_scheduling_parks
-mz_sink_status
 mz_sink_statuses
 mz_sink_utilization
-mz_source_status
 mz_source_statuses
 mz_source_utilization
 mz_worker_compute_delays
