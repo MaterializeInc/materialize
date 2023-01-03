@@ -15,6 +15,7 @@ use crossbeam_channel::{RecvError, TryRecvError};
 use differential_dataflow::lattice::Lattice;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::Broadcast;
 use timely::dataflow::operators::Operator;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -259,6 +260,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Sets up an internal dataflow that will forward commands from the given
     /// async receiver and forwards them to a local channel. The returned
     /// receiver should be used to receive and process all commands.
+    ///
+    /// Only worker 0 is receiving commands from the controller and is
+    /// responsible for broadcasting them to the other workers.
     fn install_command_dataflow(
         &mut self,
         mut command_rx: mpsc::UnboundedReceiver<StorageCommand>,
@@ -268,6 +272,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // commands are only sent to the first worker and are then broadcast using
         // this cluster-internal (replica-internal, really) dataflow.
         let (forwarding_command_tx, forwarding_command_rx) = crossbeam_channel::unbounded();
+
+        let worker_id = self.timely_worker.index();
 
         self.timely_worker.dataflow::<u64, _, _>(move |scope| {
             let mut pump_op =
@@ -279,30 +285,22 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 let mut cap = capabilities.pop().expect("missing capability");
 
                 while let Some(cmd) = command_rx.recv().await {
+                    // Commands must never be sent to another worker. This
+                    // implementation does not guarantee an ordering of events
+                    // sent to different workers.
+                    assert_eq!(worker_id, 0);
+
                     let time = cap.time().clone();
                     let mut cmd_output = cmd_output.activate();
                     let mut session = cmd_output.session(&cap);
 
-                    session.give(Ok(cmd));
-
-                    cap.downgrade(&(time + 1));
-                }
-
-                // Forward a final "Disconnected" message. We could rely on the
-                // downstream operator sending this message when it notices its
-                // input frontier going to empty, but this is more explicit.
-                {
-                    let time = cap.time().clone();
-                    let mut cmd_output = cmd_output.activate();
-                    let mut session = cmd_output.session(&cap);
-
-                    session.give(Err(RecvError));
+                    session.give(cmd);
 
                     cap.downgrade(&(time + 1));
                 }
             });
 
-            cmd_stream.unary_frontier::<Vec<()>, _, _, _>(
+            cmd_stream.broadcast().unary_frontier::<Vec<()>, _, _, _>(
                 Pipeline,
                 "StorageCmdForwarder",
                 |_cap, _info| {
@@ -311,7 +309,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         while let Some((_, data)) = input.next() {
                             data.swap(&mut container);
                             for cmd in container.drain(..) {
-                                let res = forwarding_command_tx.send(cmd);
+                                let res = forwarding_command_tx.send(Ok(cmd));
                                 // TODO(aljoscha): Could completely drop this
                                 // error handling code, with the below
                                 // reasoning.
@@ -325,6 +323,25 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                         // we're probably shutting down. Seems
                                         // fine to ignore.
                                     }
+                                }
+                            }
+                        }
+
+                        // Send a final "Disconnected" message.
+                        if input.frontier().is_empty() {
+                            let res = forwarding_command_tx.send(Err(RecvError));
+                            // TODO(aljoscha): Could completely drop this
+                            // error handling code, with the below
+                            // reasoning.
+                            match res {
+                                Ok(_) => {
+                                    // All's well!
+                                    //
+                                }
+                                Err(_send_err) => {
+                                    // The subscribe loop dropped, meaning
+                                    // we're probably shutting down. Seems
+                                    // fine to ignore.
                                 }
                             }
                         }

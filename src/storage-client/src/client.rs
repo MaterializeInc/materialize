@@ -407,7 +407,11 @@ where
     fn split_command(&mut self, command: StorageCommand<T>) -> Vec<Option<StorageCommand<T>>> {
         self.observe_command(&command);
 
-        vec![Some(command); usize::cast_from(self.parts)]
+        // Only send command to the first worker, which distributes it within
+        // the replica/timely cluster.
+        let mut res = vec![None; usize::cast_from(self.parts)];
+        res[0] = Some(command);
+        res
     }
 
     fn absorb_response(
