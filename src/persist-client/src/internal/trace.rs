@@ -700,7 +700,6 @@ impl<T: Timestamp + Lattice> Spine<T> {
             else {
                 // Introduce an empty batch with roughly *effort number of
                 // virtual updates.
-                // TODO(benesch): rewrite to avoid `as`.
                 let level = usize::cast_from(
                     (usize::try_from(*effort).expect("`exert` called with negative effort"))
                         .next_power_of_two()

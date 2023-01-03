@@ -36,7 +36,7 @@ fn protobuf_timestamp(time: DateTime<Utc>) -> Timestamp {
         // (That's not documented AFAICT, but Chrono tests for it when creating `NaiveTime`
         //  objects, and it makes logical sense, given that normal seconds
         //  have 1bn nanoseconds, and leap seconds have 2bn).
-        nanos: i32::try_from(time.timestamp_subsec_nanos()).unwrap(),
+        nanos: i32::try_from(time.timestamp_subsec_nanos()).expect("sane value for ts nanos"),
     }
 }
 

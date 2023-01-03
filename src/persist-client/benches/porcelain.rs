@@ -54,7 +54,7 @@ pub fn bench_writes(
             // succeed as long as batches <= 2^53.
             start
                 .elapsed()
-                .div_f64(f64::try_cast_from(u64::cast_from(batches)).unwrap())
+                .div_f64(f64::try_cast_from(u64::cast_from(batches)).expect("batches <= 2^53"))
         })
     });
 }
@@ -103,7 +103,7 @@ pub fn bench_write_to_listen(
             // succeed as long as batches <= 2^53.
             start
                 .elapsed()
-                .div_f64(f64::try_cast_from(u64::cast_from(batches)).unwrap())
+                .div_f64(f64::try_cast_from(u64::cast_from(batches)).expect("batches <= 2^53"))
         })
     });
 }

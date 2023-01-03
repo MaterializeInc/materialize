@@ -312,9 +312,11 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                             // 100.0 * num_of_cores, this will be true whenever there
                             // are less than 2^53 / 10^9 logical cores, or about
                             // 9 million.
-                            let cpu =
-                                u64::try_cast_from(f64::from(process.cpu_usage()) * 10_000_000.0)
-                                    .unwrap();
+                            println!("Usage is {}", process.cpu_usage());
+                            let cpu = u64::try_cast_from(
+                                (f64::from(process.cpu_usage()) * 10_000_000.0).trunc(),
+                            )
+                            .expect("sane value of process.cpu_usage()");
                             let memory = process.memory();
                             (Some(cpu), Some(memory))
                         }
