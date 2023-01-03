@@ -29,6 +29,12 @@ class CockroachStart(Action):
                 user="root",
             )
 
+        c.sql(
+            "SET CLUSTER SETTING sql.stats.forecasts.enabled = false",
+            service="cockroach",
+            user="root",
+        )
+
     def provides(self) -> List[Capability]:
         return [CockroachIsRunning()]
 
