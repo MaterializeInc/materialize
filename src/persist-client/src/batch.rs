@@ -369,41 +369,21 @@ where
         };
         let (ts, diff) = (ts.clone(), diff.clone());
 
-        let mut part_written = false;
+        self.current_part_total_bytes += size;
+        self.current_part_key_bytes += k_range.len();
+        self.current_part_value_bytes += v_range.len();
+        self.current_part.push(((k_range, v_range), ts, diff));
+
         // if we've filled up a batch part, flush out to blob to keep our memory usage capped.
-        if size + self.current_part_total_bytes > self.blob_target_size {
+        if self.current_part_total_bytes >= self.blob_target_size {
             // TODO: we currently consolidate a part when we've reached our target size of
             // _unconsolidated_ updates. This means the part we actually write to Blob may
             // be (substantially) smaller post-consolidation. We could alternatively create
             // a `BTreeMap<(&[u8], &[u8], T), D>`, consolidate as we go, and only write out
             // a part once the data referenced by the map reaches our target size.
             self.flush_current_part().await;
-            part_written = true;
-        }
-
-        self.current_part_total_bytes += size;
-        self.current_part_key_bytes += k_range.len();
-        self.current_part_value_bytes += v_range.len();
-
-        if part_written {
-            // NB: we flush our shared buf's contents to Blob storage when we've hit our
-            // target size, but we can only determine whether we've hit the target size
-            // after encoding into the buf. this means that after flushing to Blob, we have
-            // one dangling update that we need to copy back after the buf is reset.
-            let dangling_key = self.key_buf[k_range].to_owned();
-            let dangling_val = self.val_buf[v_range].to_owned();
-
-            self.key_buf.clear();
-            self.val_buf.clear();
-
-            self.key_buf.extend_from_slice(&dangling_key);
-            self.val_buf.extend_from_slice(&dangling_val);
-
-            self.current_part
-                .push(((0..dangling_key.len(), 0..dangling_val.len()), ts, diff));
             Ok(Added::RecordAndParts)
         } else {
-            self.current_part.push(((k_range, v_range), ts, diff));
             Ok(Added::Record)
         }
     }
