@@ -20,7 +20,7 @@ use std::fmt;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use timely::order::Product;
-use timely::progress::{PathSummary, Timestamp};
+use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use timely::PartialOrder;
 
 /// A partially ordered timestamp that is partitioned by an arbitrary number of partitions
@@ -145,6 +145,16 @@ impl<P: Partition, T: Timestamp> Timestamp for Partitioned<P, T> {
     fn minimum() -> Self {
         Self(Timestamp::minimum())
     }
+}
+
+impl<P: Partition, T: Timestamp> Refines<()> for Partitioned<P, T> {
+    fn to_inner(_other: ()) -> Self {
+        Self::minimum()
+    }
+
+    fn to_outer(self) {}
+
+    fn summarize(_path: Self::Summary) {}
 }
 
 impl<P: Eq, T: PartialOrder> PartialOrder for Partitioned<P, T>
