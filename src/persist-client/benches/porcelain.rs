@@ -49,9 +49,11 @@ pub fn bench_writes(
                 assert_eq!(batches.get_or_insert(b), &b);
             }
             let batches = batches.expect("didn't have at least one iter");
-            // No other known way to convert `usize` to `f64`.
-            #[allow(clippy::as_conversions)]
-            start.elapsed().div_f64(batches as f64)
+            // Justification for `unwrap`: this will
+            // succeed as long as batches <= 2^53.
+            start
+                .elapsed()
+                .div_f64(f64::try_cast_from(u64::cast_from(batches)).unwrap())
         })
     });
 }
@@ -96,9 +98,11 @@ pub fn bench_write_to_listen(
                 assert_eq!(batches.get_or_insert(b), &b);
             }
             let batches = batches.expect("didn't have at least one iter");
-            // No other known way to convert `usize` to `f64`.
-            #[allow(clippy::as_conversions)]
-            start.elapsed().div_f64(batches as f64)
+            // Justification for `unwrap`: this will
+            // succeed as long as batches <= 2^53.
+            start
+                .elapsed()
+                .div_f64(f64::try_cast_from(u64::cast_from(batches)).unwrap())
         })
     });
 }

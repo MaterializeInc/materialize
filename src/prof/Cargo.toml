@@ -11,6 +11,7 @@ askama = { version = "0.11.1", default-features = false, features = ["config", "
 anyhow = "1.0.66"
 axum = { version = "0.6.1", features = ["headers"] }
 backtrace = "0.3.66"
+bytesize = "1.1.0"
 cfg-if = "1.0.0"
 headers = "0.3.8"
 http = "0.2.8"

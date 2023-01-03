@@ -616,8 +616,6 @@ const MONTHS_ROMAN_CAPS: [&str; 12] = [
 ];
 
 impl DateTimeFormatNode {
-    // TODO(benesch): remove potentially dangerous usage of `as`.
-    #[allow(clippy::as_conversions)]
     fn render(&self, buf: &mut impl fmt::Write, ts: &impl TimestampLike) -> Result<(), fmt::Error> {
         use WordCaps::*;
         match self {
@@ -737,34 +735,34 @@ impl DateTimeFormatNode {
                     DateTimeField::MonthName {
                         abbrev: true,
                         caps: AllCaps,
-                    } => write_str!(MONTHS_ABBREV_ALL_CAPS[ts.month0() as usize]),
+                    } => write_str!(MONTHS_ABBREV_ALL_CAPS[usize::cast_from(ts.month0())]),
                     DateTimeField::MonthName {
                         abbrev: true,
                         caps: FirstCaps,
-                    } => write_str!(MONTHS_ABBREV_FIRST_CAPS[ts.month0() as usize]),
+                    } => write_str!(MONTHS_ABBREV_FIRST_CAPS[usize::cast_from(ts.month0())]),
                     DateTimeField::MonthName {
                         abbrev: true,
                         caps: NoCaps,
-                    } => write_str!(MONTHS_ABBREV_NO_CAPS[ts.month0() as usize]),
+                    } => write_str!(MONTHS_ABBREV_NO_CAPS[usize::cast_from(ts.month0())]),
                     DateTimeField::MonthName {
                         abbrev: false,
                         caps: AllCaps,
-                    } => write_str!(MONTHS_ALL_CAPS[ts.month0() as usize], 9),
+                    } => write_str!(MONTHS_ALL_CAPS[usize::cast_from(ts.month0())], 9),
                     DateTimeField::MonthName {
                         abbrev: false,
                         caps: FirstCaps,
-                    } => write_str!(MONTHS_FIRST_CAPS[ts.month0() as usize], 9),
+                    } => write_str!(MONTHS_FIRST_CAPS[usize::cast_from(ts.month0())], 9),
                     DateTimeField::MonthName {
                         abbrev: false,
                         caps: NoCaps,
-                    } => write_str!(MONTHS_NO_CAPS[ts.month0() as usize], 9),
+                    } => write_str!(MONTHS_NO_CAPS[usize::cast_from(ts.month0())], 9),
                     DateTimeField::Millisecond => write_num!(ts.nanosecond() / 1_000_000, 3),
                     DateTimeField::Quarter => write_num!(ts.month0() / 3 + 1),
                     DateTimeField::MonthInRomanNumerals { caps: true } => {
-                        write_str!(MONTHS_ROMAN_CAPS[ts.month0() as usize], 4)
+                        write_str!(MONTHS_ROMAN_CAPS[usize::cast_from(ts.month0())], 4)
                     }
                     DateTimeField::MonthInRomanNumerals { caps: false } => {
-                        write_str!(MONTHS_ROMAN_NO_CAPS[ts.month0() as usize], 4)
+                        write_str!(MONTHS_ROMAN_NO_CAPS[usize::cast_from(ts.month0())], 4)
                     }
                     DateTimeField::Second => write_num!(ts.second(), 2),
                     DateTimeField::SecondsPastMidnight => {

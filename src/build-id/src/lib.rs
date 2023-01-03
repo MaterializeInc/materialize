@@ -85,7 +85,7 @@
 //!
 //! Currently only works on Linux
 
-// TODO(benesch): remove potentially dangerous `as` conversions.
+// TODO(btv): Document why the `as` conversions in this function are legit
 #![allow(clippy::as_conversions)]
 
 /// Gets the GNU build IDs for all loaded images, including the main
