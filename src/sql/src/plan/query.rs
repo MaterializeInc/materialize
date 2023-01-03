@@ -2915,12 +2915,11 @@ fn plan_join(
             kind,
         )?,
         JoinConstraint::Natural => {
-            let left_column_names: HashSet<_> = left_scope.column_names().collect();
+            let left_column_names = left_scope.column_names();
             let right_column_names: HashSet<_> = right_scope.column_names().collect();
             let column_names: Vec<_> = left_column_names
-                .intersection(&right_column_names)
-                .into_iter()
-                .map(|n| (*n).clone())
+                .filter(|col| right_column_names.contains(col))
+                .cloned()
                 .collect();
             plan_using_constraint(
                 &column_names,

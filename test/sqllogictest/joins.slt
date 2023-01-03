@@ -995,3 +995,8 @@ SELECT (SELECT * FROM (SELECT 1 a) s1 JOIN (SELECT 2 b) s2 USING (c)) FROM (SELE
 # USING column missing from the right table only but existing in the outer scope.
 query error column "a" specified in USING clause does not exist in right table
 SELECT (SELECT * FROM (SELECT 1 a) s1 JOIN (SELECT 2 b) s2 USING (a)) FROM (SELECT 3 a) s3
+
+query II colnames
+SELECT * FROM l NATURAL JOIN l AS a LIMIT 0
+----
+la  lb
