@@ -36,8 +36,12 @@ g 0 1
 h 0 1
 f 0 1
 e 0 1
+a 0 1
+x 0 1
+y 0 1
+z 0 1
 ----
-parts=4 len=8
+parts=6 len=12
 
 fetch-batch input=b0
 ----
@@ -53,12 +57,21 @@ h 0 1
 <part 3>
 e 0 1
 f 0 1
+<part 4>
+a 0 1
+x 0 1
+<part 5>
+y 0 1
+z 0 1
 <run 0>
 part 0
 part 1
 part 2
 <run 1>
 part 3
+<run 2>
+part 4
+part 5
 
 # write a batch that doesn't cleanly divide into target part size (each update is 25 bytes)
 write-batch output=b0 lower=0 upper=2 target_size=50

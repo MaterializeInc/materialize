@@ -198,7 +198,7 @@ where
 
     buffer: BatchBuffer<T, D>,
 
-    greatest_kv_seen: Option<(Vec<u8>, Vec<u8>)>,
+    max_kv_in_run: Option<(Vec<u8>, Vec<u8>)>,
     runs: Vec<usize>,
     parts_written: usize,
 
@@ -252,7 +252,7 @@ where
                 cfg.blob_target_size,
             ),
             metrics,
-            greatest_kv_seen: None,
+            max_kv_in_run: None,
             parts_written: 0,
             runs: Vec::new(),
             num_updates: 0,
@@ -357,23 +357,26 @@ where
             return;
         }
 
-        match (
-            &self.greatest_kv_seen,
-            columnar.get(num_updates.saturating_sub(1)),
-        ) {
-            // our updates contain a key that exists within the range of a run we've
-            // already created. we should start a new run, as this part is no longer
-            // contiguous with the previous run/part
-            (Some(_greatest_kv_seen @ (k, v)), Some(greatest_kv_in_part))
-                if (k.as_slice(), v.as_slice()) > greatest_kv_in_part.0 =>
+        let (min_kv_in_part, _t, _d) = columnar.get(0).expect("num updates is greater than zero");
+        let (max_kv_in_part, _t, _d) = columnar
+            .get(num_updates.saturating_sub(1))
+            .expect("num updates is greater than zero");
+
+        if let Some(max_kv_in_run) = &mut self.max_kv_in_run {
+            // start a new run if our part contains a key that exists in the range of the last run
+            if (min_kv_in_part.0, min_kv_in_part.1)
+                < (max_kv_in_run.0.as_slice(), max_kv_in_run.1.as_slice())
             {
                 self.runs.push(self.parts_written);
             }
-            (_, Some(_greatest_kv_in_batch @ ((k, v), _t, _d))) => {
-                self.greatest_kv_seen = Some((k.to_vec(), v.to_vec()));
-            }
-            (Some(_), None) | (None, None) => {}
-        };
+
+            max_kv_in_run.0.clear();
+            max_kv_in_run.1.clear();
+            max_kv_in_run.0.extend_from_slice(max_kv_in_part.0);
+            max_kv_in_run.1.extend_from_slice(max_kv_in_part.1);
+        } else {
+            self.max_kv_in_run = Some((max_kv_in_part.0.to_vec(), max_kv_in_part.1.to_vec()));
+        }
 
         let start = Instant::now();
         self.parts
