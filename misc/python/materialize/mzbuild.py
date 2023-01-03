@@ -231,14 +231,8 @@ class CargoBuild(CargoPreImage):
         self.channel = None
         if rd.coverage:
             self.rustflags += [
-                "-Zinstrument-coverage",
-                # Nix generates some unresolved symbols that -Zinstrument-coverage
-                # somehow causes the linker to complain about, so just disable
-                # warnings about unresolved symbols and hope it all works out.
-                # See: https://github.com/nix-rust/nix/issues/1116
-                "-Clink-arg=-Wl,--warn-unresolved-symbols",
+                "-Cinstrument-coverage",
             ]
-            self.channel = "nightly"
         if len(self.bins) == 0 and len(self.examples) == 0:
             raise ValueError("mzbuild config is missing pre-build target")
 
