@@ -414,7 +414,7 @@ message ProtoUnaryFunc {
 }
 
 message ProtoBinaryFunc {
-    message ProtoRangeContainsElemInner {
+    message ProtoRangeContainsInner {
         mz_repr.relation_and_scalar.ProtoScalarType elem_type = 1;
         bool rev = 2;
     }
@@ -588,7 +588,8 @@ message ProtoBinaryFunc {
         google.protobuf.Empty mod_uint16 = 169;
         google.protobuf.Empty mod_uint32 = 170;
         google.protobuf.Empty mod_uint64 = 171;
-        ProtoRangeContainsElemInner range_contains_elem = 172;
+        ProtoRangeContainsInner range_contains_elem = 172;
+        ProtoRangeContainsInner range_contains_range = 173;
     }
 }
 
