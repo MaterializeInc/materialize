@@ -98,6 +98,18 @@ p+p {
         margin: var(--micro) 0;
     }
 
+    ul li {
+        p:not(:first-child) {
+            display: block;
+        }
+
+        &>p:not(:first-child),
+        &>.highlight,
+        &>table {
+            margin-left: var(--milli);
+        }
+    }
+
     li {
         position: relative;
 

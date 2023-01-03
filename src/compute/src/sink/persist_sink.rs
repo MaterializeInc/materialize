@@ -59,6 +59,11 @@ where
         G: Scope<Timestamp = Timestamp>,
     {
         let desired_collection = sinked_collection.map(Ok).concat(&err_collection.map(Err));
+        if sink.up_to != Antichain::default() {
+            unimplemented!(
+                "UP TO is not supported for persist sinks yet, and shouldn't have been accepted during parsing/planning"
+            )
+        }
 
         persist_sink(
             &sinked_collection.scope(),
@@ -1039,8 +1044,8 @@ where
                     Ok(()) => {
                         cap_set.downgrade(batch_upper);
                     }
-                    Err(current_upper) => {
-                        cap_set.downgrade(current_upper.0.iter());
+                    Err(mismatch) => {
+                        cap_set.downgrade(mismatch.current.iter());
 
                         // Clean up in case we didn't manage to append the
                         // batches to persist.
@@ -1056,7 +1061,7 @@ where
                             sink_id,
                             batch_lower,
                             batch_upper,
-                            current_upper
+                            mismatch.current,
                         );
                     }
                 }

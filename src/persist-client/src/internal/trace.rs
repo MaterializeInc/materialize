@@ -163,14 +163,18 @@ impl<T> Trace<T> {
         ret
     }
 
-    pub fn encoded_batch_size(&self) -> usize {
-        let mut ret = 0;
+    pub fn batch_size_metrics(&self) -> (usize, usize) {
+        let mut largest_batch_size = 0;
+        let mut encoded_batch_size = 0;
         self.map_batches(|b| {
+            let mut this_batch_size = 0;
             for part in b.parts.iter() {
-                ret += part.encoded_size_bytes;
+                this_batch_size += part.encoded_size_bytes;
             }
+            largest_batch_size = std::cmp::max(largest_batch_size, this_batch_size);
+            encoded_batch_size += this_batch_size;
         });
-        ret
+        (largest_batch_size, encoded_batch_size)
     }
 }
 
@@ -680,6 +684,8 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// The units of effort are updates, and the method should be thought of as
     /// analogous to inserting as many empty updates, where the trace is
     /// permitted to perform proportionate work.
+    ///
+    /// When this function is called, `effort` must be non-negative
     #[allow(dead_code)]
     pub fn exert(&mut self, effort: &mut isize, merge_reqs: &mut Vec<FueledMergeReq<T>>) {
         // If there is work to be done, ...
@@ -694,10 +700,11 @@ impl<T: Timestamp + Lattice> Spine<T> {
             else {
                 // Introduce an empty batch with roughly *effort number of
                 // virtual updates.
-                // TODO(benesch): rewrite to avoid `as`.
-                #[allow(clippy::as_conversions)]
-                let level =
-                    usize::cast_from((*effort as usize).next_power_of_two().trailing_zeros());
+                let level = usize::cast_from(
+                    (usize::try_from(*effort).expect("`exert` called with negative effort"))
+                        .next_power_of_two()
+                        .trailing_zeros(),
+                );
                 self.introduce_batch(None, level, merge_reqs);
             }
         }

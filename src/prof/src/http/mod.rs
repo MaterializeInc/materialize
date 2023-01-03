@@ -234,6 +234,7 @@ mod enabled {
     use axum::extract::{Form, Query};
     use axum::response::IntoResponse;
     use axum::TypedHeader;
+    use bytesize::ByteSize;
     use headers::ContentType;
     use http::header::{HeaderMap, CONTENT_DISPOSITION};
     use http::{HeaderValue, StatusCode};
@@ -245,24 +246,7 @@ mod enabled {
 
     use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
     use mz_build_info::BuildInfo;
-
-    struct HumanFormattedBytes(usize);
-    impl std::fmt::Display for HumanFormattedBytes {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            const TOKENS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
-
-            // TODO(benesch): rewrite to avoid `as`.
-            #[allow(clippy::as_conversions)]
-            let mut counter = self.0 as f64;
-            let mut tok_i = 0;
-            while counter >= 1024.0 && tok_i < TOKENS.len() - 1 {
-                counter /= 1024.0;
-                tok_i += 1;
-            }
-
-            write!(f, "{:.2} {}", counter, TOKENS[tok_i])
-        }
-    }
+    use mz_ore::cast::CastFrom;
 
     #[derive(Deserialize)]
     pub struct ProfForm {
@@ -288,21 +272,21 @@ mod enabled {
             vec![
                 (
                     "Allocated",
-                    HumanFormattedBytes(stats.allocated).to_string(),
+                    ByteSize(u64::cast_from(stats.allocated)).to_string_as(true),
                 ),
                 (
                     "In active pages",
-                    HumanFormattedBytes(stats.active).to_string(),
+                    ByteSize(u64::cast_from(stats.active)).to_string_as(true),
                 ),
                 (
                     "Allocated for allocator metadata",
-                    HumanFormattedBytes(stats.metadata).to_string(),
+                    ByteSize(u64::cast_from(stats.metadata)).to_string_as(true),
                 ),
                 // Don't print `stats.resident` since it is a bit hard to interpret;
                 // see `man jemalloc` for details.
                 (
                     "Bytes unused, but retained by allocator",
-                    HumanFormattedBytes(stats.retained).to_string(),
+                    ByteSize(u64::cast_from(stats.retained)).to_string_as(true),
                 ),
             ]
         }

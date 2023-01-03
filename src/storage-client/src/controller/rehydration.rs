@@ -9,7 +9,7 @@
 
 //! Rehydration of storage hosts.
 //!
-//! Rehydration is the process of bringing a crashed `storaged` process back
+//! Rehydration is the process of bringing a crashed `clusterd` process back
 //! up to date. The [`RehydratingStorageClient`] records all commands it
 //! observes in a minimal form. If it observes a send or receive failure while
 //! communicating with the underlying client, it will reconnect the client and

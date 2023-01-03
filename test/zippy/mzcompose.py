@@ -12,9 +12,12 @@ from enum import Enum
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
+    Cockroach,
     Debezium,
     Kafka,
     Materialized,
+    Minio,
+    MinioMc,
     Postgres,
     SchemaRegistry,
     Testdrive,
@@ -29,6 +32,9 @@ SERVICES = [
     SchemaRegistry(),
     Debezium(),
     Postgres(),
+    Cockroach(),
+    Minio(),
+    MinioMc(),
     # Those two are overriden below
     Materialized(),
     Testdrive(),
@@ -88,6 +94,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     random.seed(args.seed)
 
     environment_extra = ["MZ_LOG_FILTER=warn"]
+    mz_options = [
+        "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
+        "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
+        "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
+    ]
+    persist_blob_url = "s3://minioadmin:minioadmin@persist/persist?endpoint=http://minio:9000/&region=minio"
 
     with c.override(
         Testdrive(
@@ -99,9 +111,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "transaction_isolation": f"'{args.transaction_isolation}'",
             },
         ),
-        Materialized(environment_extra=environment_extra)
+        Materialized(
+            environment_extra=environment_extra,
+            options=mz_options,
+            persist_blob_url=persist_blob_url,
+        )
         if args.size is None
-        else Materialized(default_size=args.size, environment_extra=environment_extra),
+        else Materialized(
+            default_size=args.size,
+            environment_extra=environment_extra,
+            options=mz_options,
+            persist_blob_url=persist_blob_url,
+        ),
     ):
         c.up("testdrive", persistent=True)
 

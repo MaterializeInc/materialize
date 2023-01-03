@@ -1,7 +1,7 @@
 [package]
 name = "mz-storage"
 description = "Materialize's storage layer."
-version = "0.37.0-dev"
+version = "0.38.0-dev"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -11,10 +11,9 @@ anyhow = "1.0.66"
 async-compression = { version = "0.3.15", features = ["tokio", "gzip"] }
 async-stream = "0.3.3"
 async-trait = "0.1.59"
-aws-sdk-kinesis = { version = "0.21.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-s3 = { version = "0.21.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sdk-sqs = { version = "0.21.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-axum = { version = "0.6.1" }
+aws-sdk-kinesis = { version = "0.22.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-s3 = { version = "0.22.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-sqs = { version = "0.22.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 bytesize = "1.1.0"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
 clap = { version = "3.2.20", features = ["derive", "env"] }
@@ -57,7 +56,7 @@ prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.7.0" }
-serde = { version = "1.0.147", features = ["derive"] }
+serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.89" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.23.0", features = ["fs", "rt", "sync", "test-util"] }
@@ -79,19 +78,6 @@ tonic-build = "0.8.2"
 datadriven = { version = "0.6.0", features = ["async"] }
 itertools = "0.10.5"
 tokio = { version = "1.23.0", features = ["test-util"] }
-
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-# According to jemalloc developers, `background_threads` should always be
-# enabled, except in "esoteric" situations that don't apply to Materialize
-# (Namely: if the application relies on new threads not being created for whatever reason)
-#
-# See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
-tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"], optional = true }
-
-[features]
-default = ["jemalloc"]
-jemalloc = ["tikv-jemallocator", "mz-prof/jemalloc"]
-tokio-console = ["mz-ore/tokio-console"]
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux

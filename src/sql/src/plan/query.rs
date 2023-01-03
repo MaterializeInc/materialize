@@ -808,6 +808,29 @@ where
     Ok(expr.map(map_exprs).project(project_key))
 }
 
+/// Plans an expression in the `UP TO` position of a `SUBSCRIBE` statement.
+pub fn plan_up_to(
+    scx: &StatementContext,
+    mut up_to: Expr<Aug>,
+) -> Result<MirScalarExpr, PlanError> {
+    let scope = Scope::empty();
+    let desc = RelationDesc::empty();
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    transform_ast::transform_expr(scx, &mut up_to)?;
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "UP TO",
+        scope: &scope,
+        relation_type: desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_windows: false,
+    };
+    plan_expr(ecx, &up_to)?
+        .type_as_any(ecx)?
+        .lower_uncorrelated()
+}
+
 /// Plans an expression in the AS OF position of a `SELECT` or `SUBSCRIBE` statement.
 pub fn plan_as_of(
     scx: &StatementContext,
@@ -815,33 +838,30 @@ pub fn plan_as_of(
 ) -> Result<QueryWhen, PlanError> {
     match as_of {
         None => Ok(QueryWhen::Immediately),
-        Some(mut as_of) => {
-            scx.require_unsafe_mode("AS OF")?;
-            match as_of {
-                AsOf::At(ref mut expr) | AsOf::AtLeast(ref mut expr) => {
-                    let scope = Scope::empty();
-                    let desc = RelationDesc::empty();
-                    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-                    transform_ast::transform_expr(scx, expr)?;
-                    let ecx = &ExprContext {
-                        qcx: &qcx,
-                        name: "AS OF",
-                        scope: &scope,
-                        relation_type: desc.typ(),
-                        allow_aggregates: false,
-                        allow_subqueries: false,
-                        allow_windows: false,
-                    };
-                    let expr = plan_expr(ecx, expr)?
-                        .type_as_any(ecx)?
-                        .lower_uncorrelated()?;
-                    match as_of {
-                        AsOf::At(_) => Ok(QueryWhen::AtTimestamp(expr)),
-                        AsOf::AtLeast(_) => Ok(QueryWhen::AtLeastTimestamp(expr)),
-                    }
+        Some(mut as_of) => match as_of {
+            AsOf::At(ref mut expr) | AsOf::AtLeast(ref mut expr) => {
+                let scope = Scope::empty();
+                let desc = RelationDesc::empty();
+                let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+                transform_ast::transform_expr(scx, expr)?;
+                let ecx = &ExprContext {
+                    qcx: &qcx,
+                    name: "AS OF",
+                    scope: &scope,
+                    relation_type: desc.typ(),
+                    allow_aggregates: false,
+                    allow_subqueries: false,
+                    allow_windows: false,
+                };
+                let expr = plan_expr(ecx, expr)?
+                    .type_as_any(ecx)?
+                    .lower_uncorrelated()?;
+                match as_of {
+                    AsOf::At(_) => Ok(QueryWhen::AtTimestamp(expr)),
+                    AsOf::AtLeast(_) => Ok(QueryWhen::AtLeastTimestamp(expr)),
                 }
             }
-        }
+        },
     }
 }
 
@@ -4372,15 +4392,33 @@ pub fn resolve_func(
         }
     };
 
-    let types: Vec<_> = cexprs
-        .iter()
-        .map(|e| match ecx.scalar_type(e) {
+    let arg_types: Vec<_> = cexprs
+        .into_iter()
+        .map(|ty| match ecx.scalar_type(&ty) {
             Some(ty) => ecx.humanize_scalar_type(&ty),
             None => "unknown".to_string(),
         })
         .collect();
 
-    sql_bail!("function {}({}) does not exist", name, types.join(", "))
+    // Suggest using the `jsonb_` version of `json_` functions if they exist.
+    let alternative_hint = match name.0.split_last() {
+        Some((i, q)) if i.as_str().starts_with("json_") => {
+            let mut jsonb_version = q.to_vec();
+            jsonb_version.push(Ident::new(i.as_str().replace("json_", "jsonb_")));
+            let jsonb_version = UnresolvedObjectName(jsonb_version);
+            match resolve_func(ecx, &jsonb_version, args) {
+                Ok(_) => Some(format!("Try using {}", jsonb_version)),
+                Err(_) => None,
+            }
+        }
+        _ => None,
+    };
+
+    Err(PlanError::UnknownFunction {
+        name: name.to_string(),
+        arg_types,
+        alternative_hint,
+    })
 }
 
 fn plan_is_expr<'a>(
@@ -4803,6 +4841,11 @@ fn scalar_type_from_catalog(
                 } => Ok(ScalarType::Map {
                     value_type: Box::new(scalar_type_from_catalog(scx, *value_id, &[])?),
                     custom_id: Some(id),
+                }),
+                CatalogType::Range {
+                    element_reference: element_id,
+                } => Ok(ScalarType::Range {
+                    element_type: Box::new(scalar_type_from_catalog(scx, *element_id, &[])?),
                 }),
                 CatalogType::Record { fields } => {
                     let scalars: Vec<(ColumnName, ColumnType)> = fields

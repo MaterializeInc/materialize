@@ -35,7 +35,7 @@ per unit of time, but any issues that require greater load or variety of databas
 If you experience a failure in the CI, the scenario that is being run is listed towards the top of the log:
 
 ```
-Running `mzcompose run default --scenario=RestartEnvironmentdStoraged`
+Running `mzcompose run default --scenario=RestartEnvironmentdClusterdStorage`
 ```
 
 Immediately before the failure, the Check that is being run is reported:
@@ -47,11 +47,11 @@ Running validate() from <materialize.checks.threshold.Threshold object at 0x7f98
 You can check if the failure is reproducible in isolation by running just the Check in question against just the Scenario in question:
 
 ```
-./mzcompose run default --scenario=RestartEnvironmentdStoraged --check=Threshold
+./mzcompose run default --scenario=RestartEnvironmentdClusterdStorage --check=Threshold
 ```
 
 Sometimes, if a Mz container is unable to start, the check where the failure is reported may not be the one that have caused it, it
-may be just the first one to attempt to access `computed` or `storaged` that are no longer running.
+may be just the first one to attempt to access `clusterd`s that are no longer running.
 
 You can also check if the failure is related to restarts or upgrades in general by trying the "no-op" scenario that does not perform any
 of those.

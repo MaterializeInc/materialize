@@ -641,7 +641,7 @@ where
             // TODO: Re-enable this once we have #15511.
             //
             // Temporarily disabling this because we think it might be the cause
-            // of the remap since bug. Specifically, a storaged process has a
+            // of the remap since bug. Specifically, a clusterd process has a
             // ReadHandle for maintaining the once and one inside a Listen. If
             // we crash and stay down for longer than the read lease duration,
             // it's possible that an expiry of them both in quick succession
@@ -674,7 +674,7 @@ where
             // TODO: Re-enable this once we have #15511.
             //
             // Temporarily disabling this because we think it might be the cause
-            // of the remap since bug. Specifically, a storaged process has a
+            // of the remap since bug. Specifically, a clusterd process has a
             // ReadHandle for maintaining the once and one inside a Listen. If
             // we crash and stay down for longer than the read lease duration,
             // it's possible that an expiry of them both in quick succession
@@ -951,8 +951,8 @@ where
         self.collections.trace.num_updates()
     }
 
-    pub fn encoded_batch_size(&self) -> usize {
-        self.collections.trace.encoded_batch_size()
+    pub fn batch_size_metrics(&self) -> (usize, usize) {
+        self.collections.trace.batch_size_metrics()
     }
 
     pub fn latest_rollup(&self) -> (&SeqNo, &PartialRollupKey) {

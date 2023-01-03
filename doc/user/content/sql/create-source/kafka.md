@@ -300,6 +300,52 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< /tab >}}
 {{< /tabs >}}
 
+If your Kafka broker is not exposed to the public internet, you can tunnel the connection through an AWS PrivateLink service or an SSH bastion host:
+
+{{< tabs tabID="1" >}}
+{{< tab "AWS PrivateLink">}}
+
+```sql
+CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+);
+```
+
+```sql
+CREATE CONNECTION kafka_connection TO KAFKA (
+    BROKERS (
+        'broker1:9092' USING AWS PRIVATELINK privatelink_svc,
+        'broker2:9092' USING AWS PRIVATELINK privatelink_svc (PORT 9093)
+    )
+);
+```
+
+For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check out [this guide](/ops/network-security/privatelink/).
+{{< /tab >}}
+{{< tab "SSH tunnel">}}
+
+```sql
+CREATE CONNECTION ssh_connection TO SSH TUNNEL (
+    HOST '<SSH_BASTION_HOST>',
+    USER '<SSH_BASTION_USER>',
+    PORT <SSH_BASTION_PORT>
+);
+```
+
+```sql
+CREATE CONNECTION kafka_connection TO KAFKA (
+BROKERS (
+    'broker1:9092' USING SSH TUNNEL ssh_connection,
+    'broker2:9092' USING SSH TUNNEL ssh_connection
+    )
+);
+```
+
+For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check out [this guide](/ops/network-security/ssh-tunnel/).
+{{< /tab >}}
+{{< /tabs >}}
+
 #### Confluent Schema Registry
 
 {{< tabs tabID="1" >}}
@@ -309,7 +355,7 @@ CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
 CREATE SECRET csr_ssl_key AS '<CSR_SSL_KEY>';
 CREATE SECRET csr_password AS '<CSR_PASSWORD>';
 
-CREATE CONNECTION csr_ssl TO CONFLUENT SCHEMA REGISTRY (
+CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
     URL 'https://rp-f00000bar.data.vectorized.cloud:30993',
     SSL KEY = SECRET csr_ssl_key,
     SSL CERTIFICATE = SECRET csr_ssl_crt,
@@ -323,12 +369,53 @@ CREATE CONNECTION csr_ssl TO CONFLUENT SCHEMA REGISTRY (
 CREATE SECRET IF NOT EXISTS csr_username AS '<CSR_USERNAME>';
 CREATE SECRET IF NOT EXISTS csr_password AS '<CSR_PASSWORD>';
 
-CREATE CONNECTION csr_basic_http
+CREATE CONNECTION csr_connection
   FOR CONFLUENT SCHEMA REGISTRY
   URL '<CONFLUENT_REGISTRY_URL>',
   USERNAME = SECRET csr_username,
   PASSWORD = SECRET csr_password;
 ```
+{{< /tab >}}
+{{< /tabs >}}
+
+If your Confluent Schema Registry server is not exposed to the public internet, you can tunnel the connection through an AWS PrivateLink service or an SSH bastion host:
+
+{{< tabs tabID="1" >}}
+{{< tab "AWS PrivateLink">}}
+
+```sql
+CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+);
+```
+
+```sql
+CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
+    URL 'http://my-confluent-schema-registry:8081',
+    AWS PRIVATELINK privatelink_svc
+);
+```
+
+For step-by-step instructions on creating AWS PrivateLink connections and configuring an AWS PrivateLink service to accept connections from Materialize, check out [this guide](/ops/network-security/privatelink/).
+{{< /tab >}}
+{{< tab "SSH tunnel">}}
+```sql
+CREATE CONNECTION ssh_connection TO SSH TUNNEL (
+    HOST '<SSH_BASTION_HOST>',
+    USER '<SSH_BASTION_USER>',
+    PORT <SSH_BASTION_PORT>
+);
+```
+
+```sql
+CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
+    URL 'http://my-confluent-schema-registry:8081',
+    SSH TUNNEL ssh_connection
+);
+```
+
+For step-by-step instructions on creating SSH tunnel connections and configuring an SSH bastion server to accept connections from Materialize, check out [this guide](/ops/network-security/ssh-tunnel/).
 {{< /tab >}}
 {{< /tabs >}}
 

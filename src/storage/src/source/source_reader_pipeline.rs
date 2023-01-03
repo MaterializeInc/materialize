@@ -62,13 +62,12 @@ use mz_storage_client::source::util::async_source;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceError;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::{MzOffset, SourceToken};
+use mz_storage_client::types::sources::{MzOffset, SourceTimestamp, SourceToken};
+use mz_storage_client::util::antichain::{MutableOffsetAntichain, OffsetAntichain};
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::StreamExt as _;
-use mz_timely_util::order::Partitioned;
 
 use crate::healthcheck::write_to_persist;
-use crate::source::antichain::{MutableOffsetAntichain, OffsetAntichain};
 
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
@@ -485,17 +484,19 @@ struct SourceConnectionStreams<G: Scope<Timestamp = Timestamp>, C: SourceConnect
 /// learn about the `source_upper` that all the source reader instances now
 /// about. This second stream will be used by `remap_operator` to mint new
 /// timestamp bindings into the remap shard.
-fn source_reader_operator<G, C>(
+fn source_reader_operator<G, C, FromTime>(
     scope: &G,
     config: RawSourceCreationConfig,
     source_connection: C,
     connection_context: ConnectionContext,
-    mut reclock_follower: ReclockFollower<Partitioned<PartitionId, MzOffset>, Timestamp>,
+    mut reclock_follower: ReclockFollower<FromTime, Timestamp>,
     resume_stream: &Stream<G, ()>,
 ) -> (SourceConnectionStreams<G, C>, Option<Rc<dyn Any>>)
 where
     G: Scope<Timestamp = Timestamp>,
+    FromTime: SourceTimestamp,
     C: SourceConnectionBuilder + Clone + 'static,
+    C::Reader: SourceReader<Time = FromTime>,
 {
     let sub_config = config.clone();
     let RawSourceCreationConfig {
@@ -528,7 +529,7 @@ where
 
                 let mut source_upper = loop {
                     match reclock_follower.source_upper_at_frontier(resume_upper.borrow()) {
-                        Ok(frontier) => break OffsetAntichain::from(frontier),
+                        Ok(frontier) => break FromTime::into_compat_frontier(frontier.borrow()),
                         Err(ReclockError::BeyondUpper(_) | ReclockError::Uninitialized) => {
                             tokio::time::sleep(Duration::from_millis(100)).await
                         }
@@ -626,10 +627,11 @@ where
                                 continue;
                             }
 
-                            let mut offset_upper = OffsetAntichain::from(
+                            let mut offset_upper = FromTime::into_compat_frontier(
                                 reclock_follower
                                     .source_upper_at_frontier(resume_frontier_update.borrow())
-                                    .unwrap(),
+                                    .unwrap()
+                                    .borrow(),
                             );
                             offset_upper.filter_by_partition(|pid| {
                                 crate::source::responsible_for(&id, worker_id, worker_count, pid)
@@ -998,17 +1000,15 @@ impl futures::Stream for RemapClock {
 ///
 /// Only one worker will be active and write to the remap shard. All source
 /// upper summaries will be exchanged to it.
-fn remap_operator<G>(
+fn remap_operator<G, FromTime>(
     scope: &G,
     config: RawSourceCreationConfig,
     batch_upper_summaries: Stream<G, BatchUpperSummary>,
     resume_stream: &Stream<G, ()>,
-) -> (
-    Stream<G, (Partitioned<PartitionId, MzOffset>, Timestamp, Diff)>,
-    Rc<dyn Any>,
-)
+) -> (Stream<G, (FromTime, Timestamp, Diff)>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
+    FromTime: SourceTimestamp,
 {
     let RawSourceCreationConfig {
         name,
@@ -1067,7 +1067,7 @@ where
 
         // Same value as our use of `derive_new_compaction_since`.
         let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
-        let remap_handle = crate::source::reclock::compat::PersistHandle::new(
+        let remap_handle = crate::source::reclock::compat::PersistHandle::<FromTime, _>::new(
             Arc::clone(&persist_clients),
             storage_metadata.clone(),
             as_of.clone(),
@@ -1086,10 +1086,11 @@ where
 
         // The global view of the source_upper, which we track by combining
         // summaries from the raw reader operators.
-        let mut global_source_upper = OffsetAntichain::from(
+        let mut global_source_upper = FromTime::into_compat_frontier(
             follower
                 .source_upper_at_frontier(resume_upper.borrow())
-                .expect("source_upper_at_frontier to be used correctly"),
+                .expect("source_upper_at_frontier to be used correctly")
+                .borrow(),
         );
 
         // Emit initial snapshot of the remap_shard, bootstrapping
@@ -1216,12 +1217,12 @@ where
 /// Receives un-timestamped batches from the source reader and updates to the
 /// remap trace on a second input. This operator takes the remap information,
 /// reclocks incoming batches and sends them forward.
-fn reclock_operator<G, K, V, D>(
+fn reclock_operator<G, K, V, FromTime, D>(
     scope: &G,
     config: RawSourceCreationConfig,
-    mut timestamper: ReclockFollower<Partitioned<PartitionId, MzOffset>, Timestamp>,
+    mut timestamper: ReclockFollower<FromTime, Timestamp>,
     batches: Stream<G, SourceMessageBatch<K, V, D>>,
-    remap_trace_updates: Stream<G, (Partitioned<PartitionId, MzOffset>, Timestamp, Diff)>,
+    remap_trace_updates: Stream<G, (FromTime, Timestamp, Diff)>,
 ) -> (
     (
         Vec<Stream<G, SourceOutput<K, V, D>>>,
@@ -1233,6 +1234,7 @@ where
     G: Scope<Timestamp = Timestamp>,
     K: timely::Data + MaybeLength,
     V: timely::Data + MaybeLength,
+    FromTime: SourceTimestamp,
     D: timely::Data,
 {
     let RawSourceCreationConfig {
@@ -1500,9 +1502,9 @@ where
             let global_batch_lower = batch_capabilities.frontier();
             let bounded_source_upper = global_source_upper.bounded(&global_batch_lower);
 
-            if let Ok(new_ts_upper) =
-                timestamper.reclock_frontier(Antichain::from(bounded_source_upper.clone()).borrow())
-            {
+            if let Ok(new_ts_upper) = timestamper.reclock_frontier(
+                FromTime::from_compat_frontier(bounded_source_upper.clone()).borrow(),
+            ) {
                 tracing::trace!(
                     "reclock({id}) {worker_id}/{worker_count}: \
                         global_batch_lower: {:?}, global_source_upper: \

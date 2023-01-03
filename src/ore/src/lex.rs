@@ -80,6 +80,25 @@ impl<'a> LexBuf<'a> {
         }
     }
 
+    /// Advances the internal cusror past `s` if it exactly matches the next
+    /// elements in the buffer.
+    ///
+    /// Returns whether the cusor advanced.
+    pub fn consume_str(&mut self, s: &str) -> bool {
+        let start = self.pos;
+        let end = start + s.len();
+        if end > self.buf.len() {
+            return false;
+        }
+
+        if &self.buf[start..end] == s {
+            self.pos = end;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Searches the buffer for `delim`, returning the string from the current
     /// cursor position to the start of `delim`.
     ///

@@ -12,7 +12,7 @@ from typing import Callable
 
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
-    Computed,
+    Clusterd,
     Kafka,
     Materialized,
     SchemaRegistry,
@@ -38,12 +38,12 @@ class Disruption:
 
 disruptions = [
     Disruption(
-        name="pause-one-computed",
-        disruption=lambda c: c.pause("computed_1_1"),
+        name="pause-one-cluster",
+        disruption=lambda c: c.pause("compute_1_1"),
     ),
     Disruption(
-        name="kill-all-computed",
-        disruption=lambda c: c.kill("computed_1_1", "computed_1_2"),
+        name="kill-all-clusters",
+        disruption=lambda c: c.kill("compute_1_1", "compute_1_2"),
     ),
     Disruption(
         name="pause-in-materialized-view",
@@ -219,10 +219,10 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
     c.wait_for_materialized()
 
     nodes = [
-        Computed(name="computed_1_1"),
-        Computed(name="computed_1_2"),
-        Computed(name="computed_2_1"),
-        Computed(name="computed_2_2"),
+        Clusterd(name="compute_1_1"),
+        Clusterd(name="compute_1_2"),
+        Clusterd(name="compute_2_1"),
+        Clusterd(name="compute_2_2"),
     ]
 
     with c.override(*nodes):
@@ -232,8 +232,8 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             """
             DROP CLUSTER IF EXISTS cluster1 CASCADE;
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
-                REMOTE ['computed_1_1:2100', 'computed_1_2:2100'],
-                COMPUTE ['computed_1_1:2102', 'computed_1_2:2102']
+                REMOTE ['compute_1_1:2101', 'compute_1_2:2101'],
+                COMPUTE ['compute_1_1:2102', 'compute_1_2:2102']
             ));
             """
         )
@@ -242,8 +242,8 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             """
             DROP CLUSTER IF EXISTS cluster2 CASCADE;
             CREATE CLUSTER cluster2 REPLICAS (replica1 (
-                REMOTE ['computed_2_1:2100', 'computed_2_2:2100'],
-                COMPUTE ['computed_2_1:2102', 'computed_2_2:2102']
+                REMOTE ['compute_2_1:2101', 'compute_2_2:2101'],
+                COMPUTE ['compute_2_1:2102', 'compute_2_2:2102']
             ));
             """
         )

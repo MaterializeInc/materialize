@@ -73,7 +73,7 @@ use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
     peek, Coordinator, Message, PendingReadTxn, PendingTxn, SendDiffs, SinkConnectionReady,
-    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+    DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain_new::optimizer_trace::OptimizerTrace;
@@ -512,6 +512,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 desc: plan.source.desc,
                 timeline: plan.timeline,
                 depends_on,
+                custom_logical_compaction_window: None,
+                is_retained_metrics_relation: false,
             };
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
@@ -584,7 +586,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     self.initialize_storage_read_policies(
                         vec![source_id],
-                        DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
                     )
                     .await;
                 }
@@ -929,7 +931,7 @@ impl<S: Append + 'static> Coordinator<S> {
             self.initialize_compute_read_policies(
                 arranged_introspection_source_ids,
                 instance_id,
-                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
             )
             .await;
         }
@@ -938,12 +940,12 @@ impl<S: Append + 'static> Coordinator<S> {
             self.initialize_compute_read_policies(
                 persisted_introspection_source_ids.clone(),
                 instance_id,
-                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
             )
             .await;
             self.initialize_storage_read_policies(
                 persisted_introspection_source_ids,
-                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
             )
             .await;
         }
@@ -1079,12 +1081,12 @@ impl<S: Append + 'static> Coordinator<S> {
             self.initialize_compute_read_policies(
                 log_source_ids.clone(),
                 instance_id,
-                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
             )
             .await;
             self.initialize_storage_read_policies(
                 log_source_ids,
-                DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
             )
             .await;
         }
@@ -1117,6 +1119,8 @@ impl<S: Append + 'static> Coordinator<S> {
             defaults: table.defaults,
             conn_id,
             depends_on,
+            custom_logical_compaction_window: None,
+            is_retained_metrics_relation: false,
         };
         let table_oid = self.catalog.allocate_oid()?;
         let ops = vec![catalog::Op::CreateItem {
@@ -1144,7 +1148,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 self.initialize_storage_read_policies(
                     vec![table_id],
-                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
                 )
                 .await;
 
@@ -1555,7 +1559,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 self.initialize_storage_read_policies(
                     vec![id],
-                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS,
+                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
                 )
                 .await;
 
@@ -1852,6 +1856,7 @@ impl<S: Append + 'static> Coordinator<S> {
         if let Some(Some(ReplicaMetadata {
             last_heartbeat,
             metrics,
+            write_frontiers,
         })) = self.transient_replica_metadata.insert(replica_id, None)
         {
             let mut updates = vec![];
@@ -1870,6 +1875,12 @@ impl<S: Append + 'static> Coordinator<S> {
                     .pack_replica_metric_updates(replica_id, &metrics, -1);
                 updates.extend(retraction.into_iter());
             }
+            let retraction = self.catalog.state().pack_replica_write_frontiers_updates(
+                replica_id,
+                &write_frontiers,
+                -1,
+            );
+            updates.extend(retraction.into_iter());
             self.send_builtin_table_updates(updates, BuiltinTableUpdateSource::Background)
                 .await;
         }
@@ -2447,6 +2458,7 @@ impl<S: Append + 'static> Coordinator<S> {
             when,
             copy_to,
             emit_progress,
+            up_to,
         } = plan;
 
         let compute_instance = self.catalog.active_compute_instance(session)?;
@@ -2460,7 +2472,11 @@ impl<S: Append + 'static> Coordinator<S> {
             session.add_transaction_ops(TransactionOps::Subscribe)?;
         }
 
-        let make_sink_desc = |coord: &mut Coordinator<S>, from, from_desc, uses| {
+        let make_sink_desc = |coord: &mut Coordinator<S>,
+                              session: &mut Session,
+                              from,
+                              from_desc,
+                              uses| {
             // Determine the frontier of updates to subscribe *from*.
             // Updates greater or equal to this frontier will be produced.
             let id_bundle = coord
@@ -2477,9 +2493,24 @@ impl<S: Append + 'static> Coordinator<S> {
                     timeline,
                     None,
                 )?
-                .timestamp_context
-                .antichain();
+                .timestamp_context;
+            let frontier_ts = frontier.timestamp_or_default();
 
+            let up_to = up_to
+                .map(|expr| coord.evaluate_when(expr, session))
+                .transpose()?;
+            if let Some(up_to) = up_to {
+                if frontier_ts == up_to {
+                    session.add_notice(AdapterNotice::EqualSubscribeBounds { bound: up_to });
+                } else if frontier_ts > up_to {
+                    return Err(AdapterError::AbsurdSubscribeBounds {
+                        as_of: frontier_ts,
+                        up_to,
+                    });
+                }
+            }
+            let frontier = frontier.antichain();
+            let up_to = up_to.map(Antichain::from_elem).unwrap_or_default();
             Ok::<_, AdapterError>(ComputeSinkDesc {
                 from,
                 from_desc,
@@ -2488,6 +2519,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     frontier,
                     strict: !with_snapshot,
                 },
+                up_to,
             })
         };
 
@@ -2509,7 +2541,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .unwrap()
                     .into_owned();
                 let sink_id = self.catalog.allocate_user_id().await?;
-                let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id][..])?;
+                let sink_desc = make_sink_desc(self, session, from_id, from_desc, &[from_id][..])?;
                 let sink_name = format!("subscribe-{}", sink_id);
                 self.dataflow_builder(compute_instance_id)
                     .build_sink_dataflow(sink_name, sink_id, sink_desc)?
@@ -2524,7 +2556,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let id = self.allocate_transient_id()?;
                 let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
-                let sink_desc = make_sink_desc(self, id, desc, &depends_on)?;
+                let sink_desc = make_sink_desc(self, session, id, desc, &depends_on)?;
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(compute_instance_id);
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
@@ -3392,9 +3424,11 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut options = Vec::with_capacity(plan.options.len());
         for o in plan.options {
             options.push(match o {
-                IndexOptionName::LogicalCompactionWindow => IndexOption::LogicalCompactionWindow(
-                    DEFAULT_LOGICAL_COMPACTION_WINDOW_MS.map(|ts| Duration::from_millis(ts.into())),
-                ),
+                IndexOptionName::LogicalCompactionWindow => {
+                    IndexOption::LogicalCompactionWindow(Some(Duration::from_millis(
+                        DEFAULT_LOGICAL_COMPACTION_WINDOW_TS.into(),
+                    )))
+                }
             });
         }
 
@@ -3560,6 +3594,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.is_user_allowed_to_alter_system(session)?;
         use mz_sql::ast::{SetVariableValue, Value};
         let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
+        let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = match value {
             SetVariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
             SetVariableValue::Literal(Value::String(value)) => {
@@ -3578,6 +3613,9 @@ impl<S: Append + 'static> Coordinator<S> {
         if update_max_result_size {
             self.update_max_result_size();
         }
+        if update_metrics_retention {
+            self.update_metrics_retention();
+        }
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
@@ -3588,10 +3626,14 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
         let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
+        let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = catalog::Op::ResetSystemConfiguration { name };
         self.catalog_transact(Some(session), vec![op]).await?;
         if update_max_result_size {
             self.update_max_result_size();
+        }
+        if update_metrics_retention {
+            self.update_metrics_retention();
         }
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
@@ -3605,6 +3647,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let op = catalog::Op::ResetAllSystemConfiguration {};
         self.catalog_transact(Some(session), vec![op]).await?;
         self.update_max_result_size();
+        self.update_metrics_retention();
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
@@ -3629,6 +3672,23 @@ impl<S: Append + 'static> Coordinator<S> {
                 )
                 .unwrap();
         }
+    }
+
+    fn update_metrics_retention(&mut self) {
+        let duration = self.catalog.system_config().metrics_retention();
+        let policy = ReadPolicy::lag_writes_by(Timestamp::new(
+            u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {
+                tracing::error!("Absurd metrics retention duration: {duration:?}.");
+                u64::MAX
+            }),
+        ));
+        let policies = self
+            .catalog
+            .entries()
+            .filter(|entry| entry.item().is_retained_metrics_relation())
+            .map(|entry| (entry.id(), policy.clone()))
+            .collect::<Vec<_>>();
+        self.update_storage_base_read_policies(policies)
     }
 
     // Returns the name of the portal to execute.

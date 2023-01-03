@@ -19,7 +19,6 @@ use itertools::Itertools;
 use num::{CheckedAdd, Integer, Signed};
 use ordered_float::OrderedFloat;
 use proptest::prelude::{Arbitrary, Just};
-use proptest::prop_oneof;
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use proptest_derive::Arbitrary;
 use regex::Regex;
@@ -1200,86 +1199,96 @@ impl Arbitrary for AggregateFunc {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         use proptest::collection::vec;
         use proptest::prelude::any as proptest_any;
-        prop_oneof![
-            Just(AggregateFunc::MaxNumeric),
-            Just(AggregateFunc::MaxInt16),
-            Just(AggregateFunc::MaxInt32),
-            Just(AggregateFunc::MaxInt64),
-            Just(AggregateFunc::MaxUInt16),
-            Just(AggregateFunc::MaxUInt32),
-            Just(AggregateFunc::MaxUInt64),
-            Just(AggregateFunc::MaxMzTimestamp),
-            Just(AggregateFunc::MaxFloat32),
-            Just(AggregateFunc::MaxFloat64),
-            Just(AggregateFunc::MaxBool),
-            Just(AggregateFunc::MaxString),
-            Just(AggregateFunc::MaxTimestamp),
-            Just(AggregateFunc::MaxDate),
-            Just(AggregateFunc::MaxTimestampTz),
-            Just(AggregateFunc::MinNumeric),
-            Just(AggregateFunc::MinInt16),
-            Just(AggregateFunc::MinInt32),
-            Just(AggregateFunc::MinInt64),
-            Just(AggregateFunc::MinUInt16),
-            Just(AggregateFunc::MinUInt32),
-            Just(AggregateFunc::MinUInt64),
-            Just(AggregateFunc::MinMzTimestamp),
-            Just(AggregateFunc::MinFloat32),
-            Just(AggregateFunc::MinFloat64),
-            Just(AggregateFunc::MinBool),
-            Just(AggregateFunc::MinString),
-            Just(AggregateFunc::MinDate),
-            Just(AggregateFunc::MinTimestamp),
-            Just(AggregateFunc::MinTimestampTz),
-            Just(AggregateFunc::SumInt16),
-            Just(AggregateFunc::SumInt32),
-            Just(AggregateFunc::SumInt64),
-            Just(AggregateFunc::SumUInt16),
-            Just(AggregateFunc::SumUInt32),
-            Just(AggregateFunc::SumUInt64),
-            Just(AggregateFunc::SumFloat32),
-            Just(AggregateFunc::SumFloat64),
-            Just(AggregateFunc::SumNumeric),
-            Just(AggregateFunc::Count),
-            Just(AggregateFunc::Any),
-            Just(AggregateFunc::All),
+        Union::new(vec![
+            Just(AggregateFunc::MaxNumeric).boxed(),
+            Just(AggregateFunc::MaxInt16).boxed(),
+            Just(AggregateFunc::MaxInt32).boxed(),
+            Just(AggregateFunc::MaxInt64).boxed(),
+            Just(AggregateFunc::MaxUInt16).boxed(),
+            Just(AggregateFunc::MaxUInt32).boxed(),
+            Just(AggregateFunc::MaxUInt64).boxed(),
+            Just(AggregateFunc::MaxMzTimestamp).boxed(),
+            Just(AggregateFunc::MaxFloat32).boxed(),
+            Just(AggregateFunc::MaxFloat64).boxed(),
+            Just(AggregateFunc::MaxBool).boxed(),
+            Just(AggregateFunc::MaxString).boxed(),
+            Just(AggregateFunc::MaxTimestamp).boxed(),
+            Just(AggregateFunc::MaxDate).boxed(),
+            Just(AggregateFunc::MaxTimestampTz).boxed(),
+            Just(AggregateFunc::MinNumeric).boxed(),
+            Just(AggregateFunc::MinInt16).boxed(),
+            Just(AggregateFunc::MinInt32).boxed(),
+            Just(AggregateFunc::MinInt64).boxed(),
+            Just(AggregateFunc::MinUInt16).boxed(),
+            Just(AggregateFunc::MinUInt32).boxed(),
+            Just(AggregateFunc::MinUInt64).boxed(),
+            Just(AggregateFunc::MinMzTimestamp).boxed(),
+            Just(AggregateFunc::MinFloat32).boxed(),
+            Just(AggregateFunc::MinFloat64).boxed(),
+            Just(AggregateFunc::MinBool).boxed(),
+            Just(AggregateFunc::MinString).boxed(),
+            Just(AggregateFunc::MinDate).boxed(),
+            Just(AggregateFunc::MinTimestamp).boxed(),
+            Just(AggregateFunc::MinTimestampTz).boxed(),
+            Just(AggregateFunc::SumInt16).boxed(),
+            Just(AggregateFunc::SumInt32).boxed(),
+            Just(AggregateFunc::SumInt64).boxed(),
+            Just(AggregateFunc::SumUInt16).boxed(),
+            Just(AggregateFunc::SumUInt32).boxed(),
+            Just(AggregateFunc::SumUInt64).boxed(),
+            Just(AggregateFunc::SumFloat32).boxed(),
+            Just(AggregateFunc::SumFloat64).boxed(),
+            Just(AggregateFunc::SumNumeric).boxed(),
+            Just(AggregateFunc::Count).boxed(),
+            Just(AggregateFunc::Any).boxed(),
+            Just(AggregateFunc::All).boxed(),
             vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::JsonbAgg { order_by }),
+                .prop_map(|order_by| AggregateFunc::JsonbAgg { order_by })
+                .boxed(),
             vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::JsonbObjectAgg { order_by }),
+                .prop_map(|order_by| AggregateFunc::JsonbObjectAgg { order_by })
+                .boxed(),
             vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::ArrayConcat { order_by }),
+                .prop_map(|order_by| AggregateFunc::ArrayConcat { order_by })
+                .boxed(),
             vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::ListConcat { order_by }),
+                .prop_map(|order_by| AggregateFunc::ListConcat { order_by })
+                .boxed(),
             vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::StringAgg { order_by }),
+                .prop_map(|order_by| AggregateFunc::StringAgg { order_by })
+                .boxed(),
             vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::RowNumber { order_by }),
+                .prop_map(|order_by| AggregateFunc::RowNumber { order_by })
+                .boxed(),
             vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::DenseRank { order_by }),
+                .prop_map(|order_by| AggregateFunc::DenseRank { order_by })
+                .boxed(),
             (
                 vec(proptest_any::<ColumnOrder>(), 1..4),
-                proptest_any::<LagLeadType>()
+                proptest_any::<LagLeadType>(),
             )
-                .prop_map(|(order_by, lag_lead)| AggregateFunc::LagLead { order_by, lag_lead }),
+                .prop_map(|(order_by, lag_lead)| AggregateFunc::LagLead { order_by, lag_lead })
+                .boxed(),
             (
                 vec(proptest_any::<ColumnOrder>(), 1..4),
-                proptest_any::<WindowFrame>()
+                proptest_any::<WindowFrame>(),
             )
                 .prop_map(|(order_by, window_frame)| AggregateFunc::FirstValue {
                     order_by,
                     window_frame,
-                }),
+                })
+                .boxed(),
             (
                 vec(proptest_any::<ColumnOrder>(), 1..4),
-                proptest_any::<WindowFrame>()
+                proptest_any::<WindowFrame>(),
             )
                 .prop_map(|(order_by, window_frame)| AggregateFunc::LastValue {
                     order_by,
                     window_frame,
-                }),
-            Just(AggregateFunc::Dummy)
-        ]
+                })
+                .boxed(),
+            Just(AggregateFunc::Dummy).boxed(),
+        ])
     }
 }
 

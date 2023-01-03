@@ -360,6 +360,8 @@ subscribe_stmt ::=
     'SUBSCRIBE' 'TO'?
     ( object_name | '(' select_stmt ')' )
     ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
+    ('AS' 'OF' ( 'AT' 'LEAST' )? timestamp_expression)?
+    ( 'UP' 'TO' timestamp_expression )?
 table_ref ::=
   (
     table_name

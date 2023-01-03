@@ -1,6 +1,6 @@
 ---
-title: "Connect to Materialize via a SQL CLI"
-description: "How to connect to Materialize using PostgreSQL-compatible tools"
+title: "SQL clients"
+description: "How to connect to Materialize using PostgreSQL-compatible SQL clients"
 aliases:
   - /connect/
   - /connect/cli/
@@ -12,37 +12,22 @@ menu:
     name: "SQL clients"
 ---
 
-You can connect to Materialize using a PostgreSQL-compatible client, like `psql`. For an overview of compatible SQL clients and their current level of support, check out [Tools and Integrations](/integrations/#sql-clients).
+Materialize is **wire-compatible** with PostgreSQL, which means it integrates with most SQL clients that support PostgreSQL (see [Tools and Integrations](/integrations/#sql-clients)). In this guide, we’ll cover how to connect to your Materialize region using common SQL clients.
 
-### Connection details
+## `psql`
 
-Detail       | Info
--------------|------
-**Host**     | `<host>`
-**Port**     | `6875`
-**User**     | `<user>`
-**Database** | `materialize`
+{{< warning >}}
+Not all features of `psql` are supported by Materialize yet, including some backslash meta-commands {{% gh 9721 %}}.
+{{< /warning >}}
 
-[//]: # "Add details about managing users once RBAC lands"
+{{< tabs >}}
+{{< tab "macOS">}}
 
-### Supported tools
-
-Tool     | Description                   | Install
----------|-------------------------------|-----------------------------------
-`psql`   | Vanilla PostgreSQL CLI        | `postgresql` or `postgresql-client`
- DBeaver | Open source universal SQL CLI | [Download DBeaver](https://dbeaver.io/download/)
-
-If there's a tool that you'd like to use with Materialize but is not listed here or in [Tools and Integrations](/integrations/#sql-clients), let us know by submitting a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)!
-
-## Installation instructions for `psql`
-
-Start by checking if you have `psql` installed:
+Start by double-checking whether you already have `psql` installed:
 
 ```shell
 psql --version
 ```
-
-### macOS installation
 
 Assuming you’ve installed [Homebrew](https://brew.sh/):
 
@@ -56,11 +41,18 @@ Then symlink the `psql` binary to your `/usr/local/bin` directory:
 brew link --force libpq
 ```
 
-### Linux installation
+{{< /tab >}}
 
-For Debian-based distributions:
+{{< tab "Linux">}}
+
+Start by double-checking whether you already have `psql` installed:
 
 ```shell
+psql --version
+```
+
+
+```bash
 sudo apt-get update
 sudo apt-get install postgresql-client
 ```
@@ -69,22 +61,22 @@ The `postgresql-client` package includes only the client binaries, not the Postg
 
 For other Linux distributions, check out the [PostgreSQL documentation](https://www.postgresql.org/download/linux/).
 
-### Windows installation
+{{< /tab >}}
 
-For Windows, it is best to use the [PostgreSQL installer](https://www.postgresql.org/download/windows/) certified by EDB.
+{{< tab "Windows">}}
 
-## Examples
-
-### Connecting with `psql`
-
-{{< warning >}}
-Not all features of `psql` are supported by Materialize yet, including some backslash meta-commands {{% gh 9721 %}}.
-{{< /warning >}}
-
-You can use any of the following connection string formats to connect to Materialize with `psql`:
+Start by double-checking whether you already have `psql` installed:
 
 ```shell
-psql "postgres://<user>@<host>:6875/materialize"
-psql -U <user> -h <host> -p 6875 materialize
-psql -U <user> -h <host> -p 6875 -d materialize
+psql --version
 ```
+
+Download and install the [PostgreSQL installer](https://www.postgresql.org/download/windows/) certified by EDB.
+{{< /tab >}}
+{{< /tabs >}}
+
+## DBeaver
+
+To connect to Materialize using [DBeaver](https://dbeaver.com/docs/wiki/), follow the documentation to [create a connection](https://dbeaver.com/docs/wiki/Create-Connection/) and use the **PostgreSQL database driver** with the credentials provided in the UI for your Materialize region.
+
+<img width="1314" alt="Screenshot 2022-12-24 at 18 32 20" src="https://user-images.githubusercontent.com/23521087/209447654-11a51e45-b68f-4e11-8e82-9036d8f7aed8.png">

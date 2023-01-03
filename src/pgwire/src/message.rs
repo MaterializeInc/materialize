@@ -311,6 +311,9 @@ impl ErrorResponse {
         // a various classes of uncategorized errors that use this error code
         // inappropriately.
         let code = match e {
+            // DATA_EXCEPTION to match what Postgres returns for degenerate
+            // range bounds
+            AdapterError::AbsurdSubscribeBounds { .. } => SqlState::DATA_EXCEPTION,
             AdapterError::Catalog(_) => SqlState::INTERNAL_ERROR,
             AdapterError::ChangedPlan => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
@@ -410,6 +413,7 @@ impl ErrorResponse {
             AdapterNotice::DroppedActiveDatabase { .. } => SqlState::WARNING,
             AdapterNotice::DroppedActiveCluster { .. } => SqlState::WARNING,
             AdapterNotice::QueryTimestamp { .. } => SqlState::WARNING,
+            AdapterNotice::EqualSubscribeBounds { .. } => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -562,6 +566,7 @@ impl Severity {
             AdapterNotice::DroppedActiveDatabase { .. } => Severity::Notice,
             AdapterNotice::DroppedActiveCluster { .. } => Severity::Notice,
             AdapterNotice::QueryTimestamp { .. } => Severity::Notice,
+            AdapterNotice::EqualSubscribeBounds { .. } => Severity::Notice,
         }
     }
 }

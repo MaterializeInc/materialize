@@ -22,6 +22,7 @@ message ProtoComputeSinkDesc {
     mz_repr.relation_and_scalar.ProtoRelationDesc from_desc = 2;
     ProtoComputeSinkConnection connection = 3;
     ProtoSinkAsOf as_of = 4;
+    mz_repr.antichain.ProtoU64Antichain up_to = 5;
 }
 
 message ProtoComputeSinkConnection {

@@ -72,8 +72,8 @@ shared volumes, those files will be owned by root *on your host machine*.
    rustup update
    ```
 
-3. Run `bin/check` and `bin/lint` to see if there are any new Clippy lints or
-   rustfmt style adjustments in this release. If so, fix them.
+3. Run `cargo clippy --all-targets` and `bin/lint` to see if there are any new
+   Clippy lints or rustfmt style adjustments in this release. If so, fix them.
 
 4. (optional) [Rebuild the image](#modifying-the-image)
 5. Commit all outstanding changes and open a PR.

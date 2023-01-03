@@ -18,12 +18,11 @@ use prost::Message;
 use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;
-use mz_persist_types::Codec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::numeric::Numeric;
-use crate::adt::range::{RangeBoundDesc, RangeBoundDescValue, RangeInner};
+use crate::adt::range::{Range, RangeInner, RangeLowerBound, RangeUpperBound};
 use crate::chrono::ProtoNaiveTime;
 use crate::row::proto_datum::DatumType;
 use crate::row::{
@@ -32,17 +31,13 @@ use crate::row::{
 };
 use crate::{Datum, Row, RowPacker};
 
-impl Codec for Row {
-    fn codec_name() -> String {
-        "protobuf[Row]".into()
-    }
-
+impl Row {
     /// Encodes a row into the permanent storage format.
     ///
     /// This perfectly round-trips through [Row::decode]. It's guaranteed to be
     /// readable by future versions of Materialize through v(TODO: Figure out
     /// our policy).
-    fn encode<B>(&self, buf: &mut B)
+    pub fn encode<B>(&self, buf: &mut B)
     where
         B: BufMut,
     {
@@ -56,7 +51,7 @@ impl Codec for Row {
     /// This perfectly round-trips through [Row::encode]. It can read rows
     /// encoded by historical versions of Materialize back to v(TODO: Figure out
     /// our policy).
-    fn decode(buf: &[u8]) -> Result<Row, String> {
+    pub fn decode(buf: &[u8]) -> Result<Row, String> {
         let proto_row = ProtoRow::decode(buf).map_err(|err| err.to_string())?;
         Row::try_from(&proto_row)
     }
@@ -261,7 +256,7 @@ impl RowPacker<'_> {
             Some(DatumType::Range(inner)) => {
                 let ProtoRange { inner } = &**inner;
                 match inner {
-                    None => self.push_empty_range(),
+                    None => self.push_range(Range { inner: None }).unwrap(),
                     Some(inner) => {
                         let ProtoRangeInner {
                             lower_inclusive,
@@ -271,23 +266,17 @@ impl RowPacker<'_> {
                         } = &**inner;
 
                         self.push_range_with(
-                            RangeBoundDesc {
+                            RangeLowerBound {
                                 inclusive: *lower_inclusive,
-                                value: match lower {
-                                    None => RangeBoundDescValue::Infinite,
-                                    Some(d) => RangeBoundDescValue::Finite {
-                                        value: |row: &mut RowPacker| row.try_push_proto(&*d),
-                                    },
-                                },
+                                bound: lower
+                                    .as_ref()
+                                    .map(|d| |row: &mut RowPacker| row.try_push_proto(&*d)),
                             },
-                            RangeBoundDesc {
+                            RangeUpperBound {
                                 inclusive: *upper_inclusive,
-                                value: match upper {
-                                    None => RangeBoundDescValue::Infinite,
-                                    Some(d) => RangeBoundDescValue::Finite {
-                                        value: |row: &mut RowPacker| row.try_push_proto(&*d),
-                                    },
-                                },
+                                bound: upper
+                                    .as_ref()
+                                    .map(|d| |row: &mut RowPacker| row.try_push_proto(&*d)),
                             },
                         )
                         .expect("decoding ProtoRow must succeed");
@@ -339,7 +328,6 @@ impl RustType<ProtoRow> for Row {
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
-    use mz_persist_types::Codec;
     use uuid::Uuid;
 
     use crate::adt::array::ArrayDimension;

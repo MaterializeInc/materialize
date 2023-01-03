@@ -72,7 +72,7 @@ use mz_storage_client::types::hosts::{StorageHostConfig, StorageHostResourceAllo
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
 };
-use mz_storage_client::types::sources::{SourceDesc, Timeline};
+use mz_storage_client::types::sources::{SourceDesc, SourceEnvelope, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
@@ -86,7 +86,8 @@ pub use crate::catalog::config::{
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
-use crate::config::SynchronizedParameters;
+use crate::config::{SynchronizedParameters, SystemParameterFrontend};
+use crate::coord::DEFAULT_LOGICAL_COMPACTION_WINDOW;
 use crate::session::vars::{SystemVars, Var, CONFIG_HAS_SYNCED_ONCE};
 use crate::session::{PreparedStatement, Session, User, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
@@ -1453,6 +1454,10 @@ pub struct Table {
     pub defaults: Vec<Expr<Aug>>,
     pub conn_id: Option<ConnectionId>,
     pub depends_on: Vec<GlobalId>,
+    pub custom_logical_compaction_window: Option<Duration>,
+    /// Whether the table's logical compaction window is controlled by
+    /// METRICS_RETENTION
+    pub is_retained_metrics_relation: bool,
 }
 
 impl Table {
@@ -1480,6 +1485,10 @@ pub struct Source {
     pub desc: RelationDesc,
     pub timeline: Timeline,
     pub depends_on: Vec<GlobalId>,
+    pub custom_logical_compaction_window: Option<Duration>,
+    /// Whether the source's logical compaction window is controlled by
+    /// METRICS_RETENTION
+    pub is_retained_metrics_relation: bool,
 }
 
 impl Source {
@@ -1504,6 +1513,44 @@ impl Source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.name(),
             DataSourceDesc::Source => "subsource",
             DataSourceDesc::Introspection(_) => "source",
+        }
+    }
+
+    /// Envelope of the source.
+    pub fn envelope(&self) -> Option<&str> {
+        // Note how "none"/"append-only" is different from `None`. Source
+        // sources don't have an envelope (internal logs, for example), while
+        // other sources have an envelope that we call the "NONE"-envelope.
+
+        match &self.data_source {
+            // NOTE(aljoscha): We could move the block for ingestsions into
+            // `SourceEnvelope` itself, but that one feels more like an internal
+            // thing and adapter should own how we represent envelopes as a
+            // string? It would not be hard to convince me otherwise, though.
+            DataSourceDesc::Ingestion(ingestion) => match ingestion.desc.envelope() {
+                SourceEnvelope::None(_) => Some("none"),
+                SourceEnvelope::Debezium(_) => {
+                    // NOTE(aljoscha): This is currently not used in production.
+                    // DEBEZIUM sources transparently use `DEBEZIUM UPSERT`.
+                    Some("debezium")
+                }
+                SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
+                    mz_storage_client::types::sources::UpsertStyle::Default(_) => Some("upsert"),
+                    mz_storage_client::types::sources::UpsertStyle::Debezium { .. } => {
+                        // NOTE(aljoscha): Should we somehow mark that this is
+                        // using upsert internally? See note above about
+                        // DEBEZIUM.
+                        Some("debezium")
+                    }
+                },
+                SourceEnvelope::CdcV2 => {
+                    // TODO(aljoscha): Should we even report this? It's
+                    // currently not exposed.
+                    Some("materialize")
+                }
+            },
+            DataSourceDesc::Source => None,
+            DataSourceDesc::Introspection(_) => None,
         }
     }
 
@@ -1844,6 +1891,42 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_) => None,
+        }
+    }
+
+    pub fn initial_logical_compaction_window(&self) -> Option<Duration> {
+        let custom_logical_compaction_window = match self {
+            CatalogItem::Table(table) => table.custom_logical_compaction_window,
+            CatalogItem::Source(source) => source.custom_logical_compaction_window,
+            CatalogItem::Index(_) => None,
+            CatalogItem::MaterializedView(_) => None,
+            CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => return None,
+        };
+        Some(custom_logical_compaction_window.unwrap_or(DEFAULT_LOGICAL_COMPACTION_WINDOW))
+    }
+
+    /// Whether the item's logical compaction window
+    /// is controlled by the METRICS_RETENTION
+    /// system var.
+    pub fn is_retained_metrics_relation(&self) -> bool {
+        match self {
+            CatalogItem::Table(table) => table.is_retained_metrics_relation,
+            CatalogItem::Source(source) => source.is_retained_metrics_relation,
+            CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => false,
         }
     }
 }
@@ -2219,6 +2302,13 @@ impl<S: Append> Catalog<S> {
             );
         }
 
+        catalog
+            .load_system_configuration(
+                config.bootstrap_system_parameters,
+                config.system_parameter_frontend,
+            )
+            .await?;
+
         catalog.load_builtin_types().await?;
 
         let persisted_builtin_ids = catalog.storage().await.load_system_gids().await?;
@@ -2286,6 +2376,10 @@ impl<S: Append> Catalog<S> {
                             defaults: vec![Expr::null(); table.desc.arity()],
                             conn_id: None,
                             depends_on: vec![],
+                            custom_logical_compaction_window: table
+                                .is_retained_metrics_relation
+                                .then(|| catalog.state.system_config().metrics_retention()),
+                            is_retained_metrics_relation: table.is_retained_metrics_relation,
                         }),
                     );
                 }
@@ -2341,6 +2435,10 @@ impl<S: Append> Catalog<S> {
                             desc: coll.desc.clone(),
                             timeline: Timeline::EpochMilliseconds,
                             depends_on: vec![],
+                            custom_logical_compaction_window: coll
+                                .is_retained_metrics_relation
+                                .then(|| catalog.state.system_config().metrics_retention()),
+                            is_retained_metrics_relation: coll.is_retained_metrics_relation,
                         }),
                     );
                 }
@@ -2473,85 +2571,6 @@ impl<S: Append> Catalog<S> {
             .set_system_object_mapping(new_system_id_mappings)
             .await?;
 
-        let system_config = catalog.storage().await.load_system_configuration().await?;
-        for (name, value) in &config.bootstrap_system_parameters {
-            if !system_config.contains_key(name) {
-                catalog.state.insert_system_configuration(name, value)?;
-            }
-        }
-        for (name, value) in system_config {
-            catalog.state.insert_system_configuration(&name, &value)?;
-        }
-        if let Some(system_parameter_frontend) = config.system_parameter_frontend {
-            if !catalog.state.system_config().config_has_synced_once() {
-                tracing::info!("parameter sync on boot: start sync");
-
-                // We intentionally block initial startup, potentially forever,
-                // on initializing LaunchDarkly. This may seem scary, but the
-                // alternative is even scarier. Over time, we expect that the
-                // compiled-in default values for the system parameters will
-                // drift substantially from the defaults configured in
-                // LaunchDarkly, to the point that starting an environment
-                // without loading the latest values from LaunchDarkly will
-                // result in running an untested configuration.
-                //
-                // Note this only applies during initial startup. Restarting
-                // after we've synced once doesn't block on LaunchDarkly, as it
-                // seems reasonable to assume that the last-synced configuration
-                // was valid enough.
-                //
-                // This philosophy appears to provide a good balance between not
-                // running untested configurations in production while also not
-                // making LaunchDarkly a "tier 1" dependency for existing
-                // environments.
-                //
-                // If this proves to be an issue, we could seek to address the
-                // configuration drift in a different way--for example, by
-                // writing a script that runs in CI nightly and checks for
-                // deviation between the compiled Rust code and LaunchDarkly.
-                //
-                // If it is absolutely necessary to bring up a new environment
-                // while LaunchDarkly is down, the following manual mitigation
-                // can be performed:
-                //
-                //    1. Edit the environmentd startup parameters to omit the
-                //       LaunchDarkly configuration.
-                //    2. Boot environmentd.
-                //    3. Run `ALTER SYSTEM config_has_synced_once = true`.
-                //    4. Adjust any other parameters as necessary to avoid
-                //       running a nonstandard configuration in production.
-                //    5. Edit the environmentd startup parameters to restore the
-                //       LaunchDarkly configuration, for when LaunchDarkly comes
-                //       back online.
-                //    6. Reboot environmentd.
-                system_parameter_frontend.ensure_initialized().await;
-
-                let mut params = SynchronizedParameters::new(catalog.state.system_config().clone());
-                system_parameter_frontend.pull(&mut params);
-                let ops = params
-                    .modified()
-                    .into_iter()
-                    .map(|param| {
-                        let name = param.name;
-                        let value = param.value;
-                        tracing::debug!(name, value, "sync parameter");
-                        Op::UpdateSystemConfiguration { name, value }
-                    })
-                    .chain(std::iter::once({
-                        let name = CONFIG_HAS_SYNCED_ONCE.name().to_string();
-                        let value = true.to_string();
-                        tracing::debug!(name, value, "sync parameter");
-                        Op::UpdateSystemConfiguration { name, value }
-                    }))
-                    .collect::<Vec<_>>();
-
-                catalog.transact(None, ops, |_| Ok(())).await.unwrap();
-                tracing::info!("parameter sync on boot: end sync");
-            } else {
-                tracing::info!("parameter sync on boot: skipping sync as config has synced once");
-            }
-        }
-
         let last_seen_version = catalog
             .storage()
             .await
@@ -2683,6 +2702,110 @@ impl<S: Append> Catalog<S> {
         ))
     }
 
+    /// Loads the system configuration from the various locations in which its
+    /// values and value overrides can reside.
+    ///
+    /// This method should _always_ be called during catalog creation _before_
+    /// any other operations that depend on system configuration values.
+    ///
+    /// Configuration is loaded in the following order:
+    ///
+    /// 1. Load parameters from the configuration persisted in the catalog
+    ///    storage backend.
+    /// 2. Overwrite without persisting selected parameter values from the
+    ///    configuration passed in the provided `bootstrap_system_parameters`
+    ///    map.
+    /// 3. Overwrite and persist selected parameter values from the
+    ///    configuration that can be pulled from the provided
+    ///    `system_parameter_frontend` (if present).
+    ///
+    /// # Errors
+    async fn load_system_configuration(
+        &mut self,
+        bootstrap_system_parameters: BTreeMap<String, String>,
+        system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
+    ) -> Result<(), AdapterError> {
+        let system_config = self.storage().await.load_system_configuration().await?;
+        for (name, value) in &bootstrap_system_parameters {
+            if !system_config.contains_key(name) {
+                self.state.insert_system_configuration(name, value)?;
+            }
+        }
+        for (name, value) in system_config {
+            self.state.insert_system_configuration(&name, &value)?;
+        }
+        if let Some(system_parameter_frontend) = system_parameter_frontend {
+            if !self.state.system_config().config_has_synced_once() {
+                tracing::info!("parameter sync on boot: start sync");
+
+                // We intentionally block initial startup, potentially forever,
+                // on initializing LaunchDarkly. This may seem scary, but the
+                // alternative is even scarier. Over time, we expect that the
+                // compiled-in default values for the system parameters will
+                // drift substantially from the defaults configured in
+                // LaunchDarkly, to the point that starting an environment
+                // without loading the latest values from LaunchDarkly will
+                // result in running an untested configuration.
+                //
+                // Note this only applies during initial startup. Restarting
+                // after we've synced once doesn't block on LaunchDarkly, as it
+                // seems reasonable to assume that the last-synced configuration
+                // was valid enough.
+                //
+                // This philosophy appears to provide a good balance between not
+                // running untested configurations in production while also not
+                // making LaunchDarkly a "tier 1" dependency for existing
+                // environments.
+                //
+                // If this proves to be an issue, we could seek to address the
+                // configuration drift in a different way--for example, by
+                // writing a script that runs in CI nightly and checks for
+                // deviation between the compiled Rust code and LaunchDarkly.
+                //
+                // If it is absolutely necessary to bring up a new environment
+                // while LaunchDarkly is down, the following manual mitigation
+                // can be performed:
+                //
+                //    1. Edit the environmentd startup parameters to omit the
+                //       LaunchDarkly configuration.
+                //    2. Boot environmentd.
+                //    3. Run `ALTER SYSTEM config_has_synced_once = true`.
+                //    4. Adjust any other parameters as necessary to avoid
+                //       running a nonstandard configuration in production.
+                //    5. Edit the environmentd startup parameters to restore the
+                //       LaunchDarkly configuration, for when LaunchDarkly comes
+                //       back online.
+                //    6. Reboot environmentd.
+                system_parameter_frontend.ensure_initialized().await;
+
+                let mut params = SynchronizedParameters::new(self.state.system_config().clone());
+                system_parameter_frontend.pull(&mut params);
+                let ops = params
+                    .modified()
+                    .into_iter()
+                    .map(|param| {
+                        let name = param.name;
+                        let value = param.value;
+                        tracing::debug!(name, value, "sync parameter");
+                        Op::UpdateSystemConfiguration { name, value }
+                    })
+                    .chain(std::iter::once({
+                        let name = CONFIG_HAS_SYNCED_ONCE.name().to_string();
+                        let value = true.to_string();
+                        tracing::debug!(name, value, "sync parameter");
+                        Op::UpdateSystemConfiguration { name, value }
+                    }))
+                    .collect::<Vec<_>>();
+
+                self.transact(None, ops, |_| Ok(())).await.unwrap();
+                tracing::info!("parameter sync on boot: end sync");
+            } else {
+                tracing::info!("parameter sync on boot: skipping sync as config has synced once");
+            }
+        }
+        Ok(())
+    }
+
     /// Loads built-in system types into the catalog.
     ///
     /// Built-in types sometimes have references to other built-in types, and sometimes these
@@ -2791,6 +2914,9 @@ impl<S: Append> Catalog<S> {
             } => CatalogType::Map {
                 key_reference: name_to_id_map[key_reference],
                 value_reference: name_to_id_map[value_reference],
+            },
+            CatalogType::Range { element_reference } => CatalogType::Range {
+                element_reference: name_to_id_map[element_reference],
             },
             CatalogType::Record { fields } => CatalogType::Record {
                 fields: fields
@@ -5187,6 +5313,8 @@ impl<S: Append> Catalog<S> {
                 defaults: table.defaults,
                 conn_id: None,
                 depends_on,
+                custom_logical_compaction_window: None,
+                is_retained_metrics_relation: false,
             }),
             Plan::CreateSource(CreateSourcePlan {
                 source,
@@ -5210,6 +5338,8 @@ impl<S: Append> Catalog<S> {
                     desc: source.desc,
                     timeline,
                     depends_on,
+                    custom_logical_compaction_window: None,
+                    is_retained_metrics_relation: false,
                 })
             }
             Plan::CreateView(CreateViewPlan { view, .. }) => {
@@ -6430,6 +6560,8 @@ mod tests {
                         defaults: vec![Expr::null(); 1],
                         conn_id: None,
                         depends_on: vec![],
+                        custom_logical_compaction_window: None,
+                        is_retained_metrics_relation: false,
                     }),
                     SimplifiedItem::MaterializedView { depends_on } => {
                         let table_list = depends_on.iter().join(",");

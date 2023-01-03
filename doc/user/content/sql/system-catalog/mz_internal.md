@@ -57,18 +57,6 @@ Field              | Type       | Meaning
 `cpu_nano_cores`   | [`bigint`] | Approximate CPU usage, in billionths of a vCPU core.
 `memory_bytes`     | [`bigint`] | Approximate RAM usage, in bytes.
 
-### `mz_cluster_replica_statuses`
-
-The `mz_cluster_replica_statuses` table contains a row describing the status
-of each process in each cluster replica in the system.
-
-Field               | Type                          | Meaning
---------------------|-------------------------------|--------
-`replica_id`        | [`uint8`]                     | Materialize's unique ID for the cluster replica.
-`process_id`        | [`uint8`]                     | The ID of the process within the cluster replica.
-`status`            | [`text`]                      | The status of the cluster replica: `ready` or `not-ready`.
-`updated_at`        | [`timestamp with time zone`]  | The time at which the status was last updated.
-
 ### `mz_cluster_replica_sizes`
 
 The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
@@ -86,6 +74,33 @@ them for any kind of capacity planning.
 | `workers`        | [`uint8`] | The number of Timely Dataflow workers per process.            |
 | `cpu_nano_cores` | [`uint8`] | The CPU allocation per process, in billionths of a vCPU core. |
 | `memory_bytes`   | [`uint8`] | The RAM allocation per process, in billionths of a vCPU core. |
+
+### `mz_cluster_replica_statuses`
+
+The `mz_cluster_replica_statuses` table contains a row describing the status
+of each process in each cluster replica in the system.
+
+Field               | Type                          | Meaning
+--------------------|-------------------------------|--------
+`replica_id`        | [`uint8`]                     | Materialize's unique ID for the cluster replica.
+`process_id`        | [`uint8`]                     | The ID of the process within the cluster replica.
+`status`            | [`text`]                      | The status of the cluster replica: `ready` or `not-ready`.
+`updated_at`        | [`timestamp with time zone`]  | The time at which the status was last updated.
+
+### `mz_cluster_replica_utilization`
+
+The `mz_cluster_replica_utilization` view gives the last known CPU and RAM utilization statistics
+for all processes of all extant cluster replicas, as a percentage of the total resource allocation.
+
+At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+
+| Field            | Type      | Meaning                                                    |
+|------------------|-----------|------------------------------------------------------------|
+| `replica_id`     | [`uint8`] | The ID of a cluster replica.                               |
+| `process_id`     | [`uint8`] | An identifier of a compute process within a replica.       |
+| `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
+| `cpu_percent_normalized`    | [`uint8`] | Approximate CPU usage, in percent of the total number of timely workers. Can exceed 100, as threads other than timely workers may be scheduled. |
+| `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
 
 ### `mz_dataflows`
 
@@ -169,6 +184,21 @@ For per-worker frontier information, see
 
 Field        | Type       | Meaning
 -------------|------------|--------
+`export_id ` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
+`time`       | [`mz_timestamp`] | The next timestamp at which the output may change.
+
+### `mz_cluster_replica_frontiers`
+
+The `mz_cluster_replica_frontiers` table describes the frontiers of each [dataflow] in the system.
+[`mz_compute_frontiers`](#mz_compute_frontiers) is similar to this table, but `mz_compute_frontiers`
+exposes the frontiers known to the compute replicas while `mz_cluster_replica_frontiers` contains
+the frontiers the coordinator is aware of.
+
+At this time, we do not make any guarantees about the freshness of these numbers.
+
+Field        | Type       | Meaning
+-------------|------------|--------
+`replica_id` | [`bigint`] | The ID of a cluster replica.
 `export_id ` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
 `time`       | [`mz_timestamp`] | The next timestamp at which the output may change.
 
@@ -410,6 +440,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 |------------------|-----------|------------------------------------------------------------|
 | `source_id`      | [`uint8`] | The ID of a source.                                        |
 | `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
+| `cpu_percent_normalized`    | [`uint8`] | Approximate CPU usage, in percent of the total number of timely workers. Can exceed 100, as threads other than timely workers may be scheduled. |
 | `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
 
 ### `mz_sink_utilization`
@@ -423,12 +454,13 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 |------------------|-----------|------------------------------------------------------------|
 | `sink_id`        | [`uint8`] | The ID of a sink.                                          |
 | `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
+| `cpu_percent_normalized`    | [`uint8`] | Approximate CPU usage, in percent of the total number of timely workers. Can exceed 100, as threads other than timely workers may be scheduled. |
 | `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
 
 ### `mz_storage_host_metrics`
 
 The `mz_storage_host_metrics` table gives the last known CPU and RAM utilization statistics
-for all processes of all extant storage replicas.
+for all processes of all extant storage hosts.
 
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
 
@@ -456,9 +488,9 @@ them for any kind of capacity planning.
 | `cpu_nano_cores` | [`uint8`] | The CPU allocation per process, in billionths of a vCPU core. |
 | `memory_bytes`   | [`uint8`] | The RAM allocation per process, in billionths of a vCPU core. |
 
-### `mz_source_status`
+### `mz_source_statuses`
 
-The `mz_source_status` view provides the current state for each source in the
+The `mz_source_statuses` view provides the current state for each source in the
 system, including potential error messages and additional metadata helpful for
 debugging.
 
@@ -486,9 +518,9 @@ Field         | Type                          | Meaning
 `error`       | [`text`]                      | If the source is in an error state, the error message.
 `details`     | [`jsonb`]                     | Additional metadata provided by the source.
 
-### `mz_sink_status`
+### `mz_sink_statuses`
 
-The `mz_sink_status` view provides the current state for each sink in the
+The `mz_sink_statuses` view provides the current state for each sink in the
 system, including potential error messages and additional metadata helpful for
 debugging.
 

@@ -712,7 +712,7 @@ impl PredicatePushdown {
         *inputs = new_inputs;
     }
 
-    /// Returns (<predicates to retain>, <predicates to push at each input>).
+    /// Returns `(<predicates to retain>, <predicates to push at each input>)`.
     pub fn push_filters_through_join(
         input_mapper: &JoinInputMapper,
         equivalences: &Vec<Vec<MirScalarExpr>>,

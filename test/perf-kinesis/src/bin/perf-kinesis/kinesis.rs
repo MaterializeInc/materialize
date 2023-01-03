@@ -166,21 +166,22 @@ pub async fn put_records_one_second(
                 index += put_records;
                 put_record_count += u64::cast_from(records.len());
             }
-            Err(SdkError::ServiceError { err, .. })
-                if err.is_kms_throttling_exception()
-                    || err.is_provisioned_throughput_exceeded_exception() =>
+            Err(SdkError::ServiceError(err))
+                if err.err().is_kms_throttling_exception()
+                    || err.err().is_provisioned_throughput_exceeded_exception() =>
             {
-                info!("Hit non-fatal error, continuing: {}", err);
+                info!("Hit non-fatal error, continuing: {}", err.err());
             }
-            Err(SdkError::ServiceError { err, .. })
+            Err(SdkError::ServiceError(err))
                 if err
+                    .err()
                     .message()
                     .unwrap_or("")
                     .contains("The security token included in the request is expired") =>
             {
                 info!(
                     "{:?}. Getting a new aws_sdk_kinesis::Client.",
-                    err.message()
+                    err.err().message()
                 );
             }
             Err(e) => {

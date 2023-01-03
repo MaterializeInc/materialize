@@ -433,25 +433,6 @@ class Composition:
             cursor.execute(sql)
             return cursor.fetchall()
 
-    def create_cluster(
-        self,
-        cluster: List,
-        cluster_name: str = "cluster1",
-        replica_name: str = "replica1",
-    ) -> None:
-        """Construct and run a CREATE CLUSTER statement based a list of Computed instances
-
-        Args:
-            cluster: a List of Computed instances that will form the cluster
-            cluster_name: The cluster name to use
-            replica_name: The replica name to use
-        """
-        self.sql(
-            f"CREATE CLUSTER {cluster_name} REPLICAS ( {replica_name} ( REMOTE ["
-            + ", ".join(f'"{p.name}:2100"' for p in cluster)
-            + "]))"
-        )
-
     def start_and_wait_for_tcp(self, services: List[str]) -> None:
         """Sequentially start the named services, waiting for eaach to become
         available via TCP before moving on to the next."""
@@ -570,16 +551,6 @@ class Composition:
                 service["entrypoint"] = ["sleep", "infinity"]
                 service["command"] = []
             self._write_compose()
-
-        if "materialized" in services:
-            # Work around https://github.com/MaterializeInc/materialize/issues/15725
-            # by cleaning up Process Orchestrator metadata on restart
-            self.run(
-                "materialized",
-                "-c",
-                "rm -rf /mzdata/*.pid /mzdata/*.ports",
-                entrypoint="bash",
-            )
 
         self.invoke("up", *(["--detach"] if detach else []), *services)
 
@@ -742,6 +713,34 @@ class Composition:
         )
 
     # TODO(benesch): replace with Docker health checks.
+    def wait_for_cockroach(
+        self,
+        *,
+        dbname: str = "defaultdb",
+        port: Optional[int] = None,
+        host: str = "localhost",
+        timeout_secs: int = 120,
+        query: str = "SELECT 1",
+        user: str = "root",
+        password: Optional[str] = None,
+        expected: Union[Iterable[Any], Literal["any"]] = [[1]],
+        print_result: bool = False,
+        service: str = "cockroach",
+    ) -> None:
+        """Wait for a CockroachDB service to start."""
+        _wait_for_pg(
+            dbname=dbname,
+            host=host,
+            port=self.port(service, port) if port else self.default_port(service),
+            timeout_secs=timeout_secs,
+            query=query,
+            user=user,
+            password=password,
+            expected=expected,
+            print_result=print_result,
+        )
+
+    # TODO(benesch): replace with Docker health checks.
     def wait_for_materialized(
         self,
         service: str = "materialized",
@@ -840,6 +839,9 @@ class ServiceConfig(TypedDict, total=False):
     By default, the name of the service is used as the hostname.
     """
 
+    extra_hosts: List[str]
+    """Additional hostname mappings."""
+
     entrypoint: List[str]
     """Override the entrypoint specified in the image."""
 
@@ -862,6 +864,9 @@ class ServiceConfig(TypedDict, total=False):
 
     depends_on: List[str]
     """The list of other services that must be started before this one."""
+
+    tmpfs: List[str]
+    """Paths at which to mount temporary file systems inside the container."""
 
     volumes: List[str]
     """Volumes to attach to the service."""
@@ -954,7 +959,7 @@ def _wait_for_pg(
     port: int,
     host: str,
     user: str,
-    password: str,
+    password: Optional[str],
     expected: Union[Iterable[Any], Literal["any"]],
     print_result: bool = False,
 ) -> None:

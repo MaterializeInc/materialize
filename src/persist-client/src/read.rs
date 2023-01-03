@@ -32,7 +32,7 @@ use tracing::{debug, debug_span, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::fetch::{
-    fetch_leased_part, BatchFetcher, LeasedBatchPart, SerdeLeasedBatchPart,
+    fetch_leased_part, BatchFetcher, FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart,
     SerdeLeasedBatchPartMetadata,
 };
 use crate::internal::machine::Machine;
@@ -121,7 +121,7 @@ where
         }
     }
 
-    /// Returns a `HollowBatch` enriched with the proper metadata.
+    /// Returns a `LeasedBatchPart` enriched with the proper metadata.
     ///
     /// First returns snapshot parts, until they're exhausted, at which point
     /// begins returning listen parts.
@@ -137,6 +137,23 @@ where
             Some(x) => x,
             None => self.listen.next_parts().await,
         }
+    }
+
+    /// Equivalent to `next`, but rather than returning a [`LeasedBatchPart`],
+    /// fetches and returns the data from within it.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
+    pub async fn fetch_next(
+        &mut self,
+    ) -> (
+        Vec<((Result<K, String>, Result<V, String>), T, D)>,
+        Antichain<T>,
+    ) {
+        let (parts, progress) = self.next().await;
+        let mut v = vec![];
+        for p in parts.into_iter() {
+            v.extend(self.listen.fetch_batch_part(p).await.into_iter());
+        }
+        (v, progress)
     }
 
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
@@ -329,15 +346,7 @@ where
         let (parts, progress) = self.next_parts().await;
         let mut ret = Vec::with_capacity(parts.len() + 1);
         for part in parts {
-            let (part, fetched_part) = fetch_leased_part(
-                part,
-                self.handle.blob.as_ref(),
-                Arc::clone(&self.handle.metrics),
-                &self.handle.metrics.read.listen,
-                Some(&self.handle.reader_id),
-            )
-            .await;
-            self.handle.process_returned_leased_part(part);
+            let fetched_part = self.fetch_batch_part(part).await;
             let updates = fetched_part.collect::<Vec<_>>();
             if !updates.is_empty() {
                 ret.push(ListenEvent::Updates(updates));
@@ -345,6 +354,23 @@ where
         }
         ret.push(ListenEvent::Progress(progress));
         ret
+    }
+
+    /// Fetches the contents of `part` and returns its lease.
+    ///
+    /// This is broken out into its own function to provide a trivial means for
+    /// [`Subscribe`], which contains a [`Listen`], to fetch batches.
+    async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
+        let (part, fetched_part) = fetch_leased_part(
+            part,
+            self.handle.blob.as_ref(),
+            Arc::clone(&self.handle.metrics),
+            &self.handle.metrics.read.listen,
+            Some(&self.handle.reader_id),
+        )
+        .await;
+        self.handle.process_returned_leased_part(part);
+        fetched_part
     }
 
     /// Politely expires this listen, releasing its lease.
@@ -424,7 +450,7 @@ where
     pub(crate) reader_id: LeasedReaderId,
 
     since: Antichain<T>,
-    last_heartbeat: EpochMillis,
+    pub(crate) last_heartbeat: EpochMillis,
     explicitly_expired: bool,
     leased_seqnos: BTreeMap<SeqNo, usize>,
 
@@ -733,7 +759,7 @@ where
     /// call it as frequently as they like. Call this [Self::downgrade_since],
     /// or [Self::maybe_downgrade_since] on some interval that is "frequent"
     /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
-    async fn maybe_heartbeat_reader(&mut self) {
+    pub(crate) async fn maybe_heartbeat_reader(&mut self) {
         let min_elapsed = self.cfg.reader_lease_duration / 2;
         let heartbeat_ts = (self.cfg.now)();
         let elapsed_since_last_heartbeat =
@@ -752,7 +778,14 @@ where
                 .machine
                 .heartbeat_leased_reader(&self.reader_id, heartbeat_ts)
                 .await;
-            if !existed {
+            if !existed && !self.machine.state().collections.is_tombstone() {
+                // It's probably surprising to the caller that the shard
+                // becoming a tombstone expired this reader. Possibly the right
+                // thing to do here is pass up a bool to the caller indicating
+                // whether the LeasedReaderId it's trying to heartbeat has been
+                // expired, but that happening on a tombstone vs not is very
+                // different. As a medium-term compromise, pretend we did the
+                // heartbeat here.
                 panic!(
                     "LeasedReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
                     self.reader_id

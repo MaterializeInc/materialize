@@ -17,6 +17,7 @@ use timely::dataflow::operators::{Capability, OkErr, Operator};
 use timely::dataflow::{Scope, ScopeParent, Stream};
 
 use mz_expr::EvalError;
+use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_storage_client::types::errors::{DataflowError, EnvelopeError};
 use mz_storage_client::types::sources::{
@@ -420,7 +421,7 @@ struct DebeziumDeduplicationState {
     // TODO(petrosagg): This is only used when unpacking MySQL row coordinates. The logic was
     // transferred as-is from the previous avro-debezium code. Find a better place to put this or
     // avoid it completely.
-    filenames_to_indices: HashMap<String, i64>,
+    filenames_to_indices: HashMap<String, u64>,
     projection: DebeziumDedupProjection,
 }
 
@@ -461,7 +462,7 @@ impl FromStr for SqlServerLsn {
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 enum RowCoordinates {
     MySql {
-        file: i64,
+        file: u64,
         pos: i64,
         row: i32,
     },
@@ -527,9 +528,7 @@ impl DebeziumDeduplicationState {
                         let file = match self.filenames_to_indices.get(filename) {
                             Some(idx) => *idx,
                             None => {
-                                // TODO(benesch): rewrite to avoid `as`.
-                                #[allow(clippy::as_conversions)]
-                                let next_idx = self.filenames_to_indices.len() as i64;
+                                let next_idx = u64::cast_from(self.filenames_to_indices.len());
                                 self.filenames_to_indices
                                     .insert(filename.to_owned(), next_idx);
                                 next_idx

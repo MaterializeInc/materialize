@@ -149,8 +149,7 @@ def trim_pipeline(pipeline: Any) -> None:
                         step.extra_inputs.add(str(repo.compositions[name]))
                     elif plugin_name == "./ci/plugins/cloudtest":
                         step.image_dependencies.add(deps["environmentd"])
-                        step.image_dependencies.add(deps["computed"])
-                        step.image_dependencies.add(deps["storaged"])
+                        step.image_dependencies.add(deps["clusterd"])
         steps[step.id] = step
 
     # Find all the steps whose inputs have changed with respect to main.

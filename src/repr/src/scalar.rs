@@ -23,6 +23,7 @@ use itertools::Itertools;
 use once_cell::sync::Lazy;
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
+use proptest::strategy::Union;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -35,13 +36,12 @@ use crate::adt::date::Date;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
-use crate::adt::range::Range;
+use crate::adt::range::{Range, RangeLowerBound, RangeUpperBound};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::timestamp::{CheckedTimestamp, TimestampError};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
-use crate::GlobalId;
-use crate::{ColumnName, ColumnType, DatumList, DatumMap};
-use crate::{Row, RowArena};
+use crate::row::DatumNested;
+use crate::{ColumnName, ColumnType, DatumList, DatumMap, GlobalId, Row, RowArena};
 
 pub use crate::relation_and_scalar::proto_scalar_type::ProtoRecordField;
 pub use crate::relation_and_scalar::ProtoScalarType;
@@ -124,6 +124,8 @@ pub enum Datum<'a> {
     /// A universally unique identifier.
     Uuid(Uuid),
     MzTimestamp(crate::Timestamp),
+    /// A range of values, e.g. [-1, 1).
+    Range(Range<DatumNested<'a>>),
     /// A placeholder value.
     ///
     /// Dummy values are never meant to be observed. Many operations on `Datum`
@@ -149,8 +151,11 @@ pub enum Datum<'a> {
     // calling `<` on Datums (see `fn lt` in scalar/func.rs).
     /// An unknown value.
     Null,
-    /// A range of values, e.g. [-1, 1).
-    Range(Range<'a>),
+    // WARNING! DON'T PLACE NEW DATUM VARIANTS HERE!
+    //
+    // This order of variants of this enum determines how nulls sort. We
+    // have decided that nulls should sort last in Materialize, so all
+    // other datum variants should appear before `Null`.
 }
 
 impl TryFrom<Datum<'_>> for bool {
@@ -360,6 +365,37 @@ impl TryFrom<Datum<'_>> for CheckedTimestamp<DateTime<Utc>> {
     fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
         match from {
             Datum::TimestampTz(dt_tz) => Ok(dt_tz),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Date {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Date(d) => Ok(d),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for OrderedDecimal<Numeric> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Numeric(n) => Ok(n),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Datum<'_>> for Option<OrderedDecimal<Numeric>> {
+    type Error = ();
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::Numeric(n) => Ok(Some(n)),
             _ => Err(()),
         }
     }
@@ -687,6 +723,24 @@ impl<'a> Datum<'a> {
         }
     }
 
+    /// Unwraps the range value within this datum.
+    ///
+    /// Note that the return type is a range generic over `Datum`, which is
+    /// convenient to work with. However, the type stored in the datum is
+    /// generic over `DatumNested`, which is necessary to avoid needless boxing
+    /// of the inner `Datum`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::Range`].
+    #[track_caller]
+    pub fn unwrap_range(&self) -> Range<Datum<'a>> {
+        match self {
+            Datum::Range(range) => range.into_bounds(|b| b.datum()),
+            _ => panic!("Datum::unwrap_range called on {:?}", self),
+        }
+    }
+
     /// Reports whether this datum is an instance of the specified column type.
     pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
         fn is_instance_of_scalar(datum: Datum, scalar_type: &ScalarType) -> bool {
@@ -787,9 +841,21 @@ impl<'a> Datum<'a> {
                     (Datum::Numeric(_), _) => false,
                     (Datum::MzTimestamp(_), ScalarType::MzTimestamp) => true,
                     (Datum::MzTimestamp(_), _) => false,
-                    (Datum::Range(_), _) => {
-                        unreachable!("ranges not available in dataflows or types")
+                    (Datum::Range(Range { inner }), ScalarType::Range { element_type }) => {
+                        match inner {
+                            None => true,
+                            Some(inner) => {
+                                true && match inner.lower.bound {
+                                    None => true,
+                                    Some(b) => is_instance_of_scalar(b.datum(), element_type),
+                                } && match inner.upper.bound {
+                                    None => true,
+                                    Some(b) => is_instance_of_scalar(b.datum(), element_type),
+                                }
+                            }
+                        }
                     }
+                    (Datum::Range(_), _) => false,
                 }
             }
         }
@@ -890,6 +956,12 @@ impl<'a> From<Numeric> for Datum<'a> {
     }
 }
 
+impl<'a> From<OrderedDecimal<Numeric>> for Datum<'a> {
+    fn from(n: OrderedDecimal<Numeric>) -> Datum<'a> {
+        Datum::Numeric(n)
+    }
+}
+
 impl<'a> From<chrono::Duration> for Datum<'a> {
     fn from(duration: chrono::Duration) -> Datum<'a> {
         let micros = duration.num_microseconds().unwrap_or(0);
@@ -973,10 +1045,9 @@ where
     Datum<'a>: From<T>,
 {
     fn from(o: Option<T>) -> Datum<'a> {
-        if let Some(d) = o {
-            d.into()
-        } else {
-            Datum::Null
+        match o {
+            Some(d) => d.into(),
+            None => Datum::Null,
         }
     }
 }
@@ -1100,7 +1171,9 @@ pub enum ScalarType {
     /// scale specifies the number of digits after the decimal point.
     ///
     /// [`NUMERIC_DATUM_MAX_PRECISION`]: crate::adt::numeric::NUMERIC_DATUM_MAX_PRECISION
-    Numeric { max_scale: Option<NumericMaxScale> },
+    Numeric {
+        max_scale: Option<NumericMaxScale>,
+    },
     /// The type of [`Datum::Date`].
     Date,
     /// The type of [`Datum::Time`].
@@ -1125,7 +1198,9 @@ pub enum ScalarType {
     ///
     /// Note that a `length` of `None` is used in special cases, such as
     /// creating lists.
-    Char { length: Option<CharLength> },
+    Char {
+        length: Option<CharLength>,
+    },
     /// Stored as [`Datum::String`], but can optionally express a limit on the
     /// string's length.
     VarChar {
@@ -1188,6 +1263,9 @@ pub enum ScalarType {
     Int2Vector,
     /// A Materialize timestamp.
     MzTimestamp,
+    Range {
+        element_type: Box<ScalarType>,
+    },
 }
 
 impl RustType<ProtoRecordField> for (ColumnName, ColumnType) {
@@ -1270,6 +1348,9 @@ impl RustType<ProtoScalarType> for ScalarType {
                     custom_id: custom_id.map(|id| id.into_proto()),
                 })),
                 ScalarType::MzTimestamp => MzTimestamp(()),
+                ScalarType::Range { element_type } => Range(Box::new(ProtoRange {
+                    element_type: Some(element_type.into_proto()),
+                })),
             }),
         }
     }
@@ -1342,6 +1423,13 @@ impl RustType<ProtoScalarType> for ScalarType {
                 custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
             }),
             MzTimestamp(()) => Ok(ScalarType::MzTimestamp),
+            Range(x) => Ok(ScalarType::Range {
+                element_type: Box::new(
+                    x.element_type
+                        .map(|x| *x)
+                        .into_rust_if_some("ProtoRange::element_type")?,
+                ),
+            }),
         }
     }
 }
@@ -1508,7 +1596,7 @@ impl<'a, E> DatumType<'a, E> for DatumMap<'a> {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Range<'a> {
+impl<'a, E> DatumType<'a, E> for Range<DatumNested<'a>> {
     fn nullable() -> bool {
         false
     }
@@ -1522,6 +1610,25 @@ impl<'a, E> DatumType<'a, E> for Range<'a> {
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::Range(self))
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for Range<Datum<'a>> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(r @ Datum::Range(..)) => Ok(r.unwrap_range()),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        let d =
+            self.into_bounds(|bound| temp_storage.make_datum_nested(|packer| packer.push(bound)));
+        Ok(Datum::Range(d))
     }
 }
 
@@ -1990,6 +2097,9 @@ impl<'a> ScalarType {
             // to support Char values of different lengths in e.g. lists.
             Char { .. } => Char { length: None },
             VarChar { .. } => VarChar { max_length: None },
+            Range { element_type } => Range {
+                element_type: Box::new(element_type.without_modifiers()),
+            },
             v => v.clone(),
         }
     }
@@ -2062,6 +2172,18 @@ impl<'a> ScalarType {
         match self {
             ScalarType::VarChar { max_length, .. } => *max_length,
             _ => panic!("ScalarType::unwrap_varchar_max_length called on {:?}", self),
+        }
+    }
+
+    /// Returns the [`ScalarType`] of elements in a [`ScalarType::Range`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ScalarType::Map`].
+    pub fn unwrap_range_element_type(&self) -> &ScalarType {
+        match self {
+            ScalarType::Range { element_type } => &**element_type,
+            _ => panic!("ScalarType::unwrap_range_element_type called on {:?}", self),
         }
     }
 
@@ -2185,7 +2307,9 @@ impl<'a> ScalarType {
                     custom_id: oid_r,
                 },
             ) => l.eq_inner(r, structure_only) && (oid_l == oid_r || structure_only),
-            (Array(a), Array(b)) => a.eq_inner(b, structure_only),
+            (Array(a), Array(b)) | (Range { element_type: a }, Range { element_type: b }) => {
+                a.eq_inner(b, structure_only)
+            }
             (
                 Record {
                     fields: fields_a,
@@ -2433,6 +2557,7 @@ impl<'a> ScalarType {
                 Datum::MzTimestamp(crate::Timestamp::MAX),
             ])
         });
+        static RANGE: Lazy<Row> = Lazy::new(|| Row::pack_slice(&[]));
 
         match self {
             ScalarType::Bool => (*BOOL).iter(),
@@ -2467,6 +2592,7 @@ impl<'a> ScalarType {
             ScalarType::RegClass => (*REGCLASS).iter(),
             ScalarType::Int2Vector => (*INT2VECTOR).iter(),
             ScalarType::MzTimestamp => (*MZTIMESTAMP).iter(),
+            ScalarType::Range { .. } => (*RANGE).iter(),
         }
     }
 
@@ -2525,6 +2651,9 @@ impl<'a> ScalarType {
                 value_type: todo!(),
                 custom_id: todo!(),
             },
+            ScalarType::Range {
+                element_type: todo!(),
+            }
             */
         ]
     }
@@ -2538,57 +2667,71 @@ impl Arbitrary for ScalarType {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         // A strategy for generating the leaf cases of ScalarType
-        let leaf = prop_oneof![
-            Just(ScalarType::Bool),
-            Just(ScalarType::Int16),
-            Just(ScalarType::Int32),
-            Just(ScalarType::Int64),
-            Just(ScalarType::Float32),
-            Just(ScalarType::Float64),
+        let leaf = Union::new(vec![
+            Just(ScalarType::Bool).boxed(),
+            Just(ScalarType::Int16).boxed(),
+            Just(ScalarType::Int32).boxed(),
+            Just(ScalarType::Int64).boxed(),
+            Just(ScalarType::Float32).boxed(),
+            Just(ScalarType::Float64).boxed(),
             any::<Option<NumericMaxScale>>()
-                .prop_map(|max_scale| ScalarType::Numeric { max_scale }),
-            Just(ScalarType::Date),
-            Just(ScalarType::Time),
-            Just(ScalarType::Timestamp),
-            Just(ScalarType::TimestampTz),
-            Just(ScalarType::Interval),
-            Just(ScalarType::PgLegacyChar),
-            Just(ScalarType::Bytes),
-            Just(ScalarType::String),
-            any::<Option<CharLength>>().prop_map(|length| ScalarType::Char { length }),
+                .prop_map(|max_scale| ScalarType::Numeric { max_scale })
+                .boxed(),
+            Just(ScalarType::Date).boxed(),
+            Just(ScalarType::Time).boxed(),
+            Just(ScalarType::Timestamp).boxed(),
+            Just(ScalarType::TimestampTz).boxed(),
+            Just(ScalarType::Interval).boxed(),
+            Just(ScalarType::PgLegacyChar).boxed(),
+            Just(ScalarType::Bytes).boxed(),
+            Just(ScalarType::String).boxed(),
+            any::<Option<CharLength>>()
+                .prop_map(|length| ScalarType::Char { length })
+                .boxed(),
             any::<Option<VarCharMaxLength>>()
-                .prop_map(|max_length| ScalarType::VarChar { max_length }),
-            Just(ScalarType::Jsonb),
-            Just(ScalarType::Uuid),
-            Just(ScalarType::Oid),
-            Just(ScalarType::RegProc),
-            Just(ScalarType::RegType),
-            Just(ScalarType::RegClass),
-            Just(ScalarType::Int2Vector),
-        ];
+                .prop_map(|max_length| ScalarType::VarChar { max_length })
+                .boxed(),
+            Just(ScalarType::Jsonb).boxed(),
+            Just(ScalarType::Uuid).boxed(),
+            Just(ScalarType::Oid).boxed(),
+            Just(ScalarType::RegProc).boxed(),
+            Just(ScalarType::RegType).boxed(),
+            Just(ScalarType::RegClass).boxed(),
+            Just(ScalarType::Int2Vector).boxed(),
+        ]);
 
         leaf.prop_recursive(
             2, // For now, just go one level deep
             4,
             5,
             |inner| {
-                prop_oneof![
+                Union::new(vec![
                     // Array
-                    inner.clone().prop_map(|x| ScalarType::Array(Box::new(x))),
+                    inner
+                        .clone()
+                        .prop_map(|x| ScalarType::Array(Box::new(x)))
+                        .boxed(),
                     // List
-                    (inner.clone(), any::<Option<GlobalId>>()).prop_map(|(x, id)| {
-                        ScalarType::List {
+                    (inner.clone(), any::<Option<GlobalId>>())
+                        .prop_map(|(x, id)| ScalarType::List {
                             element_type: Box::new(x),
                             custom_id: id,
-                        }
-                    }),
+                        })
+                        .boxed(),
                     // Map
-                    (inner.clone(), any::<Option<GlobalId>>()).prop_map(|(x, id)| {
-                        ScalarType::Map {
+                    (inner.clone(), any::<Option<GlobalId>>())
+                        .prop_map(|(x, id)| ScalarType::Map {
                             value_type: Box::new(x),
                             custom_id: id,
-                        }
-                    }),
+                        })
+                        .boxed(),
+                    // Range
+                    inner
+                        .clone()
+                        .prop_map(|x| ScalarType::Range {
+                            element_type: Box::new(x),
+                        })
+                        .boxed(),
                     // Record
                     {
                         // Now we have to use `inner` to create a Record type. First we
@@ -2605,11 +2748,14 @@ impl Arbitrary for ScalarType {
                             prop::collection::vec((any::<ColumnName>(), column_type_strat), 0..10);
 
                         // Now we combine it with the default strategies to get Records.
-                        (fields_strat, any::<Option<GlobalId>>()).prop_map(|(fields, custom_id)| {
-                            ScalarType::Record { fields, custom_id }
-                        })
-                    }
-                ]
+                        (fields_strat, any::<Option<GlobalId>>())
+                            .prop_map(|(fields, custom_id)| ScalarType::Record {
+                                fields,
+                                custom_id,
+                            })
+                            .boxed()
+                    },
+                ])
             },
         )
         .boxed()
@@ -2664,6 +2810,7 @@ pub enum PropDatum {
     Array(PropArray),
     List(PropList),
     Map(PropDict),
+    Range(PropRange),
 
     JsonNull,
     Uuid(Uuid),
@@ -2675,35 +2822,41 @@ pub enum PropDatum {
 /// TODO: we also need a variant that can be parameterized by
 /// a [`ColumnType`] or a [`ColumnType`] [`Strategy`].
 pub fn arb_datum() -> BoxedStrategy<PropDatum> {
-    let leaf = prop_oneof![
-        Just(PropDatum::Null),
-        any::<bool>().prop_map(PropDatum::Bool),
-        any::<i16>().prop_map(PropDatum::Int16),
-        any::<i32>().prop_map(PropDatum::Int32),
-        any::<i64>().prop_map(PropDatum::Int64),
-        any::<f32>().prop_map(PropDatum::Float32),
-        any::<f64>().prop_map(PropDatum::Float64),
-        arb_date().prop_map(PropDatum::Date),
+    let leaf = Union::new(vec![
+        Just(PropDatum::Null).boxed(),
+        any::<bool>().prop_map(PropDatum::Bool).boxed(),
+        any::<i16>().prop_map(PropDatum::Int16).boxed(),
+        any::<i32>().prop_map(PropDatum::Int32).boxed(),
+        any::<i64>().prop_map(PropDatum::Int64).boxed(),
+        any::<f32>().prop_map(PropDatum::Float32).boxed(),
+        any::<f64>().prop_map(PropDatum::Float64).boxed(),
+        arb_date().prop_map(PropDatum::Date).boxed(),
         add_arb_duration(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap())
-            .prop_map(PropDatum::Time),
+            .prop_map(PropDatum::Time)
+            .boxed(),
         add_arb_duration(chrono::NaiveDateTime::from_timestamp_opt(0, 0).unwrap())
-            .prop_map(|t| PropDatum::Timestamp(CheckedTimestamp::from_timestamplike(t).unwrap())),
+            .prop_map(|t| PropDatum::Timestamp(CheckedTimestamp::from_timestamplike(t).unwrap()))
+            .boxed(),
         add_arb_duration(chrono::Utc.timestamp_opt(0, 0).unwrap())
-            .prop_map(|t| PropDatum::TimestampTz(CheckedTimestamp::from_timestamplike(t).unwrap())),
-        arb_interval().prop_map(PropDatum::Interval),
-        arb_numeric().prop_map(PropDatum::Numeric),
-        prop::collection::vec(any::<u8>(), 1024).prop_map(PropDatum::Bytes),
-        ".*".prop_map(PropDatum::String),
-        Just(PropDatum::JsonNull),
-        Just(PropDatum::Uuid(Uuid::nil())),
-        Just(PropDatum::Dummy)
-    ];
+            .prop_map(|t| PropDatum::TimestampTz(CheckedTimestamp::from_timestamplike(t).unwrap()))
+            .boxed(),
+        arb_interval().prop_map(PropDatum::Interval).boxed(),
+        arb_numeric().prop_map(PropDatum::Numeric).boxed(),
+        prop::collection::vec(any::<u8>(), 1024)
+            .prop_map(PropDatum::Bytes)
+            .boxed(),
+        ".*".prop_map(PropDatum::String).boxed(),
+        Just(PropDatum::JsonNull).boxed(),
+        Just(PropDatum::Uuid(Uuid::nil())).boxed(),
+        arb_range().prop_map(PropDatum::Range).boxed(),
+        Just(PropDatum::Dummy).boxed(),
+    ]);
     leaf.prop_recursive(3, 8, 16, |inner| {
-        prop_oneof!(
-            arb_array(inner.clone()).prop_map(PropDatum::Array),
-            arb_list(inner.clone()).prop_map(PropDatum::List),
-            arb_dict(inner).prop_map(PropDatum::Map),
-        )
+        Union::new(vec![
+            arb_array(inner.clone()).prop_map(PropDatum::Array).boxed(),
+            arb_list(inner.clone()).prop_map(PropDatum::List).boxed(),
+            arb_dict(inner).prop_map(PropDatum::Map).boxed(),
+        ])
     })
     .boxed()
 }
@@ -2754,6 +2907,139 @@ fn arb_list(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropLis
             row.packer().push_list(element_datums.iter());
             PropList(row, elements)
         })
+        .boxed()
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct PropRange(
+    Row,
+    Option<(
+        (Option<Box<PropDatum>>, bool),
+        (Option<Box<PropDatum>>, bool),
+    )>,
+);
+
+pub fn arb_range_type() -> Union<BoxedStrategy<ScalarType>> {
+    Union::new(vec![
+        Just(ScalarType::Int32).boxed(),
+        Just(ScalarType::Int64).boxed(),
+        Just(ScalarType::Date).boxed(),
+    ])
+}
+
+fn arb_range_data() -> Union<BoxedStrategy<(PropDatum, PropDatum)>> {
+    Union::new(vec![
+        (
+            any::<i32>().prop_map(PropDatum::Int32),
+            any::<i32>().prop_map(PropDatum::Int32),
+        )
+            .boxed(),
+        (
+            any::<i64>().prop_map(PropDatum::Int64),
+            any::<i64>().prop_map(PropDatum::Int64),
+        )
+            .boxed(),
+        (
+            arb_date().prop_map(PropDatum::Date),
+            arb_date().prop_map(PropDatum::Date),
+        )
+            .boxed(),
+    ])
+}
+
+fn arb_range() -> BoxedStrategy<PropRange> {
+    (
+        any::<u16>(),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+        arb_range_data(),
+    )
+        .prop_map(
+            |(split, lower_inf, lower_inc, upper_inf, upper_inc, (a, b))| {
+                let mut row = Row::default();
+                let mut packer = row.packer();
+                let r = if split % 32 == 0 {
+                    packer
+                        .push_range(Range::new(None))
+                        .expect("pushing empty ranges never fails");
+                    None
+                } else {
+                    let b_is_lower = Datum::from(&b) < Datum::from(&a);
+
+                    let (lower, upper) = if b_is_lower { (b, a) } else { (a, b) };
+                    let mut range = Range::new(Some((
+                        RangeLowerBound {
+                            inclusive: lower_inc,
+                            bound: if lower_inf {
+                                None
+                            } else {
+                                Some(Datum::from(&lower))
+                            },
+                        },
+                        RangeUpperBound {
+                            inclusive: upper_inc,
+                            bound: if upper_inf {
+                                None
+                            } else {
+                                Some(Datum::from(&upper))
+                            },
+                        },
+                    )));
+
+                    range.canonicalize().unwrap();
+
+                    // Extract canonicalized state; pretend the range was empty
+                    // if the bounds are rewritten.
+                    let (empty, lower_inf, lower_inc, upper_inf, upper_inc) = match range.inner {
+                        None => (true, false, false, false, false),
+                        Some(inner) => (
+                            false
+                                || match inner.lower.bound {
+                                    Some(b) => b != Datum::from(&lower),
+                                    None => !lower_inf,
+                                }
+                                || match inner.upper.bound {
+                                    Some(b) => b != Datum::from(&upper),
+                                    None => !upper_inf,
+                                },
+                            inner.lower.bound.is_none(),
+                            inner.lower.inclusive,
+                            inner.upper.bound.is_none(),
+                            inner.upper.inclusive,
+                        ),
+                    };
+
+                    if empty {
+                        packer.push_range(Range { inner: None }).unwrap();
+                        None
+                    } else {
+                        packer.push_range(range).unwrap();
+                        Some((
+                            (
+                                if lower_inf {
+                                    None
+                                } else {
+                                    Some(Box::new(lower))
+                                },
+                                lower_inc,
+                            ),
+                            (
+                                if upper_inf {
+                                    None
+                                } else {
+                                    Some(Box::new(upper))
+                                },
+                                upper_inc,
+                            ),
+                        ))
+                    }
+                };
+
+                PropRange(row, r)
+            },
+        )
         .boxed()
 }
 
@@ -2842,6 +3128,11 @@ impl<'a> From<&'a PropDatum> for Datum<'a> {
                 let map = row.unpack_first().unwrap_map();
                 Datum::Map(map)
             }
+            Range(PropRange(row, _)) => {
+                let d = row.unpack_first();
+                assert!(matches!(d, Datum::Range(_)));
+                d
+            }
             JsonNull => Datum::JsonNull,
             Uuid(u) => Datum::from(*u),
             Dummy => Datum::Dummy,
@@ -2924,6 +3215,33 @@ mod tests {
             let row = Row::pack(&datums);
             let unpacked = row.unpack();
             assert_eq!(datums, unpacked);
+        }
+
+        #[test]
+        fn range_packing_unpacks_correctly(range in arb_range()) {
+            let PropRange(row, prop_range) = range;
+            let row = row.unpack_first();
+            let d = row.unwrap_range();
+
+            let (((prop_lower, prop_lower_inc), (prop_upper, prop_upper_inc)), crate::adt::range::RangeInner {lower, upper}) = match (prop_range, d.inner) {
+                (Some(prop_values), Some(inner_range)) => (prop_values, inner_range),
+                (None, None) => return Ok(()),
+                _ => panic!("inequivalent row packing"),
+            };
+
+            for (prop_bound, prop_bound_inc, inner_bound, inner_bound_inc) in [
+                (prop_lower, prop_lower_inc, lower.bound, lower.inclusive),
+                (prop_upper, prop_upper_inc, upper.bound, upper.inclusive),
+            ] {
+                assert_eq!(prop_bound_inc, inner_bound_inc);
+                match (prop_bound, inner_bound) {
+                    (None, None) => continue,
+                    (Some(p), Some(b)) => {
+                        assert_eq!(Datum::from(&*p), b);
+                    }
+                    _ => panic!("inequivalent row packing"),
+                }
+            }
         }
     }
 }

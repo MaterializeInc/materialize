@@ -128,22 +128,16 @@ SELECT row_number() OVER (PARTITION BY x ORDER BY x), x FROM t
 ORDER BY row_number, x
 ----
 Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0, #1]
-  Return // { arity: 2 }
-    Project (#2, #0) // { arity: 2 }
-      Project (#0, #1, #3) // { arity: 3 }
-        Map (#2) // { arity: 4 }
-          Project (#3..=#5) // { arity: 3 }
-            Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[0](#2)) // { arity: 6 }
-              FlatMap unnest_list(#1) // { arity: 3 }
-                Reduce group_by=[#0] aggregates=[row_number(row(list[row(#0, #1)], #0))] // { arity: 2 }
-                  Get l1 // { arity: 2 }
-  With
-    cte l1 =
-      FlatMap wrap2("a", 1, "b", 2, "c", 1) // { arity: 2 }
-        Get l0 // { arity: 0 }
-    cte l0 =
-      Constant // { arity: 0 }
-        - ()
+  Project (#2, #0) // { arity: 2 }
+    Project (#0, #1, #3) // { arity: 3 }
+      Map (#2) // { arity: 4 }
+        Project (#3..=#5) // { arity: 3 }
+          Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[0](#2)) // { arity: 6 }
+            FlatMap unnest_list(#1) // { arity: 3 }
+              Reduce group_by=[#0] aggregates=[row_number(row(list[row(#0, #1)], #0))] // { arity: 2 }
+                FlatMap wrap2("a", 1, "b", 2, "c", 1) // { arity: 2 }
+                  Constant // { arity: 0 }
+                    - ()
 
 EOF
 
@@ -183,23 +177,23 @@ Return // { arity: 1 }
     Filter #2 // { arity: 3 }
       Project (#0, #1, #3) // { arity: 3 }
         Join on=(#0 = #2) // { arity: 4 }
-          Get l1 // { arity: 2 }
+          Get l0 // { arity: 2 }
           Union // { arity: 2 }
-            Get l5 // { arity: 2 }
+            Get l2 // { arity: 2 }
             CrossJoin // { arity: 2 }
               Project (#0) // { arity: 1 }
                 Join on=(#0 = #1) // { arity: 2 }
                   Union // { arity: 1 }
                     Negate // { arity: 1 }
                       Distinct group_by=[#0] // { arity: 1 }
-                        Get l5 // { arity: 2 }
+                        Get l2 // { arity: 2 }
                     Distinct group_by=[#0] // { arity: 1 }
-                      Get l2 // { arity: 1 }
-                  Get l2 // { arity: 1 }
+                      Get l1 // { arity: 1 }
+                  Get l1 // { arity: 1 }
               Constant // { arity: 1 }
                 - (false)
 With
-  cte l5 =
+  cte l2 =
     CrossJoin // { arity: 2 }
       Distinct group_by=[#0] // { arity: 1 }
         Filter ((integer_to_bigint(#0) = #1) AND true) // { arity: 2 }
@@ -209,26 +203,20 @@ With
                 Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[2](record_get[1](#2)), record_get[0](#2)) // { arity: 7 }
                   FlatMap unnest_list(#1) // { arity: 3 }
                     Reduce group_by=[#0] aggregates=[row_number(row(list[row(#0, #1, #2)]))] // { arity: 2 }
-                      Get l4 // { arity: 3 }
+                      CrossJoin // { arity: 3 }
+                        Get l1 // { arity: 1 }
+                        Get materialize.public.t2 // { arity: 2 }
       Constant // { arity: 1 }
         - (true)
-  cte l4 =
-    Get l3 // { arity: 3 }
-  cte l3 =
-    CrossJoin // { arity: 3 }
-      Get l2 // { arity: 1 }
-      Get materialize.public.t2 // { arity: 2 }
-  cte l2 =
-    Distinct group_by=[#0] // { arity: 1 }
-      Get l1 // { arity: 2 }
   cte l1 =
+    Distinct group_by=[#0] // { arity: 1 }
+      Get l0 // { arity: 2 }
+  cte l0 =
     Filter true // { arity: 2 }
       CrossJoin // { arity: 2 }
-        Get l0 // { arity: 0 }
+        Constant // { arity: 0 }
+          - ()
         Get materialize.public.t1 // { arity: 2 }
-  cte l0 =
-    Constant // { arity: 0 }
-      - ()
 
 EOF
 
@@ -315,32 +303,24 @@ Return // { arity: 5 }
   Filter true // { arity: 5 }
     Project (#0, #1, #3..=#5) // { arity: 5 }
       Join on=(#1 = #2) // { arity: 6 }
-        Get l1 // { arity: 2 }
+        Get l0 // { arity: 2 }
         Project (#0..=#2, #4) // { arity: 4 }
           Map (#3) // { arity: 5 }
             Project (#3..=#6) // { arity: 4 }
               Map (record_get[0](record_get[1](#2)), record_get[1](record_get[1](#2)), record_get[2](record_get[1](#2)), record_get[0](#2)) // { arity: 7 }
                 FlatMap unnest_list(#1) // { arity: 3 }
                   Reduce group_by=[#0] aggregates=[row_number(row(list[row(#0, #1, #2)]))] // { arity: 2 }
-                    Get l4 // { arity: 3 }
+                    Filter (#2 = #0) // { arity: 3 }
+                      CrossJoin // { arity: 3 }
+                        Distinct group_by=[#1] // { arity: 1 }
+                          Get l0 // { arity: 2 }
+                        Get materialize.public.t1 // { arity: 2 }
 With
-  cte l4 =
-    Get l3 // { arity: 3 }
-  cte l3 =
-    Filter (#2 = #0) // { arity: 3 }
-      CrossJoin // { arity: 3 }
-        Get l2 // { arity: 1 }
-        Get materialize.public.t1 // { arity: 2 }
-  cte l2 =
-    Distinct group_by=[#1] // { arity: 1 }
-      Get l1 // { arity: 2 }
-  cte l1 =
-    CrossJoin // { arity: 2 }
-      Get l0 // { arity: 0 }
-      Get materialize.public.t2 // { arity: 2 }
   cte l0 =
-    Constant // { arity: 0 }
-      - ()
+    CrossJoin // { arity: 2 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.public.t2 // { arity: 2 }
 
 EOF
 
@@ -351,32 +331,24 @@ Return // { arity: 5 }
   Filter true // { arity: 5 }
     Project (#0, #1, #3..=#5) // { arity: 5 }
       Join on=(#1 = #2) // { arity: 6 }
-        Get l1 // { arity: 2 }
+        Get l0 // { arity: 2 }
         Project (#0..=#2, #4) // { arity: 4 }
           Map (#3) // { arity: 5 }
             Project (#4..=#7) // { arity: 4 }
               Map (record_get[0](record_get[1](#3)), record_get[1](record_get[1](#3)), record_get[2](record_get[1](#3)), record_get[0](#3)) // { arity: 8 }
                 FlatMap unnest_list(#2) // { arity: 4 }
                   Reduce group_by=[#0, #1] aggregates=[row_number(row(list[row(#0, #1, #2)]))] // { arity: 3 }
-                    Get l4 // { arity: 3 }
+                    Filter (#2 = #0) // { arity: 3 }
+                      CrossJoin // { arity: 3 }
+                        Distinct group_by=[#1] // { arity: 1 }
+                          Get l0 // { arity: 2 }
+                        Get materialize.public.t1 // { arity: 2 }
 With
-  cte l4 =
-    Get l3 // { arity: 3 }
-  cte l3 =
-    Filter (#2 = #0) // { arity: 3 }
-      CrossJoin // { arity: 3 }
-        Get l2 // { arity: 1 }
-        Get materialize.public.t1 // { arity: 2 }
-  cte l2 =
-    Distinct group_by=[#1] // { arity: 1 }
-      Get l1 // { arity: 2 }
-  cte l1 =
-    CrossJoin // { arity: 2 }
-      Get l0 // { arity: 0 }
-      Get materialize.public.t2 // { arity: 2 }
   cte l0 =
-    Constant // { arity: 0 }
-      - ()
+    CrossJoin // { arity: 2 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.public.t2 // { arity: 2 }
 
 EOF
 

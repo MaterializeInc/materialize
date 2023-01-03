@@ -105,8 +105,8 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
 class ParallelDataflows(Concurrency):
     """Measure the time it takes to compute multiple parallel dataflows."""
 
-    SCALE = 4
-    VIEWS = 100
+    SCALE = 6
+    VIEWS = 25
 
     def benchmark(self) -> MeasurementSource:
         views = range(1, ParallelDataflows.VIEWS + 1)
@@ -115,8 +115,8 @@ class ParallelDataflows(Concurrency):
             [
                 f"""
 > CREATE MATERIALIZED VIEW v{v} AS
-  SELECT COUNT(DISTINCT f1) + {v} - {v} AS f1
-  FROM t1
+  SELECT COUNT(DISTINCT generate_series) + {v} - {v} AS f1
+  FROM generate_series(1,{self.n()})
 """
                 for v in views
             ]
@@ -134,17 +134,16 @@ class ParallelDataflows(Concurrency):
 
         return Td(
             f"""
-> DROP TABLE IF EXISTS t1 CASCADE
 
-> CREATE TABLE t1 (f1 INTEGER)
+> DROP SCHEMA public CASCADE;
 
-{create_views}
+> CREATE SCHEMA public;
 
 > SELECT 1
   /* A */
 1
 
-> INSERT INTO t1 SELECT * FROM generate_series(1,{self.n()})
+{create_views}
 
 {selects}
 

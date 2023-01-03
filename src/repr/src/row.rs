@@ -16,6 +16,9 @@ use std::mem::{size_of, transmute};
 use std::str;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
+use mz_ore::soft_assert;
+use mz_ore::vec::Vector;
+use mz_persist_types::Codec64;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
@@ -25,9 +28,6 @@ use smallvec::SmallVec;
 use uuid::Uuid;
 
 use mz_ore::cast::{CastFrom, ReinterpretCast};
-use mz_ore::soft_assert;
-use mz_ore::vec::Vector;
-use mz_persist_types::Codec64;
 
 use crate::adt::array::{
     Array, ArrayDimension, ArrayDimensions, InvalidArrayError, MAX_ARRAY_DIMENSIONS,
@@ -37,7 +37,7 @@ use crate::adt::interval::Interval;
 use crate::adt::numeric;
 use crate::adt::numeric::Numeric;
 use crate::adt::range::{
-    self, Range, RangeBound, RangeBoundDesc, RangeBoundDescValue, RangeError, RangeInner,
+    self, InvalidRangeError, Range, RangeBound, RangeInner, RangeLowerBound, RangeUpperBound,
 };
 use crate::adt::timestamp::CheckedTimestamp;
 use crate::scalar::arb_datum;
@@ -313,9 +313,23 @@ pub struct DatumMap<'a> {
 
 /// Represents a single `Datum`, appropriate to be nested inside other
 /// `Datum`s.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub struct DatumNested<'a> {
     val: &'a [u8],
+}
+
+impl<'a> std::fmt::Display for DatumNested<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        std::fmt::Display::fmt(&self.datum(), f)
+    }
+}
+
+impl<'a> std::fmt::Debug for DatumNested<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DatumNested")
+            .field("val", &self.datum())
+            .finish()
+    }
 }
 
 impl<'a> DatumNested<'a> {
@@ -1354,58 +1368,55 @@ impl RowPacker<'_> {
         })
     }
 
-    /// Pushes a `DatumRange` that is considered empty.
-    ///
-    /// - To construct other ranges, use [`Self::push_range`].
-    pub fn push_empty_range(&mut self) {
-        self.row.data.push(Tag::Range.into());
-        // Untagged bytes only contains the `RANGE_EMPTY` flag value.
-        self.row.data.push(range::Flags::EMPTY.bits());
-    }
-
-    /// Pushes a `DatumRange` built from the specified arguments.
+    /// Pushes a `Datum::Range` derived from the `Range<Datum<'a>`.
     ///
     /// # Panics
     /// - If lower and upper express finite values and they are datums of
     ///   different types.
     /// - If lower or upper express finite values and are equal to
     ///   `Datum::Null`. To handle `Datum::Null` properly, use
-    ///   `RangeBoundDescValue::From<Datum<'a>>`.
+    ///   [`RangeBound::new`].
     ///
     /// # Notes
-    /// - Prefer this function over `push_range_with`.
-    /// - Prefer creating [`RangeBoundDesc`]s using
-    ///   [`RangeBoundDesc<Datum<'a>>::new`], which handles `Datum::Null` in a
-    ///   SQL-friendly way.
-    /// - To generate an empty range, use `push_empty_range`.
-    pub fn push_range<'a>(
-        &mut self,
-        lower: RangeBoundDesc<Datum<'a>>,
-        upper: RangeBoundDesc<Datum<'a>>,
-    ) -> Result<(), RangeError> {
-        self.push_range_with(
-            RangeBoundDesc {
-                inclusive: lower.inclusive,
-                value: match lower.value {
-                    RangeBoundDescValue::Finite { value } => RangeBoundDescValue::Finite {
-                        value: move |row: &mut RowPacker| Ok(row.push(value)),
-                    },
-                    RangeBoundDescValue::Infinite => RangeBoundDescValue::Infinite,
+    /// - This function canonicalizes the range before pushing it to the row.
+    /// - Prefer this function over `push_range_with` because of its
+    ///   canonicaliztion.
+    /// - Prefer creating [`RangeBound`]s using [`RangeBound::new`], which
+    ///   handles `Datum::Null` in a SQL-friendly way.
+    pub fn push_range<'a>(&mut self, mut range: Range<Datum<'a>>) -> Result<(), InvalidRangeError> {
+        range.canonicalize()?;
+        match range.inner {
+            None => {
+                self.row.data.push(Tag::Range.into());
+                // Untagged bytes only contains the `RANGE_EMPTY` flag value.
+                self.row.data.push(range::Flags::EMPTY.bits());
+                Ok(())
+            }
+            Some(inner) => self.push_range_with(
+                RangeLowerBound {
+                    inclusive: inner.lower.inclusive,
+                    bound: inner
+                        .lower
+                        .bound
+                        .map(|value| move |row: &mut RowPacker| Ok(row.push(value))),
                 },
-            },
-            RangeBoundDesc {
-                inclusive: upper.inclusive,
-                value: match upper.value {
-                    RangeBoundDescValue::Finite { value } => RangeBoundDescValue::Finite {
-                        value: move |row: &mut RowPacker| Ok(row.push(value)),
-                    },
-                    RangeBoundDescValue::Infinite => RangeBoundDescValue::Infinite,
+                RangeUpperBound {
+                    inclusive: inner.upper.inclusive,
+                    bound: inner
+                        .upper
+                        .bound
+                        .map(|value| move |row: &mut RowPacker| Ok(row.push(value))),
                 },
-            },
-        )
+            ),
+        }
     }
 
     /// Pushes a `DatumRange` built from the specified arguments.
+    ///
+    /// # Warning
+    /// Unlike `push_range`, `push_range_with` _does not_ canonicalize its
+    /// inputs. Consequentially, this means it's possible to generate ranges
+    /// that will not reflect the proper ordering and equality.
     ///
     /// # Panics
     /// - If lower or upper expresses a finite value and does not push exactly
@@ -1417,34 +1428,28 @@ impl RowPacker<'_> {
     /// # Notes
     /// - Prefer `push_range_with` over this function. This function should be
     ///   used only when you are not pushing `Datum`s to the inner row.
-    /// - To generate an empty range, use `push_empty_range`.
     /// - Range encoding is `[<flag bytes>,<lower>?,<upper>?]`, where `lower`
     ///   and `upper` are optional, contingent on the flag value expressing an
     ///   empty range (where neither will be present) or infinite bounds (where
     ///   each infinite bound will be absent).
+    /// - To push an emtpy range, use `push_range` using `Range { inner: None }`.
     pub fn push_range_with<L, U, E>(
         &mut self,
-        lower: RangeBoundDesc<L>,
-        upper: RangeBoundDesc<U>,
+        lower: RangeLowerBound<L>,
+        upper: RangeUpperBound<U>,
     ) -> Result<(), E>
     where
         L: FnOnce(&mut RowPacker) -> Result<(), E>,
         U: FnOnce(&mut RowPacker) -> Result<(), E>,
-        E: From<RangeError>,
+        E: From<InvalidRangeError>,
     {
         let start = self.row.data.len();
         self.row.data.push(Tag::Range.into());
 
         let mut flags = range::Flags::empty();
 
-        flags.set(
-            range::Flags::LB_INFINITE,
-            matches!(lower.value, RangeBoundDescValue::Infinite),
-        );
-        flags.set(
-            range::Flags::UB_INFINITE,
-            matches!(upper.value, RangeBoundDescValue::Infinite),
-        );
+        flags.set(range::Flags::LB_INFINITE, lower.bound.is_none());
+        flags.set(range::Flags::UB_INFINITE, upper.bound.is_none());
         flags.set(range::Flags::LB_INCLUSIVE, lower.inclusive);
         flags.set(range::Flags::UB_INCLUSIVE, upper.inclusive);
 
@@ -1454,7 +1459,7 @@ impl RowPacker<'_> {
 
         let mut datum_check = self.row.data.len();
 
-        if let RangeBoundDescValue::Finite { value } = lower.value {
+        if let Some(value) = lower.bound {
             let start = self.row.data.len();
             value(self)?;
             assert!(
@@ -1464,7 +1469,7 @@ impl RowPacker<'_> {
             expected_datums += 1;
         }
 
-        if let RangeBoundDescValue::Finite { value } = upper.value {
+        if let Some(value) = upper.bound {
             let start = self.row.data.len();
             value(self)?;
             assert!(
@@ -1490,7 +1495,7 @@ impl RowPacker<'_> {
 
                     if seen > d {
                         self.row.data.truncate(start);
-                        return Err(RangeError::MisorderedRangeBounds.into());
+                        return Err(InvalidRangeError::MisorderedRangeBounds.into());
                     }
                 }
             }
@@ -1809,6 +1814,26 @@ impl RowArena {
         }
     }
 
+    /// Equivalent to `push_unary_row` but returns a `DatumNested` rather than a
+    /// `Datum`.
+    fn push_unary_row_datum_nested<'a>(&'a self, row: Row) -> DatumNested<'a> {
+        let mut inner = self.inner.borrow_mut();
+        inner.push(row.data.into_vec());
+        unsafe {
+            // This is safe because:
+            //   * We only ever append to self.inner, so the row data will live
+            //     as long as the arena.
+            //   * We force the row data into its own heap allocation--
+            //     importantly, we do NOT store the SmallVec, which might be
+            //     storing data inline--so it's okay if self.inner reallocates
+            //     and moves the row.
+            //   * We don't allow access to the byte vector itself, so it will
+            //     never reallocate.
+            let nested = DatumNested::extract(&inner[inner.len() - 1], &mut 0);
+            transmute::<DatumNested<'_>, DatumNested<'a>>(nested)
+        }
+    }
+
     /// Convenience function to make a new `Row` containing a single datum, and
     /// take ownership of it for the lifetime of the arena
     ///
@@ -1827,6 +1852,17 @@ impl RowArena {
         let mut row = Row::default();
         f(&mut row.packer());
         self.push_unary_row(row)
+    }
+
+    /// Convenience function identical to `make_datum` but instead returns a
+    /// `DatumNested`.
+    pub fn make_datum_nested<'a, F>(&'a self, f: F) -> DatumNested<'a>
+    where
+        F: FnOnce(&mut RowPacker),
+    {
+        let mut row = Row::default();
+        f(&mut row.packer());
+        self.push_unary_row_datum_nested(row)
     }
 
     /// Like [`RowArena::make_datum`], but the provided closure can return an error.
@@ -1849,7 +1885,6 @@ impl Default for RowArena {
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
-    use itertools::Itertools;
 
     use super::*;
 
@@ -2170,10 +2205,10 @@ mod tests {
             Datum::Range(Range { inner: None }),
             arena.make_datum(|packer| {
                 packer
-                    .push_range(
-                        RangeBoundDesc::new(Datum::Int32(-1), true),
-                        RangeBoundDesc::new(Datum::Int32(1), true),
-                    )
+                    .push_range(Range::new(Some((
+                        RangeLowerBound::new(Datum::Int32(-1), true),
+                        RangeUpperBound::new(Datum::Int32(1), true),
+                    ))))
                     .unwrap();
             }),
         ];
@@ -2185,141 +2220,31 @@ mod tests {
     }
 
     #[test]
-    fn test_ranges() {
-        fn test_ranges_inner(row_value: Datum, vec_value: &Datum, string_rep: &&str) {
-            // Validates multiple methods of creating datums are equivalent
-            assert_eq!(&row_value, vec_value, "{row_value} == {vec_value}");
-            // Validates printing
-            assert_eq!(
-                row_value.to_string(),
-                string_rep.to_string(),
-                "{row_value} == {string_rep}"
-            );
-
-            // Emulate the bytes of a row.
-            let mut row_inner = vec![];
-
-            // Validate values can be roundtripped through `push` and `read_datum`.
-            let mut offset = row_inner.len();
-            push_datum(&mut row_inner, row_value);
-            let roundtripped_value = unsafe { read_datum(&row_inner, &mut offset) };
-            assert_eq!(
-                row_value, roundtripped_value,
-                "{row_value} == {roundtripped_value}"
-            );
-        }
-
-        let mut row = Row::default();
-        let mut packer = row.packer();
-        let arena = RowArena::new();
-
-        let mut datum_vec = vec![];
-
-        for (lower, lower_inclusive, upper, upper_inclusive, s) in [
-            // Unbounded lower
-            (Datum::Null, true, Datum::Int32(1), false, "[,1)"),
-            (Datum::Null, true, Datum::Int32(1), true, "[,1]"),
-            (Datum::Null, true, Datum::Null, false, "[,)"),
-            (Datum::Null, true, Datum::Null, true, "[,]"),
-            (Datum::Null, false, Datum::Int32(1), false, "(,1)"),
-            (Datum::Null, false, Datum::Int32(1), true, "(,1]"),
-            // Infinite ranges
-            (Datum::Null, false, Datum::Null, false, "(,)"),
-            (Datum::Null, false, Datum::Null, true, "(,]"),
-            // -1..1
-            (Datum::Int32(-1), true, Datum::Int32(1), false, "[-1,1)"),
-            (Datum::Int32(-1), true, Datum::Int32(1), true, "[-1,1]"),
-            (Datum::Int32(-1), false, Datum::Int32(1), false, "(-1,1)"),
-            (Datum::Int32(-1), false, Datum::Int32(1), true, "(-1,1]"),
-            // Empty + point ranges
-            (Datum::Int32(0), true, Datum::Int32(0), false, "[0,0)"),
-            (Datum::Int32(0), true, Datum::Int32(0), true, "[0,0]"),
-            (Datum::Int32(0), false, Datum::Int32(0), false, "(0,0)"),
-            (Datum::Int32(0), false, Datum::Int32(0), true, "(0,0]"),
-            // Unbounded upper
-            (Datum::Int32(1), true, Datum::Null, false, "[1,)"),
-            (Datum::Int32(1), true, Datum::Null, true, "[1,]"),
-            (Datum::Int32(1), false, Datum::Null, false, "(1,)"),
-            (Datum::Int32(1), false, Datum::Null, true, "(1,]"),
-        ] {
-            packer
-                .push_range(
-                    RangeBoundDesc::new(lower, lower_inclusive),
-                    RangeBoundDesc::new(upper, upper_inclusive),
-                )
-                .unwrap();
-
-            let r = arena.make_datum(|packer| {
-                packer
-                    .push_range_with::<_, _, RangeError>(
-                        RangeBoundDesc {
-                            inclusive: lower_inclusive,
-                            value: match lower {
-                                Datum::Null => RangeBoundDescValue::Infinite,
-                                o => RangeBoundDescValue::Finite {
-                                    value: move |row: &mut RowPacker| Ok(row.push(o)),
-                                },
-                            },
-                        },
-                        RangeBoundDesc {
-                            inclusive: upper_inclusive,
-                            value: match upper {
-                                Datum::Null => RangeBoundDescValue::Infinite,
-                                o => RangeBoundDescValue::Finite {
-                                    value: move |row: &mut RowPacker| Ok(row.push(o)),
-                                },
-                            },
-                        },
-                    )
-                    .unwrap();
-            });
-            datum_vec.push((r, s));
-        }
-
-        let empty_range = arena.make_datum(|packer| {
-            packer.push_empty_range();
-        });
-
-        test_ranges_inner(empty_range, &Datum::Range(Range { inner: None }), &"empty");
-
-        let mut last_seen = empty_range;
-
-        for (row_value, (vec_value, string_rep)) in row.iter().zip_eq(datum_vec.iter()) {
-            // Validates Ord implementation; relies on input being hand-sorted.
-            assert!(last_seen < row_value, "{last_seen} < {row_value}");
-            test_ranges_inner(row_value, vec_value, string_rep);
-            last_seen = row_value;
-        }
-    }
-
-    #[test]
     fn test_range_errors() {
-        fn test_range_errors_inner<'a>(datums: Vec<Vec<Datum<'a>>>) -> Result<(), RangeError> {
+        fn test_range_errors_inner<'a>(
+            datums: Vec<Vec<Datum<'a>>>,
+        ) -> Result<(), InvalidRangeError> {
             let mut row = Row::default();
             let row_len = row.byte_len();
             let mut packer = row.packer();
             let r = packer.push_range_with(
-                RangeBoundDesc {
+                RangeLowerBound {
                     inclusive: true,
-                    value: RangeBoundDescValue::Finite {
-                        value: |row: &mut RowPacker| {
-                            for d in &datums[0] {
-                                row.push(d);
-                            }
-                            Ok(())
-                        },
-                    },
+                    bound: Some(|row: &mut RowPacker| {
+                        for d in &datums[0] {
+                            row.push(d);
+                        }
+                        Ok(())
+                    }),
                 },
-                RangeBoundDesc {
+                RangeUpperBound {
                     inclusive: true,
-                    value: RangeBoundDescValue::Finite {
-                        value: |row: &mut RowPacker| {
-                            for d in &datums[1] {
-                                row.push(d);
-                            }
-                            Ok(())
-                        },
-                    },
+                    bound: Some(|row: &mut RowPacker| {
+                        for d in &datums[1] {
+                            row.push(d);
+                        }
+                        Ok(())
+                    }),
                 },
             );
 
@@ -2349,7 +2274,7 @@ mod tests {
         }
 
         let e = test_range_errors_inner(vec![vec![Datum::Int32(2)], vec![Datum::Int32(1)]]);
-        assert_eq!(e, Err(RangeError::MisorderedRangeBounds));
+        assert_eq!(e, Err(InvalidRangeError::MisorderedRangeBounds));
     }
 }
 

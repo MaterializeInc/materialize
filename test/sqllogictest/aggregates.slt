@@ -223,7 +223,7 @@ SELECT avg(a) FROM t2
 
 # avg of an explicit NULL should return an error.
 
-query error unable to determine which implementation to use
+query error db error: ERROR: function pg_catalog\.sum\(unknown\) is not unique
 SELECT avg(NULL)
 
 statement error
@@ -324,7 +324,7 @@ select sum(distinct column1) from (values (1), (2), (1), (4)) _;
 query error count\(\*\) must be used to call a parameterless aggregate function
 SELECT count()
 
-query error arguments cannot be implicitly cast to any implementation's parameters
+query error db error: ERROR: function sum\(\) does not exist
 SELECT sum(*)
 
 # Ensure int2 has its own max implementation

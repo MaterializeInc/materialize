@@ -14,15 +14,15 @@ from materialize import ui
 from materialize.ui import UIError
 
 
-def exists(resource: str, context: str = "kind-kind") -> None:
+def exists(resource: str, context: str = "kind-cloudtest") -> None:
     _exists(resource, True, context)
 
 
-def not_exists(resource: str, context: str = "kind-kind") -> None:
+def not_exists(resource: str, context: str = "kind-cloudtest") -> None:
     _exists(resource, False, context)
 
 
-def _exists(resource: str, should_exist: bool, context: str = "kind-kind") -> None:
+def _exists(resource: str, should_exist: bool, context: str = "kind-cloudtest") -> None:
     cmd = ["kubectl", "get", "--output", "name", resource, "--context", context]
     ui.progress(f'running {" ".join(cmd)} ... ')
 

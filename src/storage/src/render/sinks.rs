@@ -70,8 +70,6 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
     );
     needed_tokens.push(source_token);
 
-    // TODO(teskje): Remove envelope-wrapping once the Kafka sink has been
-    // moved to STORAGE.
     let ok_collection =
         apply_sink_envelope(sink_id, sink, &sink_render, ok_collection.as_collection());
 
@@ -152,14 +150,7 @@ where
                 (Some(key), row)
             })
         } else {
-            // TODO(benesch): rewrite to avoid `as`.
-            #[allow(clippy::as_conversions)]
-            collection.map(|row| {
-                (
-                    Some(Row::pack(Some(Datum::Int64(row.hashed() as i64)))),
-                    row,
-                )
-            })
+            collection.map(|row| (Some(Row::pack(Some(Datum::UInt64(row.hashed())))), row))
         };
         keyed
     } else {

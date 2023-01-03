@@ -1117,21 +1117,15 @@ where
                             continue;
                         }
 
-                        assert!(diff >= 0, "can't sink negative multiplicities");
                         if diff == 0 {
                             // Explicitly refuse to send no-op records
                             continue;
                         };
-                        // TODO(benesch): rewrite to avoid `as`.
-                        #[allow(clippy::as_conversions)]
-                        let diff = diff as usize;
+                        let count =
+                            usize::try_from(diff).expect("can't sink negative multiplicities");
 
                         let rows = s.pending_rows.entry(time).or_default();
-                        rows.push(EncodedRow {
-                            key,
-                            value,
-                            count: diff,
-                        });
+                        rows.push(EncodedRow { key, value, count });
                         s.metrics.rows_queued.inc();
                     }
                 }

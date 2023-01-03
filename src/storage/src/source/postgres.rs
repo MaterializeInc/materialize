@@ -28,6 +28,7 @@ use tokio_postgres::SimpleQueryMessage;
 use tracing::{error, info, warn};
 
 use mz_expr::{MirScalarExpr, PartitionId};
+use mz_ore::display::DisplayExt;
 use mz_ore::task;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
@@ -319,6 +320,7 @@ impl SourceReader for PostgresSourceReader {
     type Key = ();
     type Value = Row;
     // Postgres can produce deletes that cause retractions
+    type Time = MzOffset;
     type Diff = Diff;
 
     // TODO(guswynn): use `next` instead of using a channel
@@ -438,13 +440,13 @@ async fn postgres_replication_loop_inner(
                 let _ = task_info
                     .sender
                     .send(InternalMessage::Status(HealthStatusUpdate {
-                        update: HealthStatus::StalledWithError(e.to_string()),
+                        update: HealthStatus::StalledWithError(e.to_string_alt()),
                         // TODO: In the future we probably want to handle this more gracefully,
                         // but for now halting is the easiest way to dump the data in the pipe.
-                        // The restarted storaged instance will restart the snapshot fresh, which will
+                        // The restarted clusterd instance will restart the snapshot fresh, which will
                         // avoid any inconsistencies. Note that if the same lsn is chosen in the
                         // next snapshotting, the remapped timestamp chosen will be the same for
-                        // both instances of storaged.
+                        // both instances of clusterd.
                         should_halt: true,
                     }))
                     .await;
@@ -718,9 +720,7 @@ impl PostgresTaskInfo {
                 // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
                 let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
 
-                // TODO(benesch): rewrite to avoid `as`.
-                #[allow(clippy::as_conversions)]
-                let mut raw_values = parser.iter_raw(info.desc.columns.len() as i32);
+                let mut raw_values = parser.iter_raw(info.desc.columns.len());
                 while let Some(raw_value) = raw_values.next() {
                     match try_definite!(raw_value) {
                         Some(value) => {

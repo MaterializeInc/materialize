@@ -19,6 +19,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use timely::progress::Antichain;
+use timely::PartialOrder;
 
 use mz_compute_client::response::{SubscribeBatch, SubscribeResponse};
 use mz_compute_client::types::sinks::{ComputeSinkDesc, SinkAsOf, SubscribeSinkConnection};
@@ -59,6 +60,7 @@ where
             sinked_collection,
             sink_id,
             sink.as_of.clone(),
+            sink.up_to.clone(),
             subscribe_protocol_handle,
         );
 
@@ -77,21 +79,27 @@ fn subscribe<G>(
     sinked_collection: Collection<G, Row, Diff>,
     sink_id: GlobalId,
     as_of: SinkAsOf,
+    up_to: Antichain<G::Timestamp>,
     subscribe_protocol_handle: Rc<RefCell<Option<SubscribeProtocol>>>,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
     let mut results = Vec::new();
+    let mut finished = false;
     sinked_collection
         .inner
         .sink(Pipeline, &format!("subscribe-{}", sink_id), move |input| {
+            if finished {
+                return;
+            }
             input.for_each(|_, rows| {
                 for (row, time, diff) in rows.iter() {
-                    let should_emit = if as_of.strict {
+                    let should_emit_as_of = if as_of.strict {
                         as_of.frontier.less_than(time)
                     } else {
                         as_of.frontier.less_equal(time)
                     };
+                    let should_emit = should_emit_as_of && !up_to.less_equal(time);
                     if should_emit {
                         results.push((*time, row.clone(), *diff));
                     }
@@ -100,6 +108,16 @@ fn subscribe<G>(
 
             if let Some(subscribe_protocol) = subscribe_protocol_handle.borrow_mut().deref_mut() {
                 subscribe_protocol.send_batch(input.frontier().frontier().to_owned(), &mut results);
+            }
+
+            if PartialOrder::less_equal(&up_to.borrow(), &input.frontier().frontier()) {
+                finished = true;
+                // We are done; indicate this by sending a batch at the
+                // empty frontier.
+                if let Some(subscribe_protocol) = subscribe_protocol_handle.borrow_mut().deref_mut()
+                {
+                    subscribe_protocol.send_batch(Antichain::default(), &mut Vec::new());
+                }
             }
         })
 }
@@ -146,7 +164,7 @@ impl SubscribeProtocol {
             self.prev_upper = upper;
             if input_exhausted {
                 // The dataflow's input has been exhausted; clear the channel,
-                // to avoid sending `TailResponse::DroppedAt`.
+                // to avoid sending `SubscribeResponse::DroppedAt`.
                 self.subscribe_response_buffer = None;
             }
         }

@@ -14,6 +14,6 @@ RUN apt-get update && apt-get -qy install ca-certificates
 COPY libvoidstar.so /usr/lib
 RUN ldconfig
 
-COPY environmentd computed storaged /usr/local/bin/
+COPY environmentd clusterd /usr/local/bin/
 
 ENTRYPOINT ["environmentd"]

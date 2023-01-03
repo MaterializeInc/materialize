@@ -31,9 +31,12 @@ pub struct RecordState {
 fn protobuf_timestamp(time: DateTime<Utc>) -> Timestamp {
     Timestamp {
         seconds: time.timestamp(),
-        // TODO(benesch): avoid dangerous `as` conversion.
-        #[allow(clippy::as_conversions)]
-        nanos: time.timestamp_subsec_nanos() as i32,
+        // Justification for `unwrap`:
+        // `timestamp_subsec_nanos` must be between 0 and 1_999_999_999.
+        // (That's not documented AFAICT, but Chrono tests for it when creating `NaiveTime`
+        //  objects, and it makes logical sense, given that normal seconds
+        //  have 1bn nanoseconds, and leap seconds have 2bn).
+        nanos: i32::try_from(time.timestamp_subsec_nanos()).expect("sane value for ts nanos"),
     }
 }
 

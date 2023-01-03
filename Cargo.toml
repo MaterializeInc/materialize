@@ -8,6 +8,7 @@ members = [
     "src/build-id",
     "src/build-info",
     "src/ccsr",
+    "src/clusterd",
     "src/compute",
     "src/compute-client",
     "src/controller",
@@ -72,7 +73,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.65.0"
+rust-version = "1.66.0"
 
 [profile.dev]
 # TODO(gusywnn|benesch): remove this when incremental ice's are improved

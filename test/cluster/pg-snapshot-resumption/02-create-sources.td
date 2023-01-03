@@ -25,5 +25,5 @@
   (PUBLICATION 'mz_source')
   FOR ALL TABLES
   WITH (
-    REMOTE = 'storaged:2100'
+    REMOTE = 'storage:2100'
   );

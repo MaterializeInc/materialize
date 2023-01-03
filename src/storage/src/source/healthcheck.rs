@@ -132,14 +132,14 @@ impl Healthchecker {
                         self.current_status = status_update.status;
                         break;
                     }
-                    Ok(Err(actual_upper)) => {
+                    Ok(Err(mismatch)) => {
                         trace!(
                             "Had to retry updating status, old upper {:?}, new upper {:?}",
                             &self.upper,
-                            &actual_upper
+                            &mismatch.current
                         );
                         // Sync to the new upper, go to the loop again
-                        self.sync(&actual_upper.0).await;
+                        self.sync(&mismatch.current).await;
                         // If we can't transition to the new status after the sync, no need to do anything else
                         if !self.current_status.can_transition(&status_update.status) {
                             break;
@@ -248,7 +248,7 @@ impl Healthchecker {
 pub enum SourceStatus {
     /// Initial state of a Source during initialization.
     Setup,
-    /// Intended to be the state while the `storaged` process is initializing itself
+    /// Intended to be the state while the `clusterd` process is initializing itself
     /// Pushed by the Healthchecker on creation.
     Starting,
     /// State indicating the source is running fine. Pushed automatically as long
@@ -638,9 +638,13 @@ mod tests {
         persist_clients: &Arc<Mutex<PersistClientCache>>,
     ) -> Healthchecker {
         let start = tokio::time::Instant::now();
-        // TODO(benesch): rewrite to avoid dangerous use of `as`.
-        #[allow(clippy::as_conversions)]
-        let now_fn = NowFn::from(move || start.elapsed().as_millis() as u64);
+        let now_fn = NowFn::from(move || {
+            start
+                .elapsed()
+                .as_millis()
+                .try_into()
+                .expect("materialize exists after 500M AD")
+        });
 
         let storage_metadata = CollectionMetadata {
             persist_location: (*PERSIST_LOCATION).clone(),

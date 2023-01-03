@@ -122,9 +122,15 @@ impl ProjectionPushdown {
                 )?;
                 desired_projection.clone()
             }
-            MirRelationExpr::LetRec { .. } => {
+            MirRelationExpr::LetRec { values, body, .. } => {
                 // TODO: Implement a more thoughtful projection pushdown.
-                (0..relation.arity()).collect()
+                let desired_projection = (0..body.arity()).collect();
+                self.action(body, &desired_projection, gets)?;
+                for value in values.iter_mut() {
+                    let desired_projection = (0..value.arity()).collect();
+                    self.action(value, &desired_projection, gets)?;
+                }
+                desired_projection
             }
             MirRelationExpr::Join {
                 inputs,

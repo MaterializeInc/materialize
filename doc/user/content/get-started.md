@@ -28,33 +28,37 @@ We are rolling out Early Access to the new, cloud-native version of Materialize.
 
 ## Connect
 
-1. Install the `psql` client:
+Open a terminal window and connect to Materialize using [any Materialize-compatible CLI](/integrations/sql-clients/), like `psql`. If you already have `psql` installed on your machine, use the connection string provided in the UI to connect:
 
-    For macOS:
+```bash
+psql "postgres://user%40domain.com@host:6875/materialize"
+```
 
-    ```shell
-    brew install libpq
-    brew link --force libpq
-    ```
+Otherwise, you can install `psql` using the following instructions:
 
-    For Debian-based distributions:
+{{< tabs >}}
+{{< tab "macOS">}}
 
-    ```shell
-    sudo apt-get update
-    sudo apt-get install postgresql-client
-    ```
+```bash
+brew install libpq
+brew link --force libpq
+```
 
-    For other operating systems, see the [`psql` installation instructions](/integrations/sql-clients#installation-instructions-for-psql).
+{{< /tab >}}
 
-1. Open a terminal window and connect to Materialize using any Materialize-compatible CLI, like `psql`. If you already have `psql` installed on your machine, use the provided connection string to connect:
+{{< tab "Linux">}}
 
-    Example:
+```bash
+sudo apt-get update
+sudo apt-get install postgresql-client
+```
 
-    ```bash
-    psql "postgres://user%40domain.com@host:6875/materialize"
-    ```
+{{< /tab >}}
 
-    Otherwise, you can find the steps to install and use your CLI of choice under [Supported tools](/integrations/sql-clients/#supported-tools).
+{{< tab "Windows">}}
+Download and install the [PostgreSQL installer](https://www.postgresql.org/download/windows/) certified by EDB.
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Explore a streaming source
 

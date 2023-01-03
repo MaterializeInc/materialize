@@ -15,3 +15,7 @@ disallowed-methods = [
 
     { path = "rdkafka::config::ClientConfig::new", reason = "use the `client::create_new_client_config` wrapper in `kafka_util` instead" },
 ]
+
+disallowed-macros = [
+    { path = "proptest::prop_oneof", reason = "use the `proptest::strategy::Union::new` instead" },
+]

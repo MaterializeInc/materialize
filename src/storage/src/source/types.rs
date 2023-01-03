@@ -33,7 +33,7 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::MzOffset;
+use mz_storage_client::types::sources::{MzOffset, SourceTimestamp};
 
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::source_reader_pipeline::HealthStatus;
@@ -89,6 +89,7 @@ pub trait SourceConnectionBuilder {
 pub trait SourceReader {
     type Key: timely::Data + MaybeLength;
     type Value: timely::Data + MaybeLength;
+    type Time: SourceTimestamp;
     type Diff: timely::Data;
 
     /// Returns the next message available from the source.
@@ -474,14 +475,12 @@ impl SourceMetrics {
 
             metric.messages_ingested.inc_by(count);
 
-            // TODO(benesch): rewrite to avoid `as`.
-            #[allow(clippy::as_conversions)]
             metric.record_offset(
                 &self.source_name,
                 self.source_id,
                 &partition,
                 offset.offset,
-                u64::from(timestamp) as i64,
+                i64::try_from(timestamp).expect("materialize exists after 250M AD"),
             );
         }
     }

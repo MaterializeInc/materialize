@@ -34,11 +34,12 @@ use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection
 
 use crate::catalog::builtin::{
     MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS,
-    MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_STATUSES,
-    MZ_COLUMNS, MZ_CONNECTIONS, MZ_DATABASES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES,
-    MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_MATERIALIZED_VIEWS, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES,
-    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_CLUSTER_REPLICA_METRICS,
+    MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS, MZ_DATABASES, MZ_EGRESS_IPS,
+    MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
+    MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS,
+    MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, Database, Error, ErrorKind, Func, Index,
@@ -201,12 +202,14 @@ impl CatalogState {
         let name = &entry.name().item;
         let mut updates = match entry.item() {
             CatalogItem::Log(_) => {
-                self.pack_source_update(id, oid, schema_id, name, "log", None, None, diff)
+                self.pack_source_update(id, oid, schema_id, name, "log", None, None, None, diff)
             }
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
             CatalogItem::Source(source) => {
-                let (source_type, connection_id) = (source.source_type(), source.connection_id());
+                let source_type = source.source_type();
+                let connection_id = source.connection_id();
+                let envelope = source.envelope();
 
                 self.pack_source_update(
                     id,
@@ -222,6 +225,7 @@ impl CatalogState {
                         }) => Some(size.as_str()),
                         _ => None,
                     },
+                    envelope,
                     diff,
                 )
             }
@@ -298,6 +302,7 @@ impl CatalogState {
         source_desc_name: &str,
         connection_id: Option<GlobalId>,
         size: Option<&str>,
+        envelope: Option<&str>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -310,6 +315,7 @@ impl CatalogState {
                 Datum::String(source_desc_name),
                 Datum::from(connection_id.map(|id| id.to_string()).as_deref()),
                 Datum::from(size),
+                Datum::from(envelope),
             ]),
             diff,
         }]
@@ -945,6 +951,26 @@ impl CatalogState {
                     BuiltinTableUpdate { id, row, diff: 1 }
                 },
             )
+            .collect();
+        updates
+    }
+
+    pub fn pack_replica_write_frontiers_updates(
+        &self,
+        replica_id: ReplicaId,
+        updates: &[(GlobalId, mz_repr::Timestamp)],
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate> {
+        let id = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_FRONTIERS);
+        let rows = updates.into_iter().map(|(coll_id, time)| {
+            Row::pack_slice(&[
+                replica_id.into(),
+                Datum::String(&coll_id.to_string()),
+                Datum::MzTimestamp(*time),
+            ])
+        });
+        let updates = rows
+            .map(|row| BuiltinTableUpdate { id, row, diff })
             .collect();
         updates
     }

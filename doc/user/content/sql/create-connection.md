@@ -104,6 +104,7 @@ Field                       | Value            | Required | Description
 `PASSWORD`                  | secret           |          | The password used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
 `USERNAME`                  | secret or `text` |          | The username used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
 `AWS PRIVATELINK`           | object name      |          | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic should be routed.
+`SSH TUNNEL`                | object name      |          | The name of an [SSH tunnel connection](#ssh-tunnel) through which network traffic should be routed.
 
 ### Examples
 
@@ -134,6 +135,21 @@ CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
 CREATE CONNECTION csr_privatelink TO CONFLUENT SCHEMA REGISTRY (
     URL 'http://my-confluent-schema-registry:8081',
     AWS PRIVATELINK privatelink_svc
+);
+```
+
+Connect to a Confluent Schema Registry server via an SSH tunnel:
+
+```sql
+CREATE CONNECTION ssh_connection TO SSH TUNNEL (
+    HOST '<SSH_BASTION_HOST>',
+    USER '<SSH_BASTION_USER>',
+    PORT <SSH_BASTION_PORT>
+);
+
+CREATE CONNECTION csr_privatelink TO CONFLUENT SCHEMA REGISTRY (
+    URL 'http://my-confluent-schema-registry:8081',
+    SSH TUNNEL ssh_connection
 );
 ```
 

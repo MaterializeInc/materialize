@@ -63,31 +63,31 @@ create the following subsources:
   * `organizations` describes the organizations known to the auction
     house.
 
-    Field | Type       | Describes
-    ------|------------|----------
+    Field | Type       | Description
+    ------|------------|------------
     id    | [`bigint`] | A unique identifier for the organization.
     name  | [`text`]   | The organization's name.
 
   * `users` describes the users that belong to each organization.
 
-    Field     | Type       | Describes
-    ----------|------------|----------
+    Field     | Type       | Description
+    ----------|------------|------------
     `id`      | [`bigint`] | A unique identifier for the user.
     `org_id`  | [`bigint`] | The identifier of the organization to which the user belongs. References `organizations.id`.
     `name`    | [`text`]   | The user's name.
 
   * `accounts` describes the account associated with each organization.
 
-    Field     | Type       | Describes
-    ----------|------------|----------
+    Field     | Type       | Description
+    ----------|------------|------------
     `id`      | [`bigint`] | A unique identifier for the account.
     `org_id`  | [`bigint`] | The identifier of the organization to which the account belongs. References `organizations.id`.
     `balance` | [`bigint`] | The balance of the account in dollars.
 
   * `auctions` describes all past and ongoing auctions.
 
-    Field      | Type                         | Describes
-    -----------|------------------------------|----------
+    Field      | Type                         | Description
+    -----------|------------------------------|------------
     `id`       | [`bigint`]                   | A unique identifier for the auction.
     `seller`   | [`bigint`]                   | The identifier of the user selling the item. References `users.id`.
     `item`     | [`text`]                     | The name of the item being sold.
@@ -95,8 +95,8 @@ create the following subsources:
 
   * `bids` describes the bids placed in each auction.
 
-    Field        | Type                         | Describes
-    -------------|------------------------------|----------
+    Field        | Type                         | Description
+    -------------|------------------------------|------------
     `id`         | [`bigint`]                   | A unique identifier for the bid.
     `buyer`      | [`bigint`]                   | The identifier vof the user placing the bid. References `users.id`.
     `auction_id` | [`text`]                     | The identifier of the auction in which the bid is placed. References `auctions.id`.
@@ -119,11 +119,12 @@ If not specified, the dataset will not change over time.
 ### Creating a counter load generator
 
 To create a load generator source that emits the next number in the sequence every
-second:
+500 milliseconds:
 
 ```sql
 CREATE SOURCE counter
   FROM LOAD GENERATOR COUNTER
+  (TICK INTERVAL '500ms')
   WITH (SIZE = '3xsmall');
 ```
 
@@ -142,11 +143,12 @@ SELECT * FROM counter;
 
 ### Creating an auction load generator
 
-To create the load generator source and its associated subsources:
+To create a load generator source that simulates an auction house and emits new data every second:
 
 ```sql
 CREATE SOURCE auction_house
   FROM LOAD GENERATOR AUCTION
+  (TICK INTERVAL '1s')
   FOR ALL TABLES
   WITH (SIZE = '3xsmall');
 ```

@@ -12,11 +12,10 @@
 pub(crate) mod text;
 
 use std::collections::HashMap;
-use std::iter::once;
 
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_expr::{visit::Visit, Id, LocalId, MirRelationExpr, OptimizedMirRelationExpr};
-use mz_ore::{cast::CastFrom, stack::RecursionLimitError, str::bracketed, str::separated};
+use mz_ore::{stack::RecursionLimitError, str::bracketed, str::separated};
 use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
 use mz_transform::attribute::{
     Arity, DerivedAttributes, NonNegative, RelationType, SubtreeSize, UniqueKeys,
@@ -67,8 +66,8 @@ impl<'a> Explainable<'a, MirRelationExpr> {
         // normalize the representation of nested Let bindings
         // and enforce sequential Let binding IDs
         if !config.raw_plans {
-            normalize_lets_in_tree(self.0)?;
-            enforce_let_id_sequence(self.0)?;
+            mz_transform::normalize_lets::normalize_lets(self.0)
+                .map_err(|e| ExplainError::UnknownError(e.to_string()))?;
         }
 
         let plan = AnnotatedPlan::try_from(context, self.0)?;
@@ -123,8 +122,8 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
                 // normalize the representation of nested Let bindings
                 // and enforce sequential Let binding IDs
                 if !config.raw_plans {
-                    normalize_lets_in_tree(build_desc.plan.as_inner_mut())?;
-                    enforce_let_id_sequence(build_desc.plan.as_inner_mut())?;
+                    mz_transform::normalize_lets::normalize_lets(build_desc.plan.as_inner_mut())
+                        .map_err(|e| ExplainError::UnknownError(e.to_string()))?;
                 }
 
                 let id = context
@@ -134,7 +133,7 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
                 let plan = AnnotatedPlan::try_from(context, build_desc.plan.as_inner())?;
                 Ok((id, plan))
             })
-            .collect::<Result<Vec<_>, RecursionLimitError>>()?;
+            .collect::<Result<Vec<_>, ExplainError>>()?;
 
         let sources = self
             .0
@@ -242,7 +241,7 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
 /// After the transform is applied, non-trival inputs `$input` of variants with
 /// more than one input are wrapped in a `let $x = $input in $x` blocks.
 ///
-/// If these blocks are subsequently pulled up by [`normalize_lets_in_tree`],
+/// If these blocks are subsequently pulled up by `NormalizeLets`,
 /// the rendered version of the resulting tree will only have linear chains.
 fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), RecursionLimitError> {
     use MirRelationExpr::{Constant, Get, Join, Union};
@@ -308,368 +307,4 @@ fn id_gen(expr: &MirRelationExpr) -> Result<impl Iterator<Item = LocalId>, Recur
     })?;
 
     Ok((max_id + 1..).map(LocalId::new))
-}
-
-/// Reset local IDs top-down as a 0-based sequence.
-fn enforce_let_id_sequence(expr: &mut MirRelationExpr) -> Result<(), RecursionLimitError> {
-    // helper struct: a map of old to new IDs
-    let mut id_map = HashMap::<LocalId, LocalId>::new();
-
-    expr.try_visit_mut_pre(&mut |expr: &mut MirRelationExpr| {
-        match expr {
-            MirRelationExpr::Let { id, .. } => {
-                let id_old = id.clone();
-                let id_new = u64::cast_from(id_map.len());
-                id_map.insert(id_old, LocalId::new(id_new));
-                std::mem::swap(id, &mut LocalId::new(id_new));
-            }
-            MirRelationExpr::Get {
-                id: Id::Local(id_old),
-                ..
-            } => {
-                let mut id_new = id_map.get(id_old).unwrap_or(id_old).clone();
-                std::mem::swap(id_old, &mut id_new);
-            }
-            _ => (),
-        }
-        Ok(())
-    })?;
-
-    Ok(())
-}
-
-/// Normalizes occurrences of nested `Let` bindings in the entire tree
-/// rooted at the given `expr`.
-///
-/// This just applies [`normalize_lets_at_root`] bottom up once.
-fn normalize_lets_in_tree(expr: &mut MirRelationExpr) -> Result<(), RecursionLimitError> {
-    expr.visit_mut_post(&mut normalize_lets_at_root)
-}
-
-/// Normalizes occurrences of nested `Let` bindings at the root of the
-/// given `expr`.
-///
-/// The general form of a `Let` binding is
-/// ```text
-/// let
-///   ${id} = ${value}
-/// in
-///   ${body}
-/// ```
-/// Let ⟦-〛 denote a translated expression.
-/// There are three basic cases for implementing ⟦-〛 that depend
-/// on the surrounding context of a matched `Let` binding.
-///
-/// ## Case 1: An inner `Let` appearing in a relational operator `op`
-/// Rewrite
-/// ```text
-/// 〚 op(
-///     ${prefix},
-///     let
-///       ${id} = ${value}
-///     in
-///       ${body},
-///     ${suffix}
-///   ) 〛
-/// ```
-/// as
-/// ```text
-/// let
-///   ${id} = ${value}
-/// in
-///   ⟦ op(${prefix}, ${body}, ${suffix}) 〛
-/// ```
-///
-/// ## Case 2: An inner `Let` appearing in the `value` of an enclosing outer `Let`
-/// Rewrite
-/// ```text
-/// 〚 let
-///     ${id_1} =
-///       let
-///         ${id_2} = ${value_2}
-///       in
-///         ${body_2}
-///   in
-///     ${body_1} 〛
-/// ```
-/// as
-/// ```text
-/// let
-///   ${id_2} = ${value_2}
-/// in
-///   〚 let
-///       ${id_1} = ${body_2}
-///     in
-///       ${body_1} 〛
-/// ```
-///
-/// ## Case 3: An inner `Let` appearing in the `body` of an enclosing outer `Let`
-/// ```text
-/// 〚 let
-///     ${id_1} = ${value_1}
-///   in
-///     let
-///       ${lhs_2} = ${value_2}
-///     in
-///       ${body_2} 〛
-/// ```
-/// Do nothing.
-///
-/// Note that the implementation of this spec is not recursive,
-/// so 〚-〛 calls in the resulting term are avoided. This ensures
-/// that the entire tree can be rewritten in a single bottom-up pass.
-fn normalize_lets_at_root(expr: &mut MirRelationExpr) {
-    use MirRelationExpr::*;
-    let normalized_expr = match expr {
-        Constant { rows: _, typ: _ } => None,
-        Get { id: _, typ: _ } => None,
-        Let {
-            id: id_1,
-            value: value_1,
-            body: body_1,
-        } => {
-            let is_modified = at_inner_most_let_body(value_1, |body_2| {
-                *body_2 = Let {
-                    id: id_1.clone(),
-                    value: Box::new(body_2.take_dangerous()),
-                    body: Box::new(body_1.take_dangerous()),
-                }
-            });
-            if is_modified {
-                Some(value_1.take_dangerous())
-            } else {
-                None
-            }
-        }
-        MirRelationExpr::LetRec { .. } => {
-            unimplemented!("unclear how to normalize LetRec");
-        }
-        Project { input, outputs } => {
-            let is_modified = at_inner_most_let_body(input, |body| {
-                *body = Project {
-                    input: Box::new(body.take_dangerous()),
-                    outputs: outputs.split_off(0),
-                }
-            });
-            if is_modified {
-                Some(input.take_dangerous())
-            } else {
-                None
-            }
-        }
-        Map { input, scalars } => {
-            let is_modified = at_inner_most_let_body(input, |body| {
-                *body = Map {
-                    input: Box::new(body.take_dangerous()),
-                    scalars: scalars.split_off(0),
-                }
-            });
-            if is_modified {
-                Some(input.take_dangerous())
-            } else {
-                None
-            }
-        }
-        FlatMap { input, func, exprs } => {
-            let is_modified = at_inner_most_let_body(input, |body| {
-                *body = FlatMap {
-                    input: Box::new(body.take_dangerous()),
-                    func: func.clone(),
-                    exprs: exprs.split_off(0),
-                }
-            });
-            if is_modified {
-                Some(input.take_dangerous())
-            } else {
-                None
-            }
-        }
-        Filter { input, predicates } => {
-            let is_modified = at_inner_most_let_body(input, |body| {
-                *body = Filter {
-                    input: Box::new(body.take_dangerous()),
-                    predicates: predicates.split_off(0),
-                }
-            });
-            if is_modified {
-                Some(input.take_dangerous())
-            } else {
-                None
-            }
-        }
-        Join {
-            inputs,
-            equivalences,
-            implementation,
-        } => {
-            let mut bindings = vec![];
-
-            let inputs = inputs
-                .drain(..)
-                .map(|input| {
-                    let mut residual = input;
-                    while let Let { id, value, body } = residual {
-                        bindings.push((id, value));
-                        residual = *body;
-                    }
-                    residual
-                })
-                .collect::<Vec<_>>();
-
-            let mut result = Join {
-                inputs,
-                equivalences: equivalences.split_off(0),
-                implementation: implementation.to_owned(),
-            };
-            for (id, value) in bindings.drain(..).rev() {
-                result = Let {
-                    id,
-                    value,
-                    body: Box::new(result),
-                };
-            }
-
-            Some(result)
-        }
-        Reduce {
-            input,
-            group_key,
-            aggregates,
-            monotonic,
-            expected_group_size,
-        } => {
-            let is_modified = at_inner_most_let_body(input, |body| {
-                *body = Reduce {
-                    input: Box::new(body.take_dangerous()),
-                    group_key: group_key.split_off(0),
-                    aggregates: aggregates.split_off(0),
-                    monotonic: monotonic.clone(),
-                    expected_group_size: expected_group_size.clone(),
-                }
-            });
-            if is_modified {
-                Some(input.take_dangerous())
-            } else {
-                None
-            }
-        }
-        TopK {
-            input,
-            group_key,
-            order_key,
-            limit,
-            offset,
-            monotonic,
-        } => {
-            let is_modified = at_inner_most_let_body(input, |body| {
-                *body = TopK {
-                    input: Box::new(body.take_dangerous()),
-                    group_key: group_key.split_off(0),
-                    order_key: order_key.split_off(0),
-                    limit: limit.clone(),
-                    offset: offset.clone(),
-                    monotonic: monotonic.clone(),
-                }
-            });
-            if is_modified {
-                Some(input.take_dangerous())
-            } else {
-                None
-            }
-        }
-        Negate { input } => {
-            let is_modified = at_inner_most_let_body(input, |body| {
-                *body = Negate {
-                    input: Box::new(body.take_dangerous()),
-                }
-            });
-            if is_modified {
-                Some(input.take_dangerous())
-            } else {
-                None
-            }
-        }
-        Threshold { input } => {
-            let is_modified = at_inner_most_let_body(input, |body| {
-                *body = Threshold {
-                    input: Box::new(body.take_dangerous()),
-                }
-            });
-            if is_modified {
-                Some(input.take_dangerous())
-            } else {
-                None
-            }
-        }
-        Union { base, inputs } => {
-            let mut bindings = vec![];
-
-            let mut inputs = once(base.take_dangerous())
-                .chain(inputs.split_off(0))
-                .into_iter()
-                .map(|input| {
-                    let mut residual = input;
-                    while let Let { id, value, body } = residual {
-                        bindings.push((id, value));
-                        residual = *body;
-                    }
-                    residual
-                })
-                .collect::<Vec<_>>();
-            let base = Box::new(inputs.remove(0));
-
-            let mut result = Union { base, inputs };
-            for (id, value) in bindings.drain(..).rev() {
-                result = Let {
-                    id,
-                    value,
-                    body: Box::new(result),
-                };
-            }
-
-            Some(result)
-        }
-        ArrangeBy { input, keys } => {
-            let is_modified = at_inner_most_let_body(input, |body| {
-                *body = ArrangeBy {
-                    input: Box::new(body.take_dangerous()),
-                    keys: keys.split_off(0),
-                }
-            });
-            if is_modified {
-                Some(input.take_dangerous())
-            } else {
-                None
-            }
-        }
-    };
-    if let Some(mut normalized_expr) = normalized_expr {
-        std::mem::swap(expr, &mut normalized_expr);
-    }
-}
-
-/// Try to match `expr`, assuming it is a chain of nested `Let` nodes,
-/// until the inner-most `body` is reached, and apply `f` to that `body`.
-/// Return `true` iff the match was successful and `f` has been applied.
-fn at_inner_most_let_body<F>(expr: &mut MirRelationExpr, mut f: F) -> bool
-where
-    F: FnMut(&mut MirRelationExpr),
-{
-    use MirRelationExpr::Let;
-    match expr {
-        Let { body: next, .. } => {
-            let mut body = next.as_mut();
-            while let Let {
-                id: _,
-                value: _,
-                body: next,
-            } = body
-            {
-                body = next.as_mut();
-            }
-            f(body);
-            true
-        }
-        _ => false,
-    }
 }

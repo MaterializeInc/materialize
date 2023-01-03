@@ -16,11 +16,9 @@ use anyhow::anyhow;
 use timely::communication::initialize::WorkerGuards;
 use tokio::sync::mpsc;
 
-use mz_build_info::BuildInfo;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::PersistConfig;
 use mz_service::local::LocalClient;
 use mz_storage_client::client::StorageClient;
 use mz_storage_client::types::connections::ConnectionContext;
@@ -32,8 +30,6 @@ use crate::DecodeMetrics;
 
 /// Configures a dataflow server.
 pub struct Config {
-    /// Build information.
-    pub build_info: &'static BuildInfo,
     /// The number of worker threads to spawn.
     pub workers: usize,
     /// The Timely configuration
@@ -44,6 +40,8 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     /// Configuration for source and sink connection.
     pub connection_context: ConnectionContext,
+    /// `persist` client cache.
+    pub persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
 }
 
 /// A handle to a running dataflow server.
@@ -73,11 +71,6 @@ pub fn serve(
 
     let tokio_executor = tokio::runtime::Handle::current();
     let now = config.now;
-    let persist_clients = PersistClientCache::new(
-        PersistConfig::new(config.build_info, now.clone()),
-        &config.metrics_registry,
-    );
-    let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_clients));
 
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
         let timely_worker_index = timely_worker.index();
@@ -90,7 +83,7 @@ pub fn serve(
             .take()
             .unwrap();
         let (source_metrics, sink_metrics, decode_metrics) = metrics_bundle.clone();
-        let persist_clients = Arc::clone(&persist_clients);
+        let persist_clients = Arc::clone(&config.persist_clients);
         Worker {
             timely_worker,
             client_rx,

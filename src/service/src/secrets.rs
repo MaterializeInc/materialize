@@ -19,15 +19,23 @@ use mz_secrets::SecretsReader;
 #[derive(clap::Parser)]
 pub struct SecretsReaderCliArgs {
     /// The secrets reader implementation to use.
-    #[structopt(long, arg_enum)]
+    #[structopt(long, arg_enum, env = "SECRETS_READER")]
     secrets_reader: SecretsReaderKind,
     /// When using the process secrets reader, the directory on the filesystem
     /// where secrets are stored.
-    #[structopt(long, required_if_eq("secrets-reader", "process"))]
+    #[structopt(
+        long,
+        required_if_eq("secrets-reader", "process"),
+        env = "SECRETS_READER_PROCESS_DIR"
+    )]
     secrets_reader_process_dir: Option<PathBuf>,
     /// When using the Kubernetes secrets reader, the Kubernetes context to
     /// load.
-    #[structopt(long, required_if_eq("secrets-reader", "kubernetes"))]
+    #[structopt(
+        long,
+        required_if_eq("secrets-reader", "kubernetes"),
+        env = "SECRETS_READER_KUBERNETES_CONTEXT"
+    )]
     secrets_reader_kubernetes_context: Option<String>,
 }
 

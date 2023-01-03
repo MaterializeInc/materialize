@@ -60,23 +60,23 @@ See the [secret design doc](../design/20220303_secrets.md).
 
 ## Binaries
 
-There are presently three binaries involved in Materialize Platform:
+There are presently two binaries involved in Materialize Platform:
 
   * `environmentd`, which hosts the storage controller, compute controller,
     and adapter layers
-  * `storaged`, which hosts a storage runtime
-  * `computed`, which hosts a compute runtime
+  * `clusterd`, which hosts a storage and compute runtime.
 
-There are three separate network protocols:
+There are four separate network protocols:
 
-  * The **controller** protocol, which is how `environmentd` communicates with
-    `storaged` and `computed`. This protocol is conventionally hosted on port
-    2100.
+  * The **storagectl** protocol, which his how `environmentd` communicates
+    with the storage runtime in `clusterd`. This protocol is conventionally
+    hosted on port 2100.
 
-  * The **storage** protocol, which is how the compute runtime communicates with
-    the storage runtime. This protocol is conventionally hosted on port 2101.
+  * The **computectl** protocol, which his how `environmentd` communicates
+    with the compute runtime in `clusterd`. This protocol is conventionally
+    hosted on port 2101.
 
-  * The **compute** protocol, which is how compute nodes communicate with one
+  * The **timely** protocol, which is how cluster processes communicate with one
     another. This protocol is conventionally hosted on port 2102.
 
 ## Terraform provider

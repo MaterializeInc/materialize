@@ -13,8 +13,7 @@ use std::collections::BTreeSet;
 use std::num::NonZeroI64;
 
 use proptest::prelude::{any, Arbitrary};
-use proptest::prop_oneof;
-use proptest::strategy::{BoxedStrategy, Strategy};
+use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
@@ -34,8 +33,8 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.command.rs"));
 
 /// Commands related to the computation and maintenance of views.
 ///
-/// A replica can consist of multiple computed processes. Upon startup, a computed will listen for
-/// a connection from environmentd. The first command sent to computed must be a CreateTimely
+/// A replica can consist of multiple clusterd processes. Upon startup, a clusterd will listen for
+/// a connection from environmentd. The first command sent to clusterd must be a CreateTimely
 /// command, which will build the timely runtime.
 ///
 /// CreateTimely is the only command that is sent to every process of the replica by environmentd.
@@ -50,15 +49,15 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.command.rs"));
 /// Within this sequence, exactly one InitializationComplete has to be sent. Commands sent before
 /// InitializationComplete are buffered and are compacted. For example a Peek followed by a
 /// CancelPeek will become a no-op if sent before InitializationComplete. After
-/// InitializationComplete, the computed is considered rehydrated and will immediately act upon the
+/// InitializationComplete, the clusterd is considered rehydrated and will immediately act upon the
 /// commands. If a new cluster is created, InitializationComplete will follow immediately after
 /// CreateInstance. If a replica is added to a cluster or environmentd restarts and rehydrates a
-/// computed, a potentially long command sequence will be sent before InitializationComplete.
+/// clusterd, a potentially long command sequence will be sent before InitializationComplete.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Create the timely runtime according to the supplied CommunicationConfig. Must be the first
-    /// command sent to a computed. This is the only command that is broadcasted by
-    /// ActiveReplication to all computed processes within a replica.
+    /// command sent to a clusterd. This is the only command that is broadcasted by
+    /// ActiveReplication to all clusterd processes within a replica.
     CreateTimely {
         comm_config: CommunicationConfig,
         epoch: ComputeStartupEpoch,
@@ -177,42 +176,49 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
 }
 
 impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
+    type Strategy = Union<BoxedStrategy<Self>>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop_oneof![
-            any::<InstanceConfig>().prop_map(ComputeCommand::CreateInstance),
-            proptest::collection::vec(
-                any::<DataflowDescription<crate::plan::Plan, CollectionMetadata, mz_repr::Timestamp>>(),
-                1..4
-            )
-            .prop_map(ComputeCommand::CreateDataflows),
-            proptest::collection::vec(
-                (
-                    any::<GlobalId>(),
-                    proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4)
-                ),
-                1..4
-            )
-            .prop_map(|collections| ComputeCommand::AllowCompaction(
-                collections
-                    .into_iter()
-                    .map(|(id, frontier_vec)| { (id, Antichain::from(frontier_vec)) })
-                    .collect()
-            )),
-            any::<Peek>().prop_map(ComputeCommand::Peek),
-            proptest::collection::vec(any_uuid(), 1..6).prop_map(|uuids| {
-                ComputeCommand::CancelPeeks {
-                    uuids: BTreeSet::from_iter(uuids.into_iter()),
-                }
-            })
-        ]
-        .boxed()
+        Union::new(vec![
+                any::<InstanceConfig>().prop_map(ComputeCommand::CreateInstance).boxed(),
+                proptest::collection::vec(
+                    any::<
+                        DataflowDescription<
+                            crate::plan::Plan,
+                            CollectionMetadata,
+                            mz_repr::Timestamp,
+                        >,
+                    >(),
+                    1..4,
+                )
+                .prop_map(ComputeCommand::CreateDataflows).boxed(),
+                proptest::collection::vec(
+                    (
+                        any::<GlobalId>(),
+                        proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
+                    ),
+                    1..4,
+                )
+                .prop_map(|collections| {
+                    ComputeCommand::AllowCompaction(
+                        collections
+                            .into_iter()
+                            .map(|(id, frontier_vec)| (id, Antichain::from(frontier_vec)))
+                            .collect(),
+                    )
+                }).boxed(),
+                any::<Peek>().prop_map(ComputeCommand::Peek).boxed(),
+                proptest::collection::vec(any_uuid(), 1..6).prop_map(|uuids| {
+                    ComputeCommand::CancelPeeks {
+                        uuids: BTreeSet::from_iter(uuids.into_iter()),
+                    }
+                }).boxed(),
+            ])
     }
 }
 
-/// A value generated by environmentd and passed to the computed processes
+/// A value generated by environmentd and passed to the clusterd processes
 /// to help them disambiguate different `CreateTimely` commands.
 ///
 /// The semantics of this value are not important, except that they
@@ -683,9 +689,7 @@ mod tests {
             assert_eq!(actual.unwrap(), expect);
         }
 
-        // TODO: Unignore after fixing #14543.
         #[test]
-        #[ignore]
         fn compute_command_protobuf_roundtrip(expect in any::<ComputeCommand<mz_repr::Timestamp>>() ) {
             let actual = protobuf_roundtrip::<_, ProtoComputeCommand>(&expect);
             assert!(actual.is_ok());

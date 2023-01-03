@@ -206,11 +206,14 @@ impl StateVersions {
             new_state.seqno(),
             new_state
         );
-        let new = self
-            .metrics
-            .codecs
-            .state_diff
-            .encode(|| VersionedData::from((new_state.seqno(), diff)));
+        let new = self.metrics.codecs.state_diff.encode(|| {
+            let mut buf = Vec::new();
+            diff.encode(&mut buf);
+            VersionedData {
+                seqno: new_state.seqno(),
+                data: Bytes::from(buf),
+            }
+        });
         assert_eq!(new.seqno, diff.seqno_to);
 
         let payload_len = new.data.len();
@@ -242,7 +245,9 @@ impl StateVersions {
                 shard_metrics.set_upper(new_state.upper());
                 shard_metrics.set_batch_part_count(new_state.batch_part_count());
                 shard_metrics.set_update_count(new_state.num_updates());
-                shard_metrics.set_encoded_batch_size(new_state.encoded_batch_size());
+                let (largest_batch_size, encoded_batch_size) = new_state.batch_size_metrics();
+                shard_metrics.set_largest_batch_size(largest_batch_size);
+                shard_metrics.set_encoded_batch_size(encoded_batch_size);
                 shard_metrics.set_seqnos_held(new_state.seqnos_held());
                 shard_metrics.inc_encoded_diff_size(payload_len);
                 Ok(Ok(()))

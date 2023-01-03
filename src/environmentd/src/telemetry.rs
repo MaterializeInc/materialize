@@ -21,7 +21,7 @@ use serde_json::json;
 use tokio::time::{self, Duration};
 use tracing::warn;
 
-use mz_adapter::telemetry::EnvironmentIdExt;
+use mz_adapter::telemetry::SegmentClientExt;
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::task;
@@ -82,7 +82,8 @@ async fn report_rollup_loop(
             subscribes: query_total.with_label_values(&["user", "subscribe"]).get(),
         };
 
-        segment_client.track(
+        segment_client.environment_track(
+            &environment_id,
             // We use the organization ID as the user ID for events
             // that are not associated with a particular user.
             environment_id.organization_id(),
@@ -95,7 +96,6 @@ async fn report_rollup_loop(
                 "selects": current_rollup.selects - last_rollup.selects,
                 "subscribes": current_rollup.subscribes - last_rollup.subscribes,
             }),
-            Some(environment_id.as_segment_context()),
         );
 
         last_rollup = current_rollup;

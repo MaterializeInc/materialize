@@ -23,8 +23,11 @@ from materialize.checks.executors import Executor
 from materialize.checks.mzcompose_actions import (
     DropCreateDefaultReplica as DropCreateDefaultReplicaAction,
 )
-from materialize.checks.mzcompose_actions import KillComputed, KillMz
-from materialize.checks.mzcompose_actions import KillStoraged as KillStoragedAction
+from materialize.checks.mzcompose_actions import KillClusterdCompute
+from materialize.checks.mzcompose_actions import (
+    KillClusterdStorage as KillClusterdStorageAction,
+)
+from materialize.checks.mzcompose_actions import KillMz
 from materialize.checks.mzcompose_actions import (
     RestartPostgresBackend as RestartPostgresBackendAction,
 )
@@ -34,7 +37,11 @@ from materialize.checks.mzcompose_actions import (
 from materialize.checks.mzcompose_actions import (
     RestartSourcePostgres as RestartSourcePostgresAction,
 )
-from materialize.checks.mzcompose_actions import StartComputed, StartMz, UseComputed
+from materialize.checks.mzcompose_actions import (
+    StartClusterdCompute,
+    StartMz,
+    UseClusterdCompute,
+)
 
 
 class Scenario:
@@ -90,35 +97,35 @@ class DropCreateDefaultReplica(Scenario):
         ]
 
 
-class RestartComputed(Scenario):
-    """Restart computed by having it run in a separate container that is then killed and restarted."""
+class RestartClusterdCompute(Scenario):
+    """Restart clusterd by having it run in a separate container that is then killed and restarted."""
 
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            StartComputed(),
-            UseComputed(),
+            StartClusterdCompute(),
+            UseClusterdCompute(),
             Initialize(self.checks),
-            KillComputed(),
-            StartComputed(),
+            KillClusterdCompute(),
+            StartClusterdCompute(),
             Manipulate(self.checks, phase=1),
-            KillComputed(),
-            StartComputed(),
+            KillClusterdCompute(),
+            StartClusterdCompute(),
             Manipulate(self.checks, phase=2),
-            KillComputed(),
-            StartComputed(),
+            KillClusterdCompute(),
+            StartClusterdCompute(),
             Validate(self.checks),
         ]
 
 
-class RestartEnvironmentdStoraged(Scenario):
-    """Restart environmentd and storaged (as spawned from it), while keeping computed running by placing it in a separate container."""
+class RestartEnvironmentdClusterdStorage(Scenario):
+    """Restart environmentd and storage clusterds (as spawned from it), while keeping computed running by placing it in a separate container."""
 
     def actions(self) -> List[Action]:
         return [
             StartMz(),
-            StartComputed(),
-            UseComputed(),
+            StartClusterdCompute(),
+            UseClusterdCompute(),
             Initialize(self.checks),
             KillMz(),
             StartMz(),
@@ -132,18 +139,18 @@ class RestartEnvironmentdStoraged(Scenario):
         ]
 
 
-class KillStoraged(Scenario):
-    """Kill storaged while it is running inside the enviromentd container. The process orchestrator will (try to) start it again."""
+class KillClusterdStorage(Scenario):
+    """Kill storage clusterd while it is running inside the enviromentd container. The process orchestrator will (try to) start it again."""
 
     def actions(self) -> List[Action]:
         return [
             StartMz(),
             Initialize(self.checks),
-            KillStoragedAction(),
+            KillClusterdStorageAction(),
             Manipulate(self.checks, phase=1),
-            KillStoragedAction(),
+            KillClusterdStorageAction(),
             Manipulate(self.checks, phase=2),
-            KillStoragedAction(),
+            KillClusterdStorageAction(),
             Validate(self.checks),
         ]
 

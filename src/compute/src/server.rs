@@ -32,7 +32,6 @@ use timely::WorkerConfig;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
-use mz_build_info::BuildInfo;
 use mz_compute_client::command::{CommunicationConfig, ComputeStartupEpoch};
 use mz_compute_client::command::{ComputeCommand, ComputeCommandHistory};
 use mz_compute_client::metrics::ComputeMetrics;
@@ -42,9 +41,7 @@ use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
 use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::PersistConfig;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::local::LocalClient;
 use tracing::{info, warn};
@@ -57,12 +54,10 @@ use crate::{TraceManager, TraceMetrics};
 /// Configures a dataflow server.
 #[derive(Debug)]
 pub struct Config {
-    /// Build information.
-    pub build_info: &'static BuildInfo,
-    /// Function to get wall time now.
-    pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
+    /// `persist` client cache.
+    pub persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
 }
 
 /// A client managing access to the local portion of a Timely cluster
@@ -108,11 +103,6 @@ pub fn serve(
     let trace_metrics = TraceMetrics::register_with(&config.metrics_registry);
     let compute_metrics = ComputeMetrics::register_with(&config.metrics_registry);
 
-    let persist_clients = PersistClientCache::new(
-        PersistConfig::new(config.build_info, config.now.clone()),
-        &config.metrics_registry,
-    );
-    let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_clients));
     let tokio_executor = tokio::runtime::Handle::current();
     let timely_container = Arc::new(tokio::sync::Mutex::new(None));
 
@@ -123,7 +113,7 @@ pub fn serve(
                 Arc::clone(&timely_container),
                 trace_metrics.clone(),
                 compute_metrics.clone(),
-                Arc::clone(&persist_clients),
+                Arc::clone(&config.persist_clients),
                 tokio_executor.clone(),
             );
             let client: Box<dyn ComputeClient> = Box::new(client);

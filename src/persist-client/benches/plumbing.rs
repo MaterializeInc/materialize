@@ -26,7 +26,6 @@ use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, Blob, Consensus, ExternalError, SeqNo, VersionedData};
 use mz_persist::workload::{self, DataGenerator};
 use mz_persist_client::ShardId;
-use mz_persist_types::Codec;
 
 use crate::{bench_all_blob, bench_all_consensus};
 

@@ -28,13 +28,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mz_ore::metrics::MetricsRegistry;
+use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist_client::async_runtime::CpuHeavyRuntime;
+use mz_persist_client::metrics::Metrics;
 use tracing::error;
 
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::ExternalError;
 use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
-use mz_persist_client::{Metrics, PersistClient, PersistConfig, PersistLocation};
+use mz_persist_client::{PersistClient, PersistConfig};
 
 use crate::BUILD_INFO;
 
@@ -165,13 +167,16 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
 }
 
 async fn persist_client(args: Args) -> Result<PersistClient, ExternalError> {
-    let location = PersistLocation {
-        blob_uri: args.blob_uri,
-        consensus_uri: args.consensus_uri,
-    };
     let config = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
-    let (blob, consensus) = location.open_locations(&config, &metrics).await?;
+    let blob = BlobConfig::try_from(&args.blob_uri).await?.open().await?;
+    let consensus = ConsensusConfig::try_from(
+        &args.consensus_uri,
+        Box::new(config.clone()),
+        metrics.postgres_consensus.clone(),
+    )?
+    .open()
+    .await?;
     let unreliable = UnreliableHandle::default();
     let should_happen = 1.0 - args.unreliability;
     let should_timeout = args.unreliability;
@@ -544,6 +549,7 @@ mod impls {
 
     use async_trait::async_trait;
     use differential_dataflow::lattice::Lattice;
+    use mz_persist_client::error::UpperMismatch;
     use timely::progress::Antichain;
     use timely::progress::Timestamp as TimelyTimestamp;
     use timely::PartialOrder;
@@ -553,7 +559,6 @@ mod impls {
     use mz_ore::now::NowFn;
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::write::WriteHandle;
-    use mz_persist_client::Upper;
     use mz_persist_types::{Codec, Codec64};
 
     use super::api::{Batch, IteratedConsensus, Source, TimestampBindings, Timestamper};
@@ -917,7 +922,7 @@ mod impls {
                 .expect("invalid usage");
             match result {
                 Ok(x) => Ok(x),
-                Err(Upper(upper)) => Err(upper),
+                Err(UpperMismatch { current, .. }) => Err(current),
             }
         }
     }
@@ -937,7 +942,6 @@ mod render {
     use tracing::{error, trace};
 
     use mz_persist_client::write::WriteHandle;
-    use mz_persist_client::Upper;
     use mz_persist_types::{Codec, Codec64};
 
     use super::api::{Batch, Message, Source, TimestampedBatch, Timestamper};
@@ -1298,13 +1302,10 @@ mod render {
                     Ok(Ok(_)) => {
                         // All good!
                     }
-                    Ok(Err(Upper(current_upper))) => {
+                    Ok(Err(mismatch)) => {
                         // We messed up, and somehow constructed a batch that would
                         // have left a hole in the shard.
-                        panic!(
-                            "emit.append: unrecoverable usage error: {:?}",
-                            current_upper
-                        );
+                        panic!("emit.append: unrecoverable usage error: {}", mismatch);
                     }
                     Err(e) => {
                         panic!("emit.append: unrecoverable usage error: {:?}", e);
