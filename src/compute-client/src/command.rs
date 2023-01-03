@@ -624,6 +624,10 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         if let Some(create_inst_command) = create_inst_command {
             self.commands.push(create_inst_command);
         }
+        if !final_configuration.is_empty() {
+            self.commands
+                .push(ComputeCommand::UpdateConfiguration(final_configuration));
+        }
         self.dataflow_count = live_dataflows.len();
         if !live_dataflows.is_empty() {
             self.commands
@@ -644,10 +648,6 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         }
         if initialization_complete {
             self.commands.push(ComputeCommand::InitializationComplete);
-        }
-        if !final_configuration.is_empty() {
-            self.commands
-                .push(ComputeCommand::UpdateConfiguration(final_configuration));
         }
 
         self.reduced_count = command_count;
