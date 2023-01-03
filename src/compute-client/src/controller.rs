@@ -163,6 +163,10 @@ pub enum ComputeControllerResponse<T> {
 pub struct ComputeReplicaConfig {
     pub location: ComputeReplicaLocation,
     pub logging: ComputeReplicaLogging,
+    /// The amount of effort to be spent on arrangement compaction during idle times.
+    ///
+    /// See [`differential_dataflow::Config::idle_merge_effort`].
+    pub idle_arrangement_merge_effort: Option<u32>,
 }
 
 /// Size or location of a replica

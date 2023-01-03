@@ -488,6 +488,7 @@ fn default_compute_replica_config(
             az_user_specified: false,
         },
         logging: default_logging_config(),
+        idle_arrangement_merge_effort: None,
     }
 }
 
@@ -501,6 +502,7 @@ fn builtin_compute_replica_config(
             az_user_specified: false,
         },
         logging: default_logging_config(),
+        idle_arrangement_merge_effort: None,
     }
 }
 

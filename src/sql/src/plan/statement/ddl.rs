@@ -2470,7 +2470,8 @@ generate_extracted_config!(
     (Compute, Vec<String>),
     (Workers, u16),
     (IntrospectionInterval, OptionalInterval),
-    (IntrospectionDebugging, bool, Default(false))
+    (IntrospectionDebugging, bool, Default(false)),
+    (IdleArrangementMergeEffort, u32)
 );
 
 fn plan_replica_config(
@@ -2485,6 +2486,7 @@ fn plan_replica_config(
         compute,
         introspection_interval,
         introspection_debugging,
+        idle_arrangement_merge_effort,
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
@@ -2537,6 +2539,7 @@ fn plan_replica_config(
                 compute_addrs,
                 workers,
                 introspection,
+                idle_arrangement_merge_effort,
             })
         }
         (Some(size), None) => {
@@ -2551,6 +2554,7 @@ fn plan_replica_config(
                 size,
                 availability_zone,
                 introspection,
+                idle_arrangement_merge_effort,
             })
         }
         (_, _) => {

@@ -821,26 +821,26 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut persisted_introspection_sources = Vec::new();
 
         for (replica_name, replica_config) in replicas.into_iter() {
+            let introspection = replica_config.get_introspection().cloned();
+            let idle_arrangement_merge_effort = replica_config.get_idle_arrangement_merge_effort();
+
             // If the AZ was not specified, choose one, round-robin, from the ones with
             // the lowest number of configured replicas for this cluster.
-            let (location, introspection) = match replica_config {
+            let location = match replica_config {
                 mz_sql::plan::ComputeReplicaConfig::Remote {
                     addrs,
                     compute_addrs,
                     workers,
-                    introspection,
-                } => {
-                    let location = SerializedComputeReplicaLocation::Remote {
-                        addrs,
-                        compute_addrs,
-                        workers,
-                    };
-                    (location, introspection)
-                }
+                    ..
+                } => SerializedComputeReplicaLocation::Remote {
+                    addrs,
+                    compute_addrs,
+                    workers,
+                },
                 mz_sql::plan::ComputeReplicaConfig::Managed {
                     size,
                     availability_zone,
-                    introspection,
+                    ..
                 } => {
                     let (availability_zone, user_specified) =
                         availability_zone.map(|az| (az, true)).unwrap_or_else(|| {
@@ -848,12 +848,11 @@ impl<S: Append + 'static> Coordinator<S> {
                             *n_replicas_per_az.get_mut(&az).unwrap() += 1;
                             (az, false)
                         });
-                    let location = SerializedComputeReplicaLocation::Managed {
+                    SerializedComputeReplicaLocation::Managed {
                         size,
                         availability_zone,
                         az_user_specified: user_specified,
-                    };
-                    (location, introspection)
+                    }
                 }
             };
 
@@ -883,6 +882,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let config = ComputeReplicaConfig {
                 location: self.catalog.concretize_replica_location(location)?,
                 logging,
+                idle_arrangement_merge_effort,
             };
 
             ops.push(catalog::Op::CreateComputeReplica {
@@ -962,25 +962,25 @@ impl<S: Append + 'static> Coordinator<S> {
             config,
         }: CreateComputeReplicaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let introspection = config.get_introspection().cloned();
+        let idle_arrangement_merge_effort = config.get_idle_arrangement_merge_effort();
+
         // Choose default AZ if necessary
-        let (location, introspection) = match config {
+        let location = match config {
             mz_sql::plan::ComputeReplicaConfig::Remote {
                 addrs,
                 compute_addrs,
                 workers,
-                introspection,
-            } => {
-                let location = SerializedComputeReplicaLocation::Remote {
-                    addrs,
-                    compute_addrs,
-                    workers,
-                };
-                (location, introspection)
-            }
+                ..
+            } => SerializedComputeReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            },
             mz_sql::plan::ComputeReplicaConfig::Managed {
                 size,
                 availability_zone,
-                introspection,
+                ..
             } => {
                 let (availability_zone, user_specified) = match availability_zone {
                     Some(az) => {
@@ -1013,12 +1013,11 @@ impl<S: Append + 'static> Coordinator<S> {
                         (az, false)
                     }
                 };
-                let location = SerializedComputeReplicaLocation::Managed {
+                SerializedComputeReplicaLocation::Managed {
                     size,
                     availability_zone,
                     az_user_specified: user_specified,
-                };
-                (location, introspection)
+                }
             }
         };
 
@@ -1048,6 +1047,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let config = ComputeReplicaConfig {
             location: self.catalog.concretize_replica_location(location)?,
             logging,
+            idle_arrangement_merge_effort,
         };
 
         let op = catalog::Op::CreateComputeReplica {

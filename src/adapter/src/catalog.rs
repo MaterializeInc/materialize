@@ -2501,6 +2501,7 @@ impl<S: Append> Catalog<S> {
             let config = ComputeReplicaConfig {
                 location: catalog.concretize_replica_location(serialized_config.location)?,
                 logging,
+                idle_arrangement_merge_effort: serialized_config.idle_arrangement_merge_effort,
             };
 
             // And write the allocated sources back to storage
@@ -5766,13 +5767,15 @@ impl From<ComputeReplicaLogging> for SerializedComputeReplicaLogging {
 pub struct SerializedComputeReplicaConfig {
     pub location: SerializedComputeReplicaLocation,
     pub logging: SerializedComputeReplicaLogging,
+    pub idle_arrangement_merge_effort: Option<u32>,
 }
 
 impl From<ComputeReplicaConfig> for SerializedComputeReplicaConfig {
-    fn from(ComputeReplicaConfig { location, logging }: ComputeReplicaConfig) -> Self {
+    fn from(config: ComputeReplicaConfig) -> Self {
         SerializedComputeReplicaConfig {
-            location: location.into(),
-            logging: logging.into(),
+            location: config.location.into(),
+            logging: config.logging.into(),
+            idle_arrangement_merge_effort: config.idle_arrangement_merge_effort,
         }
     }
 }
