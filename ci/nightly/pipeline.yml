@@ -259,7 +259,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=1000]
+          args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=2000]
 
   - id: zippy-user-tables
     label: "Zippy User Tables"
@@ -279,7 +279,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=PostgresCdc, --actions=1000]
+          args: [--scenario=PostgresCdc, --actions=3000]
 
   - id: zippy-debezium-postgres
     label: "Zippy Debezium Postgres"

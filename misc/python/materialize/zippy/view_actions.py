@@ -17,6 +17,7 @@ from materialize.zippy.framework import Action, ActionFactory, Capabilities, Cap
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.pg_cdc_capabilities import PostgresCdcTableExists
 from materialize.zippy.source_capabilities import SourceExists
+from materialize.zippy.storaged_capabilities import StoragedRunning
 from materialize.zippy.table_capabilities import TableExists
 from materialize.zippy.view_capabilities import ViewExists, WatermarkedObjects
 
@@ -126,7 +127,7 @@ class ValidateView(Action):
 
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
-        return {MzIsRunning, ViewExists}
+        return {MzIsRunning, StoragedRunning, ViewExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
         self.view = random.choice(capabilities.get(ViewExists))

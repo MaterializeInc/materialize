@@ -36,21 +36,36 @@ from materialize.zippy.replica_actions import (
 )
 from materialize.zippy.sink_actions import CreateSinkParameterized
 from materialize.zippy.source_actions import CreateSourceParameterized
+from materialize.zippy.storaged_actions import (
+    StoragedKill,
+    StoragedRestart,
+    StoragedStart,
+)
 from materialize.zippy.table_actions import DML, CreateTableParameterized, ValidateTable
 from materialize.zippy.view_actions import CreateViewParameterized, ValidateView
+
+DEFAULT_BOOTSTRAP: List[ActionOrFactory] = [
+    KafkaStart,
+    CockroachStart,
+    MinioStart,
+    MzStart,
+    StoragedStart,
+]
 
 
 class KafkaSources(Scenario):
     """A Zippy test using Kafka sources exclusively."""
 
     def bootstrap(self) -> List[ActionOrFactory]:
-        return [KafkaStart, CockroachStart, MinioStart, MzStart]
+        return DEFAULT_BOOTSTRAP
 
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
-            MzStart: 1,
-            MzStop: 10,
-            KillClusterd: 15,
+            MzStart: 5,
+            MzStop: 1,
+            KillClusterd: 5,
+            StoragedKill: 5,
+            StoragedStart: 5,
             CreateTopicParameterized(): 5,
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
@@ -65,13 +80,14 @@ class UserTables(Scenario):
     """A Zippy test using user tables exclusively."""
 
     def bootstrap(self) -> List[ActionOrFactory]:
-        return [KafkaStart, CockroachStart, MinioStart, MzStart]
+        return DEFAULT_BOOTSTRAP
 
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
             MzStart: 1,
             MzStop: 15,
-            KillClusterd: 15,
+            KillClusterd: 10,
+            StoragedRestart: 5,
             CreateTableParameterized(): 10,
             CreateViewParameterized(): 10,
             CreateSinkParameterized(): 10,
@@ -86,19 +102,18 @@ class DebeziumPostgres(Scenario):
 
     def bootstrap(self) -> List[ActionOrFactory]:
         return [
-            KafkaStart,
+            *DEFAULT_BOOTSTRAP,
             DebeziumStart,
             PostgresStart,
-            CockroachStart,
-            MinioStart,
-            MzStart,
         ]
 
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
             CreatePostgresTable: 10,
             CreateDebeziumSource: 10,
-            KillClusterd: 15,
+            KillClusterd: 5,
+            StoragedKill: 5,
+            StoragedStart: 5,
             CreateViewParameterized(): 10,
             ValidateView: 20,
             PostgresDML: 100,
@@ -109,13 +124,15 @@ class PostgresCdc(Scenario):
     """A Zippy test using Postgres CDC exclusively."""
 
     def bootstrap(self) -> List[ActionOrFactory]:
-        return [PostgresStart, CockroachStart, MinioStart, MzStart]
+        return [*DEFAULT_BOOTSTRAP, PostgresStart]
 
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
             CreatePostgresTable: 10,
             CreatePostgresCdcTable: 10,
-            KillClusterd: 15,
+            KillClusterd: 5,
+            StoragedKill: 5,
+            StoragedStart: 5,
             PostgresRestart: 10,
             CreateViewParameterized(): 10,
             ValidateView: 20,
@@ -128,10 +145,7 @@ class ClusterReplicas(Scenario):
 
     def bootstrap(self) -> List[ActionOrFactory]:
         return [
-            KafkaStart,
-            CockroachStart,
-            MinioStart,
-            MzStart,
+            *DEFAULT_BOOTSTRAP,
             DropDefaultReplica,
             CreateReplica,
         ]
@@ -139,7 +153,8 @@ class ClusterReplicas(Scenario):
     # Due to gh#13235 it is not possible to have MzStop/MzStart in this scenario
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
-            KillClusterd: 10,
+            KillClusterd: 5,
+            StoragedRestart: 5,
             CreateReplica: 30,
             DropReplica: 10,
             CreateTopicParameterized(): 10,
@@ -158,11 +173,13 @@ class KafkaParallelInsert(Scenario):
     """A Zippy test using simple views over Kafka sources with parallel insertion."""
 
     def bootstrap(self) -> List[ActionOrFactory]:
-        return [KafkaStart, CockroachStart, MinioStart, MzStart]
+        return DEFAULT_BOOTSTRAP
 
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
             KillClusterd: 5,
+            StoragedKill: 5,
+            StoragedStart: 5,
             CreateTopicParameterized(): 10,
             CreateSourceParameterized(): 10,
             CreateViewParameterized(expensive_aggregates=False, max_inputs=1): 5,
@@ -175,7 +192,7 @@ class CrdbMinioRestart(Scenario):
     """A Zippy test that restarts CRDB and Minio."""
 
     def bootstrap(self) -> List[ActionOrFactory]:
-        return [KafkaStart, CockroachStart, MinioStart, MzStart]
+        return DEFAULT_BOOTSTRAP
 
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
@@ -188,7 +205,8 @@ class CrdbMinioRestart(Scenario):
             DML: 50,
             ValidateView: 15,
             MzRestart: 5,
-            KillClusterd: 15,
+            KillClusterd: 5,
+            StoragedRestart: 10,
             CockroachRestart: 15,
             MinioRestart: 15,
         }
@@ -198,13 +216,15 @@ class KafkaSourcesLarge(Scenario):
     """A Zippy test using a large number of Kafka sources, views and sinks."""
 
     def bootstrap(self) -> List[ActionOrFactory]:
-        return [KafkaStart, CockroachStart, MinioStart, MzStart]
+        return DEFAULT_BOOTSTRAP
 
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
             MzStart: 1,
             MzStop: 2,
             KillClusterd: 2,
+            StoragedKill: 2,
+            StoragedStart: 2,
             CreateTopicParameterized(max_topics=5): 10,
             CreateSourceParameterized(max_sources=50): 10,
             CreateViewParameterized(
@@ -221,13 +241,14 @@ class DataflowsLarge(Scenario):
     """A Zippy test using a smaller number but more complex dataflows."""
 
     def bootstrap(self) -> List[ActionOrFactory]:
-        return [KafkaStart, CockroachStart, MinioStart, MzStart]
+        return DEFAULT_BOOTSTRAP
 
     def config(self) -> Dict[ActionOrFactory, float]:
         return {
             MzStart: 1,
             MzStop: 2,
             KillClusterd: 2,
+            StoragedRestart: 2,
             CreateReplica: 2,
             CreateTableParameterized(max_tables=2): 10,
             CreateTopicParameterized(max_topics=2, envelopes=[Envelope.UPSERT]): 10,
