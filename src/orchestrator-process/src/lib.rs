@@ -114,7 +114,7 @@ use mz_orchestrator::{
     NamespacedOrchestrator, Orchestrator, Service, ServiceConfig, ServiceEvent,
     ServiceProcessMetrics, ServiceStatus,
 };
-use mz_ore::cast::{CastFrom, ReinterpretCast};
+use mz_ore::cast::{CastFrom, ReinterpretCast, TryCastFrom};
 use mz_ore::netio::UnixSocketAddr;
 use mz_ore::result::ResultExt;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
@@ -297,10 +297,19 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                     match system.process(pid) {
                         None => (None, None),
                         Some(process) => {
-                            // TODO(benesch): find a way to express this that
-                            // does not involve using `as`.
-                            #[allow(clippy::as_conversions)]
-                            let cpu = (process.cpu_usage() * 10_000_000.0) as u64;
+                            // Justification for `unwrap`:
+                            //
+                            // `u64::try_cast_from(f: f64)`
+                            // will always succeed if 0 <= f <= 2^53.
+                            // Since the max value of `process.cpu_usage()` is
+                            // 100.0 * num_of_cores, this will be true whenever there
+                            // are less than 2^53 / 10^9 logical cores, or about
+                            // 9 million.
+                            println!("Usage is {}", process.cpu_usage());
+                            let cpu = u64::try_cast_from(
+                                (f64::from(process.cpu_usage()) * 10_000_000.0).trunc(),
+                            )
+                            .expect("sane value of process.cpu_usage()");
                             let memory = process.memory();
                             (Some(cpu), Some(memory))
                         }

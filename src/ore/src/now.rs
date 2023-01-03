@@ -45,7 +45,10 @@ impl NowFn {
     // TODO(benesch): rewrite to avoid dangerous use of `as`.
     #[allow(clippy::as_conversions)]
     pub fn as_secs(&self) -> i64 {
-        ((self)() / 1_000) as i64
+        let millis: u64 = (self)();
+        // Justification for `unwrap`:
+        // Any u64, when divided by 1000, is a valid i64.
+        i64::try_from(millis / 1_000).unwrap()
     }
 }
 

@@ -4341,6 +4341,7 @@ dependencies = [
  "askama",
  "axum",
  "backtrace",
+ "bytesize",
  "cfg-if",
  "headers",
  "http",
