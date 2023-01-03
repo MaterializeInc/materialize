@@ -3569,6 +3569,10 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
                 let elem_type = ecx.scalar_type(&lhs).unwrap_range_element_type().clone();
                 Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsElem { elem_type, rev: false }))
             }) => Bool, 3889;
+            params!(RangeAny, RangeAny) => Operation::binary(|ecx, lhs, rhs| {
+                let elem_type = ecx.scalar_type(&lhs).unwrap_range_element_type().clone();
+                Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsRange { elem_type, rev: false }))
+            }) => Bool, 3890;
         },
         "<@" => Scalar {
             params!(Jsonb, Jsonb) => Operation::binary(|_ecx, lhs, rhs| {
@@ -3594,6 +3598,10 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
                 let elem_type = ecx.scalar_type(&rhs).unwrap_range_element_type().clone();
                 Ok(rhs.call_binary(lhs, BinaryFunc::RangeContainsElem { elem_type, rev: true }))
             }) => Bool, 3891;
+            params!(RangeAny, RangeAny) => Operation::binary(|ecx, lhs, rhs| {
+                let elem_type = ecx.scalar_type(&rhs).unwrap_range_element_type().clone();
+                Ok(rhs.call_binary(lhs, BinaryFunc::RangeContainsRange { elem_type, rev: true }))
+            }) => Bool, 3892;
         },
         "?" => Scalar {
             params!(Jsonb, String) => JsonbContainsString, 3247;

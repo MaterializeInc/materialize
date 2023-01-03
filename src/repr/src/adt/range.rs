@@ -206,17 +206,28 @@ impl<D> Range<D> {
 }
 
 /// Range implementations meant to work with `Range<Datum>` and `Range<DatumNested>`.
-impl<'a, B: Copy> Range<B>
+impl<'a, B: Copy + Ord + PartialOrd> Range<B>
 where
     Datum<'a>: From<B>,
 {
-    pub fn contains<T: RangeOps<'a>>(&self, elem: &T) -> bool
+    pub fn contains_elem<T: RangeOps<'a>>(&self, elem: &T) -> bool
     where
         <T as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
     {
         match self.inner {
             None => false,
             Some(inner) => inner.lower.satisfied_by(elem) && inner.upper.satisfied_by(elem),
+        }
+    }
+
+    pub fn contains_range<T: RangeOps<'a>>(&self, other: &Range<B>) -> bool
+    where
+        <T as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
+    {
+        match (self.inner, other.inner) {
+            (None, None) | (Some(_), None) => return true,
+            (None, Some(_)) => return false,
+            (Some(i), Some(j)) => i.lower <= j.lower && j.upper <= i.upper,
         }
     }
 }

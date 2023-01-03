@@ -1261,7 +1261,16 @@ where
 {
     let range = a.unwrap_range();
     let elem = R::try_from(b).expect("type checking must produce correct R");
-    Datum::from(range.contains(&elem))
+    Datum::from(range.contains_elem(&elem))
+}
+
+fn contains_range_range<'a, R: RangeOps<'a>>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a>
+where
+    <R as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
+{
+    let l = a.unwrap_range();
+    let r = b.unwrap_range();
+    Datum::from(l.contains_range::<R>(&r))
 }
 
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1906,6 +1915,7 @@ pub enum BinaryFunc {
     PowerNumeric,
     GetByte,
     RangeContainsElem { elem_type: ScalarType, rev: bool },
+    RangeContainsRange { elem_type: ScalarType, rev: bool },
 }
 
 impl BinaryFunc {
@@ -2212,6 +2222,15 @@ impl BinaryFunc {
                 }
                 _ => unreachable!(),
             }),
+            BinaryFunc::RangeContainsRange { elem_type, rev: _ } => Ok(match elem_type {
+                ScalarType::Int32 => eager!(contains_range_range::<i32>),
+                ScalarType::Int64 => eager!(contains_range_range::<i64>),
+                ScalarType::Date => eager!(contains_range_range::<Date>),
+                ScalarType::Numeric { .. } => {
+                    eager!(contains_range_range::<OrderedDecimal<Numeric>>)
+                }
+                _ => unreachable!(),
+            }),
         }
     }
 
@@ -2365,7 +2384,9 @@ impl BinaryFunc {
 
             GetByte => ScalarType::Int32.nullable(in_nullable),
 
-            RangeContainsElem { .. } => ScalarType::Bool.nullable(in_nullable),
+            RangeContainsElem { .. } | RangeContainsRange { .. } => {
+                ScalarType::Bool.nullable(in_nullable)
+            }
         }
     }
 
@@ -2490,6 +2511,7 @@ impl BinaryFunc {
                 | ModFloat64
                 | ModNumeric
                 | RangeContainsElem { .. }
+                | RangeContainsRange { .. }
         )
     }
 
@@ -2619,7 +2641,8 @@ impl BinaryFunc {
             | ListListConcat
             | ListElementConcat
             | ElementListConcat
-            | RangeContainsElem { .. } => true,
+            | RangeContainsElem { .. }
+            | RangeContainsRange { .. } => true,
             ToCharTimestamp
             | ToCharTimestampTz
             | DateBinTimestamp
@@ -2878,6 +2901,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::RangeContainsElem { rev, .. } => {
                 f.write_str(if *rev { "<@" } else { "@>" })
             }
+            BinaryFunc::RangeContainsRange { rev, .. } => {
+                f.write_str(if *rev { "<@" } else { "@>" })
+            }
         }
     }
 }
@@ -3079,6 +3105,9 @@ impl Arbitrary for BinaryFunc {
             (bool::arbitrary(), mz_repr::arb_range_type())
                 .prop_map(|(rev, elem_type)| BinaryFunc::RangeContainsElem { elem_type, rev })
                 .boxed(),
+            (bool::arbitrary(), mz_repr::arb_range_type())
+                .prop_map(|(rev, elem_type)| BinaryFunc::RangeContainsRange { elem_type, rev })
+                .boxed(),
         ])
     }
 }
@@ -3255,12 +3284,18 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::Power => Power(()),
             BinaryFunc::PowerNumeric => PowerNumeric(()),
             BinaryFunc::GetByte => GetByte(()),
-            BinaryFunc::RangeContainsElem { elem_type, rev } => RangeContainsElem(
-                crate::scalar::proto_binary_func::ProtoRangeContainsElemInner {
+            BinaryFunc::RangeContainsElem { elem_type, rev } => {
+                RangeContainsElem(crate::scalar::proto_binary_func::ProtoRangeContainsInner {
                     elem_type: Some(elem_type.into_proto()),
                     rev: *rev,
-                },
-            ),
+                })
+            }
+            BinaryFunc::RangeContainsRange { elem_type, rev } => {
+                RangeContainsRange(crate::scalar::proto_binary_func::ProtoRangeContainsInner {
+                    elem_type: Some(elem_type.into_proto()),
+                    rev: *rev,
+                })
+            }
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -3446,7 +3481,13 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 RangeContainsElem(inner) => Ok(BinaryFunc::RangeContainsElem {
                     elem_type: inner
                         .elem_type
-                        .into_rust_if_some("ProtoRangeContainsElemInner::elem_type")?,
+                        .into_rust_if_some("ProtoRangeContainsInner::elem_type")?,
+                    rev: inner.rev,
+                }),
+                RangeContainsRange(inner) => Ok(BinaryFunc::RangeContainsRange {
+                    elem_type: inner
+                        .elem_type
+                        .into_rust_if_some("ProtoRangeContainsInner::elem_type")?,
                     rev: inner.rev,
                 }),
             }
