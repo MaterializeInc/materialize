@@ -458,7 +458,6 @@ where
             let v = &self.val_buf[v_range.clone()];
             ColumnarRecordsBuilder::columnar_record_size(k, v)
         };
-        let (ts, diff) = (ts.clone(), diff.clone());
 
         self.current_part_total_bytes += size;
         self.current_part_key_bytes += k_range.len();

@@ -474,18 +474,6 @@ impl ColumnarRecordsBuilder {
     }
 }
 
-/// A new-type so we can impl FromIterator for `Vec<ColumnarRecords>`.
-#[derive(Debug)]
-pub struct ColumnarRecordsVec(pub Vec<ColumnarRecords>);
-
-impl ColumnarRecordsVec {
-    /// Unwraps this ColumnarRecordsVec, returning the underlying
-    /// `Vec<ColumnarRecords>`.
-    pub fn into_inner(self) -> Vec<ColumnarRecords> {
-        self.0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
