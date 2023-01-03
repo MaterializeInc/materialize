@@ -22,8 +22,8 @@ body:
     attributes:
       label: What version of Materialize are you using?
       description: |
-        From the shell, run: `materialized -v`
         From the SQL console, run: `SELECT mz_version();`
+        From the shell, run: `bin/environmentd -- --version`
       placeholder: v0.9.0
     validations:
       required: true
