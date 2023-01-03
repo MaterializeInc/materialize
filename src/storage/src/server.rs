@@ -110,14 +110,10 @@ pub fn serve(
         .run()
     })
     .map_err(|e| anyhow!("{}", e))?;
-    let worker_threads = worker_guards
-        .guards()
-        .iter()
-        .map(|g| g.thread().clone())
-        .collect::<Vec<_>>();
+
     let client_builder = move || {
         let (command_txs, command_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
-            .map(|_| crossbeam_channel::unbounded())
+            .map(|_| mpsc::unbounded_channel())
             .unzip();
         let (response_txs, response_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
             .map(|_| mpsc::unbounded_channel())
@@ -130,8 +126,7 @@ pub fn serve(
                 .send(channels)
                 .expect("worker should not drop first");
         }
-        let client =
-            LocalClient::new_partitioned(response_rxs, command_txs, worker_threads.clone());
+        let client = LocalClient::new_partitioned(response_rxs, command_txs);
         let client: Box<dyn StorageClient> = Box::new(client);
         client
     };

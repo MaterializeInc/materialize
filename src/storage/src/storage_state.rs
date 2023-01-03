@@ -11,9 +11,11 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crossbeam_channel::TryRecvError;
+use crossbeam_channel::{RecvError, TryRecvError};
 use differential_dataflow::lattice::Lattice;
 use timely::communication::Allocate;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::Operator;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
@@ -33,12 +35,13 @@ use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::{IngestionDescription, SourceData};
+use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 
-type CommandReceiver = crossbeam_channel::Receiver<StorageCommand>;
+type CommandReceiver = mpsc::UnboundedReceiver<StorageCommand>;
 type ResponseSender = mpsc::UnboundedSender<StorageResponse>;
 
 /// State maintained for each worker thread.
@@ -201,7 +204,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
     /// Draws commands from a single client until disconnected.
     fn run_client(&mut self, command_rx: CommandReceiver, response_tx: ResponseSender) {
-        self.reconcile(&command_rx);
+        let mut command_rx = self.install_command_dataflow(command_rx);
+
+        if let Err(_) = self.reconcile(&mut command_rx) {
+            return;
+        }
 
         let mut disconnected = false;
         while !disconnected {
@@ -246,6 +253,88 @@ impl<'w, A: Allocate> Worker<'w, A> {
             for cmd in cmds {
                 self.handle_storage_command(cmd);
             }
+        }
+    }
+
+    /// Sets up an internal dataflow that will forward commands from the given
+    /// async receiver and forwards them to a local channel. The returned
+    /// receiver should be used to receive and process all commands.
+    fn install_command_dataflow(
+        &mut self,
+        mut command_rx: mpsc::UnboundedReceiver<StorageCommand>,
+    ) -> CommandPump {
+        // TODO(aljoscha): As a next step, we can change how commands are sent to
+        // the storage timely cluster to make it more similar to compute where
+        // commands are only sent to the first worker and are then broadcast using
+        // this cluster-internal (replica-internal, really) dataflow.
+        let (forwarding_command_tx, forwarding_command_rx) = crossbeam_channel::unbounded();
+
+        self.timely_worker.dataflow::<u64, _, _>(move |scope| {
+            let mut pump_op =
+                AsyncOperatorBuilder::new("StorageCmdPump".to_string(), scope.clone());
+
+            let (mut cmd_output, cmd_stream) = pump_op.new_output();
+
+            let _shutdown_button = pump_op.build(move |mut capabilities| async move {
+                let mut cap = capabilities.pop().expect("missing capability");
+
+                while let Some(cmd) = command_rx.recv().await {
+                    let time = cap.time().clone();
+                    let mut cmd_output = cmd_output.activate();
+                    let mut session = cmd_output.session(&cap);
+
+                    session.give(Ok(cmd));
+
+                    cap.downgrade(&(time + 1));
+                }
+
+                // Forward a final "Disconnected" message. We could rely on the
+                // downstream operator sending this message when it notices its
+                // input frontier going to empty, but this is more explicit.
+                {
+                    let time = cap.time().clone();
+                    let mut cmd_output = cmd_output.activate();
+                    let mut session = cmd_output.session(&cap);
+
+                    session.give(Err(RecvError));
+
+                    cap.downgrade(&(time + 1));
+                }
+            });
+
+            cmd_stream.unary_frontier::<Vec<()>, _, _, _>(
+                Pipeline,
+                "StorageCmdForwarder",
+                |_cap, _info| {
+                    let mut container = Default::default();
+                    move |input, _output| {
+                        while let Some((_, data)) = input.next() {
+                            data.swap(&mut container);
+                            for cmd in container.drain(..) {
+                                let res = forwarding_command_tx.send(cmd);
+                                // TODO(aljoscha): Could completely drop this
+                                // error handling code, with the below
+                                // reasoning.
+                                match res {
+                                    Ok(_) => {
+                                        // All's well!
+                                        //
+                                    }
+                                    Err(_send_err) => {
+                                        // The subscribe loop dropped, meaning
+                                        // we're probably shutting down. Seems
+                                        // fine to ignore.
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+            );
+        });
+
+        CommandPump {
+            command_rx: forwarding_command_rx,
         }
     }
 
@@ -423,15 +512,29 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// subscribe response buffer. We will need to be vigilant with future
     /// modifications to `StorageState` to line up changes there with clean
     /// resets here.
-    fn reconcile(&mut self, command_rx: &CommandReceiver) {
+    fn reconcile(&mut self, command_rx: &mut CommandPump) -> Result<(), RecvError> {
         // To initialize the connection, we want to drain all commands until we
         // receive a `StorageCommand::InitializationComplete` command to form a
         // target command state.
         let mut commands = vec![];
-        while let Ok(command) = command_rx.recv() {
-            match command {
+
+        // TODO(aljoscha): I don't like that we are passing the timely worker
+        // here and that `recv` will internally step that worker until commands
+        // are available. I see two options:
+        //
+        //  1. We live with this, this is also how compute does it currently.
+        //  2. We change reconciliation to be a state that we can be in, and
+        //     move the logic that we do at the end of this method to be in the
+        //     method handler of `InitializationComplete`. The timely main loop
+        //     would start out in a state of reconciling and then transition to
+        //     "normal" state.
+        //
+        //  I like how 2. integrates nicer with how message pumping works, but
+        //  "shmears" the reconciliation logic across more code.
+        loop {
+            match command_rx.recv(self)? {
                 StorageCommand::InitializationComplete => break,
-                _ => commands.push(command),
+                command => commands.push(command),
             }
         }
 
@@ -502,5 +605,38 @@ impl<'w, A: Allocate> Worker<'w, A> {
         for command in commands {
             self.handle_storage_command(command);
         }
+
+        Ok(())
+    }
+}
+
+struct CommandPump {
+    // TODO(aljoscha): Compute uses a shared `VecDeque` for this. I can change
+    // it to that if we like the basic shape of this. I used a channel just out
+    // of laziness, but we don't need the synchronization/costs that come with
+    // it.
+    command_rx: crossbeam_channel::Receiver<Result<StorageCommand, RecvError>>,
+}
+
+impl CommandPump {
+    fn try_recv(&mut self) -> Result<StorageCommand, TryRecvError> {
+        let wrapped = self.command_rx.try_recv();
+        match wrapped {
+            Ok(Ok(msg)) => Ok(msg),
+            Ok(Err(RecvError)) => Err(TryRecvError::Disconnected),
+            Err(try_recv_error) => Err(try_recv_error),
+        }
+    }
+
+    /// Blocks until a command is available.
+    fn recv<A: Allocate>(&mut self, worker: &mut Worker<A>) -> Result<StorageCommand, RecvError> {
+        while self.is_empty() {
+            worker.timely_worker.step_or_park(None);
+        }
+        self.command_rx.recv().expect("must contain element")
+    }
+
+    fn is_empty(&self) -> bool {
+        self.command_rx.is_empty()
     }
 }

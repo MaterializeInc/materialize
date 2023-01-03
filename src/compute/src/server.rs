@@ -22,15 +22,14 @@ use futures::future;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::generic::source;
 use timely::dataflow::operators::Operator;
 use timely::execute::execute_from;
 use timely::progress::Timestamp;
-use timely::scheduling::{Scheduler, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
 use timely::WorkerConfig;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
+use tracing::{info, warn};
 
 use mz_compute_client::command::{CommunicationConfig, ComputeStartupEpoch};
 use mz_compute_client::command::{ComputeCommand, ComputeCommandHistory};
@@ -44,7 +43,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::cache::PersistClientCache;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::local::LocalClient;
-use tracing::{info, warn};
+use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
 
 use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;
@@ -83,9 +82,8 @@ pub struct TimelyContainer {
     /// Channels over which to send endpoints for wiring up a new Client
     client_txs: Vec<
         crossbeam_channel::Sender<(
-            crossbeam_channel::Receiver<ComputeCommand>,
+            mpsc::UnboundedReceiver<ComputeCommand>,
             mpsc::UnboundedSender<ComputeResponse>,
-            crossbeam_channel::Sender<SyncActivator>,
         )>,
     >,
     /// Thread guards that keep worker threads alive
@@ -245,30 +243,23 @@ impl ClusterClient<PartitionedClient> {
         };
 
         let (command_txs, command_rxs): (Vec<_>, Vec<_>) =
-            (0..workers).map(|_| crossbeam_channel::unbounded()).unzip();
+            (0..workers).map(|_| mpsc::unbounded_channel()).unzip();
         let (response_txs, response_rxs): (Vec<_>, Vec<_>) =
             (0..workers).map(|_| mpsc::unbounded_channel()).unzip();
-        let activators = timely
+        timely
             .client_txs
             .iter()
             .zip(command_rxs)
             .zip(response_txs)
-            .map(|((client_tx, cmd_rx), resp_tx)| {
-                let (activator_tx, activator_rx) = crossbeam_channel::unbounded();
+            .for_each(|((client_tx, cmd_rx), resp_tx)| {
                 client_tx
-                    .send((cmd_rx, resp_tx, activator_tx))
+                    .send((cmd_rx, resp_tx))
                     .expect("worker should not drop first");
+            });
 
-                activator_rx.recv().unwrap()
-            })
-            .collect();
         *timely_lock = Some(timely);
 
-        self.inner = Some(LocalClient::new_partitioned(
-            response_rxs,
-            command_txs,
-            activators,
-        ));
+        self.inner = Some(LocalClient::new_partitioned(response_rxs, command_txs));
         Ok(())
     }
 }
@@ -306,9 +297,8 @@ impl GenericClient<ComputeCommand, ComputeResponse> for ClusterClient<Partitione
     }
 }
 
-type CommandReceiver = crossbeam_channel::Receiver<ComputeCommand>;
+type CommandReceiver = mpsc::UnboundedReceiver<ComputeCommand>;
 type ResponseSender = mpsc::UnboundedSender<ComputeResponse>;
-type ActivatorSender = crossbeam_channel::Sender<SyncActivator>;
 
 struct CommandReceiverQueue {
     queue: Rc<RefCell<VecDeque<Result<ComputeCommand, TryRecvError>>>>,
@@ -346,11 +336,8 @@ impl CommandReceiverQueue {
         self.queue.borrow().is_empty()
     }
 }
-type PartitionedClient = Partitioned<
-    LocalClient<ComputeCommand, ComputeResponse, SyncActivator>,
-    ComputeCommand,
-    ComputeResponse,
->;
+type PartitionedClient =
+    Partitioned<LocalClient<ComputeCommand, ComputeResponse>, ComputeCommand, ComputeResponse>;
 
 /// State maintained for each worker thread.
 ///
@@ -361,7 +348,7 @@ struct Worker<'w, A: Allocate> {
     timely_worker: &'w mut TimelyWorker<A>,
     /// The channel over which communication handles for newly connected clients
     /// are delivered.
-    client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender, ActivatorSender)>,
+    client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
     compute_state: Option<ComputeState>,
     /// Trace metrics.
     trace_metrics: TraceMetrics,
@@ -378,9 +365,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let mut shutdown = false;
         while !shutdown {
             match self.client_rx.recv() {
-                Ok((rx, tx, activator_tx)) => {
-                    self.setup_channel_and_run_client(rx, tx, activator_tx)
-                }
+                Ok((rx, tx)) => self.setup_channel_and_run_client(rx, tx),
                 Err(_) => shutdown = true,
             }
         }
@@ -436,9 +421,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
     fn setup_channel_and_run_client(
         &mut self,
-        command_rx: CommandReceiver,
+        mut command_rx: CommandReceiver,
         response_tx: ResponseSender,
-        activator_tx: ActivatorSender,
     ) {
         let cmd_queue = Rc::new(RefCell::new(
             VecDeque::<Result<ComputeCommand, TryRecvError>>::new(),
@@ -450,54 +434,40 @@ impl<'w, A: Allocate> Worker<'w, A> {
             let cmd_queue = Rc::clone(&cmd_queue);
 
             self.timely_worker.dataflow::<u64, _, _>(move |scope| {
-                source(scope, "CmdSource", |capability, info| {
-                    // Send activator for this operator back
-                    let activator = scope.sync_activator_for(&info.address[..]);
-                    activator_tx.send(activator).expect("activator_tx working");
+                let mut pump_op = AsyncOperatorBuilder::new("CmdSource".to_string(), scope.clone());
 
-                    //Hold onto capbility until we receive a disconnected error
-                    let mut cap_opt = Some(capability);
-                    // Drop capability if we are not the leader, as our queue will
-                    // be empty and we will never use nor importantly downgrade it.
+                let (mut cmd_output, cmd_stream) = pump_op.new_output();
+
+                let _shutdown_button = pump_op.build(move |mut capabilities| async move {
+                    let mut cap = capabilities.pop().expect("missing capability");
+
+                    // Drop capability and return if we are not the leader, as
+                    // our queue will be empty and we will never use nor
+                    // importantly downgrade it.
                     if idx != 0 {
-                        cap_opt = None;
+                        return;
                     }
 
-                    move |output| {
-                        let mut disconnected = false;
-                        if let Some(cap) = cap_opt.as_mut() {
-                            let time = cap.time().clone();
-                            let mut session = output.session(&cap);
+                    while let Some(cmd) = command_rx.recv().await {
+                        let time = cap.time().clone();
+                        let mut cmd_output = cmd_output.activate();
+                        let mut session = cmd_output.session(&cap);
 
-                            loop {
-                                match command_rx.try_recv() {
-                                    Ok(cmd) => {
-                                        // Commands must never be sent to another worker. This
-                                        // implementation does not guarantee an ordering of events
-                                        // sent to different workers.
-                                        assert_eq!(idx, 0);
-                                        session.give_iterator(
-                                            Self::split_command(cmd, peers).into_iter().enumerate(),
-                                        );
-                                    }
-                                    Err(TryRecvError::Disconnected) => {
-                                        disconnected = true;
-                                        break;
-                                    }
-                                    Err(TryRecvError::Empty) => {
-                                        break;
-                                    }
-                                };
-                            }
-                            cap.downgrade(&(time + 1));
-                        }
+                        // Commands must never be sent to another worker. This
+                        // implementation does not guarantee an ordering of events
+                        // sent to different workers.
+                        assert_eq!(idx, 0);
+                        session
+                            .give_iterator(Self::split_command(cmd, peers).into_iter().enumerate());
 
-                        if disconnected {
-                            cap_opt = None;
-                        }
+                        cap.downgrade(&(time + 1));
                     }
-                })
-                .unary_frontier::<Vec<()>, _, _, _>(
+
+                    // When we break out of the loop because the channel is
+                    // closed, we will drop our capability here.
+                });
+
+                cmd_stream.unary_frontier::<Vec<()>, _, _, _>(
                     Exchange::new(|(idx, _)| u64::cast_from(*idx)),
                     "CmdReceiver",
                     |_, _| {
