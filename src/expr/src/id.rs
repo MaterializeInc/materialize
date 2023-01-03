@@ -11,9 +11,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::Error;
-use bytes::BufMut;
 use proptest_derive::Arbitrary;
-use prost::Message;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
@@ -198,25 +196,6 @@ impl RustType<ProtoPartitionId> for PartitionId {
             Option::Some(None(_)) => Ok(PartitionId::None),
             Option::None => Err(TryFromProtoError::missing_field("ProtoPartitionId::kind")),
         }
-    }
-}
-
-impl mz_persist_types::Codec for PartitionId {
-    fn codec_name() -> String {
-        "protobuf[PartitionId]".into()
-    }
-
-    fn encode<B: BufMut>(&self, buf: &mut B) {
-        self.into_proto()
-            .encode(buf)
-            .expect("provided buffer had sufficient capacity")
-    }
-
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        ProtoPartitionId::decode(buf)
-            .map_err(|err| err.to_string())?
-            .into_rust()
-            .map_err(|err: TryFromProtoError| err.to_string())
     }
 }
 

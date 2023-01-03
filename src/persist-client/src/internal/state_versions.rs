@@ -206,11 +206,14 @@ impl StateVersions {
             new_state.seqno(),
             new_state
         );
-        let new = self
-            .metrics
-            .codecs
-            .state_diff
-            .encode(|| VersionedData::from((new_state.seqno(), diff)));
+        let new = self.metrics.codecs.state_diff.encode(|| {
+            let mut buf = Vec::new();
+            diff.encode(&mut buf);
+            VersionedData {
+                seqno: new_state.seqno(),
+                data: Bytes::from(buf),
+            }
+        });
         assert_eq!(new.seqno, diff.seqno_to);
 
         let payload_len = new.data.len();

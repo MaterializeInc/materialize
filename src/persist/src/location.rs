@@ -14,9 +14,8 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use mz_ore::cast::u64_to_usize;
-use mz_persist_types::Codec;
 use mz_proto::RustType;
 use serde::{Deserialize, Serialize};
 
@@ -297,34 +296,6 @@ pub struct VersionedData {
     pub seqno: SeqNo,
     /// The data itself.
     pub data: Bytes,
-}
-
-impl<T: Codec> From<(SeqNo, &T)> for VersionedData {
-    fn from(x: (SeqNo, &T)) -> Self {
-        let (seqno, t) = x;
-        let mut data = BytesMut::new();
-        Codec::encode(t, &mut data);
-        VersionedData {
-            seqno,
-            data: Bytes::from(data),
-        }
-    }
-}
-
-impl<T: Codec> TryFrom<&VersionedData> for (SeqNo, T) {
-    type Error = ExternalError;
-
-    fn try_from(x: &VersionedData) -> Result<Self, Self::Error> {
-        let t = T::decode(&x.data).map_err(|err| {
-            ExternalError::from(anyhow!(
-                "invalid {} at {}: {}",
-                T::codec_name(),
-                x.seqno,
-                err
-            ))
-        })?;
-        Ok((x.seqno, t))
-    }
 }
 
 /// Helper constant to scan all states in [Consensus::scan].

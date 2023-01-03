@@ -18,7 +18,6 @@ use prost::Message;
 use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;
-use mz_persist_types::Codec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::adt::array::ArrayDimension;
@@ -32,17 +31,13 @@ use crate::row::{
 };
 use crate::{Datum, Row, RowPacker};
 
-impl Codec for Row {
-    fn codec_name() -> String {
-        "protobuf[Row]".into()
-    }
-
+impl Row {
     /// Encodes a row into the permanent storage format.
     ///
     /// This perfectly round-trips through [Row::decode]. It's guaranteed to be
     /// readable by future versions of Materialize through v(TODO: Figure out
     /// our policy).
-    fn encode<B>(&self, buf: &mut B)
+    pub fn encode<B>(&self, buf: &mut B)
     where
         B: BufMut,
     {
@@ -56,7 +51,7 @@ impl Codec for Row {
     /// This perfectly round-trips through [Row::encode]. It can read rows
     /// encoded by historical versions of Materialize back to v(TODO: Figure out
     /// our policy).
-    fn decode(buf: &[u8]) -> Result<Row, String> {
+    pub fn decode(buf: &[u8]) -> Result<Row, String> {
         let proto_row = ProtoRow::decode(buf).map_err(|err| err.to_string())?;
         Row::try_from(&proto_row)
     }
@@ -333,7 +328,6 @@ impl RustType<ProtoRow> for Row {
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
-    use mz_persist_types::Codec;
     use uuid::Uuid;
 
     use crate::adt::array::ArrayDimension;

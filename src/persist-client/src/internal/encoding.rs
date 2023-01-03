@@ -173,6 +173,15 @@ impl RustType<String> for PartialRollupKey {
 }
 
 impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
+    pub fn encode<B>(&self, buf: &mut B)
+    where
+        B: bytes::BufMut,
+    {
+        self.into_proto()
+            .encode(buf)
+            .expect("no required fields means no initialization errors");
+    }
+
     pub fn decode(build_version: &Version, buf: &[u8]) -> Self {
         let proto = ProtoStateDiff::decode(buf)
             // We received a State that we couldn't decode. This could happen if
@@ -183,29 +192,6 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         let diff = Self::from_proto(proto).expect("internal error: invalid encoded state");
         check_applier_version(build_version, &diff.applier_version);
         diff
-    }
-}
-
-impl<T> Codec for StateDiff<T>
-where
-    T: Timestamp + Lattice + Codec64,
-{
-    fn codec_name() -> String {
-        "proto[StateDiff]".into()
-    }
-
-    fn encode<B>(&self, buf: &mut B)
-    where
-        B: bytes::BufMut,
-    {
-        self.into_proto()
-            .encode(buf)
-            .expect("no required fields means no initialization errors");
-    }
-
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        let proto = ProtoStateDiff::decode(buf).map_err(|err| err.to_string())?;
-        proto.into_rust().map_err(|err| err.to_string())
     }
 }
 
@@ -910,7 +896,6 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use mz_persist::location::SeqNo;
-    use mz_persist_types::Codec;
 
     use crate::internal::paths::PartialRollupKey;
     use crate::internal::state::{HandleDebugState, State};

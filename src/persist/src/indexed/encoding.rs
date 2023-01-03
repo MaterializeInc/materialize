@@ -20,7 +20,7 @@ use std::marker::PhantomData;
 use bytes::BufMut;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::Codec64;
 use prost::Message;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -215,25 +215,18 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
         }
         Ok(())
     }
-}
 
-// BlobTraceBatchPart doesn't really need to implement Codec (it's never stored as a
-// key or value in a persisted record) but it's nice to have a common interface
-// for this.
-impl<T: Timestamp + Codec64> Codec for BlobTraceBatchPart<T> {
-    fn codec_name() -> String {
-        "parquet[TraceBatch]".into()
-    }
-
-    fn encode<B>(&self, buf: &mut B)
+    /// Encodes an BlobTraceBatchPart into the Parquet format.
+    pub fn encode<B>(&self, buf: &mut B)
     where
         B: BufMut,
     {
         encode_trace_parquet(&mut buf.writer(), self).expect("batch was invalid");
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        decode_trace_parquet(&mut Cursor::new(&buf)).map_err(|err| err.to_string())
+    /// Decodes a BlobTraceBatchPart from the Parquet format.
+    pub fn decode<'a>(buf: &'a [u8]) -> Result<Self, Error> {
+        decode_trace_parquet(&mut Cursor::new(&buf))
     }
 }
 
