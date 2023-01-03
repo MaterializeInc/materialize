@@ -3439,30 +3439,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-billing-demo"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "hex",
- "mz-ore",
- "mz-test-util",
- "prost",
- "prost-build",
- "prost-types",
- "protobuf-src",
- "rand",
- "rand_distr",
- "tokio",
- "tokio-postgres",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "workspace-hack",
-]
-
-[[package]]
 name = "mz-build-id"
 version = "0.1.0"
 dependencies = [
@@ -6044,16 +6020,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34cf66eb183df1c5876e2dcf6b13d57340741e8dc255b48e40a26de954d06ae7"
 dependencies = [
  "getrandom",
-]
-
-[[package]]
-name = "rand_distr"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32cb0b9bc82b0a0876c2dd994a7e7a2683d3e7390ca40e6886785ef0c7e3ee31"
-dependencies = [
- "num-traits",
- "rand",
 ]
 
 [[package]]
