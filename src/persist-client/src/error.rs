@@ -12,7 +12,7 @@
 use std::fmt::Debug;
 
 use mz_persist::location::{Determinate, ExternalError, Indeterminate};
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 
 use crate::internal::paths::PartialBatchKey;
 use crate::{ShardId, WriterId};
@@ -196,5 +196,26 @@ impl<T> From<CodecMismatch> for InvalidUsage<T> {
 impl<T> From<Box<CodecMismatch>> for InvalidUsage<T> {
     fn from(x: Box<CodecMismatch>) -> Self {
         InvalidUsage::CodecMismatch(x)
+    }
+}
+
+/// An error returned from [crate::write::WriteHandle::compare_and_append] (and
+/// variants) when the expected upper didn't match the actual current upper of
+/// the shard.
+#[derive(Debug, PartialEq)]
+pub struct UpperMismatch<T> {
+    /// The expected upper given by the caller.
+    pub expected: Antichain<T>,
+    /// The actual upper of the shard at the time compare_and_append evaluated.
+    pub current: Antichain<T>,
+}
+
+impl<T: Timestamp> std::fmt::Display for UpperMismatch<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "expected upper {:?} did not match current upper {:?}",
+            self.expected, self.current,
+        )
     }
 }

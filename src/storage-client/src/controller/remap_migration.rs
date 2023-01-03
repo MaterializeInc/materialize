@@ -17,6 +17,7 @@ use anyhow::Context;
 use differential_dataflow::consolidation;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
+use mz_persist_client::error::UpperMismatch;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
@@ -27,7 +28,7 @@ use mz_expr::PartitionId;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::Subscribe;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{ShardId, Upper};
+use mz_persist_client::ShardId;
 use mz_persist_types::Codec64;
 use mz_repr::{Datum, Diff, GlobalId};
 use mz_timely_util::order::Partitioned;
@@ -314,7 +315,7 @@ where
         &mut self,
         updates: Vec<(FromTime, IntoTime, Diff)>,
         new_upper: Antichain<IntoTime>,
-    ) -> Result<(), Upper<IntoTime>> {
+    ) -> Result<(), UpperMismatch<IntoTime>> {
         let row_updates = updates.into_iter().map(|(from_ts, ts, diff)| {
             (
                 (SourceData(Ok(FromTime::encode_row(&from_ts))), ()),

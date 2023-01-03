@@ -81,6 +81,7 @@ use criterion::{criterion_group, criterion_main, Bencher, BenchmarkGroup, Benchm
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_persist_client::metrics::Metrics;
 use tempfile::TempDir;
 use timely::progress::{Antichain, Timestamp};
 use tokio::runtime::Runtime;
@@ -93,7 +94,7 @@ use mz_persist::s3::{S3Blob, S3BlobConfig};
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::async_runtime::CpuHeavyRuntime;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{Metrics, PersistClient, PersistConfig};
+use mz_persist_client::{PersistClient, PersistConfig};
 use mz_persist_types::Codec64;
 
 // The "plumbing" and "porcelain" names are from git [1]. Our "plumbing"

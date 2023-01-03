@@ -10,10 +10,10 @@
 //! Reclocking compatibility code until the whole ingestion pipeline is transformed to native
 //! timestamps
 
+use mz_persist_client::error::UpperMismatch;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
 
-use mz_persist_client::Upper;
 use mz_repr::Diff;
 
 /// A handle that can produce the data expressing the translation of FromTime to
@@ -49,7 +49,7 @@ pub trait RemapHandle: RemapHandleReader {
         updates: Vec<(Self::FromTime, Self::IntoTime, Diff)>,
         upper: Antichain<Self::IntoTime>,
         new_upper: Antichain<Self::IntoTime>,
-    ) -> Result<(), Upper<Self::IntoTime>>;
+    ) -> Result<(), UpperMismatch<Self::IntoTime>>;
 
     async fn compact(&mut self, since: Antichain<Self::IntoTime>);
 

@@ -89,7 +89,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
-use mz_persist::cfg::{BlobConfig, ConsensusConfig, ConsensusKnobs};
+use mz_persist::cfg::ConsensusKnobs;
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::{Codec, Codec64, Opaque};
 use proptest_derive::Arbitrary;
@@ -102,11 +102,13 @@ use uuid::Uuid;
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
+use crate::fetch::BatchFetcher;
 use crate::internal::compact::Compactor;
 use crate::internal::encoding::parse_id;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state_versions::StateVersions;
+use crate::metrics::Metrics;
 use crate::read::{LeasedReaderId, ReadHandle};
 use crate::write::{WriteHandle, WriterId};
 
@@ -125,14 +127,17 @@ pub mod operators {
     //! [timely] operators for reading and writing persist Shards.
     pub mod shard_source;
 }
+pub mod metrics {
+    //! Utilities related to metrics.
+    pub use crate::internal::metrics::encode_ts_metric;
+    pub use crate::internal::metrics::Metrics;
+}
 pub mod read;
 pub mod usage;
 pub mod write;
 
-pub use crate::internal::state::{Since, Upper};
-
 /// An implementation of the public crate interface.
-pub(crate) mod internal {
+mod internal {
     pub mod compact;
     pub mod encoding;
     pub mod gc;
@@ -149,17 +154,6 @@ pub(crate) mod internal {
     pub mod datadriven;
 }
 
-// TODO: Remove this in favor of making it possible for all PersistClients to be
-// created by the PersistCache.
-pub use crate::internal::metrics::Metrics;
-
-use self::fetch::BatchFetcher;
-/// Utilities related to metrics.
-pub mod metrics {
-    pub use crate::internal::metrics::encode_ts_metric;
-    pub use crate::internal::metrics::Metrics;
-}
-
 const BUILD_INFO: BuildInfo = build_info!();
 
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
@@ -174,38 +168,6 @@ pub struct PersistLocation {
 
     /// Uri string that identifies the consensus system.
     pub consensus_uri: String,
-}
-
-impl PersistLocation {
-    /// Opens the associated implementations of [Blob] and [Consensus].
-    ///
-    /// This is exposed mostly for testing. Persist users likely want
-    /// [crate::cache::PersistClientCache::open].
-    pub async fn open_locations(
-        &self,
-        config: &PersistConfig,
-        metrics: &Metrics,
-    ) -> Result<
-        (
-            Arc<dyn Blob + Send + Sync>,
-            Arc<dyn Consensus + Send + Sync>,
-        ),
-        ExternalError,
-    > {
-        let blob = BlobConfig::try_from(&self.blob_uri).await?;
-        let blob =
-            retry_external(&metrics.retries.external.blob_open, || blob.clone().open()).await;
-        let consensus = ConsensusConfig::try_from(
-            &self.consensus_uri,
-            Box::new(config.clone()),
-            metrics.postgres_consensus.clone(),
-        )?;
-        let consensus = retry_external(&metrics.retries.external.consensus_open, || {
-            consensus.clone().open()
-        })
-        .await;
-        Ok((blob, consensus))
-    }
 }
 
 /// An opaque identifier for a persist durable TVC (aka shard).
@@ -830,9 +792,8 @@ mod tests {
     use tokio::task::JoinHandle;
 
     use crate::cache::PersistClientCache;
-    use crate::error::CodecMismatch;
+    use crate::error::{CodecMismatch, UpperMismatch};
     use crate::internal::paths::BlobKey;
-    use crate::internal::state::Upper;
     use crate::read::ListenEvent;
 
     use super::*;
@@ -1326,7 +1287,13 @@ mod tests {
                 Antichain::from_elem(7),
             )
             .await;
-        assert_eq!(res, Ok(Err(Upper(Antichain::from_elem(3)))));
+        assert_eq!(
+            res,
+            Ok(Err(UpperMismatch {
+                expected: Antichain::from_elem(5),
+                current: Antichain::from_elem(3)
+            }))
+        );
 
         // Writing with an outdated upper updates the write handle's upper to the correct upper.
         assert_eq!(write.upper(), &Antichain::from_elem(3));
@@ -1392,7 +1359,13 @@ mod tests {
                 Antichain::from_elem(3),
             )
             .await;
-        assert_eq!(res, Ok(Err(Upper(Antichain::from_elem(3)))));
+        assert_eq!(
+            res,
+            Ok(Err(UpperMismatch {
+                expected: Antichain::from_elem(u64::minimum()),
+                current: Antichain::from_elem(3)
+            }))
+        );
 
         // A failed write updates our local cache of the shard upper.
         assert_eq!(write2.upper(), &Antichain::from_elem(3));
@@ -1487,7 +1460,13 @@ mod tests {
                 Antichain::from_elem(6),
             )
             .await;
-        assert_eq!(result, Ok(Err(Upper(Antichain::from_elem(3)))));
+        assert_eq!(
+            result,
+            Ok(Err(UpperMismatch {
+                expected: Antichain::from_elem(5),
+                current: Antichain::from_elem(3)
+            }))
+        );
 
         // Fixing the lower to make the write contiguous should make the append succeed.
         write.expect_append(&data[2..5], vec![3], vec![6]).await;
@@ -1572,7 +1551,13 @@ mod tests {
                 Antichain::from_elem(6),
             )
             .await;
-        assert_eq!(result, Ok(Err(Upper(Antichain::from_elem(3)))));
+        assert_eq!(
+            result,
+            Ok(Err(UpperMismatch {
+                expected: Antichain::from_elem(5),
+                current: Antichain::from_elem(3)
+            }))
+        );
 
         // Writing with the correct expected upper to make the write contiguous should make the
         // append succeed.
