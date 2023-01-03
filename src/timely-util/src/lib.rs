@@ -83,6 +83,7 @@
 //! Utilities for working with Timely.
 
 pub mod activator;
+pub mod antichain;
 pub mod builder_async;
 pub mod event;
 pub mod operator;
