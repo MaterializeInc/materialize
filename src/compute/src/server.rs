@@ -156,21 +156,26 @@ impl ClusterClient<PartitionedClient> {
             .unzip();
         let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
-        let (builders, other) = initialize_networking(&config, epoch).await?;
+        let (builders, other) = initialize_networking(
+            config.workers,
+            config.process,
+            config.addresses.clone(),
+            epoch,
+        )
+        .await?;
 
         let mut worker_config = WorkerConfig::default();
         differential_dataflow::configure(
             &mut worker_config,
             &differential_dataflow::Config {
-                idle_merge_effort: Some(1000),
+                idle_merge_effort: Some(isize::cast_from(config.idle_arrangement_merge_effort)),
             },
         );
 
-        let workers = config.workers;
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
             let timely_worker_index = timely_worker.index();
             let _tokio_guard = tokio_executor.enter();
-            let client_rx = client_rxs.lock().unwrap()[timely_worker_index % workers]
+            let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
                 .take()
                 .unwrap();
             let _trace_metrics = trace_metrics.clone();

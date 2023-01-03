@@ -42,6 +42,14 @@ pub(crate) enum ReplicaResponse<T> {
     MetricsUpdate(Result<Vec<ServiceProcessMetrics>, anyhow::Error>),
 }
 
+/// Replica-specific configuration.
+#[derive(Clone, Debug)]
+pub(super) struct ReplicaConfig {
+    pub location: ComputeReplicaLocation,
+    pub logging: LoggingConfig,
+    pub idle_arrangement_merge_effort: u32,
+}
+
 /// State for a single replica.
 #[derive(Debug)]
 pub(super) struct Replica<T> {
@@ -55,10 +63,8 @@ pub(super) struct Replica<T> {
     /// If receiving from the channel returns `None`, the replica has failed
     /// and requires rehydration.
     response_rx: UnboundedReceiver<ReplicaResponse<T>>,
-    /// Location of the replica
-    pub location: ComputeReplicaLocation,
-    /// The logging config specific to this replica.
-    pub logging_config: LoggingConfig,
+    /// Configuration specific to this replica.
+    pub config: ReplicaConfig,
     /// Handle to the active-replication-replica task.
     pub replica_task: Option<JoinHandle<()>>,
 }
@@ -72,8 +78,7 @@ where
         id: ReplicaId,
         instance_id: ComputeInstanceId,
         build_info: &'static BuildInfo,
-        location: ComputeReplicaLocation,
-        logging_config: LoggingConfig,
+        config: ReplicaConfig,
         orchestrator: ComputeOrchestrator,
         epoch: ComputeStartupEpoch,
     ) -> Self {
@@ -89,8 +94,7 @@ where
                 instance_id,
                 replica_id: id,
                 build_info,
-                location: location.clone(),
-                logging_config: logging_config.clone(),
+                config: config.clone(),
                 orchestrator,
                 command_rx,
                 response_tx,
@@ -102,8 +106,7 @@ where
         Self {
             command_tx,
             response_rx,
-            location,
-            logging_config,
+            config,
             replica_task: Some(replica_task),
         }
     }
@@ -130,10 +133,8 @@ struct ReplicaTask<T> {
     instance_id: ComputeInstanceId,
     /// The ID of the replica.
     replica_id: ReplicaId,
-    /// Location
-    location: ComputeReplicaLocation,
-    /// Logging
-    logging_config: LoggingConfig,
+    /// Replica configuration.
+    config: ReplicaConfig,
     /// The build information for this process.
     build_info: &'static BuildInfo,
     /// A channel upon which commands intended for the replica are delivered.
@@ -181,8 +182,7 @@ where
         let ReplicaTask {
             instance_id,
             replica_id,
-            location,
-            logging_config,
+            config,
             build_info,
             command_rx,
             response_tx,
@@ -193,10 +193,16 @@ where
         tracing::info!("starting replica task for {replica_id}");
 
         let result = orchestrator
-            .ensure_replica_location(instance_id, replica_id, location)
-            .and_then(|(addrs, timely_config)| {
+            .ensure_replica_location(instance_id, replica_id, config.location)
+            .and_then(|(command_addrs, workers, timely_addrs)| {
+                let timely_config = TimelyConfig {
+                    workers,
+                    process: 0,
+                    addresses: timely_addrs,
+                    idle_arrangement_merge_effort: config.idle_arrangement_merge_effort,
+                };
                 let cmd_spec = CommandSpecialization {
-                    logging_config,
+                    logging_config: config.logging,
                     timely_config,
                     epoch,
                 };
@@ -207,7 +213,7 @@ where
                     command_rx,
                     response_tx,
                     build_info,
-                    addrs,
+                    command_addrs,
                     cmd_spec,
                     metrics,
                 )

@@ -46,26 +46,23 @@ use timely::communication::allocator::zero_copy::initialize::initialize_networki
 use timely::communication::allocator::GenericBuilder;
 use tracing::{debug, info, warn};
 
-use mz_compute_client::command::{ComputeStartupEpoch, TimelyConfig};
+use mz_compute_client::command::ComputeStartupEpoch;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
 
 /// Creates communication mesh from cluster config
 pub async fn initialize_networking(
-    config: &TimelyConfig,
+    workers: usize,
+    process: usize,
+    addresses: Vec<String>,
     epoch: ComputeStartupEpoch,
 ) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error> {
-    let TimelyConfig {
-        workers,
-        process,
-        addresses,
-    } = config;
     info!(
         process = process,
         "initializing network for multi-process timely instance, with {} processes for epoch number {epoch}",
         addresses.len()
     );
-    let sockets = create_sockets(addresses.clone(), u64::cast_from(*process), epoch)
+    let sockets = create_sockets(addresses, u64::cast_from(process), epoch)
         .await
         .context("failed to set up timely sockets")?;
 
@@ -80,7 +77,7 @@ pub async fn initialize_networking(
             .collect::<Result<Vec<_>, _>>()
             .map_err(anyhow::Error::from)
             .context("failed to get standard sockets from tokio sockets")?;
-        initialize_networking_inner(sockets, *process, *workers)
+        initialize_networking_inner(sockets, process, workers)
     } else if sockets
         .iter()
         .filter_map(|s| s.as_ref())
@@ -92,7 +89,7 @@ pub async fn initialize_networking(
             .collect::<Result<Vec<_>, _>>()
             .map_err(anyhow::Error::from)
             .context("failed to get standard sockets from tokio sockets")?;
-        initialize_networking_inner(sockets, *process, *workers)
+        initialize_networking_inner(sockets, process, workers)
     } else {
         anyhow::bail!("cannot mix TCP and Unix streams");
     }

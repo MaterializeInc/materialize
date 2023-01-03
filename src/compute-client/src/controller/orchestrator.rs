@@ -21,8 +21,6 @@ use mz_orchestrator::{
     ServiceEvent, ServicePort, ServiceProcessMetrics,
 };
 
-use crate::command::TimelyConfig;
-
 use super::{
     ComputeInstanceEvent, ComputeInstanceId, ComputeReplicaAllocation, ComputeReplicaLocation,
     ReplicaId,
@@ -47,25 +45,31 @@ impl ComputeOrchestrator {
             init_container_image,
         }
     }
+
+    /// Ensure that a service for the given replica exists at the given `location`.
+    ///
+    /// Returns a tuple `(compute_addrs, workers, timely_addrs)`, where:
+    ///  * `command_addrs` is the list of addresses on which the replica's processes listen for
+    ///    controller connections.
+    ///  * `workers` is the number of timely workers per process.
+    ///  * `timely_addrs` is the list of addresses used by the timely cluster for inter-process
+    ///    communication.
     pub(super) async fn ensure_replica_location(
         &self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
         location: ComputeReplicaLocation,
-    ) -> Result<(Vec<String>, TimelyConfig), anyhow::Error> {
+    ) -> Result<(Vec<String>, usize, Vec<String>), anyhow::Error> {
         match location {
             ComputeReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
                 workers,
             } => {
-                let addrs = addrs.into_iter().collect();
-                let timely_config = TimelyConfig {
-                    workers: workers.get(),
-                    process: 0,
-                    addresses: compute_addrs.into_iter().collect(),
-                };
-                Ok((addrs, timely_config))
+                let server_addrs = addrs.into_iter().collect();
+                let workers = workers.get();
+                let worker_addrs = compute_addrs.into_iter().collect();
+                Ok((server_addrs, workers, worker_addrs))
             }
             ComputeReplicaLocation::Managed {
                 allocation,
@@ -76,14 +80,10 @@ impl ComputeOrchestrator {
                     .ensure_replica(instance_id, replica_id, allocation, availability_zone)
                     .await?;
 
-                let addrs = service.addresses("computectl");
-                let timely_config = TimelyConfig {
-                    workers: allocation.workers.get(),
-                    process: 0,
-                    addresses: service.addresses("compute"),
-                };
-
-                Ok((addrs, timely_config))
+                let command_addrs = service.addresses("computectl");
+                let workers = allocation.workers.get();
+                let timely_addrs = service.addresses("compute");
+                Ok((command_addrs, workers, timely_addrs))
             }
         }
     }

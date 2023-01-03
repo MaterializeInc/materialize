@@ -56,8 +56,8 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.command.rs"));
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Create the timely runtime according to the supplied CommunicationConfig. Must be the first
-    /// command sent to a clusterd. This is the only command that is broadcasted by
-    /// ActiveReplication to all clusterd processes within a replica.
+    /// command sent to a clusterd. This is the only command that is broadcasted to all clusterd
+    /// processes within a replica.
     CreateTimely {
         config: TimelyConfig,
         epoch: ComputeStartupEpoch,
@@ -312,6 +312,10 @@ pub struct TimelyConfig {
     pub process: usize,
     /// Addresses of all processes
     pub addresses: Vec<String>,
+    /// The amount of effort to be spent on arrangement compaction during idle times.
+    ///
+    /// See [`differential_dataflow::Config::idle_merge_effort`].
+    pub idle_arrangement_merge_effort: u32,
 }
 
 impl RustType<ProtoTimelyConfig> for TimelyConfig {
@@ -320,6 +324,7 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             workers: self.workers.into_proto(),
             addresses: self.addresses.into_proto(),
             process: self.process.into_proto(),
+            idle_arrangement_merge_effort: self.idle_arrangement_merge_effort,
         }
     }
 
@@ -328,6 +333,7 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             process: proto.process.into_rust()?,
             workers: proto.workers.into_rust()?,
             addresses: proto.addresses.into_rust()?,
+            idle_arrangement_merge_effort: proto.idle_arrangement_merge_effort,
         })
     }
 }
