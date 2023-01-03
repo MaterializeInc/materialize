@@ -370,6 +370,8 @@ where
                 self.runs.push(self.parts_written);
             }
 
+            // given the above check, whether or not we extended an existing run or
+            // started a new one, this part contains the greatest KV in the run so far
             max_kv_in_run.0.clear();
             max_kv_in_run.1.clear();
             max_kv_in_run.0.extend_from_slice(max_kv_in_part.0);
