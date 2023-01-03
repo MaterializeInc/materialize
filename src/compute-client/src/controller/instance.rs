@@ -27,7 +27,8 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::command::{
-    ComputeCommand, ComputeCommandHistory, ComputeStartupEpoch, InstanceConfig, Peek,
+    ComputeCommand, ComputeCommandHistory, ComputeParameter, ComputeStartupEpoch, InstanceConfig,
+    Peek,
 };
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
@@ -751,8 +752,9 @@ where
 
     /// Update the max size in bytes of any result.
     pub fn update_max_result_size(&mut self, max_result_size: u32) {
+        let params = [ComputeParameter::MaxResultSize(max_result_size)].into();
         self.compute
-            .send(ComputeCommand::UpdateMaxResultSize(max_result_size))
+            .send(ComputeCommand::UpdateConfiguration(params));
     }
 
     /// Validate that a collection exists for all identifiers, and error if any do not.

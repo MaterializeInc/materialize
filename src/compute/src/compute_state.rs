@@ -27,7 +27,9 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
-use mz_compute_client::command::{ComputeCommand, ComputeCommandHistory, InstanceConfig, Peek};
+use mz_compute_client::command::{
+    ComputeCommand, ComputeCommandHistory, ComputeParameter, InstanceConfig, Peek,
+};
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::metrics::ComputeMetrics;
 use mz_compute_client::plan::Plan;
@@ -131,6 +133,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             CreateInstance(config) => self.handle_create_instance(config),
             InitializationComplete => (),
+            UpdateConfiguration(params) => self.handle_update_configuration(params),
             CreateDataflows(dataflows) => self.handle_create_dataflows(dataflows),
             AllowCompaction(list) => self.handle_allow_compaction(list),
             Peek(peek) => {
@@ -138,14 +141,21 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 self.handle_peek(peek)
             }
             CancelPeeks { uuids } => self.handle_cancel_peeks(uuids),
-            UpdateMaxResultSize(max_result_size) => {
-                self.compute_state.max_result_size = max_result_size
-            }
         }
     }
 
     fn handle_create_instance(&mut self, config: InstanceConfig) {
         self.initialize_logging(&config.logging);
+    }
+
+    fn handle_update_configuration(&mut self, params: BTreeSet<ComputeParameter>) {
+        for param in params {
+            match param {
+                ComputeParameter::MaxResultSize(size) => {
+                    self.compute_state.max_result_size = size;
+                }
+            }
+        }
     }
 
     fn handle_create_dataflows(

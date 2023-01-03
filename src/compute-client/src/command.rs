@@ -9,7 +9,7 @@
 
 //! Compute layer commands.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
 
 use proptest::prelude::{any, Arbitrary};
@@ -43,8 +43,8 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.command.rs"));
 ///
 /// After a timely runtime has been built with CreateTimely, a sequence of commands that have to be
 /// handled in the timely runtime can be sent: First a CreateInstance must be sent which activates
-/// logging sources. After this, any combination of CreateDataflows, AllowCompaction, Peek,
-/// UpdateMaxResultSize and CancelPeeks can be sent.
+/// logging sources. After this, any combination of UpdateConfiguration, CreateDataflows,
+/// AllowCompaction, Peek, and CancelPeeks can be sent.
 ///
 /// Within this sequence, exactly one InitializationComplete has to be sent. Commands sent before
 /// InitializationComplete are buffered and are compacted. For example a Peek followed by a
@@ -71,6 +71,9 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// initial state.
     InitializationComplete,
 
+    /// Update compute instance configuration.
+    UpdateConfiguration(BTreeSet<ComputeParameter>),
+
     /// Create a sequence of dataflows.
     ///
     /// Each of the dataflows must contain `as_of` members that are valid
@@ -96,7 +99,6 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
         /// The identifiers of the peek requests to cancel.
         uuids: BTreeSet<Uuid>,
     },
-    UpdateMaxResultSize(u32),
 }
 
 impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
@@ -107,6 +109,11 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
             kind: Some(match self {
                 ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
                 ComputeCommand::InitializationComplete => InitializationComplete(()),
+                ComputeCommand::UpdateConfiguration(params) => {
+                    UpdateConfiguration(ProtoUpdateConfiguration {
+                        params: params.into_proto(),
+                    })
+                }
                 ComputeCommand::CreateDataflows(dataflows) => {
                     CreateDataflows(ProtoCreateDataflows {
                         dataflows: dataflows.into_proto(),
@@ -121,9 +128,6 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                 ComputeCommand::CancelPeeks { uuids } => CancelPeeks(ProtoCancelPeeks {
                     uuids: uuids.into_proto(),
                 }),
-                ComputeCommand::UpdateMaxResultSize(max_result_size) => {
-                    UpdateMaxResultSize(max_result_size.into_proto())
-                }
                 ComputeCommand::CreateTimely {
                     comm_config,
                     epoch: ComputeStartupEpoch { envd, replica },
@@ -144,6 +148,9 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         match proto.kind {
             Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
             Some(InitializationComplete(())) => Ok(ComputeCommand::InitializationComplete),
+            Some(UpdateConfiguration(ProtoUpdateConfiguration { params })) => {
+                Ok(ComputeCommand::UpdateConfiguration(params.into_rust()?))
+            }
             Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
                 Ok(ComputeCommand::CreateDataflows(dataflows.into_rust()?))
             }
@@ -154,9 +161,6 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
             Some(CancelPeeks(ProtoCancelPeeks { uuids })) => Ok(ComputeCommand::CancelPeeks {
                 uuids: uuids.into_rust()?,
             }),
-            Some(UpdateMaxResultSize(ProtoUpdateMaxResultSize { max_result_size })) => {
-                Ok(ComputeCommand::UpdateMaxResultSize(max_result_size))
-            }
             Some(CreateTimely(ProtoCreateTimely { comm_config, epoch })) => {
                 let comm_config = comm_config.ok_or_else(|| {
                     TryFromProtoError::missing_field("ProtoCreateTimely::comm_config")
@@ -181,7 +185,12 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
-                any::<InstanceConfig>().prop_map(ComputeCommand::CreateInstance).boxed(),
+                any::<InstanceConfig>()
+                    .prop_map(ComputeCommand::CreateInstance)
+                    .boxed(),
+                proptest::collection::btree_set(any::<ComputeParameter>(), 1..4)
+                    .prop_map(ComputeCommand::UpdateConfiguration)
+                    .boxed(),
                 proptest::collection::vec(
                     any::<
                         DataflowDescription<
@@ -192,7 +201,8 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
                     >(),
                     1..4,
                 )
-                .prop_map(ComputeCommand::CreateDataflows).boxed(),
+                .prop_map(ComputeCommand::CreateDataflows)
+                .boxed(),
                 proptest::collection::vec(
                     (
                         any::<GlobalId>(),
@@ -207,13 +217,14 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
                             .map(|(id, frontier_vec)| (id, Antichain::from(frontier_vec)))
                             .collect(),
                     )
-                }).boxed(),
+                })
+                .boxed(),
                 any::<Peek>().prop_map(ComputeCommand::Peek).boxed(),
-                proptest::collection::vec(any_uuid(), 1..6).prop_map(|uuids| {
-                    ComputeCommand::CancelPeeks {
+                proptest::collection::vec(any_uuid(), 1..6)
+                    .prop_map(|uuids| ComputeCommand::CancelPeeks {
                         uuids: BTreeSet::from_iter(uuids.into_iter()),
-                    }
-                }).boxed(),
+                    })
+                    .boxed(),
             ])
     }
 }
@@ -357,6 +368,39 @@ impl RustType<ProtoCommunicationConfig> for CommunicationConfig {
     }
 }
 
+/// Compute instance configuration parameters.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
+pub enum ComputeParameter {
+    /// The maximum allowed size in bytes for results of peeks and subscribes.
+    ///
+    /// Peeks and subscribes that would return results larger than this maximum return error
+    /// responses instead.
+    MaxResultSize(u32),
+}
+
+impl RustType<ProtoComputeParameter> for ComputeParameter {
+    fn into_proto(&self) -> ProtoComputeParameter {
+        use proto_compute_parameter::*;
+
+        ProtoComputeParameter {
+            kind: Some(match self {
+                ComputeParameter::MaxResultSize(size) => Kind::MaxResultSize(*size),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoComputeParameter) -> Result<Self, TryFromProtoError> {
+        use proto_compute_parameter::*;
+
+        match proto.kind {
+            Some(Kind::MaxResultSize(size)) => Ok(ComputeParameter::MaxResultSize(size)),
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoComputeParameter::kind",
+            )),
+        }
+    }
+}
+
 /// Peek at an arrangement.
 ///
 /// This request elicits data from the worker, by naming an
@@ -438,18 +482,6 @@ impl RustType<ProtoPeek> for Peek {
     }
 }
 
-impl RustType<ProtoUpdateMaxResultSize> for u32 {
-    fn into_proto(&self) -> ProtoUpdateMaxResultSize {
-        ProtoUpdateMaxResultSize {
-            max_result_size: *self,
-        }
-    }
-
-    fn from_proto(proto: ProtoUpdateMaxResultSize) -> Result<Self, TryFromProtoError> {
-        Ok(proto.max_result_size)
-    }
-}
-
 fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
     (0..1).prop_map(|_| OpenTelemetryContext::empty())
 }
@@ -508,14 +540,19 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         // First determine what the final compacted frontiers will be for each collection.
         // These will determine for each collection whether the command that creates it is required,
         // and if required what `as_of` frontier should be used for its updated command.
-        let mut final_frontiers = std::collections::BTreeMap::new();
+        let mut final_frontiers = BTreeMap::new();
         let mut live_dataflows = Vec::new();
         let mut live_peeks = Vec::new();
-        let mut live_cancels = std::collections::BTreeSet::new();
+        let mut live_cancels = BTreeSet::new();
 
         let mut create_inst_command = None;
         let mut create_timely_command = None;
-        let mut update_max_result_size_command = None;
+
+        // Collect only the final configuration.
+        // Note that this is only correct as long as all config parameters apply globally. If we
+        // ever introduce parameters that only affect subsequent commands, we will have to
+        // reconsider this approach.
+        let mut final_configuration = BTreeSet::new();
 
         let mut initialization_complete = false;
 
@@ -533,6 +570,9 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                 ComputeCommand::InitializationComplete => {
                     initialization_complete = true;
                 }
+                ComputeCommand::UpdateConfiguration(params) => {
+                    final_configuration.extend(params);
+                }
                 ComputeCommand::CreateDataflows(dataflows) => {
                     live_dataflows.extend(dataflows);
                 }
@@ -546,9 +586,6 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                 }
                 ComputeCommand::CancelPeeks { uuids } => {
                     live_cancels.extend(uuids);
-                }
-                update @ ComputeCommand::UpdateMaxResultSize(_) => {
-                    update_max_result_size_command = Some(update);
                 }
             }
         }
@@ -601,7 +638,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         command_count += final_frontiers.len();
         command_count += live_peeks.len();
         command_count += live_cancels.len();
-        if update_max_result_size_command.is_some() {
+        if !final_configuration.is_empty() {
             command_count += 1;
         }
 
@@ -633,8 +670,9 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         if initialization_complete {
             self.commands.push(ComputeCommand::InitializationComplete);
         }
-        if let Some(update_max_result_size_command) = update_max_result_size_command {
-            self.commands.push(update_max_result_size_command)
+        if !final_configuration.is_empty() {
+            self.commands
+                .push(ComputeCommand::UpdateConfiguration(final_configuration));
         }
 
         self.reduced_count = command_count;
