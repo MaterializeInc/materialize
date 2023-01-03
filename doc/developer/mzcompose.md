@@ -203,3 +203,13 @@ def workflow_simple_test(c: Composition):
    w.run("testdrive", "*.td")
    ...
 ```
+
+## Debugging
+
+Here are a few tips for debugging failing Testdrive files:
+
+### Inspecting materialize after a run
+When running a Testdrive mzcompose, upon failure, _usually_ materialize is left running. You can connect with a normal `psql` shell using:
+```
+./mzcompose exec -- materialized psql -h localhost -p 6875
+```
