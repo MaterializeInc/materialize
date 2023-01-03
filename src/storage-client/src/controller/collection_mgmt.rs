@@ -18,11 +18,13 @@ use mz_ore::now::{EpochMillis, NowFn};
 use timely::progress::Timestamp;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tracing::debug;
 
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 
 use crate::client::TimestamplessUpdate;
+use crate::controller::StorageError;
 
 use super::persist_handles;
 
@@ -87,11 +89,21 @@ impl CollectionManager {
                                 diff,
                             }).collect::<Vec<_>>(), T::from(now()))];
 
-                            // TODO? Handle contention among multiple writers
-                            write_handle.monotonic_append(updates)
-                                .await
-                                .expect("sender hung up")
-                                .expect("no write contention on collections");
+                            loop {
+                                let append_result = write_handle.monotonic_append(updates.clone()).await.expect("sender hung up");
+                                match append_result {
+                                    Ok(()) => break,
+                                    Err(StorageError::InvalidUppers(ids)) => {
+                                        // It's fine to retry invalid-uppers errors here, since monotonic appends
+                                        // do not specify a particular upper or timestamp.
+                                        assert_eq!(&ids, &[id], "expect to receive errors for only the relevant collection");
+                                        debug!("Retrying invalid-uppers error while appending to managed collection {id}");
+                                    }
+                                    Err(other) => {
+                                        panic!("Unhandled error while appending to managed collection {id}: {other:?}")
+                                    }
+                                }
+                            }
                         }
                     }
                 }

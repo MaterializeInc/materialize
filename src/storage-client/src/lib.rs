@@ -78,6 +78,7 @@
 
 pub mod client;
 pub mod controller;
+pub mod healthcheck;
 pub mod sink;
 pub mod source;
 pub mod types;
