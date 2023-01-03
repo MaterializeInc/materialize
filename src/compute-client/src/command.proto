@@ -47,7 +47,7 @@ message ProtoComputeCommand {
 
     oneof kind {
         ProtoCreateTimely create_timely = 1;
-        ProtoInstanceConfig create_instance = 2;
+        logging.ProtoLoggingConfig create_instance = 2;
         ProtoCreateDataflows create_dataflows = 3;
         mz_storage_client.client.ProtoAllowCompaction allow_compaction = 4;
         ProtoPeek peek = 5;
@@ -55,11 +55,6 @@ message ProtoComputeCommand {
         google.protobuf.Empty initialization_complete = 7;
         ProtoUpdateConfiguration update_configuration = 8;
     }
-}
-
-message ProtoInstanceConfig {
-    logging.ProtoLoggingConfig logging = 1;
-    uint32 max_result_size = 2;
 }
 
 message ProtoCommunicationConfig {

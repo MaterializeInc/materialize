@@ -65,7 +65,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
 
     /// Setup and logging sources within a running timely instance. Must be the second command
     /// after CreateTimely.
-    CreateInstance(InstanceConfig),
+    CreateInstance(LoggingConfig),
 
     /// Indicates that the controller has sent all commands reflecting its
     /// initial state.
@@ -107,7 +107,17 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         use proto_compute_command::*;
         ProtoComputeCommand {
             kind: Some(match self {
-                ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
+                ComputeCommand::CreateTimely {
+                    comm_config,
+                    epoch: ComputeStartupEpoch { envd, replica },
+                } => CreateTimely(ProtoCreateTimely {
+                    comm_config: Some(comm_config.into_proto()),
+                    epoch: Some(ProtoComputeStartupEpoch {
+                        envd: envd.get().into_proto(),
+                        replica: replica.into_proto(),
+                    }),
+                }),
+                ComputeCommand::CreateInstance(logging) => CreateInstance(logging.into_proto()),
                 ComputeCommand::InitializationComplete => InitializationComplete(()),
                 ComputeCommand::UpdateConfiguration(params) => {
                     UpdateConfiguration(ProtoUpdateConfiguration {
@@ -128,16 +138,6 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                 ComputeCommand::CancelPeeks { uuids } => CancelPeeks(ProtoCancelPeeks {
                     uuids: uuids.into_proto(),
                 }),
-                ComputeCommand::CreateTimely {
-                    comm_config,
-                    epoch: ComputeStartupEpoch { envd, replica },
-                } => CreateTimely(ProtoCreateTimely {
-                    comm_config: Some(comm_config.into_proto()),
-                    epoch: Some(ProtoComputeStartupEpoch {
-                        envd: envd.get().into_proto(),
-                        replica: replica.into_proto(),
-                    }),
-                }),
             }),
         }
     }
@@ -146,7 +146,20 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         use proto_compute_command::Kind::*;
         use proto_compute_command::*;
         match proto.kind {
-            Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
+            Some(CreateTimely(ProtoCreateTimely { comm_config, epoch })) => {
+                let comm_config = comm_config.ok_or_else(|| {
+                    TryFromProtoError::missing_field("ProtoCreateTimely::comm_config")
+                })?;
+                let epoch = epoch
+                    .ok_or_else(|| TryFromProtoError::missing_field("ProtoCreateTimely::epoch"))?;
+                Ok(ComputeCommand::CreateTimely {
+                    comm_config: comm_config.into_rust()?,
+                    epoch: epoch.into_rust()?,
+                })
+            }
+            Some(CreateInstance(logging)) => {
+                Ok(ComputeCommand::CreateInstance(logging.into_rust()?))
+            }
             Some(InitializationComplete(())) => Ok(ComputeCommand::InitializationComplete),
             Some(UpdateConfiguration(ProtoUpdateConfiguration { params })) => {
                 Ok(ComputeCommand::UpdateConfiguration(params.into_rust()?))
@@ -161,17 +174,6 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
             Some(CancelPeeks(ProtoCancelPeeks { uuids })) => Ok(ComputeCommand::CancelPeeks {
                 uuids: uuids.into_rust()?,
             }),
-            Some(CreateTimely(ProtoCreateTimely { comm_config, epoch })) => {
-                let comm_config = comm_config.ok_or_else(|| {
-                    TryFromProtoError::missing_field("ProtoCreateTimely::comm_config")
-                })?;
-                let epoch = epoch
-                    .ok_or_else(|| TryFromProtoError::missing_field("ProtoCreateTimely::epoch"))?;
-                Ok(ComputeCommand::CreateTimely {
-                    comm_config: comm_config.into_rust()?,
-                    epoch: epoch.into_rust()?,
-                })
-            }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeCommand::kind",
             )),
@@ -185,7 +187,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
-                any::<InstanceConfig>()
+                any::<LoggingConfig>()
                     .prop_map(ComputeCommand::CreateInstance)
                     .boxed(),
                 proptest::collection::btree_set(any::<ComputeParameter>(), 1..4)
@@ -312,15 +314,6 @@ impl Ord for ComputeStartupEpoch {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
-/// Configuration sent to new compute instances.
-pub struct InstanceConfig {
-    /// Configuration of logging sources.
-    pub logging: LoggingConfig,
-    /// Max size in bytes of any result.
-    pub max_result_size: u32,
-}
-
 /// Configuration of the cluster we will spin up
 #[derive(Arbitrary, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CommunicationConfig {
@@ -330,24 +323,6 @@ pub struct CommunicationConfig {
     pub process: usize,
     /// Addresses of all processes
     pub addresses: Vec<String>,
-}
-
-impl RustType<ProtoInstanceConfig> for InstanceConfig {
-    fn into_proto(&self) -> ProtoInstanceConfig {
-        ProtoInstanceConfig {
-            logging: Some(self.logging.into_proto()),
-            max_result_size: self.max_result_size,
-        }
-    }
-
-    fn from_proto(proto: ProtoInstanceConfig) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            logging: proto
-                .logging
-                .into_rust_if_some("ProtoInstanceConfig::logging")?,
-            max_result_size: proto.max_result_size,
-        })
-    }
 }
 
 impl RustType<ProtoCommunicationConfig> for CommunicationConfig {

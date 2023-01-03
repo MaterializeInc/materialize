@@ -587,7 +587,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
     fn handle_command(&mut self, response_tx: &mut ResponseSender, cmd: ComputeCommand) {
         match &cmd {
-            ComputeCommand::CreateInstance(config) => {
+            ComputeCommand::CreateInstance(_) => {
                 self.compute_state = Some(ComputeState {
                     traces: TraceManager::new(
                         self.trace_metrics.clone(),
@@ -604,7 +604,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     compute_logger: None,
                     persist_clients: Arc::clone(&self.persist_clients),
                     command_history: ComputeCommandHistory::default(),
-                    max_result_size: config.max_result_size,
+                    max_result_size: u32::MAX,
                     metrics: self.compute_metrics.clone(),
                 });
             }
@@ -695,16 +695,16 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // this before being too confident. It should be rare without peeks, but could happen with e.g.
             // multiple outputs of a dataflow.
 
-            // The configuration with which a prior `CreateInstance` was called, if it was.
-            let mut old_config = None;
+            // The logging configuration with which a prior `CreateInstance` was called, if it was.
+            let mut old_logging_config = None;
             // Index dataflows by `export_ids().collect()`, as this is a precondition for their compatibility.
             let mut old_dataflows = BTreeMap::default();
             // Maintain allowed compaction, in case installed identifiers may have been allowed to compact.
             let mut old_frontiers = BTreeMap::default();
             for command in compute_state.command_history.iter() {
                 match command {
-                    ComputeCommand::CreateInstance(config) => {
-                        old_config = Some(config);
+                    ComputeCommand::CreateInstance(logging) => {
+                        old_logging_config = Some(logging);
                     }
                     ComputeCommand::CreateDataflows(dataflows) => {
                         for dataflow in dataflows.iter() {
@@ -773,18 +773,18 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             todo_commands.push(ComputeCommand::CreateDataflows(new_dataflows));
                         }
                     }
-                    ComputeCommand::CreateInstance(new_config) => {
+                    ComputeCommand::CreateInstance(logging) => {
                         // Cluster creation should not be performed again!
-                        if Some(new_config) != old_config {
+                        if Some(logging) != old_logging_config {
                             halt!(
-                                "new instance configuration does not match existing instance configuration:\n{:?}\nvs\n{:?}",
-                                new_config,
-                                old_config,
+                                "new logging configuration does not match existing logging configuration:\n{:?}\nvs\n{:?}",
+                                logging,
+                                old_logging_config,
                             );
                         }
 
                         // Ensure we retain the logging sink dataflows.
-                        for (id, _) in new_config.logging.sink_logs.values() {
+                        for (id, _) in logging.sink_logs.values() {
                             retain_ids.insert(*id);
                         }
                     }

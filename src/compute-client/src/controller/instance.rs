@@ -27,8 +27,7 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::command::{
-    ComputeCommand, ComputeCommandHistory, ComputeParameter, ComputeStartupEpoch, InstanceConfig,
-    Peek,
+    ComputeCommand, ComputeCommandHistory, ComputeParameter, ComputeStartupEpoch, Peek,
 };
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
@@ -198,10 +197,12 @@ where
             comm_config: Default::default(),
             epoch: ComputeStartupEpoch::new(envd_epoch, 0),
         });
-        instance.send(ComputeCommand::CreateInstance(InstanceConfig {
-            logging: Default::default(),
-            max_result_size,
-        }));
+
+        let dummy_logging_config = Default::default();
+        instance.send(ComputeCommand::CreateInstance(dummy_logging_config));
+
+        let params = [ComputeParameter::MaxResultSize(max_result_size)].into();
+        instance.send(ComputeCommand::UpdateConfiguration(params));
 
         instance
     }

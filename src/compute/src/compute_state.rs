@@ -27,9 +27,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
-use mz_compute_client::command::{
-    ComputeCommand, ComputeCommandHistory, ComputeParameter, InstanceConfig, Peek,
-};
+use mz_compute_client::command::{ComputeCommand, ComputeCommandHistory, ComputeParameter, Peek};
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::metrics::ComputeMetrics;
 use mz_compute_client::plan::Plan;
@@ -131,7 +129,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         );
         match cmd {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),
-            CreateInstance(config) => self.handle_create_instance(config),
+            CreateInstance(logging) => self.handle_create_instance(logging),
             InitializationComplete => (),
             UpdateConfiguration(params) => self.handle_update_configuration(params),
             CreateDataflows(dataflows) => self.handle_create_dataflows(dataflows),
@@ -144,8 +142,8 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         }
     }
 
-    fn handle_create_instance(&mut self, config: InstanceConfig) {
-        self.initialize_logging(&config.logging);
+    fn handle_create_instance(&mut self, logging: LoggingConfig) {
+        self.initialize_logging(&logging);
     }
 
     fn handle_update_configuration(&mut self, params: BTreeSet<ComputeParameter>) {
