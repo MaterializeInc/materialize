@@ -25,7 +25,7 @@ use std::mem;
 use timely::progress::Timestamp;
 use tracing::info;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct LeaseExpiration {
     pub(crate) readers: Vec<LeasedReaderId>,
     pub(crate) writers: Vec<WriterId>,
@@ -42,7 +42,7 @@ pub struct LeaseExpiration {
 /// Operations that run regularly once a handle is registered, such
 /// as heartbeats, are expected to always perform maintenance.
 #[must_use]
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct RoutineMaintenance {
     pub(crate) garbage_collection: Option<GcReq>,
     pub(crate) lease_expiration: LeaseExpiration,
@@ -51,10 +51,7 @@ pub struct RoutineMaintenance {
 
 impl RoutineMaintenance {
     pub(crate) fn is_empty(&self) -> bool {
-        self.garbage_collection.is_none()
-            && self.lease_expiration.readers.is_empty()
-            && self.lease_expiration.writers.is_empty()
-            && self.write_rollup.is_none()
+        self == &RoutineMaintenance::default()
     }
 
     /// Initiates any routine maintenance necessary in background tasks

@@ -28,8 +28,7 @@ use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::ShardId;
 
-#[derive(Debug, Clone)]
-#[cfg_attr(test, derive(PartialEq))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GcReq {
     pub shard_id: ShardId,
     pub new_seqno_since: SeqNo,
