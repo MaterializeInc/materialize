@@ -54,6 +54,7 @@ import yaml
 from pg8000 import Cursor
 
 from materialize import mzbuild, spawn, ui
+from materialize.mzcompose import loader
 from materialize.ui import UIError
 
 T = TypeVar("T")
@@ -108,7 +109,9 @@ class Composition:
             assert spec
             module = importlib.util.module_from_spec(spec)
             assert isinstance(spec.loader, importlib.abc.Loader)
+            loader.composition_path = self.path
             spec.loader.exec_module(module)
+            loader.composition_path = None
             self.description = inspect.getdoc(module)
             for name, fn in getmembers(module, isfunction):
                 if name.startswith("workflow_"):
@@ -289,14 +292,18 @@ class Composition:
         ui.header(f"Running workflow {name}")
         func = self.workflows[name]
         parser = WorkflowArgumentParser(name, inspect.getdoc(func), list(args))
-        if len(inspect.signature(func).parameters) > 1:
-            func(self, parser)
-        else:
-            # If the workflow doesn't have an `args` parameter, parse them here
-            # with an empty parser to reject bogus arguments and to handle the
-            # trivial help message.
-            parser.parse_args()
-            func(self)
+        try:
+            loader.composition_path = self.path
+            if len(inspect.signature(func).parameters) > 1:
+                func(self, parser)
+            else:
+                # If the workflow doesn't have an `args` parameter, parse them here
+                # with an empty parser to reject bogus arguments and to handle the
+                # trivial help message.
+                parser.parse_args()
+                func(self)
+        finally:
+            loader.composition_path = None
 
     @contextmanager
     def override(self, *services: "Service") -> Iterator[None]:
@@ -533,7 +540,13 @@ class Composition:
             ):
                 self.invoke("pull", service)
 
-    def up(self, *services: str, detach: bool = True, persistent: bool = False) -> None:
+    def up(
+        self,
+        *services: str,
+        detach: bool = True,
+        wait: bool = True,
+        persistent: bool = False,
+    ) -> None:
         """Build, (re)create, and start the named services.
 
         Delegates to `docker compose up`. See that command's help for details.
@@ -541,6 +554,8 @@ class Composition:
         Args:
             services: The names of services in the composition.
             detach: Run containers in the background.
+            wait: Wait for health checks to complete before returning.
+                Implies `detach` mode.
             persistent: Replace the container's entrypoint and command with
                 `sleep infinity` so that additional commands can be scheduled
                 on the container with `Composition.exec`.
@@ -552,7 +567,12 @@ class Composition:
                 service["command"] = []
             self._write_compose()
 
-        self.invoke("up", *(["--detach"] if detach else []), *services)
+        self.invoke(
+            "up",
+            *(["--detach"] if detach else []),
+            *(["--wait"] if wait else []),
+            *services,
+        )
 
         if persistent:
             self.compose = old_compose
@@ -789,6 +809,37 @@ class Composition:
             self.run(service, *args, stdin=input)
 
 
+class ServiceHealthcheck(TypedDict, total=False):
+    """Configuration for a check to determine whether the containers for this
+    service are healthy."""
+
+    test: Union[List[str], str]
+    """A specification of a command to run."""
+
+    interval: str
+    """The interval at which to run the healthcheck."""
+
+    timeout: str
+    """The maximum amount of time that the test command can run before it
+    is considered failed."""
+
+    retries: int
+    """The number of consecutive healthchecks that must fail for the container
+    to be considered unhealthy."""
+
+    start_period: str
+    """The period after container start during which failing healthchecks will
+    not be counted towards the retry limit."""
+
+
+class ServiceDependency(TypedDict, total=False):
+    """Configuration for a check to determine whether the containers for this
+    service are healthy."""
+
+    condition: str
+    """Condition under which a dependency is considered satisfied."""
+
+
 class ServiceConfig(TypedDict, total=False):
     """The definition of a service in Docker Compose.
 
@@ -862,7 +913,7 @@ class ServiceConfig(TypedDict, total=False):
     TODO(benesch): this should accept a `Dict[str, str]` instead.
     """
 
-    depends_on: List[str]
+    depends_on: Union[List[str], Dict[str, ServiceDependency]]
     """The list of other services that must be started before this one."""
 
     tmpfs: List[str]
@@ -888,6 +939,10 @@ class ServiceConfig(TypedDict, total=False):
 
     working_dir: str
     """Overrides the container's working directory."""
+
+    healthcheck: ServiceHealthcheck
+    """Configuration for a check to determine whether the containers for this
+    service are healthy."""
 
 
 class Service:

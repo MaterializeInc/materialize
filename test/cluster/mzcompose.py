@@ -547,10 +547,8 @@ def workflow_test_remote_storage(c: Composition) -> None:
         # Use a separate CockroachDB service for persist rather than the one in
         # the `Materialized` service, so that crashing `environmentd` does not
         # also take down CockroachDB.
-        Cockroach(),
-        Materialized(
-            options=["--persist-consensus-url=postgres://root@cockroach:26257"]
-        ),
+        Cockroach(setup_materialize=True),
+        Materialized(external_cockroach=True),
     ):
         dependencies = [
             "materialized",

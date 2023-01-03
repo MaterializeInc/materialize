@@ -11,7 +11,8 @@ import os
 import random
 from typing import Dict, List, Optional, Tuple, Union
 
-from materialize.mzcompose import Service, ServiceConfig
+from materialize import ROOT
+from materialize.mzcompose import Service, ServiceConfig, ServiceDependency, loader
 
 DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.5"
 
@@ -43,14 +44,20 @@ class Materialized(Service):
         image: Optional[str] = None,
         environment_extra: List[str] = [],
         volumes_extra: List[str] = [],
-        depends_on: Optional[List[str]] = None,
+        depends_on: List[str] = [],
         memory: Optional[str] = None,
         options: List[str] = [],
         persist_blob_url: Optional[str] = None,
         default_size: int = Size.DEFAULT_SIZE,
         environment_id: Optional[str] = None,
         propagate_crashes: bool = True,
+        external_cockroach: bool = False,
+        external_minio: bool = False,
     ) -> None:
+        depends_on: Dict[str, ServiceDependency] = {
+            s: {"condition": "service_started"} for s in depends_on
+        }
+
         environment = [
             "MZ_SOFT_ASSERTIONS=1",
             # TODO(benesch): remove the following environment variables
@@ -84,6 +91,10 @@ class Materialized(Service):
             environment_id = DEFAULT_MZ_ENVIRONMENT_ID
         command += [f"--environment-id={environment_id}"]
 
+        if external_minio:
+            depends_on["minio"] = {"condition": "service_healthy"}
+            persist_blob_url = "s3://minioadmin:minioadmin@persist/persist?endpoint=http://minio:9000/&region=minio"
+
         if persist_blob_url:
             command.append(f"--persist-blob-url={persist_blob_url}")
 
@@ -102,6 +113,14 @@ class Materialized(Service):
             f"--default-storage-host-size={self.default_storage_size}",
         ]
 
+        if external_cockroach:
+            depends_on["cockroach"] = {"condition": "service_healthy"}
+            command += [
+                "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
+                "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
+                "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
+            ]
+
         command += options
 
         config: ServiceConfig = {}
@@ -119,7 +138,7 @@ class Materialized(Service):
 
         config.update(
             {
-                "depends_on": depends_on or [],
+                "depends_on": depends_on,
                 "command": command,
                 "ports": [6875, 6876, 6877, 6878, 26257],
                 "environment": environment,
@@ -372,14 +391,30 @@ class Cockroach(Service):
     def __init__(
         self,
         name: str = "cockroach",
+        setup_materialize: bool = False,
     ):
+        volumes = []
+        if setup_materialize:
+            path = os.path.relpath(
+                ROOT / "misc" / "cockroach" / "setup_materialize.sql",
+                loader.composition_path,
+            )
+            volumes += [f"{path}:/docker-entrypoint-initdb.d/setup_materialize.sql"]
         super().__init__(
-            name="cockroach",
+            name=name,
             config={
                 "image": "cockroachdb/cockroach:v22.2.0",
                 "ports": [26257],
                 "command": ["start-single-node", "--insecure"],
-                "volumes": ["/cockroach/cockroach-data"],
+                "volumes": volumes,
+                "init": True,
+                "healthcheck": {
+                    # init_success is a file created by the Cockroach container entrypoint
+                    "test": "[ -f init_success ] && curl --fail 'http://localhost:8080/health?ready=1'",
+                    "timeout": "5s",
+                    "interval": "1s",
+                    "start_period": "30s",
+                },
             },
         )
 
@@ -531,26 +566,33 @@ class Minio(Service):
         self,
         name: str = "minio",
         image: str = f"minio/minio:RELEASE.2022-09-25T15-44-53Z.fips",
+        setup_materialize: bool = False,
     ) -> None:
+        # We can pre-create buckets in minio by creating subdirectories in
+        # /data. A bit gross to do this via a shell command, but it's net
+        # less complicated than using a separate setup container that runs `mc`.
+        command = "minio server /data --console-address :9001"
+        if setup_materialize:
+            command = f"mkdir -p /data/persist && {command}"
         super().__init__(
             name=name,
             config={
-                "command": ["minio", "server", "/data", "--console-address", ":9001"],
+                "entrypoint": ["sh", "-c"],
+                "command": [command],
                 "image": image,
                 "ports": [9000, 9001],
+                "healthcheck": {
+                    "test": [
+                        "CMD",
+                        "curl",
+                        "--fail",
+                        "http://localhost:9000/minio/health/live",
+                    ],
+                    "timeout": "5s",
+                    "interval": "1s",
+                    "start_period": "30s",
+                },
             },
-        )
-
-
-class MinioMc(Service):
-    def __init__(
-        self,
-        name: str = "minio_mc",
-        image: str = f"minio/mc:RELEASE.2022-09-16T09-16-47Z",
-    ) -> None:
-        super().__init__(
-            name=name,
-            config={"image": image},
         )
 
 
@@ -671,6 +713,9 @@ class TestCerts(Service):
         super().__init__(
             name="test-certs",
             config={
+                # Container must stay alive indefinitely to be considered
+                # healthy by `docker compose up --wait`.
+                "command": ["sleep", "infinity"],
                 "mzbuild": "test-certs",
                 "volumes": ["secrets:/secrets"],
             },

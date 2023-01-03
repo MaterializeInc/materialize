@@ -27,12 +27,6 @@ class MzcomposeAction(Action):
 
 
 class StartMz(MzcomposeAction):
-    DEFAULT_MZ_OPTIONS = [
-        "--persist-consensus-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=consensus",
-        "--storage-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=storage",
-        "--adapter-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=adapter",
-    ]
-
     def __init__(
         self, tag: Optional[str] = None, environment_extra: List[str] = []
     ) -> None:
@@ -46,7 +40,7 @@ class StartMz(MzcomposeAction):
         print(f"Starting Mz using image {image}")
         mz = Materialized(
             image=image,
-            options=StartMz.DEFAULT_MZ_OPTIONS,
+            external_cockroach=True,
             environment_extra=self.environment_extra,
         )
 
@@ -134,22 +128,21 @@ class RestartRedpandaDebezium(MzcomposeAction):
             c.start_and_wait_for_tcp(services=[service])
 
 
-class RestartPostgresBackend(MzcomposeAction):
+class RestartCockroach(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        c.kill("postgres-backend")
-        c.up("postgres-backend")
-        c.wait_for_postgres(service="postgres-backend")
+        c.kill("cockroach")
+        c.up("cockroach")
 
 
 class RestartSourcePostgres(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        c.kill("postgres-source")
-        c.up("postgres-source")
-        c.wait_for_postgres(service="postgres-source")
+        c.kill("postgres")
+        c.up("postgres")
+        c.wait_for_postgres(service="postgres")
 
 
 class KillClusterdStorage(MzcomposeAction):
