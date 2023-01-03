@@ -45,6 +45,11 @@ query I
 SELECT t2.a FROM t1 NATURAL JOIN t2
 ----
 
+# Regression test for #16920.
+query I
+SELECT t.a FROM (t1 NATURAL JOIN t2) t
+----
+
 # Test sources with unnamed columns.
 
 statement ok
