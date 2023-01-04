@@ -34,7 +34,7 @@ Materialize provides public Kafka topics and a Confluent Schema Registry for its
 
 Sources are the first step in most Materialize projects.
 
-1. In your `psql` terminal, create the connection to the Confluent Schema Registry:
+1. In your `psql` terminal, create [a connection](/sql/create-connection/#confluent-schema-registry) to the Confluent Schema Registry:
 
     ```sql
     CREATE SECRET IF NOT EXISTS csr_username AS '<TBD>';
