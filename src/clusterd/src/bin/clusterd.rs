@@ -98,6 +98,7 @@ use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistConfig;
 use mz_pid_file::PidFile;
+use mz_prof::jemalloc_metrics;
 use mz_service::emit_boot_diagnostics;
 use mz_service::grpc::GrpcServer;
 use mz_service::secrets::SecretsReaderCliArgs;
@@ -225,6 +226,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .context("loading secrets reader")?;
 
     let metrics_registry = MetricsRegistry::new();
+    jemalloc_metrics::register_into(&metrics_registry);
 
     mz_ore::task::spawn(|| "clusterd_internal_http_server", {
         let metrics_registry = metrics_registry.clone();
