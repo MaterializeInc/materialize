@@ -146,8 +146,6 @@ RUN mkdir rust \
     && rm -f rust-src.asc rust-src.tar.gz \
     && case $RUST_COMPONENTS in *miri*) \
         PATH=$PATH:/root/.cargo/bin cargo miri setup \
-        && mv /root/.cargo/bin/xargo /usr/local/bin/xargo \
-        && mv /root/.cargo/bin/xargo-check /usr/local/bin/xargo-check \
         ;; \
     esac \
     && rm -rf rust \
