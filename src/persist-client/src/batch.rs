@@ -373,9 +373,7 @@ where
         if let Some((max_run_k, max_run_v, max_run_t)) = &mut self.max_kvt_in_run {
             // start a new run if our part contains an update that exists in the
             // range already covered by the existing parts of the current run
-            if (min_part_k, min_part_v, min_part_t.as_slice())
-                < (&max_run_k, &max_run_v, &max_run_t)
-            {
+            if (min_part_k, min_part_v, min_part_t.as_slice()) < (max_run_k, max_run_v, max_run_t) {
                 self.runs.push(self.parts_written);
             }
 
