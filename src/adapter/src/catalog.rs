@@ -4509,6 +4509,11 @@ impl<S: Append> Catalog<S> {
                         let schema_id = name.qualifiers.schema_spec.clone().into();
                         let serialized_item = Self::serialize_item(&item);
                         tx.insert_item(id, schema_id, &name.item, serialized_item)?;
+
+                        // Fill the `mz_object_dependencies` table.
+                        for dependee in item.uses() {
+                            builtin_table_updates.push(state.pack_depends_update(id, *dependee, 1))
+                        }
                     }
 
                     if Self::should_audit_log_item(&item) {
@@ -4729,7 +4734,13 @@ impl<S: Append> Catalog<S> {
                     let entry = state.get_entry(&id);
                     if !entry.item().is_temporary() {
                         tx.remove_item(id)?;
+
+                        // Clean up the `mz_object_dependencies` table.
+                        for dependee in entry.item().uses() {
+                            builtin_table_updates.push(state.pack_depends_update(id, *dependee, -1))
+                        }
                     }
+
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
                     if Self::should_audit_log_item(&entry.item) {
                         state.add_to_audit_log(
