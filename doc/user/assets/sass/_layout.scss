@@ -159,6 +159,8 @@
         position: relative;
         padding: 3px 0 3px 15px;
         text-decoration: none;
+        word-wrap: break-word;
+        white-space: initial;
 
         &.active {
             font-weight: 500;
