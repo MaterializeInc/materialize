@@ -151,7 +151,7 @@ With JSON-formatted messages, we don't know the schema so the [JSON is pulled in
         GROUP BY 1,2;
     ```
 
-    The above view uses a [temporal filter](/sql/patterns/temporal-filters/) to only include users who have not visited the site in the last 3 minutes.
+    The above view uses a [temporal filter](/sql/patterns/temporal-filters/) to only include users who have not visited the website in the last 3 minutes.
 
 1. Create a materialized view to join the incomplete purchases with the inactive users to get the abandoned carts:
 
