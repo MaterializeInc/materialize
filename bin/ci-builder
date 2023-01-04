@@ -134,7 +134,7 @@ case "$cmd" in
         docker push materialize/ci-builder:"$cache_tag"
         ;;
     run)
-        mkdir -p target-xcompile
+        mkdir -p target-xcompile ~/.kube
         args=(
             --cidfile "$cid_file"
             --rm --interactive
@@ -158,6 +158,20 @@ case "$cmd" in
         done
         if [[ -t 1 ]]; then
             args+=(--tty)
+        fi
+        # Forward the host's Kubernetes config.
+        args+=(
+            # Need to forward the entire directory to allow creation and
+            # deletion of config.lock.
+            --volume "$HOME/.kube:/kube"
+            --env "KUBECONFIG=/kube/config"
+        )
+        # Forward the host's SSH agent, if available.
+        if [[ "${SSH_AUTH_SOCK:-}" ]]; then
+            args+=(
+                --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock"
+                --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock"
+            )
         fi
         if [[ "$(uname -s)" = Linux ]]; then
             # Allow Docker-in-Docker by mounting the Docker socket in the
@@ -193,14 +207,6 @@ case "$cmd" in
             export DOCKER_HOST=${MZ_DEV_CI_BUILDER_DOCKER_HOST-${DOCKER_HOST-}}
             export DOCKER_TLS_VERIFY=${MZ_DEV_CI_BUILDER_DOCKER_TLS_VERIFY-${DOCKER_TLS_VERIFY-}}
             export DOCKER_CERT_PATH=${MZ_DEV_CI_BUILDER_DOCKER_CERT_PATH-${DOCKER_CERT_PATH-}}
-
-            # Forward the host's SSH agent, if available.
-            if [[ "${SSH_AUTH_SOCK:-}" ]]; then
-                args+=(
-                    --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock"
-                    --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock"
-                )
-            fi
 
             # Forward the host's buildkite-agent binary, if available.
             if command -v buildkite-agent > /dev/null 2>&1; then
