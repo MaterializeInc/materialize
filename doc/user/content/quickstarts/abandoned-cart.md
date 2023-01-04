@@ -30,9 +30,9 @@ The key concepts present in this quickstart will also apply to many other real-t
 
 ### Create the sources
 
-Materialize provides public Kafka topics and a Confluent Schema Registry for its users. The Kafka topics contain data from a fictional eCommerce store and receive updates every second.
+Materialize provides public Kafka topics and a Confluent Schema Registry for its users. The Kafka topics contain data from a fictional eCommerce website and receive updates every second. You will use this sample data to build the abandoned cart pipeline.
 
-Sources are the first step in most Materialize projects. For this quickstart, you will use our public Kafka topics. They contain data from a fictional eCommerce and receive updates every second.
+Sources are the first step in most Materialize projects.
 
 1. In your `psql` terminal, create the connection to the Confluent Schema Registry:
 
