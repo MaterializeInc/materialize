@@ -1,6 +1,6 @@
 ---
 title: "Abandoned Cart"
-description: "Abandoned Cart Demo"
+description: "How to build a data pipeline to power customer workflows using Materialize"
 menu:
     main:
         parent: quickstarts
