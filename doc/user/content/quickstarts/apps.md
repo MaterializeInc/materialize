@@ -1,18 +1,18 @@
 ---
 title: "Data Applications"
-description: "Data Applications"
+description: "How to build interactive data applications using Materialize"
 menu:
   main:
     parent: 'quickstarts'
     weight: 30
-    name: 'Data Applications'
+    name: 'Data applications'
 draft: true
 aliases:
   - /demos/data-applications
 ---
 
 In this quickstart, you'll build the analytics for an eCommerce sales dashboard that queries Materialize.
-At the end of this guide, you'll have the chance to explore an eCommerce data application querying against your code.
+At the end of this guide, you'll have the chance to explore an eCommerce data application querying against your Materialize region.
 
 The key concepts present in this quickstart will also apply to many other projects:
 
@@ -28,7 +28,7 @@ The key concepts present in this quickstart will also apply to many other projec
 
 ### Create the sources
 
-Materialize provides public Kafka topics and a Confluent Schema Registry for its users. The Kafka topics contain data from a fictional eCommerce and receive updates every second. You will use the data in them to build the analytics for the dashboard.
+Materialize provides public Kafka topics and a Confluent Schema Registry for its users. The Kafka topics contain data from a fictional eCommerce website and receive updates every second. You will use this sample data to feed an embedded analytics dashboard.
 
 1. In your `psql` terminal, create a new schema:
 
@@ -36,7 +36,7 @@ Materialize provides public Kafka topics and a Confluent Schema Registry for its
     CREATE SCHEMA shop;
     ```
 
-1. Create the connection to the Confluent Schema Registry:
+1. Create [a connection](/sql/create-connection/#confluent-schema-registry) to the Confluent Schema Registry:
     ```sql
     CREATE SECRET IF NOT EXISTS shop.csr_username AS '<TBD>';
     CREATE SECRET IF NOT EXISTS shop.csr_password AS '<TBD>';
@@ -48,7 +48,7 @@ Materialize provides public Kafka topics and a Confluent Schema Registry for its
     PASSWORD = SECRET csr_password;
     ```
 
-1. Create the connection to the Kafka broker:
+1. Create [a connection](/sql/create-connection/#kafka) to the Kafka broker:
 
     ```sql
     CREATE SECRET shop.kafka_password AS '<TBD>';
@@ -400,7 +400,7 @@ end
 
 The materialized views you have running allow multiple services and applications to access the latest analytic results with little effort from Materialize.
 
-Insert your credentials [here](https://materialize-embedded-analytics.vercel.app/) to explore your work powering an eCommerce's analytic dashboard!
+Authenticate using your credentials [here](https://materialize-embedded-analytics.vercel.app/) to explore your work powering an eCommerce's analytic dashboard!
 
 ## Recap
 
