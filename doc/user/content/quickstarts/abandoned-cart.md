@@ -190,7 +190,7 @@ Materialize is wire-compatible with PostgreSQL, so you can use any PostgreSQL cl
 ### Create a Telegram bot
 
 1. Sign up for a [Telegram account](https://telegram.org/).
-1. Next create a bot on Telegram by talking to the `BotFather`.
+1. Next, create a bot on Telegram by talking to the `BotFather`.
 1. Use the `/newbot` command to create a new bot, and follow the instructions to set a name and username for your bot.
 1. The `BotFather` will give you a token that you will use to authenticate your bot. Keep this token safe, as it will allow anyone to control your bot.
 1. Create a group on Telegram and add your bot to the group.
