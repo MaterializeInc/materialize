@@ -29,7 +29,8 @@ DEFAULT_MZ_VOLUMES = [
     "tmp:/share/tmp",
 ]
 
-DEFAULT_MZ_ENVIRONMENT_ID = "docker-mzcompose-00000000-0000-0000-0000-000000000000-0"
+# TODO(benesch): change to `docker-mzcompose` once v0.39 ships.
+DEFAULT_MZ_ENVIRONMENT_ID = "mzcompose-test-00000000-0000-0000-0000-000000000000-0"
 
 
 class Materialized(Service):
@@ -79,10 +80,7 @@ class Materialized(Service):
             command.append("--orchestrator-process-secrets-directory=/mzdata/secrets")
 
         if not environment_id:
-            if is_old_version:
-                environment_id = "mzcompose-test-00000000-0000-0000-0000-000000000000-0"
-            else:
-                environment_id = DEFAULT_MZ_ENVIRONMENT_ID
+            environment_id = DEFAULT_MZ_ENVIRONMENT_ID
         command += [f"--environment-id={environment_id}"]
 
         if persist_blob_url:

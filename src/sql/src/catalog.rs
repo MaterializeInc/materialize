@@ -685,6 +685,9 @@ pub enum CloudProvider {
     Local,
     /// A pseudo-provider value used by Docker.
     Docker,
+    /// A deprecated psuedo-provider value used by mzcompose.
+    // TODO(benesch): remove once v0.39 ships.
+    MzCompose,
     /// A pseudo-provider value used by cloudtest.
     Cloudtest,
     /// Amazon Web Services.
@@ -696,6 +699,7 @@ impl fmt::Display for CloudProvider {
         match self {
             CloudProvider::Local => f.write_str("local"),
             CloudProvider::Docker => f.write_str("docker"),
+            CloudProvider::MzCompose => f.write_str("mzcompose"),
             CloudProvider::Cloudtest => f.write_str("cloudtest"),
             CloudProvider::Aws => f.write_str("aws"),
         }
@@ -709,6 +713,7 @@ impl FromStr for CloudProvider {
         match s {
             "local" => Ok(CloudProvider::Local),
             "docker" => Ok(CloudProvider::Docker),
+            "mzcompose" => Ok(CloudProvider::MzCompose),
             "cloudtest" => Ok(CloudProvider::Cloudtest),
             "aws" => Ok(CloudProvider::Aws),
             _ => Err(InvalidCloudProviderError),
