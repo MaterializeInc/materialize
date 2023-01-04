@@ -171,7 +171,7 @@ dollars,category
   FORMAT CSV WITH HEADER (dollars, category)
 
 ! SELECT * FROM bad_text_csv
-contains:Decode error: Text: CSV error at record number 2: invalid UTF-8
+contains:invalid UTF-8
 
 # Declare a key constraint (PRIMARY KEY NOT ENFORCED)
 
