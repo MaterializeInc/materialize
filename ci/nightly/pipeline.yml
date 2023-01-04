@@ -55,8 +55,8 @@ steps:
           - { value: checks-parallel-restart-redpanda }
           - { value: checks-upgrade-entire-mz }
           - { value: checks-upgrade-entire-mz-previous-version }
-          - { value: checks-upgrade-computed-first }
-          - { value: checks-upgrade-computed-last }
+          - { value: checks-upgrade-clusterd-compute-first }
+          - { value: checks-upgrade-clusterd-compute-last }
           - { value: cloudtest-upgrade }
           - { value: persist-maelstrom-single-node }
           - { value: persist-maelstrom-multi-node }
