@@ -247,11 +247,13 @@ p+p {
 
     .multilinkbox {
         margin: var(--small) 0;
+        display: flex;
+        justify-content: space-between;
+        gap: var(--milli);
 
-        &>div {
-            display: flex;
-            justify-content: space-between;
-            gap: var(--milli);
+        @media(max-width: 1325px) {
+            flex-direction: column;
+            max-width: 400px;
         }
     }
 

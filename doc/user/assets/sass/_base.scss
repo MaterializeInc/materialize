@@ -147,9 +147,12 @@ a,
 button,
 input[type="submit"] {
     cursor: pointer;
+    background: none;
+    border: none;
     transition: all 0.2s;
     transition-delay: 50ms;
     white-space: nowrap;
+    font-family: inherit;
 }
 
 a {
