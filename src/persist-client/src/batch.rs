@@ -285,16 +285,23 @@ where
                 upper: registered_upper,
             });
         }
-        // disallow updates with timestamps beyond the registered `upper` of the batch,
-        // with an exception made when `since` is beyond `upper` (as these may have been
-        // produced by compaction, which is allowed to produce batches with an arbitrary
-        // `since`)
-        if registered_upper.less_equal(&self.max_ts)
-            && !PartialOrder::less_equal(&registered_upper, &self.since)
-        {
-            return Err(InvalidUsage::UpdateBeyondUpper {
+        // when since is less-equal to upper, the upper is a strict bound on the updates' timestamp.
+        // because user batches would never have a since in advance of upper, this ensures that new
+        // updates are recorded with valid timestamps
+        if PartialOrder::less_than(&self.since, &registered_upper) {
+            if registered_upper.less_equal(&self.max_ts) {
+                return Err(InvalidUsage::UpdateBeyondUpper {
+                    max_ts: self.max_ts,
+                    expected_upper: registered_upper.clone(),
+                });
+            }
+        // but if since is in advance of the upper (e.g. from compaction, not from a user batch)
+        // then our updates will similarly have timestamps in advance of upper. this is OK, so
+        // long as we validate that they aren't beyond the since.
+        } else if self.since.less_than(&self.max_ts) {
+            return Err(InvalidUsage::UpdateBeyondSince {
                 max_ts: self.max_ts,
-                expected_upper: registered_upper.clone(),
+                expected_since: self.since.clone(),
             });
         }
 
