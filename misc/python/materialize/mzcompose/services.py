@@ -70,11 +70,12 @@ class Materialized(Service):
 
         command = ["--unsafe-mode"]
 
-        # TODO(benesch): remove this special case when v0.38 ships.
-        is_old_version = image is not None and (
-            image.endswith("v0.36.2") or image.endswith("v0.37.1")
-        )
-        if is_old_version:
+        # TODO(benesch): remove this special case when v0.39 ships.
+        # latest being 'v0.38.0' until then
+        if image is not None and any(
+            image.endswith(version)
+            for version in ["v0.36.2", "v0.37.1", "v0.38.0", "latest"]
+        ):
             persist_blob_url = "file:///mzdata/persist/blob"
             command.append("--orchestrator=process")
             command.append("--orchestrator-process-secrets-directory=/mzdata/secrets")
