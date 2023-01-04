@@ -4,7 +4,6 @@ members = [
     "src/audit-log",
     "src/avro",
     "src/avro-derive",
-    "src/billing-demo",
     "src/build-id",
     "src/build-info",
     "src/ccsr",
