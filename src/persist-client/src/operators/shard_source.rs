@@ -71,10 +71,7 @@ pub fn shard_source<K, V, D, G>(
     shard_id: ShardId,
     as_of: Option<Antichain<G::Timestamp>>,
     until: Antichain<G::Timestamp>,
-    // Use Infallible to statically ensure that no data can ever be sent. TODO:
-    // Replace Infallible with `!` once the latter is stabilized.
-    flow_control_input: &Stream<G, Infallible>,
-    flow_control_max_inflight_bytes: usize,
+    flow_control: Option<FlowControl<G>>,
 ) -> (Stream<G, FetchedPart<K, V, G::Timestamp, D>>, Rc<dyn Any>)
 where
     K: Debug + Codec,
@@ -118,8 +115,7 @@ where
         shard_id.clone(),
         as_of,
         until,
-        flow_control_input,
-        flow_control_max_inflight_bytes,
+        flow_control,
         consumed_part_rx,
         chosen_worker,
     );
@@ -134,8 +130,18 @@ where
     (parts, token)
 }
 
-/// Informs a `persist_source` to skip flow control on its output
-pub const NO_FLOW_CONTROL: usize = usize::MAX;
+/// Flow control configuration.
+#[derive(Debug)]
+pub struct FlowControl<G: Scope> {
+    /// Stream providing in-flight frontier updates.
+    ///
+    /// As implied by its type, this stream never emits data, only progress updates.
+    ///
+    /// TODO: Replace `Infallible` with `!` once the latter is stabilized.
+    pub progress_stream: Stream<G, Infallible>,
+    /// Maximum number of in-flight bytes.
+    pub max_inflight_bytes: usize,
+}
 
 pub(crate) fn shard_source_descs<K, V, D, G>(
     scope: &G,
@@ -145,10 +151,7 @@ pub(crate) fn shard_source_descs<K, V, D, G>(
     shard_id: ShardId,
     as_of: Option<Antichain<G::Timestamp>>,
     until: Antichain<G::Timestamp>,
-    // Use Infallible to statically ensure that no data can ever be sent. TODO:
-    // Replace Infallible with `!` once the latter is stabilized.
-    flow_control_input: &Stream<G, Infallible>,
-    flow_control_max_inflight_bytes: usize,
+    flow_control: Option<FlowControl<G>>,
     mut consumed_part_rx: mpsc::UnboundedReceiver<SerdeLeasedBatchPart>,
     chosen_worker: usize,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, ShutdownButton<()>)
@@ -253,11 +256,20 @@ where
     // just get the value directly with a function call.
     let mut pinned_stream = Box::pin(async_stream);
 
+    let (flow_control_stream, flow_control_bytes) = match flow_control {
+        Some(fc) => (fc.progress_stream, Some(fc.max_inflight_bytes)),
+        None => (
+            timely::dataflow::operators::generic::operator::empty(scope),
+            None,
+        ),
+    };
+
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
     let (mut descs_output, descs_stream) = builder.new_output();
+
     let mut flow_control_input = builder.new_input_connection(
-        flow_control_input,
+        &flow_control_stream,
         Pipeline,
         // Disconnect the flow_control_input from the output capabilities of the
         // operator. We could leave it connected without risking deadlock so
@@ -276,17 +288,21 @@ where
         let mut inflight_bytes = 0;
         let mut inflight_parts: Vec<(Antichain<G::Timestamp>, usize)> = Vec::new();
 
+        let max_inflight_bytes = flow_control_bytes.unwrap_or(usize::MAX);
+
         loop {
             // While we have budget left for fetching more parts, read from the
             // subscription and pass them on.
-            while inflight_bytes < flow_control_max_inflight_bytes {
+            while inflight_bytes < max_inflight_bytes {
                 match pinned_stream.next().await {
                     Some(Ok((parts, progress, size_in_bytes))) => {
                         let session_cap = cap_set.delayed(&current_ts);
                         let mut descs_output = descs_output.activate();
                         let mut descs_session = descs_output.session(&session_cap);
 
-                        if size_in_bytes > 0 {
+                        // Only track in-flight parts if flow control is enabled. Otherwise we
+                        // would leak memory, as tracked parts would never be drained.
+                        if flow_control_bytes.is_some() && size_in_bytes > 0 {
                             inflight_parts.push((progress.clone(), size_in_bytes));
                             inflight_bytes += size_in_bytes;
                             trace!(
@@ -341,7 +357,11 @@ where
             // with the handle, so even if we never make it to this block (e.g.
             // budget of usize::MAX), because the stream has no data, we don't
             // cause unbounded buffering in timely.
-            while inflight_bytes >= flow_control_max_inflight_bytes {
+            while inflight_bytes >= max_inflight_bytes {
+                // We can never get here when flow control is disabled, as we are not tracking
+                // in-flight bytes in this case.
+                assert_eq!(flow_control_bytes, None);
+
                 // Get an upper bound until which we should produce data
                 let flow_control_upper = match flow_control_input.next().await {
                     Some(Event::Progress(frontier)) => frontier,
