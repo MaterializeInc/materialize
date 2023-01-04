@@ -513,6 +513,10 @@ mz_message_counts_sent_internal_3
 SOURCE
 materialize
 mz_internal
+mz_object_dependencies
+BASE TABLE
+materialize
+mz_internal
 mz_peek_durations
 VIEW
 materialize
