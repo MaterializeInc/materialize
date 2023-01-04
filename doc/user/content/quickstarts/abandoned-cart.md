@@ -47,7 +47,7 @@ Sources are the first step in most Materialize projects.
         PASSWORD = SECRET csr_password;
     ```
 
-1. Create the connection to the Kafka broker:
+1. Create [a connection](/sql/create-connection/#kafka) to the Kafka broker:
 
     ```sql
     CREATE SECRET kafka_password AS '<TBD>';
