@@ -254,39 +254,39 @@ impl<S: Append + 'static> Coordinator<S> {
                         .await;
                 }
             }
-            ControllerResponse::ComputeReplicaWriteFrontiers(updates) => {
-                let mut builtin_updates = vec![];
-                for (replica_id, new) in updates {
-                    let m = match self
-                        .transient_replica_metadata
-                        .entry(replica_id)
-                        .or_insert_with(|| Some(Default::default()))
-                    {
-                        // `None` is the tombstone for a removed replica
-                        None => continue,
-                        Some(md) => &mut md.write_frontiers,
-                    };
-                    let old = std::mem::replace(m, new.clone());
-                    if old != new {
-                        let retractions = self
-                            .catalog
-                            .state()
-                            .pack_replica_write_frontiers_updates(replica_id, &old, -1);
-                        builtin_updates.extend(retractions.into_iter());
+            ControllerResponse::ComputeReplicaWriteFrontiers(_updates) => {
+                // let mut builtin_updates = vec![];
+                // for (replica_id, new) in updates {
+                //     let m = match self
+                //         .transient_replica_metadata
+                //         .entry(replica_id)
+                //         .or_insert_with(|| Some(Default::default()))
+                //     {
+                //         // `None` is the tombstone for a removed replica
+                //         None => continue,
+                //         Some(md) => &mut md.write_frontiers,
+                //     };
+                //     let old = std::mem::replace(m, new.clone());
+                //     if old != new {
+                //         let retractions = self
+                //             .catalog
+                //             .state()
+                //             .pack_replica_write_frontiers_updates(replica_id, &old, -1);
+                //         builtin_updates.extend(retractions.into_iter());
 
-                        let insertions = self
-                            .catalog
-                            .state()
-                            .pack_replica_write_frontiers_updates(replica_id, &new, 1);
-                        builtin_updates.extend(insertions.into_iter());
-                    }
-                }
+                //         let insertions = self
+                //             .catalog
+                //             .state()
+                //             .pack_replica_write_frontiers_updates(replica_id, &new, 1);
+                //         builtin_updates.extend(insertions.into_iter());
+                //     }
+                // }
 
-                self.send_builtin_table_updates(
-                    builtin_updates,
-                    BuiltinTableUpdateSource::Background,
-                )
-                .await;
+                // self.send_builtin_table_updates(
+                //     builtin_updates,
+                //     BuiltinTableUpdateSource::Background,
+                // )
+                // .await;
             }
         }
     }

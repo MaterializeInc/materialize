@@ -1762,15 +1762,15 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
     is_retained_metrics_relation: true,
 });
 
-pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_cluster_replica_frontiers",
-    schema: MZ_INTERNAL_SCHEMA,
-    desc: RelationDesc::empty()
-        .with_column("replica_id", ScalarType::UInt64.nullable(false))
-        .with_column("export_id", ScalarType::String.nullable(false))
-        .with_column("time", ScalarType::MzTimestamp.nullable(false)),
-    is_retained_metrics_relation: false,
-});
+// pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+//     name: "mz_cluster_replica_frontiers",
+//     schema: MZ_INTERNAL_SCHEMA,
+//     desc: RelationDesc::empty()
+//         .with_column("replica_id", ScalarType::UInt64.nullable(false))
+//         .with_column("export_id", ScalarType::String.nullable(false))
+//         .with_column("time", ScalarType::MzTimestamp.nullable(false)),
+//     is_retained_metrics_relation: false,
+// });
 
 pub static MZ_STORAGE_HOST_METRICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_storage_host_metrics",
@@ -3058,7 +3058,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS),
-        Builtin::Table(&MZ_CLUSTER_REPLICA_FRONTIERS),
+        // Builtin::Table(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_METRICS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
@@ -3313,7 +3313,7 @@ mod tests {
                 .resolve_item(&PartialObjectName {
                     database: None,
                     // All functions we check exist in PG, so the types must, as
-                    // well
+                    // well1
                     schema: Some(PG_CATALOG_SCHEMA.into()),
                     item: item.to_string(),
                 })
