@@ -1251,6 +1251,7 @@ impl CatalogState {
     // passing tx, session, and builtin_table_updates?
     fn add_to_audit_log<S: Append>(
         &self,
+        oracle_write_ts: Option<mz_repr::Timestamp>,
         session: Option<&Session>,
         tx: &mut storage::Transaction<S>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
@@ -1260,7 +1261,7 @@ impl CatalogState {
         details: EventDetails,
     ) -> Result<(), Error> {
         let user = session.map(|session| session.user().name.to_string());
-        let occurred_at = (self.config.now)();
+        let occurred_at = oracle_write_ts.expect("must exist").into();
         let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
         let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
         builtin_table_updates.push(self.pack_audit_log_update(&event)?);
@@ -2810,7 +2811,7 @@ impl<S: Append> Catalog<S> {
                     }))
                     .collect::<Vec<_>>();
 
-                self.transact(None, ops, |_| Ok(())).await.unwrap();
+                self.transact(None, None, ops, |_| Ok(())).await.unwrap();
                 tracing::info!("parameter sync on boot: end sync");
             } else {
                 tracing::info!("parameter sync on boot: skipping sync as config has synced once");
@@ -3849,6 +3850,7 @@ impl<S: Append> Catalog<S> {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn transact<F, R>(
         &mut self,
+        oracle_write_ts: Option<mz_repr::Timestamp>,
         session: Option<&Session>,
         ops: Vec<Op>,
         f: F,
@@ -3884,6 +3886,7 @@ impl<S: Append> Catalog<S> {
         let mut state = self.state.clone();
 
         Self::transact_inner(
+            oracle_write_ts,
             session,
             ops,
             temporary_ids,
@@ -3912,6 +3915,7 @@ impl<S: Append> Catalog<S> {
     }
 
     fn transact_inner(
+        oracle_write_ts: Option<mz_repr::Timestamp>,
         session: Option<&Session>,
         ops: Vec<Op>,
         temporary_ids: Vec<GlobalId>,
@@ -4090,6 +4094,7 @@ impl<S: Append> Catalog<S> {
                         builtin_table_updates.extend(state.pack_item_update(id, -1));
 
                         state.add_to_audit_log(
+                            oracle_write_ts,
                             session,
                             tx,
                             builtin_table_updates,
@@ -4219,6 +4224,7 @@ impl<S: Append> Catalog<S> {
                         builtin_table_updates.extend(state.pack_item_update(id, -1));
 
                         state.add_to_audit_log(
+                            oracle_write_ts,
                             session,
                             tx,
                             builtin_table_updates,
@@ -4256,6 +4262,7 @@ impl<S: Append> Catalog<S> {
                     let database_id = tx.insert_database(&name)?;
                     let schema_id = tx.insert_schema(database_id, DEFAULT_SCHEMA)?;
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4277,6 +4284,7 @@ impl<S: Append> Catalog<S> {
                         },
                     )?;
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4320,6 +4328,7 @@ impl<S: Append> Catalog<S> {
                     };
                     let schema_id = tx.insert_schema(database_id, &schema_name)?;
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4351,6 +4360,7 @@ impl<S: Append> Catalog<S> {
                     }
                     let role_id = tx.insert_user_role(&name)?;
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4384,6 +4394,7 @@ impl<S: Append> Catalog<S> {
                     let id =
                         tx.insert_user_compute_instance(&name, &arranged_introspection_sources)?;
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4438,6 +4449,7 @@ impl<S: Append> Catalog<S> {
                             },
                         );
                         state.add_to_audit_log(
+                            oracle_write_ts,
                             session,
                             tx,
                             builtin_table_updates,
@@ -4548,6 +4560,7 @@ impl<S: Append> Catalog<S> {
                             _ => EventDetails::IdFullNameV1(IdFullNameV1 { id, name }),
                         };
                         state.add_to_audit_log(
+                            oracle_write_ts,
                             session,
                             tx,
                             builtin_table_updates,
@@ -4574,6 +4587,7 @@ impl<S: Append> Catalog<S> {
                     tx.remove_database(&id)?;
                     builtin_table_updates.push(state.pack_database_update(database, -1));
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4599,6 +4613,7 @@ impl<S: Append> Catalog<S> {
                         -1,
                     ));
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4630,6 +4645,7 @@ impl<S: Append> Catalog<S> {
                     let role = &state.roles[&name];
                     builtin_table_updates.push(state.pack_role_update(role, -1));
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4656,6 +4672,7 @@ impl<S: Append> Catalog<S> {
                         builtin_table_updates.extend(state.pack_item_update(*id, -1));
                     }
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4720,6 +4737,7 @@ impl<S: Append> Catalog<S> {
                             replica_name: name.clone(),
                         });
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4750,6 +4768,7 @@ impl<S: Append> Catalog<S> {
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
                     if Self::should_audit_log_item(&entry.item) {
                         state.add_to_audit_log(
+                            oracle_write_ts,
                             session,
                             tx,
                             builtin_table_updates,
@@ -4809,6 +4828,7 @@ impl<S: Append> Catalog<S> {
                     });
                     if Self::should_audit_log_item(&entry.item) {
                         state.add_to_audit_log(
+                            oracle_write_ts,
                             session,
                             tx,
                             builtin_table_updates,
@@ -6408,6 +6428,7 @@ mod tests {
         assert_eq!(catalog.transient_revision(), 1);
         catalog
             .transact(
+                Some(mz_repr::Timestamp::MIN),
                 None,
                 vec![Op::CreateDatabase {
                     name: "test".to_string(),
@@ -6660,6 +6681,7 @@ mod tests {
                 .clone();
             catalog
                 .transact(
+                    Some(mz_repr::Timestamp::MIN),
                     None,
                     vec![Op::CreateItem {
                         id,

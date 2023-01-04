@@ -217,6 +217,16 @@ impl<S: Append + 'static> Coordinator<S> {
                 .unwrap_or(SYSTEM_CONN_ID),
         )?;
 
+        // This will produce timestamps that are guaranteed to increase on each
+        // call, and also never be behind the system clock. If the system clock
+        // hasn't advanced (or has gone backward), it will increment by 1. For
+        // the audit log, we need to balance "close (within 10s or so) to the
+        // system clock" and "always goes up". We've chosen here to prioritize
+        // always going up, and believe we will always be close to the system
+        // clock because it is well configured (chrony) and so may only rarely
+        // regress or pause for 10s.
+        let oracle_write_ts = self.get_local_write_ts().await.timestamp;
+
         let TransactionResult {
             builtin_table_updates,
             audit_events,
@@ -224,7 +234,7 @@ impl<S: Append + 'static> Coordinator<S> {
             result,
         } = self
             .catalog
-            .transact(session, ops, |catalog| {
+            .transact(Some(oracle_write_ts), session, ops, |catalog| {
                 f(CatalogTxn {
                     dataflow_client: &self.controller,
                     catalog,

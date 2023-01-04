@@ -124,7 +124,10 @@ fn bench_transact(c: &mut Criterion) {
                     oid: id,
                     public_schema_oid: id,
                 }];
-                catalog.transact(None, ops, |_| Ok(())).await.unwrap();
+                catalog
+                    .transact(Some(mz_repr::Timestamp::MIN), None, ops, |_| Ok(()))
+                    .await
+                    .unwrap();
             })
         })
     });
