@@ -2341,6 +2341,8 @@ impl<S: Append> Catalog<S> {
             .into_iter()
             .partition(|(builtin, _)| matches!(builtin, Builtin::Index(_)));
 
+        let mut mz_object_dependencies_updates = vec![];
+
         for (builtin, id) in builtin_non_indexes {
             let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
             let name = QualifiedObjectName {
@@ -2403,6 +2405,7 @@ impl<S: Append> Catalog<S> {
                             )
                         });
                     let oid = catalog.allocate_oid()?;
+                    mz_object_dependencies_updates.push((id, item.uses().to_owned()));
                     catalog.state.insert_item(id, oid, name, item);
                 }
 
@@ -2542,6 +2545,7 @@ impl<S: Append> Catalog<S> {
                             )
                         });
                     let oid = catalog.allocate_oid()?;
+                    mz_object_dependencies_updates.push((id, item.uses().to_owned()));
                     catalog.state.insert_item(id, oid, name, item);
                 }
                 Builtin::Log(_)
@@ -2651,6 +2655,12 @@ impl<S: Append> Catalog<S> {
         }
         for (_name, role) in &catalog.state.roles {
             builtin_table_updates.push(catalog.state.pack_role_update(role, 1));
+        }
+        for (depender, dependees) in mz_object_dependencies_updates {
+            dependees.into_iter().for_each(|dependee| {
+                builtin_table_updates
+                    .push(catalog.state.pack_depends_update(depender, dependee, 1));
+            })
         }
         for (name, id) in &catalog.state.compute_instances_by_name {
             builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
