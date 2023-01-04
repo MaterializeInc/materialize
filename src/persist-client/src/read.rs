@@ -495,14 +495,14 @@ where
             cfg,
             metrics,
             machine: machine.clone(),
-            gc,
+            gc: gc.clone(),
             blob,
             reader_id: reader_id.clone(),
             since,
             last_heartbeat,
             explicitly_expired: false,
             leased_seqnos: BTreeMap::new(),
-            heartbeat_task: Some(machine.start_reader_heartbeat_task(reader_id).await),
+            heartbeat_task: Some(machine.start_reader_heartbeat_task(reader_id, gc).await),
         }
     }
 
@@ -723,8 +723,9 @@ where
     pub async fn clone(&self, purpose: &str) -> Self {
         let new_reader_id = LeasedReaderId::new();
         let mut machine = self.machine.clone();
+        let gc = self.gc.clone();
         let heartbeat_ts = (self.cfg.now)();
-        let reader_state = machine
+        let (reader_state, maintenance) = machine
             .register_leased_reader(
                 &new_reader_id,
                 purpose,
@@ -732,6 +733,7 @@ where
                 heartbeat_ts,
             )
             .await;
+        maintenance.start_performing(&machine, &gc);
         // The point of clone is that you're guaranteed to have the same (or
         // greater) since capability, verify that.
         assert!(PartialOrder::less_equal(&reader_state.since, &self.since));
@@ -739,7 +741,7 @@ where
             self.cfg.clone(),
             Arc::clone(&self.metrics),
             machine,
-            self.gc.clone(),
+            gc,
             Arc::clone(&self.blob),
             new_reader_id,
             reader_state.since,
@@ -823,7 +825,8 @@ where
     /// happens.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
-        self.machine.expire_leased_reader(&self.reader_id).await;
+        let (_, maintenance) = self.machine.expire_leased_reader(&self.reader_id).await;
+        maintenance.start_performing(&self.machine, &self.gc);
         self.explicitly_expired = true;
     }
 
@@ -926,6 +929,7 @@ where
             }
         };
         let mut machine = self.machine.clone();
+        let gc = self.gc.clone();
         let reader_id = self.reader_id.clone();
         // Spawn a best-effort task to expire this read handle. It's fine if
         // this doesn't run to completion, we'd just have to wait out the lease
@@ -936,7 +940,8 @@ where
         handle.spawn_named(
             || format!("ReadHandle::expire ({})", self.reader_id),
             async move {
-                machine.expire_leased_reader(&reader_id).await;
+                let (_, maintenance) = machine.expire_leased_reader(&reader_id).await;
+                maintenance.start_performing(&machine, &gc);
             }
             .instrument(expire_span),
         );

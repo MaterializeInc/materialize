@@ -133,12 +133,20 @@ error: Since(Antichain { elements: [] })
 # maintenance it needs.
 perform-maintenance
 ----
+v20 ok
 v21 ok
 v21 ok
 v21 ok
 v21 ok
 v21 ok
 v21 ok
+v21 ok
+v21 ok
+v22 ok
+v22 ok
+v22 ok
+v22 ok
+v22 ok
 v22 ok
 v22 ok
 v22 ok
