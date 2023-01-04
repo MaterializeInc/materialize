@@ -29,7 +29,7 @@ use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{BidiProtoClient, ClientTransport, GrpcClient, GrpcServer, ResponseStream};
 
-use crate::command::{CommunicationConfig, ComputeCommand, ProtoComputeCommand};
+use crate::command::{ComputeCommand, ProtoComputeCommand, TimelyConfig};
 use crate::response::{
     ComputeResponse, PeekResponse, ProtoComputeResponse, SubscribeBatch, SubscribeResponse,
 };
@@ -188,13 +188,13 @@ where
     fn split_command(&mut self, command: ComputeCommand<T>) -> Vec<Option<ComputeCommand<T>>> {
         self.observe_command(&command);
         match command {
-            ComputeCommand::CreateTimely { comm_config, epoch } => (0..self.parts)
+            ComputeCommand::CreateTimely { config, epoch } => (0..self.parts)
                 .into_iter()
                 .map(|part| {
                     Some(ComputeCommand::CreateTimely {
-                        comm_config: CommunicationConfig {
+                        config: TimelyConfig {
                             process: part,
-                            ..comm_config.clone()
+                            ..config.clone()
                         },
                         epoch,
                     })

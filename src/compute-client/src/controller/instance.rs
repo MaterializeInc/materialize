@@ -194,7 +194,7 @@ where
         };
 
         instance.send(ComputeCommand::CreateTimely {
-            comm_config: Default::default(),
+            config: Default::default(),
             epoch: ComputeStartupEpoch::new(envd_epoch, 0),
         });
 

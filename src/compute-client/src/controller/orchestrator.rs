@@ -21,7 +21,7 @@ use mz_orchestrator::{
     ServiceEvent, ServicePort, ServiceProcessMetrics,
 };
 
-use crate::command::CommunicationConfig;
+use crate::command::TimelyConfig;
 
 use super::{
     ComputeInstanceEvent, ComputeInstanceId, ComputeReplicaAllocation, ComputeReplicaLocation,
@@ -52,7 +52,7 @@ impl ComputeOrchestrator {
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
         location: ComputeReplicaLocation,
-    ) -> Result<(Vec<String>, CommunicationConfig), anyhow::Error> {
+    ) -> Result<(Vec<String>, TimelyConfig), anyhow::Error> {
         match location {
             ComputeReplicaLocation::Remote {
                 addrs,
@@ -60,12 +60,12 @@ impl ComputeOrchestrator {
                 workers,
             } => {
                 let addrs = addrs.into_iter().collect();
-                let comm_config = CommunicationConfig {
+                let timely_config = TimelyConfig {
                     workers: workers.get(),
                     process: 0,
                     addresses: compute_addrs.into_iter().collect(),
                 };
-                Ok((addrs, comm_config))
+                Ok((addrs, timely_config))
             }
             ComputeReplicaLocation::Managed {
                 allocation,
@@ -77,14 +77,13 @@ impl ComputeOrchestrator {
                     .await?;
 
                 let addrs = service.addresses("computectl");
-                let comm_config = CommunicationConfig {
+                let timely_config = TimelyConfig {
                     workers: allocation.workers.get(),
                     process: 0,
                     addresses: service.addresses("compute"),
                 };
 
-                tracing::debug!("Obtained comm_config: {:?}", comm_config);
-                Ok((addrs, comm_config))
+                Ok((addrs, timely_config))
             }
         }
     }

@@ -27,7 +27,7 @@ use mz_build_info::BuildInfo;
 use mz_ore::retry::Retry;
 use mz_service::client::GenericClient;
 
-use crate::command::{CommunicationConfig, ComputeCommand, ComputeStartupEpoch};
+use crate::command::{ComputeCommand, ComputeStartupEpoch, TimelyConfig};
 use crate::logging::LoggingConfig;
 use crate::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -194,10 +194,10 @@ where
 
         let result = orchestrator
             .ensure_replica_location(instance_id, replica_id, location)
-            .and_then(|(addrs, comm_config)| {
+            .and_then(|(addrs, timely_config)| {
                 let cmd_spec = CommandSpecialization {
                     logging_config,
-                    comm_config,
+                    timely_config,
                     epoch,
                 };
                 let metrics = metrics_stream(orchestrator.clone(), instance_id, replica_id);
@@ -302,7 +302,7 @@ where
 
 struct CommandSpecialization {
     logging_config: LoggingConfig,
-    comm_config: CommunicationConfig,
+    timely_config: TimelyConfig,
     epoch: ComputeStartupEpoch,
 }
 
@@ -316,8 +316,8 @@ impl CommandSpecialization {
             *logging = self.logging_config.clone();
         }
 
-        if let ComputeCommand::CreateTimely { comm_config, epoch } = command {
-            *comm_config = self.comm_config.clone();
+        if let ComputeCommand::CreateTimely { config, epoch } = command {
+            *config = self.timely_config.clone();
             *epoch = self.epoch;
         }
     }

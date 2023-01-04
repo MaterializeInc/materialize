@@ -37,7 +37,7 @@ message ProtoComputeCommand {
     }
 
     message ProtoCreateTimely {
-        ProtoCommunicationConfig comm_config = 1;
+        ProtoTimelyConfig config = 1;
         ProtoComputeStartupEpoch epoch = 2;
     }
 
@@ -57,7 +57,7 @@ message ProtoComputeCommand {
     }
 }
 
-message ProtoCommunicationConfig {
+message ProtoTimelyConfig {
     uint64 workers = 1;
     uint64 process = 2;
     repeated string addresses = 3;

@@ -46,16 +46,16 @@ use timely::communication::allocator::zero_copy::initialize::initialize_networki
 use timely::communication::allocator::GenericBuilder;
 use tracing::{debug, info, warn};
 
-use mz_compute_client::command::{CommunicationConfig, ComputeStartupEpoch};
+use mz_compute_client::command::{ComputeStartupEpoch, TimelyConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
 
 /// Creates communication mesh from cluster config
 pub async fn initialize_networking(
-    config: &CommunicationConfig,
+    config: &TimelyConfig,
     epoch: ComputeStartupEpoch,
 ) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error> {
-    let CommunicationConfig {
+    let TimelyConfig {
         workers,
         process,
         addresses,
