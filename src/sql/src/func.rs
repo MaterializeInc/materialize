@@ -397,7 +397,7 @@ fn sql_impl_table_func_inner(
 ) -> Operation<TableFuncPlan> {
     let query = match mz_sql_parser::parser::parse_statements(sql)
         .expect("static function definition failed to parse")
-        .expect_element("static function definition must have exactly one statement")
+        .expect_element(|| "static function definition must have exactly one statement")
     {
         Statement::Select(SelectStatement { query, as_of: None }) => query,
         _ => panic!("static function definition expected SELECT statement"),
