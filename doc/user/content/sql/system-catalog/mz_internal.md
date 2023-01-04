@@ -448,7 +448,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 The `mz_sink_utilization` table gives the last known CPU and RAM utilization
 statistics for all extant sinks, as a percentage of the total allocation.
 
-At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+Materialize does not make any guarantees about the exactness or freshness of these numbers.
 
 | Field            | Type      | Meaning                                                    |
 |------------------|-----------|------------------------------------------------------------|
@@ -470,6 +470,37 @@ Field              | Type       | Meaning
 `process_id`       | [`bigint`] | An identifier of a process within a host.
 `cpu_nano_cores`   | [`bigint`] | Approximate CPU usage, in billionths of a vCPU core.
 `memory_bytes`     | [`bigint`] | Approximate RAM usage, in bytes.
+
+### `mz_source_statistics`
+
+The `mz_source_statistics` table contains statistics for each process of each source in the system.
+
+Materialize does not make any guarantees about the exactness or freshness of these numbers. As internal
+components of the system are restarted, some of these metrics will be reset to 0.
+
+Field                 | Type         | Meaning
+----------------------|--------------|--------
+`id`                  | [`text`]     | The ID of the source. Corresponds to [mz_catalog.mz_sources.id](https://materialize.com/docs/sql/system-catalog/mz_catalog#mz_sources).
+`worker_id`           | [`bigint`]   | The ID of the worker thread.
+`snapshot_committed`  | [`boolean`]  | Whether or not the worker has committed the initial snapshot for a source.
+`messages_received`   | [`bigint`]   | The number of raw messages the worker has received from upstream.
+`updates_staged`      | [`bigint`]   | The number of updates (inserts + deletes) the worker has written but not yet committed to the storage layer.
+`updates_committed`   | [`bigint`]   | The number of updates (inserts + deletes) the worker has committed into the storage layer.
+`bytes_received`      | [`bigint`]   | The number of bytes worth of messages the worker has received from upstream. The way the bytes are counted is source-specific.
+
+These values all require some amount of interpretation:
+
+- `messages_received` does not distinguish between inserts and deletes. Some upstream sources, like PostgreSQL,
+  produce deletion messages that are counted the same as insertions.
+- The `updates_*` metrics can be permanently lower or higher than `messages_received`, because:
+  - The storage layer can choose to consolidate messages within a certain time interval.
+  - Some envelopes (like `UPSERT`) can produce 2 messages (an insert and a delete) from a single upstream message.
+- The `messages_*` and `bytes_received` metrics can optionally be interpreted as rates that can loosely show
+  the changing speed of a source over time.
+- In general, the values should be summed across `worker_id`'s, and some metrics may only exist for some workers.
+  - Additionally, sources with multiple outputs (like PostgreSQL) will need `messages_committed`
+  and `snapshot_committed` summed/AND-ed across the top-level source and its subsources.
+
 
 ### `mz_storage_host_sizes`
 
