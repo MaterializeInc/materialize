@@ -144,8 +144,9 @@ Apache License, Version 2.0. */}}
       sidebarOpenButton.addEventListener("click", () => {
         sidebarWrapper.classList.add("shown");
         backdrop.style.display = "block";
-
-        /*  sidebarWrapper.setAttribute("tabindex", "0");  */
+        const searchButton = document.querySelector("button.DocSearch-Button");
+        searchButton.focus();
+        document.activeElement.focus();
       });
 
       sidebarCloseButton.addEventListener("click", () => {
@@ -168,6 +169,9 @@ Apache License, Version 2.0. */}}
       });
 
       const query = window.matchMedia("(max-width: 850px)");
+
+      if (query.matches) {
+      }
 
       query.addEventListener("change", (e) => {
         if (!e.matches) {
