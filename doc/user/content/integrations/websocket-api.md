@@ -52,13 +52,18 @@ The WebSocket API provides two modes with slightly different transactional seman
 ### Endpoint
 
 ```
-https://<MZ host address>/api/experimental/sql
+wss://<MZ host address>/api/experimental/sql
 ```
 
-Accessing the endpoint requires [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme). Reuse the same credentials as with `psql`:
+To authenticate, send an initial text or binary message containing a JSON object with keys:
 
-* **User ID:** Your email to access Materialize.
-* **Password:** Your app password.
+- `user`: Your email to access Materialize.
+- `password`: Your app password.
+
+Successful authentication will result in an initial `ReadyForQuery` response from the server.
+Otherwise an error is indicated by a websocket Close message.
+
+HTTP `Authorization` headers are ignored.
 
 ### Messages
 
@@ -161,6 +166,11 @@ The payload is an array of JSON values corresponding to the columns from the `Ro
 You can model these with the following TypeScript definitions:
 
 ```typescript
+interface Auth {
+    user: string;
+    password: string;
+}
+
 interface Simple {
     query: string;
 }

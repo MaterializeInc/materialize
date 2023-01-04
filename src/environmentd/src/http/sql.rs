@@ -11,14 +11,17 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use axum::extract::ws::{Message, WebSocket};
-use axum::extract::WebSocketUpgrade;
+use axum::extract::ws::{CloseFrame, Message, WebSocket};
+use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::Json;
 use futures::Future;
 use http::StatusCode;
 use itertools::izip;
 use serde::{Deserialize, Serialize};
+use tokio::time;
+use tracing::warn;
+use tungstenite::protocol::frame::coding::CloseCode;
 
 use mz_adapter::session::{EndTransactionAction, RowBatchStream, TransactionStatus};
 use mz_adapter::{ExecuteResponse, ExecuteResponseKind, PeekResponseUnary, SessionClient};
@@ -31,9 +34,10 @@ use mz_repr::{Datum, RelationDesc, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
 use mz_sql::plan::Plan;
-use tokio::time;
 
 use crate::http::AuthedClient;
+
+use super::{init_ws, WsState};
 
 pub async fn handle_sql(
     mut client: AuthedClient,
@@ -53,11 +57,46 @@ struct ErrorResponse {
     error: String,
 }
 
-pub async fn handle_sql_ws(client: AuthedClient, ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(|ws| async move { run_ws(client, ws).await })
+pub async fn handle_sql_ws(
+    State(state): State<WsState>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(|ws| async move { run_ws(&state, ws).await })
 }
 
-async fn run_ws(mut client: AuthedClient, mut ws: WebSocket) {
+#[derive(Serialize, Deserialize, Debug)]
+pub struct WebSocketAuth {
+    pub user: String,
+    pub password: String,
+}
+
+async fn run_ws(state: &WsState, mut ws: WebSocket) {
+    let mut client = match init_ws(state, &mut ws).await {
+        Ok(client) => client,
+        Err(e) => {
+            // We omit most detail from the error message we send to the client, to
+            // avoid giving attackers unnecessary information.
+            warn!("WS request failed authentication: {}", e);
+            let _ = ws
+                .send(Message::Close(Some(CloseFrame {
+                    code: CloseCode::Protocol.into(),
+                    reason: "unauthorized".into(),
+                })))
+                .await;
+            return;
+        }
+    };
+
+    // Successful auth results in an initial ready message.
+    let _ = ws
+        .send(Message::Text(
+            serde_json::to_string(&WebSocketResponse::ReadyForQuery(
+                client.0.session().transaction_code().into(),
+            ))
+            .expect("must serialize"),
+        ))
+        .await;
+
     loop {
         let msg = match ws.recv().await {
             Some(Ok(msg)) => msg,

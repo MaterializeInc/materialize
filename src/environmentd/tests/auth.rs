@@ -80,9 +80,9 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::error::Error;
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::iter;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -115,10 +115,12 @@ use serde::Deserialize;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
+use tungstenite::protocol::frame::coding::CloseCode;
+use tungstenite::Message;
 use uuid::Uuid;
 
 use mz_adapter::catalog::{HTTP_DEFAULT_USER, SYSTEM_USER};
-use mz_environmentd::TlsMode;
+use mz_environmentd::{TlsMode, WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
     ApiTokenArgs, ApiTokenResponse, Claims, FronteggAuthentication, FronteggConfig, RefreshToken,
     REFRESH_SUFFIX,
@@ -282,6 +284,22 @@ where
     HttpsConnector::with_connector(http, connector_builder).unwrap()
 }
 
+fn make_ws_tls<F>(uri: &Uri, configure: F) -> impl Read + Write
+where
+    F: Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack>,
+{
+    let mut connector_builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    // See comment in `make_pg_tls` about disabling TLS v1.3.
+    let options = connector_builder.options() | SslOptions::NO_TLSV1_3;
+    connector_builder.set_options(options);
+    configure(&mut connector_builder).unwrap();
+    let connector = connector_builder.build();
+
+    let stream =
+        TcpStream::connect(format!("{}:{}", uri.host().unwrap(), uri.port().unwrap())).unwrap();
+    connector.connect(uri.host().unwrap(), stream).unwrap()
+}
+
 enum Assert<E> {
     Success,
     Err(E),
@@ -301,6 +319,12 @@ enum TestCase<'a> {
         headers: &'a HeaderMap,
         configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
         assert: Assert<Box<dyn Fn(Option<StatusCode>, String) + 'a>>,
+    },
+    Ws {
+        user: &'a str,
+        password: &'a str,
+        configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
+        assert: Assert<Box<dyn Fn(CloseCode, String) + 'a>>,
     },
 }
 
@@ -418,6 +442,66 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                             Err(e) => (None, e.to_string()),
                         };
                         check(code, message)
+                    }
+                }
+            }
+            TestCase::Ws {
+                user,
+                password,
+                configure,
+                assert,
+            } => {
+                println!("ws user={} password={}", user, password);
+
+                let uri = Uri::builder()
+                    .scheme("wss")
+                    .authority(&*format!(
+                        "{}:{}",
+                        Ipv4Addr::LOCALHOST,
+                        server.inner.http_local_addr().port()
+                    ))
+                    .path_and_query("/api/experimental/sql")
+                    .build()
+                    .unwrap();
+                let stream = make_ws_tls(&uri, configure);
+                let (mut ws, _resp) = tungstenite::client(uri, stream).unwrap();
+                //  let (mut ws, _resp) = tungstenite::connect(uri).unwrap();
+                ws.write_message(Message::Text(
+                    serde_json::to_string(&WebSocketAuth {
+                        user: user.to_string(),
+                        password: password.to_string(),
+                    })
+                    .unwrap(),
+                ))
+                .unwrap();
+
+                ws.write_message(Message::Text(
+                    r#"{"query": "SELECT pg_catalog.current_user()"}"#.into(),
+                ))
+                .unwrap();
+                match assert {
+                    Assert::Success => loop {
+                        let resp = ws.read_message().unwrap();
+                        if let Message::Text(msg) = resp {
+                            let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
+                            if let WebSocketResponse::CommandComplete(tag) = msg {
+                                assert_eq!(tag, "SELECT 1");
+                                break;
+                            }
+                        } else {
+                            panic!("unexpected: {resp}");
+                        }
+                    },
+                    Assert::Err(check) => {
+                        let resp = ws.read_message().unwrap();
+                        let (code, message) = match resp {
+                            Message::Close(frame) => {
+                                let frame = frame.unwrap();
+                                (frame.code, frame.reason)
+                            }
+                            _ => panic!("unexpected: {resp}"),
+                        };
+                        check(code, message.to_string())
                     }
                 }
             }
@@ -665,7 +749,7 @@ fn test_auth_expiry() {
 
 #[allow(clippy::unit_arg)]
 #[test]
-fn test_auth() {
+fn test_auth_base() {
     mz_ore::test::init_logging();
 
     let ca = Ca::new_root("test ca").unwrap();
@@ -876,6 +960,21 @@ fn test_auth() {
         "TlsMode::Require, MzCloud",
         &server,
         &[
+            TestCase::Ws {
+                user: frontegg_user,
+                password: frontegg_password,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            TestCase::Ws {
+                user: "bad user",
+                password: frontegg_password,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, CloseCode::Protocol);
+                    assert_eq!(message, "unauthorized");
+                })),
+            },
             // TLS with a password should succeed.
             TestCase::Pgwire {
                 user: frontegg_user,

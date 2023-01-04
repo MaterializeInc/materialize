@@ -106,7 +106,7 @@ tower-http = { version = "0.3.5", features = ["auth", "base64", "cors", "map-res
 tracing = { version = "0.1.37", features = ["attributes", "log", "std", "tracing-attributes"] }
 tracing-core = { version = "0.1.30", features = ["once_cell", "std"] }
 tracing-subscriber = { version = "0.3.16", features = ["alloc", "ansi", "env-filter", "fmt", "json", "matchers", "nu-ansi-term", "once_cell", "regex", "registry", "serde", "serde_json", "sharded-slab", "smallvec", "std", "thread_local", "tracing", "tracing-log", "tracing-serde"] }
-tungstenite = { version = "0.18.0", features = ["base64", "handshake", "http", "httparse", "sha1", "url"] }
+tungstenite = { version = "0.18.0", features = ["base64", "handshake", "http", "httparse", "native-tls", "native-tls-crate", "sha1", "url"] }
 uncased = { version = "0.9.7", features = ["alloc"] }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.2.2", features = ["getrandom", "rng", "serde", "std", "v4"] }
@@ -207,7 +207,7 @@ tower-http = { version = "0.3.5", features = ["auth", "base64", "cors", "map-res
 tracing = { version = "0.1.37", features = ["attributes", "log", "std", "tracing-attributes"] }
 tracing-core = { version = "0.1.30", features = ["once_cell", "std"] }
 tracing-subscriber = { version = "0.3.16", features = ["alloc", "ansi", "env-filter", "fmt", "json", "matchers", "nu-ansi-term", "once_cell", "regex", "registry", "serde", "serde_json", "sharded-slab", "smallvec", "std", "thread_local", "tracing", "tracing-log", "tracing-serde"] }
-tungstenite = { version = "0.18.0", features = ["base64", "handshake", "http", "httparse", "sha1", "url"] }
+tungstenite = { version = "0.18.0", features = ["base64", "handshake", "http", "httparse", "native-tls", "native-tls-crate", "sha1", "url"] }
 uncased = { version = "0.9.7", features = ["alloc"] }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.2.2", features = ["getrandom", "rng", "serde", "std", "v4"] }

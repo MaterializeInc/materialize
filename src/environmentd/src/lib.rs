@@ -120,7 +120,7 @@ mod http;
 mod server;
 mod telemetry;
 
-pub use crate::http::{SqlResponse, WebSocketResponse};
+pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 
