@@ -124,6 +124,18 @@ async fn report_traits_loop(
                     .get();
                 let rows = adapter_client.introspection_execute_one(&format!("
                     SELECT jsonb_build_object(
+                        'active_clusters', (SELECT count(*) FROM mz_clusters WHERE id LIKE 'u%')::int4,
+                        'active_cluster_replicas', (
+                            SELECT jsonb_object_agg(base.size, coalesce(count, 0))
+                            FROM mz_internal.mz_cluster_replica_sizes base
+                            LEFT JOIN (
+                                SELECT size, count(*)::int4
+                                FROM mz_cluster_replicas r
+                                JOIN mz_clusters c ON c.id = r.cluster_id
+                                WHERE c.id LIKE 'u%'
+                                GROUP BY size
+                            ) extant ON base.size = extant.size
+                        ),
                         'active_materialized_views', (SELECT count(*) FROM mz_materialized_views WHERE id LIKE 'u%')::int4,
                         'active_sources', (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%')::int4,
                         'active_kafka_sources', (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%' AND type = 'kafka')::int4,
