@@ -242,7 +242,7 @@ impl<S: Append + 'static> Coordinator<S> {
         mut session: Session,
         tx: ClientTransmitter<ExecuteResponse>,
     ) {
-        if session.vars().emit_tracing_notice() {
+        if session.vars().emit_trace_id_notice() {
             let span_context = tracing::Span::current()
                 .context()
                 .span()
