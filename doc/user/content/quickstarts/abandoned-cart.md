@@ -102,7 +102,7 @@ Sources are the first step in most Materialize projects.
 
 ### Create the views
 
-With JSON-formatted messages, we don't know the schema so the [JSON is pulled in as raw bytes](/sql/create-source/#json) and we still need to CAST data into the proper columns and types.
+With JSON-formatted messages, we don't know the schema so the [JSON is pulled in as raw bytes](/sql/create-source/#json) and we still need to cast data into the proper columns and types.
 
 1. [Create a `VIEW`](/sql/create-view/) that casts the raw bytes into a JSON object:
 
