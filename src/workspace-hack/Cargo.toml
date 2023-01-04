@@ -50,6 +50,7 @@ globset = { version = "0.4.9", features = ["log", "serde", "serde1"] }
 hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git", features = ["ahash", "inline-more", "raw"] }
 hyper = { version = "0.14.23", features = ["client", "full", "h2", "http1", "http2", "runtime", "server", "socket2", "stream", "tcp"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
+itertools = { version = "0.10.5", features = ["use_alloc", "use_std"] }
 k8s-openapi = { version = "0.16.0", features = ["api", "http", "percent-encoding", "url", "v1_23"] }
 kube = { version = "0.77.0", features = ["client", "config", "derive", "kube-client", "kube-derive", "kube-runtime", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.77.0", default-features = false, features = ["__non_core", "base64", "bytes", "chrono", "client", "config", "dirs", "either", "futures", "http-body", "hyper", "hyper-openssl", "hyper-timeout", "jsonpatch", "jsonpath_lib", "openssl", "openssl-tls", "pem", "pin-project", "rand", "serde_yaml", "tokio", "tokio-tungstenite", "tokio-util", "tower", "tower-http", "tracing", "ws"] }
@@ -74,7 +75,7 @@ postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-fe
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["chrono-04", "serde-1", "serde_json-1", "uuid-1", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 proc-macro2 = { version = "1.0.47", features = ["proc-macro", "span-locations"] }
 prometheus = { version = "0.13.3", default-features = false, features = ["libc", "process", "procfs"] }
-prost = { version = "0.11.3", features = ["no-recursion-limit", "prost-derive", "std"] }
+prost = { version = "0.11.5", features = ["no-recursion-limit", "prost-derive", "std"] }
 prost-reflect = { version = "0.9.2", default-features = false, features = ["base64", "serde", "serde-value", "serde1"] }
 prost-types = { version = "0.11.2", features = ["std"] }
 quote = { version = "1.0.23", features = ["proc-macro"] }
@@ -150,6 +151,7 @@ globset = { version = "0.4.9", features = ["log", "serde", "serde1"] }
 hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git", features = ["ahash", "inline-more", "raw"] }
 hyper = { version = "0.14.23", features = ["client", "full", "h2", "http1", "http2", "runtime", "server", "socket2", "stream", "tcp"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
+itertools = { version = "0.10.5", features = ["use_alloc", "use_std"] }
 k8s-openapi = { version = "0.16.0", features = ["api", "http", "percent-encoding", "url", "v1_23"] }
 kube = { version = "0.77.0", features = ["client", "config", "derive", "kube-client", "kube-derive", "kube-runtime", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.77.0", default-features = false, features = ["__non_core", "base64", "bytes", "chrono", "client", "config", "dirs", "either", "futures", "http-body", "hyper", "hyper-openssl", "hyper-timeout", "jsonpatch", "jsonpath_lib", "openssl", "openssl-tls", "pem", "pin-project", "rand", "serde_yaml", "tokio", "tokio-tungstenite", "tokio-util", "tower", "tower-http", "tracing", "ws"] }
@@ -174,7 +176,7 @@ postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-fe
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["chrono-04", "serde-1", "serde_json-1", "uuid-1", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 proc-macro2 = { version = "1.0.47", features = ["proc-macro", "span-locations"] }
 prometheus = { version = "0.13.3", default-features = false, features = ["libc", "process", "procfs"] }
-prost = { version = "0.11.3", features = ["no-recursion-limit", "prost-derive", "std"] }
+prost = { version = "0.11.5", features = ["no-recursion-limit", "prost-derive", "std"] }
 prost-reflect = { version = "0.9.2", default-features = false, features = ["base64", "serde", "serde-value", "serde1"] }
 prost-types = { version = "0.11.2", features = ["std"] }
 quote = { version = "1.0.23", features = ["proc-macro"] }
