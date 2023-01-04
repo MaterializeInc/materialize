@@ -3390,6 +3390,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(UInt16, UInt32) => BitShiftLeftUInt16, oid::FUNC_SHIFT_LEFT_UINT16;
             params!(UInt32, UInt32) => BitShiftLeftUInt32, oid::FUNC_SHIFT_LEFT_UINT32;
             params!(UInt64, UInt32) => BitShiftLeftUInt64, oid::FUNC_SHIFT_LEFT_UINT64;
+            params!(RangeAny, RangeAny) => RangeBefore => Bool, 3893;
         },
         ">>" => Scalar {
             params!(Int16, Int32) => BitShiftRightInt16, 1879;
@@ -3398,6 +3399,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(UInt16, UInt32) => BitShiftRightUInt16, oid::FUNC_SHIFT_RIGHT_UINT16;
             params!(UInt32, UInt32) => BitShiftRightUInt32, oid::FUNC_SHIFT_RIGHT_UINT32;
             params!(UInt64, UInt32) => BitShiftRightUInt64, oid::FUNC_SHIFT_RIGHT_UINT64;
+            params!(RangeAny, RangeAny) => RangeAfter => Bool, 3894;
         },
 
         // ILIKE
@@ -3535,7 +3537,7 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
             params!(ListElementAnyCompatible, ListAnyCompatible) => ElementListConcat => ListAnyCompatible, oid::OP_CONCAT_ELEMENY_LIST_OID;
         },
 
-        //JSON and MAP
+        //JSON, MAP, RANGE
         "->" => Scalar {
             params!(Jsonb, Int64) => JsonbGetInt64 { stringify: false }, 3212;
             params!(Jsonb, String) => JsonbGetString { stringify: false }, 3211;
@@ -3569,9 +3571,8 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
                 let elem_type = ecx.scalar_type(&lhs).unwrap_range_element_type().clone();
                 Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsElem { elem_type, rev: false }))
             }) => Bool, 3889;
-            params!(RangeAny, RangeAny) => Operation::binary(|ecx, lhs, rhs| {
-                let elem_type = ecx.scalar_type(&lhs).unwrap_range_element_type().clone();
-                Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsRange { elem_type, rev: false }))
+            params!(RangeAny, RangeAny) => Operation::binary(|_ecx, lhs, rhs| {
+                Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsRange {  rev: false }))
             }) => Bool, 3890;
         },
         "<@" => Scalar {
@@ -3598,9 +3599,8 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
                 let elem_type = ecx.scalar_type(&rhs).unwrap_range_element_type().clone();
                 Ok(rhs.call_binary(lhs, BinaryFunc::RangeContainsElem { elem_type, rev: true }))
             }) => Bool, 3891;
-            params!(RangeAny, RangeAny) => Operation::binary(|ecx, lhs, rhs| {
-                let elem_type = ecx.scalar_type(&rhs).unwrap_range_element_type().clone();
-                Ok(rhs.call_binary(lhs, BinaryFunc::RangeContainsRange { elem_type, rev: true }))
+            params!(RangeAny, RangeAny) => Operation::binary(|_ecx, lhs, rhs| {
+                Ok(rhs.call_binary(lhs, BinaryFunc::RangeContainsRange { rev: true }))
             }) => Bool, 3892;
         },
         "?" => Scalar {
@@ -3613,6 +3613,19 @@ static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
         "?|" => Scalar {
             params!(MapAny, ScalarType::Array(Box::new(ScalarType::String))) => MapContainsAnyKeys => Bool, oid::OP_CONTAINS_ANY_KEYS_MAP_OID;
         },
+        "&&" => Scalar {
+            params!(RangeAny, RangeAny) => BinaryFunc::RangeOverlaps => Bool, 3888;
+        },
+        "&<" => Scalar {
+            params!(RangeAny, RangeAny) => BinaryFunc::RangeOverleft => Bool, 3895;
+        },
+        "&>" => Scalar {
+            params!(RangeAny, RangeAny) => BinaryFunc::RangeOverright => Bool, 3896;
+        },
+        "-|-" => Scalar {
+            params!(RangeAny, RangeAny) => BinaryFunc::RangeAdjacent => Bool, 3897;
+        },
+
         // COMPARISON OPS
         "<" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Lt, 1754;

@@ -1264,14 +1264,27 @@ where
     Datum::from(range.contains_elem(&elem))
 }
 
-fn contains_range_range<'a, R: RangeOps<'a>>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a>
-where
-    <R as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
-{
-    let l = a.unwrap_range();
-    let r = b.unwrap_range();
-    Datum::from(l.contains_range::<R>(&r))
+macro_rules! range_fn {
+    ($fn:expr) => {
+        paste::paste! {
+
+            fn [< range_ $fn >]<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a>
+            {
+                let l = a.unwrap_range();
+                let r = b.unwrap_range();
+                Datum::from(Range::<Datum<'a>>::$fn(&l, &r))
+            }
+        }
+    };
 }
+
+range_fn!(contains_range);
+range_fn!(overlaps);
+range_fn!(after);
+range_fn!(before);
+range_fn!(overleft);
+range_fn!(overright);
+range_fn!(adjacent);
 
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
@@ -1915,7 +1928,13 @@ pub enum BinaryFunc {
     PowerNumeric,
     GetByte,
     RangeContainsElem { elem_type: ScalarType, rev: bool },
-    RangeContainsRange { elem_type: ScalarType, rev: bool },
+    RangeContainsRange { rev: bool },
+    RangeOverlaps,
+    RangeAfter,
+    RangeBefore,
+    RangeOverleft,
+    RangeOverright,
+    RangeAdjacent,
 }
 
 impl BinaryFunc {
@@ -2222,15 +2241,13 @@ impl BinaryFunc {
                 }
                 _ => unreachable!(),
             }),
-            BinaryFunc::RangeContainsRange { elem_type, rev: _ } => Ok(match elem_type {
-                ScalarType::Int32 => eager!(contains_range_range::<i32>),
-                ScalarType::Int64 => eager!(contains_range_range::<i64>),
-                ScalarType::Date => eager!(contains_range_range::<Date>),
-                ScalarType::Numeric { .. } => {
-                    eager!(contains_range_range::<OrderedDecimal<Numeric>>)
-                }
-                _ => unreachable!(),
-            }),
+            BinaryFunc::RangeContainsRange { rev: _ } => Ok(eager!(range_contains_range)),
+            BinaryFunc::RangeOverlaps => Ok(eager!(range_overlaps)),
+            BinaryFunc::RangeAfter => Ok(eager!(range_after)),
+            BinaryFunc::RangeBefore => Ok(eager!(range_before)),
+            BinaryFunc::RangeOverleft => Ok(eager!(range_overleft)),
+            BinaryFunc::RangeOverright => Ok(eager!(range_overright)),
+            BinaryFunc::RangeAdjacent => Ok(eager!(range_adjacent)),
         }
     }
 
@@ -2384,9 +2401,14 @@ impl BinaryFunc {
 
             GetByte => ScalarType::Int32.nullable(in_nullable),
 
-            RangeContainsElem { .. } | RangeContainsRange { .. } => {
-                ScalarType::Bool.nullable(in_nullable)
-            }
+            RangeContainsElem { .. }
+            | RangeContainsRange { .. }
+            | RangeOverlaps
+            | RangeAfter
+            | RangeBefore
+            | RangeOverleft
+            | RangeOverright
+            | RangeAdjacent => ScalarType::Bool.nullable(in_nullable),
         }
     }
 
@@ -2512,6 +2534,12 @@ impl BinaryFunc {
                 | ModNumeric
                 | RangeContainsElem { .. }
                 | RangeContainsRange { .. }
+                | RangeOverlaps
+                | RangeAfter
+                | RangeBefore
+                | RangeOverleft
+                | RangeOverright
+                | RangeAdjacent
         )
     }
 
@@ -2642,7 +2670,13 @@ impl BinaryFunc {
             | ListElementConcat
             | ElementListConcat
             | RangeContainsElem { .. }
-            | RangeContainsRange { .. } => true,
+            | RangeContainsRange { .. }
+            | RangeOverlaps
+            | RangeAfter
+            | RangeBefore
+            | RangeOverleft
+            | RangeOverright
+            | RangeAdjacent => true,
             ToCharTimestamp
             | ToCharTimestampTz
             | DateBinTimestamp
@@ -2904,6 +2938,12 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::RangeContainsRange { rev, .. } => {
                 f.write_str(if *rev { "<@" } else { "@>" })
             }
+            BinaryFunc::RangeOverlaps => f.write_str("&&"),
+            BinaryFunc::RangeAfter => f.write_str(">>"),
+            BinaryFunc::RangeBefore => f.write_str("<<"),
+            BinaryFunc::RangeOverleft => f.write_str("&<"),
+            BinaryFunc::RangeOverright => f.write_str("&>"),
+            BinaryFunc::RangeAdjacent => f.write_str("-|-"),
         }
     }
 }
@@ -3105,9 +3145,15 @@ impl Arbitrary for BinaryFunc {
             (bool::arbitrary(), mz_repr::arb_range_type())
                 .prop_map(|(rev, elem_type)| BinaryFunc::RangeContainsElem { elem_type, rev })
                 .boxed(),
-            (bool::arbitrary(), mz_repr::arb_range_type())
-                .prop_map(|(rev, elem_type)| BinaryFunc::RangeContainsRange { elem_type, rev })
+            bool::arbitrary()
+                .prop_map(|rev| BinaryFunc::RangeContainsRange { rev })
                 .boxed(),
+            Just(BinaryFunc::RangeOverlaps).boxed(),
+            Just(BinaryFunc::RangeAfter).boxed(),
+            Just(BinaryFunc::RangeBefore).boxed(),
+            Just(BinaryFunc::RangeOverleft).boxed(),
+            Just(BinaryFunc::RangeOverright).boxed(),
+            Just(BinaryFunc::RangeAdjacent).boxed(),
         ])
     }
 }
@@ -3290,12 +3336,13 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                     rev: *rev,
                 })
             }
-            BinaryFunc::RangeContainsRange { elem_type, rev } => {
-                RangeContainsRange(crate::scalar::proto_binary_func::ProtoRangeContainsInner {
-                    elem_type: Some(elem_type.into_proto()),
-                    rev: *rev,
-                })
-            }
+            BinaryFunc::RangeContainsRange { rev } => RangeContainsRange(*rev),
+            BinaryFunc::RangeOverlaps => RangeOverlaps(()),
+            BinaryFunc::RangeAfter => RangeAfter(()),
+            BinaryFunc::RangeBefore => RangeBefore(()),
+            BinaryFunc::RangeOverleft => RangeOverleft(()),
+            BinaryFunc::RangeOverright => RangeOverright(()),
+            BinaryFunc::RangeAdjacent => RangeAdjacent(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -3484,12 +3531,13 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                         .into_rust_if_some("ProtoRangeContainsInner::elem_type")?,
                     rev: inner.rev,
                 }),
-                RangeContainsRange(inner) => Ok(BinaryFunc::RangeContainsRange {
-                    elem_type: inner
-                        .elem_type
-                        .into_rust_if_some("ProtoRangeContainsInner::elem_type")?,
-                    rev: inner.rev,
-                }),
+                RangeContainsRange(rev) => Ok(BinaryFunc::RangeContainsRange { rev }),
+                RangeOverlaps(()) => Ok(BinaryFunc::RangeOverlaps),
+                RangeAfter(()) => Ok(BinaryFunc::RangeAfter),
+                RangeBefore(()) => Ok(BinaryFunc::RangeBefore),
+                RangeOverleft(()) => Ok(BinaryFunc::RangeOverleft),
+                RangeOverright(()) => Ok(BinaryFunc::RangeOverright),
+                RangeAdjacent(()) => Ok(BinaryFunc::RangeAdjacent),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))

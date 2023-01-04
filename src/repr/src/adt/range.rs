@@ -19,7 +19,6 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
-use mz_ore::soft_assert;
 use mz_proto::{RustType, TryFromProtoError};
 
 use crate::scalar::DatumKind;
@@ -113,15 +112,7 @@ where
 {
     /// Increment `self` one step forward, if applicable. Return `None` if
     /// overflows.
-    ///
-    /// Types that do not have discrete steps should never call this function,
-    /// but we handle this with a soft assert because there's nothing inherently
-    /// wrong with it.
     fn step(self) -> Option<Self> {
-        soft_assert!(
-            false,
-            "default implementation viable only for continuous value types, which should never be called"
-        );
         Some(self)
     }
 
@@ -206,7 +197,7 @@ impl<D> Range<D> {
 }
 
 /// Range implementations meant to work with `Range<Datum>` and `Range<DatumNested>`.
-impl<'a, B: Copy + Ord + PartialOrd> Range<B>
+impl<'a, B: Copy + Ord + PartialOrd + Display + Debug> Range<B>
 where
     Datum<'a>: From<B>,
 {
@@ -220,14 +211,87 @@ where
         }
     }
 
-    pub fn contains_range<T: RangeOps<'a>>(&self, other: &Range<B>) -> bool
-    where
-        <T as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
-    {
+    pub fn contains_range(&self, other: &Range<B>) -> bool {
         match (self.inner, other.inner) {
-            (None, None) | (Some(_), None) => return true,
-            (None, Some(_)) => return false,
+            (None, None) | (Some(_), None) => true,
+            (None, Some(_)) => false,
             (Some(i), Some(j)) => i.lower <= j.lower && j.upper <= i.upper,
+        }
+    }
+
+    pub fn overlaps(&self, other: &Range<B>) -> bool {
+        match (self.inner, other.inner) {
+            (Some(s), Some(o)) => {
+                let r = match s.cmp(&o) {
+                    Ordering::Equal => Ordering::Equal,
+                    Ordering::Less => s.upper.range_bound_cmp(&o.lower),
+                    Ordering::Greater => o.upper.range_bound_cmp(&s.lower),
+                };
+
+                // If smaller upper is >= larger lower, elements overlap.
+                matches!(r, Ordering::Greater | Ordering::Equal)
+            }
+            _ => false,
+        }
+    }
+
+    pub fn before(&self, other: &Range<B>) -> bool {
+        match (self.inner, other.inner) {
+            (Some(s), Some(o)) => {
+                matches!(s.upper.range_bound_cmp(&o.lower), Ordering::Less)
+            }
+            _ => false,
+        }
+    }
+
+    pub fn after(&self, other: &Range<B>) -> bool {
+        match (self.inner, other.inner) {
+            (Some(s), Some(o)) => {
+                matches!(s.lower.range_bound_cmp(&o.upper), Ordering::Greater)
+            }
+            _ => false,
+        }
+    }
+
+    pub fn overleft(&self, other: &Range<B>) -> bool {
+        match (self.inner, other.inner) {
+            (Some(s), Some(o)) => {
+                matches!(
+                    s.upper.range_bound_cmp(&o.upper),
+                    Ordering::Less | Ordering::Equal
+                )
+            }
+            _ => false,
+        }
+    }
+
+    pub fn overright(&self, other: &Range<B>) -> bool {
+        match (self.inner, other.inner) {
+            (Some(s), Some(o)) => {
+                matches!(
+                    s.lower.range_bound_cmp(&o.lower),
+                    Ordering::Greater | Ordering::Equal
+                )
+            }
+            _ => false,
+        }
+    }
+
+    pub fn adjacent(&self, other: &Range<B>) -> bool {
+        match (self.inner, other.inner) {
+            (Some(s), Some(o)) => {
+                // Look at each (lower, upper) pair.
+                for (lower, upper) in [(s.lower, o.upper), (o.lower, s.upper)] {
+                    if let (Some(l), Some(u)) = (lower.bound, upper.bound) {
+                        // If ..x](x.. or ..x)[x.., adjacent
+                        if lower.inclusive ^ upper.inclusive && l == u {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            _ => false,
         }
     }
 }
@@ -369,7 +433,7 @@ pub type RangeUpperBound<B> = RangeBound<B, true>;
 
 // Generic RangeBound implementations meant to work over `RangeBound<Datum,..>`
 // and `RangeBound<DatumNested,..>`.
-impl<'a, const UPPER: bool, B: Copy> RangeBound<B, UPPER>
+impl<'a, const UPPER: bool, B: Copy + Ord + PartialOrd + Display + Debug> RangeBound<B, UPPER>
 where
     Datum<'a>: From<B>,
 {
@@ -402,6 +466,41 @@ where
             // Lower satisfied with values greater than itself
             Ordering::Less => !UPPER,
         }
+    }
+
+    // Compares two `RangeBound`, which do not need to both be of the same
+    // `UPPER`.
+    fn range_bound_cmp<const OTHER_UPPER: bool>(
+        &self,
+        other: &RangeBound<B, OTHER_UPPER>,
+    ) -> Ordering {
+        if UPPER == OTHER_UPPER {
+            return self.cmp(&RangeBound {
+                inclusive: other.inclusive,
+                bound: other.bound,
+            });
+        }
+
+        // Handle cases where either are infinite bounds, which have special
+        // semantics.
+        if self.bound.is_none() || other.bound.is_none() {
+            return if UPPER {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            };
+        }
+        // 1. Sort by bounds
+        let cmp = self.bound.cmp(&other.bound);
+        // 2. Tie break by sorting by inclusivity, which is inverted between
+        //    lowers and uppers.
+        cmp.then(if self.inclusive && other.inclusive {
+            Ordering::Equal
+        } else if UPPER {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        })
     }
 }
 
