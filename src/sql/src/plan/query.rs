@@ -2622,16 +2622,52 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
 
         let table_name = normalize::ident(name.to_owned());
         for (i, item) in scope.items.iter_mut().enumerate() {
-            let column_name = columns
+            item.table_name = if item.allow_unqualified_references {
+                Some(PartialObjectName {
+                    database: None,
+                    schema: None,
+                    item: table_name.clone(),
+                })
+            } else {
+                // Columns that prohibit unqualified references are special
+                // columns from the output of a NATURAL or USING join that can
+                // only be referenced by their full, pre-join name. Applying an
+                // alias to the output of that join renders those columns
+                // inaccessible, which we accomplish here by setting the
+                // table name to `None`.
+                //
+                // Concretely, consider:
+                //
+                //      CREATE TABLE t1 (a int);
+                //      CREATE TABLE t2 (a int);
+                //  (1) SELECT ... FROM (t1 NATURAL JOIN t2);
+                //  (2) SELECT ... FROM (t1 NATURAL JOIN t2) AS t;
+                //
+                // In (1), the join has no alias. The underlying columns from
+                // either side of the join can be referenced as `t1.a` and
+                // `t2.a`, respectively, and the unqualified name `a` refers to
+                // a column whose value is `coalesce(t1.a, t2.a)`.
+                //
+                // In (2), the join is aliased as `t`. The columns from either
+                // side of the join (`t1.a` and `t2.a`) are inaccessible, and
+                // the coalesced column can be named as either `a` or `t.a`.
+                //
+                // We previously had a bug [0] that mishandled this subtle
+                // logic.
+                //
+                // NOTE(benesch): We could in theory choose to project away
+                // those inaccessible columns and drop them from the scope
+                // entirely, but that would require that this function also
+                // take and return the `HirRelationExpr` that is being aliased,
+                // which is a rather large refactor.
+                //
+                // [0]: https://github.com/MaterializeInc/materialize/issues/16920
+                None
+            };
+            item.column_name = columns
                 .get(i)
                 .map(|a| normalize::column_name(a.clone()))
                 .unwrap_or_else(|| item.column_name.clone());
-            item.table_name = Some(PartialObjectName {
-                database: None,
-                schema: None,
-                item: table_name.clone(),
-            });
-            item.column_name = column_name;
         }
     }
     Ok(scope)
