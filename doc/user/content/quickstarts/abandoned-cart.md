@@ -214,7 +214,7 @@ Materialize is wire-compatible with PostgreSQL, so you can use any PostgreSQL cl
 
     The `node-telegram-bot-api` package provides an interface for the Telegram Bot API.
 
-    The `pg` package is the official PostgreSQL client for Node.js which we'll use to connect to Materialize.
+    The `pg` package is the official PostgreSQL client for Node.js, which we'll use to connect to Materialize.
 
 1. Here is an example of how you might use the `node-telegram-bot-api` package to send a message to the Telegram group:
 
