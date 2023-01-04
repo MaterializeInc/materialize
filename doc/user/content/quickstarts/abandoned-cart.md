@@ -185,7 +185,7 @@ With JSON-formatted messages, we don't know the schema so the [JSON is pulled in
 
 ## Send notifications to Telegram
 
-Materialize is wire-compatible with PostgreSQL, so you can use any PostgreSQL client to connect to Materialize. In this example, we'll use the [Node.js](/integrations/node-js) and create a simple script that sends a message to a Telegram user when a user abandons a cart in real time.
+Materialize is wire-compatible with PostgreSQL, so you can use any PostgreSQL client to connect to Materialize. In this example, we'll use [Node.js](/integrations/node-js) and the `node-postgres` library to create a script that pushes a message to Telegram when a user is inactive for 3 minutes and has incomplete purchases.
 
 ### Create a Telegram bot
 
