@@ -627,6 +627,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     resumption_frontier
                 );
 
+                // An empty resume upper means that we can never write down any
+                // more data for this ingestion. We therefore don't render a
+                // dataflow for it.
+                let is_closed = resumption_frontier.is_empty();
+
                 for (export_id, export) in ingestion_description.source_exports.iter() {
                     // This is a separate line cause rustfmt :(
                     let stats =
@@ -648,20 +653,30 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         .storage_state
                         .source_uppers
                         .entry(export_id.clone())
-                        .or_insert_with(|| Rc::new(RefCell::new(Antichain::new())));
+                        .or_insert_with(|| {
+                            Rc::new(RefCell::new(if is_closed {
+                                Antichain::new()
+                            } else {
+                                Antichain::from_elem(mz_repr::Timestamp::minimum())
+                            }))
+                        });
 
                     let mut source_upper = source_upper.borrow_mut();
-                    source_upper.clear();
-                    source_upper.insert(mz_repr::Timestamp::minimum());
+                    if !source_upper.is_empty() {
+                        source_upper.clear();
+                        source_upper.insert(mz_repr::Timestamp::minimum());
+                    }
                 }
 
-                crate::render::build_ingestion_dataflow(
-                    self.timely_worker,
-                    &mut self.storage_state,
-                    ingestion_id,
-                    ingestion_description,
-                    resumption_frontier,
-                );
+                if !is_closed {
+                    crate::render::build_ingestion_dataflow(
+                        self.timely_worker,
+                        &mut self.storage_state,
+                        ingestion_id,
+                        ingestion_description,
+                        resumption_frontier,
+                    );
+                }
             }
             InternalStorageCommand::CreateSinkDataflow(sink_id, sink_description) => {
                 info!(
