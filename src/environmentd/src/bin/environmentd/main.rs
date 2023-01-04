@@ -538,6 +538,16 @@ pub struct Args {
     #[clap(long, env = "AWS_ACCOUNT_ID")]
     aws_account_id: Option<String>,
 
+    /// The list of supported AWS PrivateLink availability zone ids.
+    /// Must be zone IDs, of format e.g. "use-az1".
+    #[clap(
+        long,
+        env = "AWS_PRIVATELINK_AVAILABILITY_ZONES",
+        multiple = true,
+        use_delimiter = true
+    )]
+    aws_privatelink_availability_zones: Option<Vec<String>>,
+
     // === Tracing options. ===
     #[clap(flatten)]
     tracing: TracingCliArgs,
@@ -827,6 +837,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         segment_api_key: args.segment_api_key,
         egress_ips: args.announce_egress_ip,
         aws_account_id: args.aws_account_id,
+        aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,
         launchdarkly_sdk_key: args.launchdarkly_sdk_key,
         launchdarkly_key_map: args
             .launchdarkly_key_map

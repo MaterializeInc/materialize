@@ -27,7 +27,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
         CREATE CONNECTION privatelinkconn
         TO AWS PRIVATELINK (
             SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
-            AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+            AVAILABILITY ZONES ('use1-az1', 'use1-az2')
         )
         """
     )
@@ -118,3 +118,18 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
     mz.environmentd.sql("DROP CONNECTION privatelinkconn")
 
     not_exists(resource=f"vpcendpoint/connection-{aws_connection_id}")
+
+    with pytest.raises(
+        ProgrammingError, match='invalid AWS PrivateLink availability zone "us-east-1a"'
+    ):
+        mz.environmentd.sql(
+            dedent(
+                """\
+                CREATE CONNECTION privatelinkconn2
+                TO AWS PRIVATELINK (
+                SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+                AVAILABILITY ZONES ('use1-az2', 'us-east-1a')
+                );
+                """
+            )
+        )

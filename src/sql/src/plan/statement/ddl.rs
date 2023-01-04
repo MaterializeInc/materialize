@@ -3050,6 +3050,16 @@ pub fn plan_create_connection(
         CreateConnection::AwsPrivatelink { with_options } => {
             let c = AwsPrivatelinkConnectionOptionExtracted::try_from(with_options)?;
             let connection = AwsPrivatelinkConnection::try_from(c)?;
+            if let Some(supported_azs) = scx.catalog.aws_privatelink_availability_zones() {
+                for connection_az in &connection.availability_zones {
+                    if !supported_azs.contains(connection_az) {
+                        return Err(PlanError::InvalidPrivatelinkAvailabilityZone {
+                            name: connection_az.to_string(),
+                            supported_azs,
+                        });
+                    }
+                }
+            }
             Connection::AwsPrivatelink(connection)
         }
         CreateConnection::Ssh { with_options } => {
