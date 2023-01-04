@@ -15,18 +15,36 @@
 
 use std::fmt::{Display, Error, Formatter};
 
-use timely::progress::frontier::AntichainRef;
+use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 
 pub trait AntichainExt {
-    type Pretty: Display;
+    type Pretty<'a>: Display
+    where
+        Self: 'a;
 
-    fn pretty(&self) -> Self::Pretty;
+    fn pretty(&self) -> Self::Pretty<'_>;
+}
+
+impl<T: Display + 'static> AntichainExt for Antichain<T> {
+    type Pretty<'a> = FrontierPrinter<AntichainRef<'a, T>>;
+
+    fn pretty(&self) -> Self::Pretty<'_> {
+        self.borrow().pretty()
+    }
+}
+
+impl<T: Display + 'static> AntichainExt for MutableAntichain<T> {
+    type Pretty<'a> = FrontierPrinter<AntichainRef<'a, T>>;
+
+    fn pretty(&self) -> Self::Pretty<'_> {
+        self.frontier().pretty()
+    }
 }
 
 impl<'a, T: Display> AntichainExt for AntichainRef<'a, T> {
-    type Pretty = FrontierPrinter<Self>;
+    type Pretty<'b> = FrontierPrinter<Self> where Self: 'b;
 
-    fn pretty(&self) -> Self::Pretty {
+    fn pretty(&self) -> Self::Pretty<'a> {
         FrontierPrinter(*self)
     }
 }
