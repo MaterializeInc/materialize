@@ -121,9 +121,6 @@
 
 .sidebar {
     margin-left: auto;
-    width: 100%;
-    min-width: 200px;
-    max-width: 285px;
     position: sticky;
     top: 0;
     padding: var(--x-small) 0;
@@ -133,14 +130,22 @@
     height: 100vh;
     display: flex;
     font-size: 1.3rem;
+    overflow-x: hidden;
+
+    &,
+    ul {
+        width: 100%;
+        min-width: 200px;
+        max-width: 285px;
+
+        @media(max-width: 850px) {
+            min-width: 260px;
+        }
+    }
 
     @media (max-width: 1570px) {
         padding-left: var(--milli);
         padding-right: var(--nano);
-    }
-
-    @media(max-width: 850px) {
-        min-width: 260px;
     }
 
     &>ul>li:last-child {
