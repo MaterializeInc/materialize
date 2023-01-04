@@ -13,9 +13,11 @@
 use std::sync::Arc;
 
 use mz_ore::tracing::OpenTelemetryContext;
+use opentelemetry::trace::TraceContextExt;
 use rand::Rng;
 use tokio::sync::{oneshot, watch};
 use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use mz_compute_client::response::PeekResponse;
 use mz_ore::task;
@@ -34,6 +36,7 @@ use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
 use crate::error::AdapterError;
 use crate::metrics;
+use crate::notice::AdapterNotice;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
 
@@ -239,6 +242,19 @@ impl<S: Append + 'static> Coordinator<S> {
         mut session: Session,
         tx: ClientTransmitter<ExecuteResponse>,
     ) {
+        if session.vars().emit_trace_id_notice() {
+            let span_context = tracing::Span::current()
+                .context()
+                .span()
+                .span_context()
+                .clone();
+            if span_context.is_valid() {
+                session.add_notice(AdapterNotice::QueryTrace {
+                    trace_id: span_context.trace_id(),
+                });
+            }
+        }
+
         if let Err(err) = self.verify_portal(&mut session, &portal_name) {
             return tx.send(Err(err), session);
         }

@@ -414,6 +414,7 @@ impl ErrorResponse {
             AdapterNotice::DroppedActiveCluster { .. } => SqlState::WARNING,
             AdapterNotice::QueryTimestamp { .. } => SqlState::WARNING,
             AdapterNotice::EqualSubscribeBounds { .. } => SqlState::WARNING,
+            AdapterNotice::QueryTrace { .. } => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -567,6 +568,7 @@ impl Severity {
             AdapterNotice::DroppedActiveCluster { .. } => Severity::Notice,
             AdapterNotice::QueryTimestamp { .. } => Severity::Notice,
             AdapterNotice::EqualSubscribeBounds { .. } => Severity::Notice,
+            AdapterNotice::QueryTrace { .. } => Severity::Notice,
         }
     }
 }
