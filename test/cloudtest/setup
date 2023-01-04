@@ -19,6 +19,11 @@ if ! kind get clusters | grep -q cloudtest; then
     run kind create cluster --name=cloudtest --config=misc/kind/cluster.yaml --wait=60s
 fi
 
+# Make sure a kubeconfig file is generated and placed in $KUBECONFIG
+# of the ci-builder container, as defined in its Dockerfile
+
+run kind export kubeconfig --name cloudtest
+
 for f in misc/kind/configmaps/*; do
     run kubectl --context=kind-cloudtest apply -f "$f"
 done
