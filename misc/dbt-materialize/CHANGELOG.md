@@ -1,6 +1,6 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.3.3 - 2023-01-05
 
 * Remove the 63-character limitation on relation names. Materialize does not
   have this limitation, unlike PostgreSQL (see [dbt-core #2727](https://github.com/dbt-labs/dbt-core/pull/2727)).
