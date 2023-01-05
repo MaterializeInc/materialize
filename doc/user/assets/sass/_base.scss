@@ -145,6 +145,10 @@ body {
     font-weight: 300;
     max-width: 100vw;
     overflow-x: hidden;
+
+    @media(max-width: 500px) {
+        font-size: var(--sm);
+    }
 }
 
 input,

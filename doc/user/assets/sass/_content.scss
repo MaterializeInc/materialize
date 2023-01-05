@@ -321,6 +321,14 @@ p+p {
         font-size: var(--sm);
         font-weight: 300;
         line-height: 2.1rem;
+
+        @media(max-width: 500px) {
+            font-size: var(--xsm);
+
+            code {
+                font-size: 1.1rem;
+            }
+        }
     }
 
     tr {
@@ -339,6 +347,10 @@ p+p {
     td {
         padding: var(--nano);
         vertical-align: top;
+
+        @media(max-width: 500px) {
+            padding: var(--nano) var(--pico);
+        }
 
         pre {
             background-color: inherit;
@@ -419,6 +431,14 @@ p+p {
             padding: 1.6rem 0 1.6rem 6rem;
             border-top: 1px solid var(--divider-light);
 
+            @media(max-width: 850px) {
+                padding-left: 4.5rem;
+            }
+
+            @media(max-width: 480px) {
+                padding-left: 3rem;
+            }
+
             &:before {
                 content: counter(list-counter);
                 color: var(--orchid);
@@ -427,6 +447,16 @@ p+p {
                 position: absolute;
                 top: 0;
                 left: 1rem;
+
+                @media(max-width: 850px) {
+                    font-size: 4rem;
+                    left: .5rem;
+                }
+
+                @media(max-width: 480px) {
+                    font-size: 3.5rem;
+                    left: 0;
+                }
             }
 
             &:last-child {
@@ -510,6 +540,10 @@ p+p {
         padding: 1.6rem 1.6rem 1.6rem 9.6rem;
         position: relative;
         border-radius: 1.2rem;
+
+        @media(max-width: 510px) {
+            padding-left: 6rem;
+        }
 
         p:first-of-type {
             margin-top: 0;
@@ -659,6 +693,14 @@ p+p {
                 font-size: 1.6rem;
                 text-decoration: none;
                 font-weight: 500;
+
+                @media(max-width: 850px) {
+                    padding: 0.8rem 2.5rem;
+                }
+
+                @media(max-width: 380px) {
+                    padding: 0.8rem 1.5rem;
+                }
 
                 &:hover {
                     color: $purple;
@@ -957,6 +999,12 @@ body.dark .content {
                 color: var(--important);
             }
         }
+    }
+}
+
+.back-to-top {
+    @media(max-width: 850px) {
+        margin: var(--medium) 0;
     }
 }
 
