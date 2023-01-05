@@ -12,6 +12,7 @@ from enum import Enum
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
+    Clusterd,
     Cockroach,
     Debezium,
     Kafka,
@@ -37,6 +38,7 @@ SERVICES = [
     MinioMc(),
     # Those two are overriden below
     Materialized(),
+    Clusterd(name="storaged", storage_workers=4),
     Testdrive(),
 ]
 
