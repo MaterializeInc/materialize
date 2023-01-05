@@ -93,6 +93,14 @@ pub enum InvalidUsage<T> {
         /// The expected upper of the batch
         expected_upper: Antichain<T>,
     },
+    /// An update in the batch was beyond the expected since
+    /// This is an error when `upper.less_than(since)`
+    UpdateBeyondSince {
+        /// The maximum timestamp of updates added to the batch.
+        max_ts: T,
+        /// The expected since of the batch
+        expected_since: Antichain<T>,
+    },
     /// A [crate::batch::Batch] or [crate::fetch::LeasedBatchPart] was
     /// given to a [crate::write::WriteHandle] from a different shard
     BatchNotFromThisShard {
@@ -142,6 +150,14 @@ impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
                 f,
                 "maximum timestamp {:?} is beyond the expected batch upper: {:?}",
                 max_ts, expected_upper
+            ),
+            InvalidUsage::UpdateBeyondSince {
+                max_ts,
+                expected_since,
+            } => write!(
+                f,
+                "maximum timestamp {:?} is beyond the expected batch since: {:?}",
+                max_ts, expected_since
             ),
             InvalidUsage::BatchNotFromThisShard {
                 batch_shard,

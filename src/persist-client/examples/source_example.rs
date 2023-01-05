@@ -1281,8 +1281,7 @@ mod render {
                     .filter(move |(_update, ts)| initial_upper1.less_equal(ts))
                     .map(|(update, ts)| ((update, ()), ts, 1));
 
-                let (size_hint, _) = updates.size_hint();
-                let mut builder = write.builder(size_hint, write.upper().clone());
+                let mut builder = write.builder(write.upper().clone());
                 for ((key, val), ts, diff) in updates {
                     builder
                         .add(key, &val, ts, &diff)

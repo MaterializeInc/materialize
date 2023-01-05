@@ -145,13 +145,9 @@ where
                     for (row, ts, diff) in buffer.drain(..) {
                         if write.upper().less_equal(&ts) {
                             let builder = stashed_batches.entry(ts).or_insert_with(|| {
-                                BatchBuilderAndCounts::new(write.builder(
-                                    // TODO: the lower has to be the min because we don't know
-                                    // what the minimum ts of data we will see is. In the future,
-                                    // this lower should be declared in `finish` instead.
-                                    100,
-                                    Antichain::from_elem(Timestamp::minimum()),
-                                ))
+                                BatchBuilderAndCounts::new(
+                                    write.builder(Antichain::from_elem(Timestamp::minimum())),
+                                )
                             });
 
                             let is_value = row.is_ok();

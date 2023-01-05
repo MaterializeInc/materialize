@@ -344,7 +344,7 @@ mod tests {
     use bytes::Bytes;
 
     use crate::error::Error;
-    use crate::indexed::columnar::ColumnarRecordsVec;
+    use crate::indexed::columnar::ColumnarRecordsBuilder;
     use crate::location::Atomicity;
     use crate::mem::{MemBlob, MemBlobConfig};
     use crate::workload::DataGenerator;
@@ -382,7 +382,11 @@ mod tests {
     }
 
     fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> Vec<ColumnarRecords> {
-        updates.iter().collect::<ColumnarRecordsVec>().into_inner()
+        let mut builder = ColumnarRecordsBuilder::default();
+        for ((k, v), t, d) in updates {
+            assert!(builder.push(((&k, &v), Codec64::encode(&t), Codec64::encode(&d))));
+        }
+        vec![builder.finish()]
     }
 
     #[test]
@@ -528,24 +532,18 @@ mod tests {
         let batch0 = BlobTraceBatchPart {
             desc: batch_desc.clone(),
             index: 0,
-            updates: vec![
-                (("k".as_bytes(), "v".as_bytes()), 2, 1),
-                (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
-            ]
-            .iter()
-            .collect::<ColumnarRecordsVec>()
-            .into_inner(),
+            updates: columnar_records(vec![
+                (("k".as_bytes().to_vec(), "v".as_bytes().to_vec()), 2, 1),
+                (("k3".as_bytes().to_vec(), "v3".as_bytes().to_vec()), 2, 1),
+            ]),
         };
         let batch1 = BlobTraceBatchPart {
             desc: batch_desc.clone(),
             index: 1,
-            updates: vec![
-                (("k4".as_bytes(), "v4".as_bytes()), 2, 1),
-                (("k5".as_bytes(), "v5".as_bytes()), 2, 1),
-            ]
-            .iter()
-            .collect::<ColumnarRecordsVec>()
-            .into_inner(),
+            updates: columnar_records(vec![
+                (("k4".as_bytes().to_vec(), "v4".as_bytes().to_vec()), 2, 1),
+                (("k5".as_bytes().to_vec(), "v5".as_bytes().to_vec()), 2, 1),
+            ]),
         };
 
         let batch0_size_bytes = expect_set_trace_batch(blob.as_ref(), "b0", &batch0).await;

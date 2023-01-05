@@ -522,16 +522,18 @@ where
     /// updates is very large. Individual records, however, should be small
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
-    pub fn builder(&mut self, size_hint: usize, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
+    pub fn builder(&mut self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
         BatchBuilder::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
-            size_hint,
+            self.metrics.user.clone(),
             lower,
             Arc::clone(&self.blob),
             Arc::clone(&self.cpu_heavy_runtime),
             self.machine.shard_id().clone(),
             self.writer_id.clone(),
+            Antichain::from_elem(T::minimum()),
+            None,
         )
     }
 
@@ -554,10 +556,7 @@ where
     {
         let iter = updates.into_iter();
 
-        // This uses the iter's size_hint's lower+1 to match the logic in Vec.
-        let (size_hint_lower, _) = iter.size_hint();
-
-        let mut builder = self.builder(size_hint_lower, lower.clone());
+        let mut builder = self.builder(lower.clone());
 
         for update in iter {
             let ((k, v), t, d) = update.borrow();
