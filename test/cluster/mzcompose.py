@@ -548,7 +548,9 @@ def workflow_test_remote_storage(c: Composition) -> None:
         # the `Materialized` service, so that crashing `environmentd` does not
         # also take down CockroachDB.
         Cockroach(),
-        Materialized(options="--persist-consensus-url=postgres://root@cockroach:26257"),
+        Materialized(
+            options=["--persist-consensus-url=postgres://root@cockroach:26257"]
+        ),
     ):
         dependencies = [
             "materialized",
@@ -620,7 +622,7 @@ def workflow_test_builtin_migration(c: Composition) -> None:
             name="materialized",
             config={
                 "image": "materialize/materialized:devel-aa4128c9c485322f90ab0af2b9cb4d16e1c470c0",
-                "command": "--persist-blob-url=file:///mzdata/persist/blob",
+                "command": ["--persist-blob-url=file:///mzdata/persist/blob"],
                 "ports": [6875],
                 "volumes": [
                     "mzdata:/mzdata",
@@ -833,7 +835,9 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
     with c.override(
         Testdrive(no_reset=True),
         Materialized(
-            options="--bootstrap-system-parameter=\"allowed_cluster_replica_sizes='1', '2', 'oops'\"",
+            options=[
+                "--bootstrap-system-parameter=allowed_cluster_replica_sizes='1', '2', 'oops'"
+            ],
         ),
     ):
         dependencies = [
