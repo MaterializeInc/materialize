@@ -14,12 +14,12 @@
 use crate::jemalloc;
 use mz_ore::metrics::MetricsRegistry;
 
-#[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
+#[cfg(all(feature = "jemalloc"))]
 pub fn register_into(registry: &MetricsRegistry) {
     jemalloc::JemallocMetrics::register_into(registry);
 }
 
-#[cfg(not(all(not(target_os = "macos"), feature = "jemalloc")))]
+#[cfg(not(all(feature = "jemalloc")))]
 pub fn register_into(_registry: &MetricsRegistry) {
     // No-op if we dont use jemalloc
 }
