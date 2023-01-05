@@ -73,10 +73,6 @@ Component                            | Value     | Description
 
 ### Additional macros
 
-Macro | Purpose
-------|----------
-`mz_generate_name(identifier)` | (Deprecated) Generates a fully-qualified name given an object name. Use the native Jinja function [`{{ this }}`](https://docs.getdbt.com/reference/dbt-jinja-functions/this) to reference relations instead.
-
 We provide a `materialize-dbt-utils` package with Materialize-specific implementations of dispatched macros from `dbt-utils`. To use this package in your dbt project, check the latest installation instructions in [dbt Hub](https://hub.getdbt.com/materializeinc/materialize_dbt_utils/latest/).
 
 ### Seeds
