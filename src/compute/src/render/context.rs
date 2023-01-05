@@ -100,7 +100,7 @@ where
         scope: S,
     ) -> Self {
         use mz_ore::collections::CollectionExt as IteratorExt;
-        let dataflow_id = scope.addr().into_element();
+        let dataflow_id = scope.addr().into_first();
         let as_of_frontier = dataflow
             .as_of
             .clone()
