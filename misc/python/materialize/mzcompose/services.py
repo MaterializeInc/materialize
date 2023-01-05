@@ -85,7 +85,7 @@ class Materialized(Service):
         command += [f"--environment-id={environment_id}"]
 
         if persist_blob_url:
-            command.append(f"--persist-blob-url={persist_blob_url}")
+            command.append(f"--persist-blob-url='{persist_blob_url}'")
 
         if propagate_crashes:
             command += ["--orchestrator-process-propagate-crashes"]
