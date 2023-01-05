@@ -106,9 +106,9 @@ class StartClusterdCompute(MzcomposeAction):
             if any(self.tag.startswith(version) for version in ["v0.37", "v0.38"]):
                 clusterd = Clusterd(
                     name="clusterd_compute_1",
-                    image=f"materialize/computed:{self.tag}",
+                    image=f"materialize/clusterd:{self.tag}",
                     options=[
-                        "--controller-listen-addr=0.0.0.0:2101",
+                        "--compute-controller-listen-addr=0.0.0.0:2101",
                         "--secrets-reader=process",
                         "--secrets-reader-process-dir=/mzdata/secrets",
                     ],
@@ -117,12 +117,12 @@ class StartClusterdCompute(MzcomposeAction):
             else:
                 clusterd = Clusterd(
                     name="clusterd_compute_1",
-                    image=f"materialize/computed:{self.tag}",
+                    image=f"materialize/clusterd:{self.tag}",
                 )
         print(f"Starting Compute using image {clusterd.config.get('image')}")
 
         with c.override(clusterd):
-            c.up("clusterd_compute_1")
+            c.start_and_wait_for_tcp(services=["clusterd_compute_1"])
 
 
 class RestartRedpandaDebezium(MzcomposeAction):

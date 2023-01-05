@@ -112,16 +112,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     if args.tests in ["all", "non-ssl"]:
         for version in tested_versions:
-            priors = [f"v{v}" for v in all_versions if v < version]
+            priors = [v for v in all_versions if v <= version]
             test_upgrade_from_version(c, f"v{version}", priors, filter=args.filter)
 
-        test_upgrade_from_version(c, "current_source", priors=["*"], filter=args.filter)
+        test_upgrade_from_version(c, "current_source", priors=[], filter=args.filter)
 
     if args.tests in ["all", "ssl"]:
         kafka, schema_registry, testdrive = ssl_services()
         with c.override(kafka, schema_registry, testdrive):
             for version in tested_versions:
-                priors = [f"v{v}" for v in all_versions if v < version]
+                priors = [v for v in all_versions if v <= version]
                 test_upgrade_from_version(
                     c, f"v{version}", priors, filter=args.filter, style="ssl-"
                 )
@@ -129,9 +129,28 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def test_upgrade_from_version(
-    c: Composition, from_version: str, priors: List[str], filter: str, style: str = ""
+    c: Composition,
+    from_version: str,
+    priors: List[Version],
+    filter: str,
+    style: str = "",
 ) -> None:
     print(f"===>>> Testing upgrade from Materialize {from_version} to current_source.")
+
+    # If we are testing vX.Y.Z, the glob should include all patch versions 0 to Z
+    prior_patch_versions = []
+    for prior in priors:
+        for prior_patch_version in range(0, prior.patch):
+            prior_patch_versions.append(
+                Version(major=prior.major, minor=prior.minor, patch=prior_patch_version)
+            )
+
+    priors = priors + prior_patch_versions
+    priors.sort()
+    priors = [f"v{prior}" for prior in priors]
+
+    if len(priors) == 0:
+        priors = ["*"]
 
     version_glob = "{" + ",".join(["any_version", *priors, from_version]) + "}"
     print(">>> Version glob pattern: " + version_glob)

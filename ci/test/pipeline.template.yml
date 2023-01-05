@@ -286,6 +286,7 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 60
     artifact_paths: junit_mzcompose_*.xml
+    inputs: [doc/user/content/releases]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: upgrade
