@@ -140,6 +140,11 @@ Apache License, Version 2.0. */}}
       const sidebarCloseButton = document.querySelector("button.close-topics");
       const sidebarWrapper = document.querySelector(".sidebar-wrapper");
       const backdrop = document.querySelector(".backdrop");
+      const allTables  = document.querySelectorAll("table");
+
+      allTables.forEach(table => {
+       table.outerHTML = `<div class="table-container">${table.outerHTML}</div>`;
+      })
 
       const toggleBodyOverflow = (boolean) => {
         if (boolean) {
