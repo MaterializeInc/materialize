@@ -408,6 +408,7 @@ impl Usage {
             secrets_reader,
             egress_ips: vec![],
             aws_principal_context: None,
+            aws_privatelink_availability_zones: None,
             system_parameter_frontend: None,
         })
         .await?;

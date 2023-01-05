@@ -193,6 +193,7 @@ pub struct CatalogState {
     system_configuration: SystemVars,
     egress_ips: Vec<Ipv4Addr>,
     aws_principal_context: Option<AwsPrincipalContext>,
+    aws_privatelink_availability_zones: Option<HashSet<String>>,
 }
 
 impl CatalogState {
@@ -2225,6 +2226,7 @@ impl<S: Append> Catalog<S> {
                 system_configuration: SystemVars::default(),
                 egress_ips: config.egress_ips,
                 aws_principal_context: config.aws_principal_context,
+                aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             },
             transient_revision: 0,
             storage: Arc::new(Mutex::new(config.storage)),
@@ -3306,6 +3308,7 @@ impl<S: Append> Catalog<S> {
             secrets_reader,
             egress_ips: vec![],
             aws_principal_context: None,
+            aws_privatelink_availability_zones: None,
             system_parameter_frontend: None,
         })
         .await?;
@@ -6130,6 +6133,10 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn now(&self) -> EpochMillis {
         (self.state.config().now)()
+    }
+
+    fn aws_privatelink_availability_zones(&self) -> Option<HashSet<String>> {
+        self.state.aws_privatelink_availability_zones.clone()
     }
 }
 

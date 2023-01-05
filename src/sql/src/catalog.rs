@@ -201,6 +201,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// this means the Unix epoch. This can safely be mocked in tests and start
     /// at 0.
     fn now(&self) -> EpochMillis;
+
+    /// Returns the set of supported AWS PrivateLink availability zone ids.
+    fn aws_privatelink_availability_zones(&self) -> Option<HashSet<String>>;
 }
 
 /// Configuration associated with a catalog.
@@ -925,6 +928,10 @@ impl SessionCatalog for DummyCatalog {
 
     fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
         name
+    }
+
+    fn aws_privatelink_availability_zones(&self) -> Option<HashSet<String>> {
+        unimplemented!()
     }
 }
 

@@ -880,6 +880,7 @@ impl RunnerInner {
             segment_api_key: None,
             egress_ips: vec![],
             aws_account_id: None,
+            aws_privatelink_availability_zones: None,
             launchdarkly_sdk_key: None,
             launchdarkly_key_map: Default::default(),
             config_sync_loop_interval: None,

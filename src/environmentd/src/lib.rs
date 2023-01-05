@@ -196,6 +196,8 @@ pub struct Config {
     pub egress_ips: Vec<Ipv4Addr>,
     /// 12-digit AWS account id, which will be used to generate an AWS Principal.
     pub aws_account_id: Option<String>,
+    /// Supported AWS PrivateLink availability zone ids.
+    pub aws_privatelink_availability_zones: Option<Vec<String>>,
     /// An SDK key for LaunchDarkly. Enables system parameter synchronization
     /// with LaunchDarkly.
     pub launchdarkly_sdk_key: Option<String>,
@@ -415,6 +417,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         consolidations_tx,
         consolidations_rx,
         aws_account_id: config.aws_account_id,
+        aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
     })
     .await?;
 

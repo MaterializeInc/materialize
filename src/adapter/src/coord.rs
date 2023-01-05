@@ -271,6 +271,7 @@ pub struct Config<S> {
     pub consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
     pub consolidations_rx: mpsc::UnboundedReceiver<Vec<mz_stash::Id>>,
     pub aws_account_id: Option<String>,
+    pub aws_privatelink_availability_zones: Option<Vec<String>>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -1100,6 +1101,7 @@ pub async fn serve<S: Append + 'static>(
         consolidations_tx,
         consolidations_rx,
         aws_account_id,
+        aws_privatelink_availability_zones,
         system_parameter_frontend,
     }: Config<S>,
 ) -> Result<(Handle, Client), AdapterError> {
@@ -1133,6 +1135,9 @@ pub async fn serve<S: Append + 'static>(
             None
         };
 
+    let aws_privatelink_availability_zones = aws_privatelink_availability_zones
+        .map(|azs_vec| HashSet::from_iter(azs_vec.iter().cloned()));
+
     info!("coordinator init: opening catalog");
     let (mut catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
         Catalog::open(catalog::Config {
@@ -1152,6 +1157,7 @@ pub async fn serve<S: Append + 'static>(
             secrets_reader: secrets_controller.reader(),
             egress_ips,
             aws_principal_context,
+            aws_privatelink_availability_zones,
             system_parameter_frontend,
         })
         .await?;
