@@ -350,7 +350,15 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                         let row = pg_client.query_one("SELECT current_user", &[]).unwrap();
                         assert_eq!(row.get::<_, String>(0), *user);
                     }
-                    Assert::Err(check) => check(pg_client.err().unwrap()),
+                    Assert::Err(check) => {
+                        // Due to delayed startup, we must attempt a query to
+                        // check if there was a login error.
+                        let err = match pg_client {
+                            Ok(mut pg_client) => pg_client.query_one("SELECT 1", &[]).unwrap_err(),
+                            Err(err) => err,
+                        };
+                        check(err)
+                    }
                 }
             }
             TestCase::Http {

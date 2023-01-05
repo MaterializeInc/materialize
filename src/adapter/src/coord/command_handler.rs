@@ -12,15 +12,14 @@
 
 use std::sync::Arc;
 
-use mz_ore::tracing::OpenTelemetryContext;
 use opentelemetry::trace::TraceContextExt;
-use rand::Rng;
 use tokio::sync::{oneshot, watch};
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use mz_compute_client::response::PeekResponse;
 use mz_ore::task;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::ScalarType;
 use mz_sql::ast::{InsertSource, Query, Raw, SetExpr, Statement};
 use mz_sql::catalog::SessionCatalog as _;
@@ -208,8 +207,6 @@ impl<S: Append + 'static> Coordinator<S> {
             ));
         }
 
-        let secret_key = rand::thread_rng().gen();
-
         let session_type = metrics::session_type_label_value(&session);
         self.metrics
             .active_sessions
@@ -219,19 +216,14 @@ impl<S: Append + 'static> Coordinator<S> {
             session.conn_id(),
             ConnMeta {
                 cancel_tx,
-                secret_key,
+                secret_key: session.secret_key(),
                 notice_tx: session.retain_notice_transmitter(),
                 drop_sinks: Vec::new(),
             },
         );
 
-        ClientTransmitter::new(tx, self.internal_cmd_tx.clone()).send(
-            Ok(StartupResponse {
-                messages,
-                secret_key,
-            }),
-            session,
-        )
+        ClientTransmitter::new(tx, self.internal_cmd_tx.clone())
+            .send(Ok(StartupResponse { messages }), session)
     }
 
     /// Handles an execute command.

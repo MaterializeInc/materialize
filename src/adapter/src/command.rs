@@ -119,8 +119,6 @@ pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send>>;
 /// The response to [`ConnClient::startup`](crate::ConnClient::startup).
 #[derive(Debug)]
 pub struct StartupResponse {
-    /// An opaque secret associated with this session.
-    pub secret_key: u32,
     /// Notifications associated with session startup.
     pub messages: Vec<StartupMessage>,
 }
