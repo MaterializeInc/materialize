@@ -167,14 +167,6 @@ impl<S: Append + 'static> Coordinator<S> {
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
-        if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
-            let _ = tx.send(Response {
-                result: Err(e.into()),
-                session,
-            });
-            return;
-        }
-
         if self
             .catalog
             .for_session(&session)
@@ -198,6 +190,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 });
                 return;
             }
+        }
+
+        if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
+            let _ = tx.send(Response {
+                result: Err(e.into()),
+                session,
+            });
+            return;
         }
 
         let mut messages = vec![];
