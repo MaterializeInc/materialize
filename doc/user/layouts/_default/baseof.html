@@ -141,30 +141,45 @@ Apache License, Version 2.0. */}}
       const sidebarWrapper = document.querySelector(".sidebar-wrapper");
       const backdrop = document.querySelector(".backdrop");
 
+      const toggleBodyOverflow = (boolean) => {
+        if (boolean) {
+          document.documentElement.style.overflowY = "scroll";
+        } else {
+          document.documentElement.style.overflowY = "hidden";
+        }
+      };
+
       sidebarOpenButton.addEventListener("click", () => {
         sidebarWrapper.classList.add("shown");
         backdrop.style.display = "block";
+        toggleBodyOverflow(false);
         const searchButton = document.querySelector("button.DocSearch-Button");
         searchButton.focus();
         document.activeElement.focus();
       });
 
-      sidebarCloseButton.addEventListener("click", () => {
+      const closeSidebar = () => {
         sidebarWrapper.classList.remove("shown");
         backdrop.style.display = "none";
+        toggleBodyOverflow(true);
+      };
+
+      sidebarCloseButton.addEventListener("click", () => {
+        closeSidebar();
       });
 
       backdrop.addEventListener("click", () => {
-        sidebarWrapper.classList.remove("shown");
-        backdrop.style.display = "none";
+        closeSidebar();
       });
 
       menuToggle.addEventListener("click", () => {
         menuToggle.classList.toggle("open");
         if (menuToggle.classList.contains("open")) {
           mobileLinks.style.display = "block";
+          toggleBodyOverflow(false);
         } else {
           mobileLinks.style.display = "none";
+          toggleBodyOverflow(true);
         }
       });
 
@@ -174,6 +189,7 @@ Apache License, Version 2.0. */}}
         if (!e.matches) {
           mobileLinks.style.display = "none";
           menuToggle.classList.remove("open");
+          toggleBodyOverflow(true);
         }
       });
 
