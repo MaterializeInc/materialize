@@ -976,6 +976,9 @@ pub struct ShardsMetrics {
     encoded_batch_size: mz_ore::metrics::UIntGaugeVec,
     largest_batch_size: mz_ore::metrics::UIntGaugeVec,
     seqnos_held: mz_ore::metrics::UIntGaugeVec,
+    current_blobs: mz_ore::metrics::UIntGaugeVec,
+    live_blobs: mz_ore::metrics::UIntGaugeVec,
+    live_diffs: mz_ore::metrics::UIntGaugeVec,
     gc_finished: mz_ore::metrics::IntCounterVec,
     compaction_applied: mz_ore::metrics::IntCounterVec,
     cmd_succeeded: mz_ore::metrics::IntCounterVec,
@@ -1046,6 +1049,21 @@ impl ShardsMetrics {
                 help: "maximum count of gc-ineligible states by shard",
                 var_labels: ["shard"],
             )),
+            current_blobs: registry.register(metric!(
+                name: "mz_persist_shard_current_blobs",
+                help: "the total number of batch blobs that constitute the current state",
+                var_labels: ["shard"],
+            )),
+            live_blobs: registry.register(metric!(
+                name: "mz_persist_shard_live_blobs",
+                help: "the current number of batch blobs that are referenced by any live diff",
+                var_labels: ["shard"],
+            )),
+            live_diffs: registry.register(metric!(
+                name: "mz_persist_shard_live_diffs",
+                help: "the number of diffs (or, alternatively, the number of seqnos) present in consensus state",
+                var_labels: ["shard"],
+            )),
             gc_finished: registry.register(metric!(
                 name: "mz_persist_shard_gc_finished",
                 help: "count of garbage collections finished by shard",
@@ -1112,6 +1130,9 @@ pub struct ShardMetrics {
     encoded_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     largest_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) current_blobs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) live_blobs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) live_diffs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     // These are already counted elsewhere in aggregate, so delete them if we
     // remove per-shard labels.
     pub gc_finished: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
@@ -1150,6 +1171,15 @@ impl ShardMetrics {
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             seqnos_held: shards_metrics
                 .seqnos_held
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            current_blobs: shards_metrics
+                .current_blobs
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            live_blobs: shards_metrics
+                .live_blobs
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            live_diffs: shards_metrics
+                .live_diffs
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             gc_finished: shards_metrics
                 .gc_finished
