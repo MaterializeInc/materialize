@@ -437,10 +437,46 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Entry point for applying an internal storage command.
     pub fn handle_internal_storage_command(
         &mut self,
-        _async_worker: &mut AsyncStorageWorker<mz_repr::Timestamp>,
+        async_worker: &mut AsyncStorageWorker<mz_repr::Timestamp>,
         internal_cmd: InternalStorageCommand,
     ) {
         match internal_cmd {
+            InternalStorageCommand::SuspendAndRestart(id) => {
+                let maybe_ingestion = self.storage_state.ingestions.get(&id).cloned();
+
+                if let Some(ingestion_description) = maybe_ingestion {
+                    // Yank the token of the previously existing source
+                    // dataflow.
+                    let maybe_token = self.storage_state.source_tokens.remove(&id);
+
+                    if maybe_token.is_none() {
+                        // Something has dropped the source. Make sure we don't
+                        // accidentally re-create it.
+                        return;
+                    }
+
+                    // This needs to be done by one worker, which will
+                    // broadcasts a `CreateIngestionDataflow` command to all
+                    // workers based on the response that contains the
+                    // resumption upper.
+                    //
+                    // Doing this separately on each worker could lead to
+                    // differing resume_uppers which might lead to all kinds of
+                    // mayhem.
+                    //
+                    // TODO(aljoscha): If we ever become worried that this is
+                    // putting undue pressure on worker 0 we can pick the
+                    // designated worker for a source/sink based on `id.hash()`.
+                    if self.timely_worker.index() == 0 {
+                        async_worker.calculate_resume_upper(id, ingestion_description);
+                    }
+
+                    // Continue with other commands.
+                    return;
+                }
+
+                panic!("got InternalStorageCommand::SuspendAndRestart for something that is not a source: {id}");
+            }
             InternalStorageCommand::CreateIngestionDataflow {
                 id: ingestion_id,
                 ingestion_description,

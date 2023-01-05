@@ -110,6 +110,13 @@ where
     // a million fields
     let resumption_calculator = description.clone();
 
+    let internal_cmd_tx = Rc::clone(
+        storage_state
+            .internal_cmd_tx
+            .as_ref()
+            .expect("missing internal command sender"),
+    );
+
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
     let ((ok_sources, err_source), capability) = match connection {
@@ -120,6 +127,7 @@ where
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
+                internal_cmd_tx,
             );
             let oks: Vec<_> = oks.into_iter().map(SourceType::Delimited).collect();
             ((oks, err), cap)
@@ -131,6 +139,7 @@ where
                 DelimitedValueSourceConnection(connection),
                 storage_state.connection_context.clone(),
                 resumption_calculator,
+                internal_cmd_tx,
             );
             let oks = oks.into_iter().map(SourceType::Delimited).collect();
             ((oks, err), cap)
@@ -142,6 +151,7 @@ where
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
+                internal_cmd_tx,
             );
             let oks = oks.into_iter().map(SourceType::ByteStream).collect();
             ((oks, err), cap)
@@ -153,6 +163,7 @@ where
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
+                internal_cmd_tx,
             );
             let oks = oks.into_iter().map(SourceType::Row).collect();
             ((oks, err), cap)
@@ -164,6 +175,7 @@ where
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
+                internal_cmd_tx,
             );
             let oks = oks.into_iter().map(SourceType::Row).collect();
             ((oks, err), cap)
@@ -175,6 +187,7 @@ where
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
+                internal_cmd_tx,
             );
             let oks: Vec<_> = oks.into_iter().map(SourceType::Delimited).collect();
             ((oks, err), cap)
