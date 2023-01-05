@@ -56,7 +56,6 @@ where
         &mut self,
         inputs: Vec<CollectionBundle<G, Row, T>>,
         linear_plan: LinearJoinPlan,
-        scope: &mut G,
     ) -> CollectionBundle<G, Row, T> {
         // Collect all error streams, and concatenate them at the end.
         let mut errors = Vec::new();
@@ -155,7 +154,7 @@ where
             // Return joined results and all produced errors collected together.
             CollectionBundle::from_collections(
                 joined,
-                differential_dataflow::collection::concatenate(scope, errors),
+                differential_dataflow::collection::concatenate(&mut self.scope, errors),
             )
         } else {
             panic!("Unexpectedly arranged join output");

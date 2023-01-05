@@ -70,6 +70,10 @@ where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
+    /// The scope within which all managed collections exist.
+    ///
+    /// It is an error to add any collections not contained in this scope.
+    pub(crate) scope: S,
     /// The debug name of the dataflow associated with this context.
     pub debug_name: String,
     /// The Timely ID of the dataflow associated with this context.
@@ -91,16 +95,19 @@ where
     S::Timestamp: Lattice + Refines<mz_repr::Timestamp>,
 {
     /// Creates a new empty Context.
-    pub fn for_dataflow<Plan>(
+    pub fn for_dataflow_in<Plan>(
         dataflow: &DataflowDescription<Plan, CollectionMetadata>,
-        dataflow_id: usize,
+        scope: S,
     ) -> Self {
+        use mz_ore::collections::CollectionExt as IteratorExt;
+        let dataflow_id = scope.addr().into_first();
         let as_of_frontier = dataflow
             .as_of
             .clone()
             .unwrap_or_else(|| Antichain::from_elem(Timestamp::minimum()));
 
         Self {
+            scope,
             debug_name: dataflow.debug_name.clone(),
             dataflow_id,
             as_of_frontier,

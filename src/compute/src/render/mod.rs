@@ -121,7 +121,6 @@ use timely::PartialOrder;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_expr::Id;
-use mz_ore::collections::CollectionExt as IteratorExt;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
@@ -243,10 +242,8 @@ pub fn build_compute_dataflow<A: Allocate>(
 
         if recursive {
             scope.clone().iterative::<usize, _, _>(|region| {
-                let mut context = crate::render::context::Context::for_dataflow(
-                    &dataflow,
-                    scope.addr().into_element(),
-                );
+                let mut context =
+                    crate::render::context::Context::for_dataflow_in(&dataflow, region.clone());
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -259,14 +256,7 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
-                    context.import_index(
-                        compute_state,
-                        &mut tokens,
-                        scope,
-                        region,
-                        *idx_id,
-                        &idx.0,
-                    );
+                    context.import_index(compute_state, &mut tokens, *idx_id, &idx.0);
                 }
 
                 // Build declared objects.
@@ -296,7 +286,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                             variables.insert(Id::Local(*id), (oks_v, err_v));
                         }
                         for (id, value) in ids.into_iter().zip(values.into_iter()) {
-                            let bundle = context.render_plan(value, region, region.index());
+                            let bundle = context.render_plan(value);
                             // We need to ensure that the raw collection exists, but do not have enough information
                             // here to cause that to happen.
                             let (oks, err) = bundle.collection.clone().unwrap();
@@ -306,10 +296,10 @@ pub fn build_compute_dataflow<A: Allocate>(
                             err_v.set(&err);
                         }
 
-                        let bundle = context.render_plan(*body, region, region.index());
+                        let bundle = context.render_plan(*body);
                         context.insert_id(Id::Global(object.id), bundle);
                     } else {
-                        context.build_object(region, object);
+                        context.build_object(object);
                     }
                 }
 
@@ -331,10 +321,8 @@ pub fn build_compute_dataflow<A: Allocate>(
             });
         } else {
             scope.clone().region_named(&build_name, |region| {
-                let mut context = crate::render::context::Context::for_dataflow(
-                    &dataflow,
-                    scope.addr().into_element(),
-                );
+                let mut context =
+                    crate::render::context::Context::for_dataflow_in(&dataflow, region.clone());
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -347,19 +335,12 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
-                    context.import_index(
-                        compute_state,
-                        &mut tokens,
-                        scope,
-                        region,
-                        *idx_id,
-                        &idx.0,
-                    );
+                    context.import_index(compute_state, &mut tokens, *idx_id, &idx.0);
                 }
 
                 // Build declared objects.
                 for object in dataflow.objects_to_build {
-                    context.build_object(region, object);
+                    context.build_object(object);
                 }
 
                 // Export declared indexes.
@@ -428,8 +409,6 @@ where
         &mut self,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-        scope: &mut G,
-        region: &mut Child<'g, G, T>,
         idx_id: GlobalId,
         idx: &IndexDesc,
     ) {
@@ -441,19 +420,19 @@ where
 
             let token = traces.to_drop().clone();
             let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
-                scope,
+                &self.scope.parent,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
             );
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
-                scope,
+                &self.scope.parent,
                 &format!("ErrIndex({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
             );
-            let ok_arranged = ok_arranged.enter(region);
-            let err_arranged = err_arranged.enter(region);
+            let ok_arranged = ok_arranged.enter(&self.scope);
+            let err_arranged = err_arranged.enter(&self.scope);
             self.update_id(
                 Id::Global(idx.on_id),
                 CollectionBundle::from_expressions(
@@ -480,9 +459,9 @@ where
     G: Scope,
     G::Timestamp: RenderTimestamp,
 {
-    pub(crate) fn build_object(&mut self, scope: &mut G, object: BuildDesc<Plan>) {
+    pub(crate) fn build_object(&mut self, object: BuildDesc<Plan>) {
         // First, transform the relation expression into a render plan.
-        let bundle = self.render_plan(object.plan, scope, scope.index());
+        let bundle = self.render_plan(object.plan);
         self.insert_id(Id::Global(object.id), bundle);
     }
 }
@@ -618,12 +597,7 @@ where
     ///
     /// The return type reflects the uncertainty about the data representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
-    pub fn render_plan(
-        &mut self,
-        plan: Plan,
-        scope: &mut G,
-        worker_index: usize,
-    ) -> CollectionBundle<G, Row> {
+    pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G, Row> {
         match plan {
             Plan::Constant { rows } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.
@@ -649,7 +623,7 @@ where
                             None
                         }
                     })
-                    .to_stream(scope)
+                    .to_stream(&mut self.scope)
                     .as_collection();
 
                 let mut error_time: mz_repr::Timestamp = Timestamp::minimum();
@@ -663,7 +637,7 @@ where
                             1,
                         )
                     })
-                    .to_stream(scope)
+                    .to_stream(&mut self.scope)
                     .as_collection();
 
                 CollectionBundle::from_collections(ok_collection, err_collection)
@@ -705,11 +679,11 @@ where
             }
             Plan::Let { id, value, body } => {
                 // Render `value` and bind it to `id`. Complain if this shadows an id.
-                let value = self.render_plan(*value, scope, worker_index);
+                let value = self.render_plan(*value);
                 let prebound = self.insert_id(Id::Local(id), value);
                 assert!(prebound.is_none());
 
-                let body = self.render_plan(*body, scope, worker_index);
+                let body = self.render_plan(*body);
                 self.remove_id(Id::Local(id));
                 body
             }
@@ -721,7 +695,7 @@ where
                 mfp,
                 input_key_val,
             } => {
-                let input = self.render_plan(*input, scope, worker_index);
+                let input = self.render_plan(*input);
                 // If `mfp` is non-trivial, we should apply it and produce a collection.
                 if mfp.is_identity() {
                     input
@@ -738,20 +712,20 @@ where
                 mfp,
                 input_key,
             } => {
-                let input = self.render_plan(*input, scope, worker_index);
+                let input = self.render_plan(*input);
                 self.render_flat_map(input, func, exprs, mfp, input_key)
             }
             Plan::Join { inputs, plan } => {
                 let inputs = inputs
                     .into_iter()
-                    .map(|input| self.render_plan(input, scope, worker_index))
+                    .map(|input| self.render_plan(input))
                     .collect();
                 match plan {
                     mz_compute_client::plan::join::JoinPlan::Linear(linear_plan) => {
-                        self.render_join(inputs, linear_plan, scope)
+                        self.render_join(inputs, linear_plan)
                     }
                     mz_compute_client::plan::join::JoinPlan::Delta(delta_plan) => {
-                        self.render_delta_join(inputs, delta_plan, scope)
+                        self.render_delta_join(inputs, delta_plan)
                     }
                 }
             }
@@ -761,15 +735,15 @@ where
                 plan,
                 input_key,
             } => {
-                let input = self.render_plan(*input, scope, worker_index);
+                let input = self.render_plan(*input);
                 self.render_reduce(input, key_val_plan, plan, input_key)
             }
             Plan::TopK { input, top_k_plan } => {
-                let input = self.render_plan(*input, scope, worker_index);
+                let input = self.render_plan(*input);
                 self.render_topk(input, top_k_plan)
             }
             Plan::Negate { input } => {
-                let input = self.render_plan(*input, scope, worker_index);
+                let input = self.render_plan(*input);
                 let (oks, errs) = input.as_specific_collection(None);
                 CollectionBundle::from_collections(oks.negate(), errs)
             }
@@ -777,21 +751,19 @@ where
                 input,
                 threshold_plan,
             } => {
-                let input = self.render_plan(*input, scope, worker_index);
+                let input = self.render_plan(*input);
                 self.render_threshold(input, threshold_plan)
             }
             Plan::Union { inputs } => {
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for input in inputs.into_iter() {
-                    let (os, es) = self
-                        .render_plan(input, scope, worker_index)
-                        .as_specific_collection(None);
+                    let (os, es) = self.render_plan(input).as_specific_collection(None);
                     oks.push(os);
                     errs.push(es);
                 }
-                let oks = differential_dataflow::collection::concatenate(scope, oks);
-                let errs = differential_dataflow::collection::concatenate(scope, errs);
+                let oks = differential_dataflow::collection::concatenate(&mut self.scope, oks);
+                let errs = differential_dataflow::collection::concatenate(&mut self.scope, errs);
                 CollectionBundle::from_collections(oks, errs)
             }
             Plan::ArrangeBy {
@@ -800,7 +772,7 @@ where
                 input_key,
                 input_mfp,
             } => {
-                let input = self.render_plan(*input, scope, worker_index);
+                let input = self.render_plan(*input);
                 input.ensure_collections(keys, input_key, input_mfp, self.until.clone())
             }
         }
