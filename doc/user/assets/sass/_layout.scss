@@ -359,7 +359,9 @@
     &-links {
         display: flex;
         justify-content: center;
-        gap: var(--small);
+        flex-wrap: wrap;
+        column-gap: var(--small);
+        row-gap: var(--milli);
         font-size: var(--sm);
     }
 
