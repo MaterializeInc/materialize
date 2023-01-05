@@ -387,8 +387,46 @@ SELECT * FROM ov
       "id": "Explained Query",
       "plan": {
         "TopK": {
+          "top_k_plan": {
+            "Basic": {
+              "group_key": [],
+              "order_key": [
+                {
+                  "column": 1,
+                  "desc": false,
+                  "nulls_last": true
+                },
+                {
+                  "column": 0,
+                  "desc": true,
+                  "nulls_last": false
+                }
+              ],
+              "limit": 5,
+              "offset": 0,
+              "arity": 2
+            }
+          },
           "input": {
             "ArrangeBy": {
+              "forms": {
+                "raw": true,
+                "arranged": []
+              },
+              "input_key": [
+                {
+                  "Column": 0
+                }
+              ],
+              "input_mfp": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0,
+                  1
+                ],
+                "input_arity": 2
+              },
               "input": {
                 "Get": {
                   "id": {
@@ -417,45 +455,7 @@ SELECT * FROM ov
                   },
                   "plan": "PassArrangements"
                 }
-              },
-              "forms": {
-                "raw": true,
-                "arranged": []
-              },
-              "input_key": [
-                {
-                  "Column": 0
-                }
-              ],
-              "input_mfp": {
-                "expressions": [],
-                "predicates": [],
-                "projection": [
-                  0,
-                  1
-                ],
-                "input_arity": 2
               }
-            }
-          },
-          "top_k_plan": {
-            "Basic": {
-              "group_key": [],
-              "order_key": [
-                {
-                  "column": 1,
-                  "desc": false,
-                  "nulls_last": true
-                },
-                {
-                  "column": 0,
-                  "desc": true,
-                  "nulls_last": false
-                }
-              ],
-              "limit": 5,
-              "offset": 0,
-              "arity": 2
             }
           }
         }
@@ -477,8 +477,48 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
       "id": "Explained Query",
       "plan": {
         "Threshold": {
+          "threshold_plan": {
+            "Basic": {
+              "ensure_arrangement": [
+                [
+                  {
+                    "Column": 0
+                  }
+                ],
+                {
+                  "0": 0
+                },
+                []
+              ]
+            }
+          },
           "input": {
             "ArrangeBy": {
+              "forms": {
+                "raw": false,
+                "arranged": [
+                  [
+                    [
+                      {
+                        "Column": 0
+                      }
+                    ],
+                    {
+                      "0": 0
+                    },
+                    []
+                  ]
+                ]
+              },
+              "input_key": null,
+              "input_mfp": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0
+                ],
+                "input_arity": 1
+              },
               "input": {
                 "Union": {
                   "inputs": [
@@ -557,47 +597,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                     }
                   ]
                 }
-              },
-              "forms": {
-                "raw": false,
-                "arranged": [
-                  [
-                    [
-                      {
-                        "Column": 0
-                      }
-                    ],
-                    {
-                      "0": 0
-                    },
-                    []
-                  ]
-                ]
-              },
-              "input_key": null,
-              "input_mfp": {
-                "expressions": [],
-                "predicates": [],
-                "projection": [
-                  0
-                ],
-                "input_arity": 1
               }
-            }
-          },
-          "threshold_plan": {
-            "Basic": {
-              "ensure_arrangement": [
-                [
-                  {
-                    "Column": 0
-                  }
-                ],
-                {
-                  "0": 0
-                },
-                []
-              ]
             }
           }
         }
@@ -630,8 +630,46 @@ VIEW ov
       "id": "Explained Query",
       "plan": {
         "TopK": {
+          "top_k_plan": {
+            "Basic": {
+              "group_key": [],
+              "order_key": [
+                {
+                  "column": 1,
+                  "desc": false,
+                  "nulls_last": true
+                },
+                {
+                  "column": 0,
+                  "desc": true,
+                  "nulls_last": false
+                }
+              ],
+              "limit": 5,
+              "offset": 0,
+              "arity": 2
+            }
+          },
           "input": {
             "ArrangeBy": {
+              "forms": {
+                "raw": true,
+                "arranged": []
+              },
+              "input_key": [
+                {
+                  "Column": 0
+                }
+              ],
+              "input_mfp": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0,
+                  1
+                ],
+                "input_arity": 2
+              },
               "input": {
                 "Get": {
                   "id": {
@@ -660,45 +698,7 @@ VIEW ov
                   },
                   "plan": "PassArrangements"
                 }
-              },
-              "forms": {
-                "raw": true,
-                "arranged": []
-              },
-              "input_key": [
-                {
-                  "Column": 0
-                }
-              ],
-              "input_mfp": {
-                "expressions": [],
-                "predicates": [],
-                "projection": [
-                  0,
-                  1
-                ],
-                "input_arity": 2
               }
-            }
-          },
-          "top_k_plan": {
-            "Basic": {
-              "group_key": [],
-              "order_key": [
-                {
-                  "column": 1,
-                  "desc": false,
-                  "nulls_last": true
-                },
-                {
-                  "column": 0,
-                  "desc": true,
-                  "nulls_last": false
-                }
-              ],
-              "limit": 5,
-              "offset": 0,
-              "arity": 2
             }
           }
         }
@@ -724,8 +724,48 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
           "id": 0,
           "value": {
             "Threshold": {
+              "threshold_plan": {
+                "Basic": {
+                  "ensure_arrangement": [
+                    [
+                      {
+                        "Column": 0
+                      }
+                    ],
+                    {
+                      "0": 0
+                    },
+                    []
+                  ]
+                }
+              },
               "input": {
                 "ArrangeBy": {
+                  "forms": {
+                    "raw": false,
+                    "arranged": [
+                      [
+                        [
+                          {
+                            "Column": 0
+                          }
+                        ],
+                        {
+                          "0": 0
+                        },
+                        []
+                      ]
+                    ]
+                  },
+                  "input_key": null,
+                  "input_mfp": {
+                    "expressions": [],
+                    "predicates": [],
+                    "projection": [
+                      0
+                    ],
+                    "input_arity": 1
+                  },
                   "input": {
                     "Union": {
                       "inputs": [
@@ -804,47 +844,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                         }
                       ]
                     }
-                  },
-                  "forms": {
-                    "raw": false,
-                    "arranged": [
-                      [
-                        [
-                          {
-                            "Column": 0
-                          }
-                        ],
-                        {
-                          "0": 0
-                        },
-                        []
-                      ]
-                    ]
-                  },
-                  "input_key": null,
-                  "input_mfp": {
-                    "expressions": [],
-                    "predicates": [],
-                    "projection": [
-                      0
-                    ],
-                    "input_arity": 1
                   }
-                }
-              },
-              "threshold_plan": {
-                "Basic": {
-                  "ensure_arrangement": [
-                    [
-                      {
-                        "Column": 0
-                      }
-                    ],
-                    {
-                      "0": 0
-                    },
-                    []
-                  ]
                 }
               }
             }
@@ -1025,10 +1025,125 @@ SELECT x * 5 FROM cte WHERE x = 5
       "id": "Explained Query",
       "plan": {
         "Mfp": {
+          "mfp": {
+            "expressions": [
+              {
+                "Literal": [
+                  {
+                    "Ok": {
+                      "data": [
+                        4,
+                        25,
+                        0,
+                        0,
+                        0
+                      ]
+                    }
+                  },
+                  {
+                    "scalar_type": "Int32",
+                    "nullable": false
+                  }
+                ]
+              }
+            ],
+            "predicates": [
+              [
+                1,
+                {
+                  "CallBinary": {
+                    "func": "Eq",
+                    "expr1": {
+                      "Column": 0
+                    },
+                    "expr2": {
+                      "Literal": [
+                        {
+                          "Ok": {
+                            "data": [
+                              4,
+                              5,
+                              0,
+                              0,
+                              0
+                            ]
+                          }
+                        },
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": false
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            ],
+            "projection": [
+              1
+            ],
+            "input_arity": 1
+          },
+          "input_key_val": [
+            [
+              {
+                "Column": 0
+              }
+            ],
+            {
+              "data": [
+                4,
+                5,
+                0,
+                0,
+                0
+              ]
+            }
+          ],
           "input": {
             "Threshold": {
+              "threshold_plan": {
+                "Basic": {
+                  "ensure_arrangement": [
+                    [
+                      {
+                        "Column": 0
+                      }
+                    ],
+                    {
+                      "0": 0
+                    },
+                    []
+                  ]
+                }
+              },
               "input": {
                 "ArrangeBy": {
+                  "forms": {
+                    "raw": false,
+                    "arranged": [
+                      [
+                        [
+                          {
+                            "Column": 0
+                          }
+                        ],
+                        {
+                          "0": 0
+                        },
+                        []
+                      ]
+                    ]
+                  },
+                  "input_key": null,
+                  "input_mfp": {
+                    "expressions": [],
+                    "predicates": [],
+                    "projection": [
+                      0
+                    ],
+                    "input_arity": 1
+                  },
                   "input": {
                     "Union": {
                       "inputs": [
@@ -1107,126 +1222,11 @@ SELECT x * 5 FROM cte WHERE x = 5
                         }
                       ]
                     }
-                  },
-                  "forms": {
-                    "raw": false,
-                    "arranged": [
-                      [
-                        [
-                          {
-                            "Column": 0
-                          }
-                        ],
-                        {
-                          "0": 0
-                        },
-                        []
-                      ]
-                    ]
-                  },
-                  "input_key": null,
-                  "input_mfp": {
-                    "expressions": [],
-                    "predicates": [],
-                    "projection": [
-                      0
-                    ],
-                    "input_arity": 1
                   }
-                }
-              },
-              "threshold_plan": {
-                "Basic": {
-                  "ensure_arrangement": [
-                    [
-                      {
-                        "Column": 0
-                      }
-                    ],
-                    {
-                      "0": 0
-                    },
-                    []
-                  ]
                 }
               }
             }
-          },
-          "mfp": {
-            "expressions": [
-              {
-                "Literal": [
-                  {
-                    "Ok": {
-                      "data": [
-                        4,
-                        25,
-                        0,
-                        0,
-                        0
-                      ]
-                    }
-                  },
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": false
-                  }
-                ]
-              }
-            ],
-            "predicates": [
-              [
-                1,
-                {
-                  "CallBinary": {
-                    "func": "Eq",
-                    "expr1": {
-                      "Column": 0
-                    },
-                    "expr2": {
-                      "Literal": [
-                        {
-                          "Ok": {
-                            "data": [
-                              4,
-                              5,
-                              0,
-                              0,
-                              0
-                            ]
-                          }
-                        },
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": false
-                        }
-                      ]
-                    }
-                  }
-                }
-              ]
-            ],
-            "projection": [
-              1
-            ],
-            "input_arity": 1
-          },
-          "input_key_val": [
-            [
-              {
-                "Column": 0
-              }
-            ],
-            {
-              "data": [
-                4,
-                5,
-                0,
-                0,
-                0
-              ]
-            }
-          ]
+          }
         }
       }
     }
@@ -1258,35 +1258,6 @@ SELECT generate_series(a, b) from t
       "id": "Explained Query",
       "plan": {
         "FlatMap": {
-          "input": {
-            "Get": {
-              "id": {
-                "Global": {
-                  "User": 1
-                }
-              },
-              "keys": {
-                "raw": false,
-                "arranged": [
-                  [
-                    [
-                      {
-                        "Column": 0
-                      }
-                    ],
-                    {
-                      "0": 0,
-                      "1": 1
-                    },
-                    [
-                      1
-                    ]
-                  ]
-                ]
-              },
-              "plan": "PassArrangements"
-            }
-          },
           "func": "GenerateSeriesInt32",
           "exprs": [
             {
@@ -1327,26 +1298,7 @@ SELECT generate_series(a, b) from t
             {
               "Column": 0
             }
-          ]
-        }
-      }
-    }
-  ],
-  "sources": []
-}
-EOF
-
-# Test Reduce::Distinct.
-query T multiline
-EXPLAIN PHYSICAL PLAN AS JSON FOR
-SELECT DISTINCT a, b FROM t
-----
-{
-  "plans": [
-    {
-      "id": "Explained Query",
-      "plan": {
-        "Reduce": {
+          ],
           "input": {
             "Get": {
               "id": {
@@ -1375,7 +1327,26 @@ SELECT DISTINCT a, b FROM t
               },
               "plan": "PassArrangements"
             }
-          },
+          }
+        }
+      }
+    }
+  ],
+  "sources": []
+}
+EOF
+
+# Test Reduce::Distinct.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS JSON FOR
+SELECT DISTINCT a, b FROM t
+----
+{
+  "plans": [
+    {
+      "id": "Explained Query",
+      "plan": {
+        "Reduce": {
           "key_val_plan": {
             "key_plan": {
               "mfp": {
@@ -1402,31 +1373,7 @@ SELECT DISTINCT a, b FROM t
             {
               "Column": 0
             }
-          ]
-        }
-      }
-    }
-  ],
-  "sources": []
-}
-EOF
-
-# Test Reduce::Accumulable (with GROUP BY).
-query T multiline
-EXPLAIN PHYSICAL PLAN AS JSON FOR
-SELECT
-  a,
-  SUM(b),
-  COUNT(DISTINCT b)
-FROM t
-GROUP BY a
-----
-{
-  "plans": [
-    {
-      "id": "Explained Query",
-      "plan": {
-        "Reduce": {
+          ],
           "input": {
             "Get": {
               "id": {
@@ -1455,7 +1402,31 @@ GROUP BY a
               },
               "plan": "PassArrangements"
             }
-          },
+          }
+        }
+      }
+    }
+  ],
+  "sources": []
+}
+EOF
+
+# Test Reduce::Accumulable (with GROUP BY).
+query T multiline
+EXPLAIN PHYSICAL PLAN AS JSON FOR
+SELECT
+  a,
+  SUM(b),
+  COUNT(DISTINCT b)
+FROM t
+GROUP BY a
+----
+{
+  "plans": [
+    {
+      "id": "Explained Query",
+      "plan": {
+        "Reduce": {
           "key_val_plan": {
             "key_plan": {
               "mfp": {
@@ -1529,7 +1500,36 @@ GROUP BY a
             {
               "Column": 0
             }
-          ]
+          ],
+          "input": {
+            "Get": {
+              "id": {
+                "Global": {
+                  "User": 1
+                }
+              },
+              "keys": {
+                "raw": false,
+                "arranged": [
+                  [
+                    [
+                      {
+                        "Column": 0
+                      }
+                    ],
+                    {
+                      "0": 0,
+                      "1": 1
+                    },
+                    [
+                      1
+                    ]
+                  ]
+                ]
+              },
+              "plan": "PassArrangements"
+            }
+          }
         }
       }
     }
@@ -1555,52 +1555,6 @@ FROM t
           "id": 0,
           "value": {
             "Reduce": {
-              "input": {
-                "Get": {
-                  "id": {
-                    "Global": {
-                      "User": 1
-                    }
-                  },
-                  "keys": {
-                    "raw": false,
-                    "arranged": [
-                      [
-                        [
-                          {
-                            "Column": 0
-                          }
-                        ],
-                        {
-                          "0": 0,
-                          "1": 1
-                        },
-                        [
-                          1
-                        ]
-                      ]
-                    ]
-                  },
-                  "plan": {
-                    "Arrangement": [
-                      [
-                        {
-                          "Column": 0
-                        }
-                      ],
-                      null,
-                      {
-                        "expressions": [],
-                        "predicates": [],
-                        "projection": [
-                          1
-                        ],
-                        "input_arity": 2
-                      }
-                    ]
-                  }
-                }
-              },
               "key_val_plan": {
                 "key_plan": {
                   "mfp": {
@@ -1668,7 +1622,53 @@ FROM t
                   ]
                 }
               },
-              "input_key": null
+              "input_key": null,
+              "input": {
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 1
+                    }
+                  },
+                  "keys": {
+                    "raw": false,
+                    "arranged": [
+                      [
+                        [
+                          {
+                            "Column": 0
+                          }
+                        ],
+                        {
+                          "0": 0,
+                          "1": 1
+                        },
+                        [
+                          1
+                        ]
+                      ]
+                    ]
+                  },
+                  "plan": {
+                    "Arrangement": [
+                      [
+                        {
+                          "Column": 0
+                        }
+                      ],
+                      null,
+                      {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          1
+                        ],
+                        "input_arity": 2
+                      }
+                    ]
+                  }
+                }
+              }
             }
           },
           "body": {
@@ -1676,6 +1676,20 @@ FROM t
               "inputs": [
                 {
                   "ArrangeBy": {
+                    "forms": {
+                      "raw": true,
+                      "arranged": []
+                    },
+                    "input_key": [],
+                    "input_mfp": {
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1
+                      ],
+                      "input_arity": 2
+                    },
                     "input": {
                       "Get": {
                         "id": {
@@ -1699,25 +1713,60 @@ FROM t
                         },
                         "plan": "PassArrangements"
                       }
-                    },
-                    "forms": {
-                      "raw": true,
-                      "arranged": []
-                    },
-                    "input_key": [],
-                    "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
                     }
                   }
                 },
                 {
                   "Mfp": {
+                    "mfp": {
+                      "expressions": [
+                        {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  0
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "Int64",
+                              "nullable": true
+                            }
+                          ]
+                        },
+                        {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  5,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  0
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "Int64",
+                              "nullable": false
+                            }
+                          ]
+                        }
+                      ],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1
+                      ],
+                      "input_arity": 0
+                    },
+                    "input_key_val": null,
                     "input": {
                       "Union": {
                         "inputs": [
@@ -1777,56 +1826,7 @@ FROM t
                           }
                         ]
                       }
-                    },
-                    "mfp": {
-                      "expressions": [
-                        {
-                          "Literal": [
-                            {
-                              "Ok": {
-                                "data": [
-                                  0
-                                ]
-                              }
-                            },
-                            {
-                              "scalar_type": "Int64",
-                              "nullable": true
-                            }
-                          ]
-                        },
-                        {
-                          "Literal": [
-                            {
-                              "Ok": {
-                                "data": [
-                                  5,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0
-                                ]
-                              }
-                            },
-                            {
-                              "scalar_type": "Int64",
-                              "nullable": false
-                            }
-                          ]
-                        }
-                      ],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 0
-                    },
-                    "input_key_val": null
+                    }
                   }
                 }
               ]
@@ -1856,35 +1856,6 @@ GROUP BY a
       "id": "Explained Query",
       "plan": {
         "Reduce": {
-          "input": {
-            "Get": {
-              "id": {
-                "Global": {
-                  "User": 1
-                }
-              },
-              "keys": {
-                "raw": false,
-                "arranged": [
-                  [
-                    [
-                      {
-                        "Column": 0
-                      }
-                    ],
-                    {
-                      "0": 0,
-                      "1": 1
-                    },
-                    [
-                      1
-                    ]
-                  ]
-                ]
-              },
-              "plan": "PassArrangements"
-            }
-          },
           "key_val_plan": {
             "key_plan": {
               "mfp": {
@@ -1935,7 +1906,36 @@ GROUP BY a
             {
               "Column": 0
             }
-          ]
+          ],
+          "input": {
+            "Get": {
+              "id": {
+                "Global": {
+                  "User": 1
+                }
+              },
+              "keys": {
+                "raw": false,
+                "arranged": [
+                  [
+                    [
+                      {
+                        "Column": 0
+                      }
+                    ],
+                    {
+                      "0": 0,
+                      "1": 1
+                    },
+                    [
+                      1
+                    ]
+                  ]
+                ]
+              },
+              "plan": "PassArrangements"
+            }
+          }
         }
       }
     }
@@ -1961,6 +1961,51 @@ FROM t
           "id": 0,
           "value": {
             "Reduce": {
+              "key_val_plan": {
+                "key_plan": {
+                  "mfp": {
+                    "expressions": [],
+                    "predicates": [],
+                    "projection": [],
+                    "input_arity": 1
+                  }
+                },
+                "val_plan": {
+                  "mfp": {
+                    "expressions": [],
+                    "predicates": [],
+                    "projection": [
+                      0,
+                      0
+                    ],
+                    "input_arity": 1
+                  }
+                }
+              },
+              "plan": {
+                "Hierarchical": {
+                  "Bucketed": {
+                    "aggr_funcs": [
+                      "MinInt32",
+                      "MaxInt32"
+                    ],
+                    "skips": [
+                      0,
+                      0
+                    ],
+                    "buckets": [
+                      268435456,
+                      16777216,
+                      1048576,
+                      65536,
+                      4096,
+                      256,
+                      16
+                    ]
+                  }
+                }
+              },
+              "input_key": null,
               "input": {
                 "Get": {
                   "id": {
@@ -2006,52 +2051,7 @@ FROM t
                     ]
                   }
                 }
-              },
-              "key_val_plan": {
-                "key_plan": {
-                  "mfp": {
-                    "expressions": [],
-                    "predicates": [],
-                    "projection": [],
-                    "input_arity": 1
-                  }
-                },
-                "val_plan": {
-                  "mfp": {
-                    "expressions": [],
-                    "predicates": [],
-                    "projection": [
-                      0,
-                      0
-                    ],
-                    "input_arity": 1
-                  }
-                }
-              },
-              "plan": {
-                "Hierarchical": {
-                  "Bucketed": {
-                    "aggr_funcs": [
-                      "MinInt32",
-                      "MaxInt32"
-                    ],
-                    "skips": [
-                      0,
-                      0
-                    ],
-                    "buckets": [
-                      268435456,
-                      16777216,
-                      1048576,
-                      65536,
-                      4096,
-                      256,
-                      16
-                    ]
-                  }
-                }
-              },
-              "input_key": null
+              }
             }
           },
           "body": {
@@ -2059,6 +2059,20 @@ FROM t
               "inputs": [
                 {
                   "ArrangeBy": {
+                    "forms": {
+                      "raw": true,
+                      "arranged": []
+                    },
+                    "input_key": [],
+                    "input_mfp": {
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1
+                      ],
+                      "input_arity": 2
+                    },
                     "input": {
                       "Get": {
                         "id": {
@@ -2082,25 +2096,52 @@ FROM t
                         },
                         "plan": "PassArrangements"
                       }
-                    },
-                    "forms": {
-                      "raw": true,
-                      "arranged": []
-                    },
-                    "input_key": [],
-                    "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
                     }
                   }
                 },
                 {
                   "Mfp": {
+                    "mfp": {
+                      "expressions": [
+                        {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  0
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "Int32",
+                              "nullable": true
+                            }
+                          ]
+                        },
+                        {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  0
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "Int32",
+                              "nullable": true
+                            }
+                          ]
+                        }
+                      ],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1
+                      ],
+                      "input_arity": 0
+                    },
+                    "input_key_val": null,
                     "input": {
                       "Union": {
                         "inputs": [
@@ -2160,48 +2201,7 @@ FROM t
                           }
                         ]
                       }
-                    },
-                    "mfp": {
-                      "expressions": [
-                        {
-                          "Literal": [
-                            {
-                              "Ok": {
-                                "data": [
-                                  0
-                                ]
-                              }
-                            },
-                            {
-                              "scalar_type": "Int32",
-                              "nullable": true
-                            }
-                          ]
-                        },
-                        {
-                          "Literal": [
-                            {
-                              "Ok": {
-                                "data": [
-                                  0
-                                ]
-                              }
-                            },
-                            {
-                              "scalar_type": "Int32",
-                              "nullable": true
-                            }
-                          ]
-                        }
-                      ],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 0
-                    },
-                    "input_key_val": null
+                    }
                   }
                 }
               ]
@@ -2231,35 +2231,6 @@ GROUP BY a
       "id": "Explained Query",
       "plan": {
         "Reduce": {
-          "input": {
-            "Get": {
-              "id": {
-                "Global": {
-                  "User": 1
-                }
-              },
-              "keys": {
-                "raw": false,
-                "arranged": [
-                  [
-                    [
-                      {
-                        "Column": 0
-                      }
-                    ],
-                    {
-                      "0": 0,
-                      "1": 1
-                    },
-                    [
-                      1
-                    ]
-                  ]
-                ]
-              },
-              "plan": "PassArrangements"
-            }
-          },
           "key_val_plan": {
             "key_plan": {
               "mfp": {
@@ -2616,7 +2587,36 @@ GROUP BY a
             {
               "Column": 0
             }
-          ]
+          ],
+          "input": {
+            "Get": {
+              "id": {
+                "Global": {
+                  "User": 1
+                }
+              },
+              "keys": {
+                "raw": false,
+                "arranged": [
+                  [
+                    [
+                      {
+                        "Column": 0
+                      }
+                    ],
+                    {
+                      "0": 0,
+                      "1": 1
+                    },
+                    [
+                      1
+                    ]
+                  ]
+                ]
+              },
+              "plan": "PassArrangements"
+            }
+          }
         }
       }
     }
@@ -2642,52 +2642,6 @@ FROM t
           "id": 0,
           "value": {
             "Reduce": {
-              "input": {
-                "Get": {
-                  "id": {
-                    "Global": {
-                      "User": 1
-                    }
-                  },
-                  "keys": {
-                    "raw": false,
-                    "arranged": [
-                      [
-                        [
-                          {
-                            "Column": 0
-                          }
-                        ],
-                        {
-                          "0": 0,
-                          "1": 1
-                        },
-                        [
-                          1
-                        ]
-                      ]
-                    ]
-                  },
-                  "plan": {
-                    "Arrangement": [
-                      [
-                        {
-                          "Column": 0
-                        }
-                      ],
-                      null,
-                      {
-                        "expressions": [],
-                        "predicates": [],
-                        "projection": [
-                          1
-                        ],
-                        "input_arity": 2
-                      }
-                    ]
-                  }
-                }
-              },
               "key_val_plan": {
                 "key_plan": {
                   "mfp": {
@@ -3038,7 +2992,53 @@ FROM t
                   ]
                 }
               },
-              "input_key": null
+              "input_key": null,
+              "input": {
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 1
+                    }
+                  },
+                  "keys": {
+                    "raw": false,
+                    "arranged": [
+                      [
+                        [
+                          {
+                            "Column": 0
+                          }
+                        ],
+                        {
+                          "0": 0,
+                          "1": 1
+                        },
+                        [
+                          1
+                        ]
+                      ]
+                    ]
+                  },
+                  "plan": {
+                    "Arrangement": [
+                      [
+                        {
+                          "Column": 0
+                        }
+                      ],
+                      null,
+                      {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          1
+                        ],
+                        "input_arity": 2
+                      }
+                    ]
+                  }
+                }
+              }
             }
           },
           "body": {
@@ -3046,6 +3046,20 @@ FROM t
               "inputs": [
                 {
                   "ArrangeBy": {
+                    "forms": {
+                      "raw": true,
+                      "arranged": []
+                    },
+                    "input_key": [],
+                    "input_mfp": {
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1
+                      ],
+                      "input_arity": 2
+                    },
                     "input": {
                       "Get": {
                         "id": {
@@ -3069,25 +3083,52 @@ FROM t
                         },
                         "plan": "PassArrangements"
                       }
-                    },
-                    "forms": {
-                      "raw": true,
-                      "arranged": []
-                    },
-                    "input_key": [],
-                    "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
                     }
                   }
                 },
                 {
                   "Mfp": {
+                    "mfp": {
+                      "expressions": [
+                        {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  0
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "String",
+                              "nullable": true
+                            }
+                          ]
+                        },
+                        {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  0
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "String",
+                              "nullable": true
+                            }
+                          ]
+                        }
+                      ],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1
+                      ],
+                      "input_arity": 0
+                    },
+                    "input_key_val": null,
                     "input": {
                       "Union": {
                         "inputs": [
@@ -3147,48 +3188,7 @@ FROM t
                           }
                         ]
                       }
-                    },
-                    "mfp": {
-                      "expressions": [
-                        {
-                          "Literal": [
-                            {
-                              "Ok": {
-                                "data": [
-                                  0
-                                ]
-                              }
-                            },
-                            {
-                              "scalar_type": "String",
-                              "nullable": true
-                            }
-                          ]
-                        },
-                        {
-                          "Literal": [
-                            {
-                              "Ok": {
-                                "data": [
-                                  0
-                                ]
-                              }
-                            },
-                            {
-                              "scalar_type": "String",
-                              "nullable": true
-                            }
-                          ]
-                        }
-                      ],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 0
-                    },
-                    "input_key_val": null
+                    }
                   }
                 }
               ]
@@ -3222,35 +3222,6 @@ GROUP BY a
       "id": "Explained Query",
       "plan": {
         "Reduce": {
-          "input": {
-            "Get": {
-              "id": {
-                "Global": {
-                  "User": 1
-                }
-              },
-              "keys": {
-                "raw": false,
-                "arranged": [
-                  [
-                    [
-                      {
-                        "Column": 0
-                      }
-                    ],
-                    {
-                      "0": 0,
-                      "1": 1
-                    },
-                    [
-                      1
-                    ]
-                  ]
-                ]
-              },
-              "plan": "PassArrangements"
-            }
-          },
           "key_val_plan": {
             "key_plan": {
               "mfp": {
@@ -3686,7 +3657,36 @@ GROUP BY a
             {
               "Column": 0
             }
-          ]
+          ],
+          "input": {
+            "Get": {
+              "id": {
+                "Global": {
+                  "User": 1
+                }
+              },
+              "keys": {
+                "raw": false,
+                "arranged": [
+                  [
+                    [
+                      {
+                        "Column": 0
+                      }
+                    ],
+                    {
+                      "0": 0,
+                      "1": 1
+                    },
+                    [
+                      1
+                    ]
+                  ]
+                ]
+              },
+              "plan": "PassArrangements"
+            }
+          }
         }
       }
     }
@@ -3716,52 +3716,6 @@ FROM t
           "id": 0,
           "value": {
             "Reduce": {
-              "input": {
-                "Get": {
-                  "id": {
-                    "Global": {
-                      "User": 1
-                    }
-                  },
-                  "keys": {
-                    "raw": false,
-                    "arranged": [
-                      [
-                        [
-                          {
-                            "Column": 0
-                          }
-                        ],
-                        {
-                          "0": 0,
-                          "1": 1
-                        },
-                        [
-                          1
-                        ]
-                      ]
-                    ]
-                  },
-                  "plan": {
-                    "Arrangement": [
-                      [
-                        {
-                          "Column": 0
-                        }
-                      ],
-                      null,
-                      {
-                        "expressions": [],
-                        "predicates": [],
-                        "projection": [
-                          1
-                        ],
-                        "input_arity": 2
-                      }
-                    ]
-                  }
-                }
-              },
               "key_val_plan": {
                 "key_plan": {
                   "mfp": {
@@ -4191,7 +4145,53 @@ FROM t
                   ]
                 }
               },
-              "input_key": null
+              "input_key": null,
+              "input": {
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 1
+                    }
+                  },
+                  "keys": {
+                    "raw": false,
+                    "arranged": [
+                      [
+                        [
+                          {
+                            "Column": 0
+                          }
+                        ],
+                        {
+                          "0": 0,
+                          "1": 1
+                        },
+                        [
+                          1
+                        ]
+                      ]
+                    ]
+                  },
+                  "plan": {
+                    "Arrangement": [
+                      [
+                        {
+                          "Column": 0
+                        }
+                      ],
+                      null,
+                      {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          1
+                        ],
+                        "input_arity": 2
+                      }
+                    ]
+                  }
+                }
+              }
             }
           },
           "body": {
@@ -4199,6 +4199,24 @@ FROM t
               "inputs": [
                 {
                   "ArrangeBy": {
+                    "forms": {
+                      "raw": true,
+                      "arranged": []
+                    },
+                    "input_key": [],
+                    "input_mfp": {
+                      "expressions": [],
+                      "predicates": [],
+                      "projection": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                      ],
+                      "input_arity": 6
+                    },
                     "input": {
                       "Get": {
                         "id": {
@@ -4230,97 +4248,11 @@ FROM t
                         },
                         "plan": "PassArrangements"
                       }
-                    },
-                    "forms": {
-                      "raw": true,
-                      "arranged": []
-                    },
-                    "input_key": [],
-                    "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1,
-                        2,
-                        3,
-                        4,
-                        5
-                      ],
-                      "input_arity": 6
                     }
                   }
                 },
                 {
                   "Mfp": {
-                    "input": {
-                      "Union": {
-                        "inputs": [
-                          {
-                            "Negate": {
-                              "input": {
-                                "Get": {
-                                  "id": {
-                                    "Local": 0
-                                  },
-                                  "keys": {
-                                    "raw": false,
-                                    "arranged": [
-                                      [
-                                        [],
-                                        {
-                                          "0": 0,
-                                          "1": 1,
-                                          "2": 2,
-                                          "3": 3,
-                                          "4": 4,
-                                          "5": 5
-                                        },
-                                        [
-                                          0,
-                                          1,
-                                          2,
-                                          3,
-                                          4,
-                                          5
-                                        ]
-                                      ]
-                                    ]
-                                  },
-                                  "plan": {
-                                    "Arrangement": [
-                                      [],
-                                      null,
-                                      {
-                                        "expressions": [],
-                                        "predicates": [],
-                                        "projection": [],
-                                        "input_arity": 6
-                                      }
-                                    ]
-                                  }
-                                }
-                              }
-                            }
-                          },
-                          {
-                            "Constant": {
-                              "rows": {
-                                "Ok": [
-                                  [
-                                    {
-                                      "data": []
-                                    },
-                                    0,
-                                    1
-                                  ]
-                                ]
-                              }
-                            }
-                          }
-                        ]
-                      }
-                    },
                     "mfp": {
                       "expressions": [
                         {
@@ -4433,7 +4365,75 @@ FROM t
                       ],
                       "input_arity": 0
                     },
-                    "input_key_val": null
+                    "input_key_val": null,
+                    "input": {
+                      "Union": {
+                        "inputs": [
+                          {
+                            "Negate": {
+                              "input": {
+                                "Get": {
+                                  "id": {
+                                    "Local": 0
+                                  },
+                                  "keys": {
+                                    "raw": false,
+                                    "arranged": [
+                                      [
+                                        [],
+                                        {
+                                          "0": 0,
+                                          "1": 1,
+                                          "2": 2,
+                                          "3": 3,
+                                          "4": 4,
+                                          "5": 5
+                                        },
+                                        [
+                                          0,
+                                          1,
+                                          2,
+                                          3,
+                                          4,
+                                          5
+                                        ]
+                                      ]
+                                    ]
+                                  },
+                                  "plan": {
+                                    "Arrangement": [
+                                      [],
+                                      null,
+                                      {
+                                        "expressions": [],
+                                        "predicates": [],
+                                        "projection": [],
+                                        "input_arity": 6
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "Constant": {
+                              "rows": {
+                                "Ok": [
+                                  [
+                                    {
+                                      "data": []
+                                    },
+                                    0,
+                                    1
+                                  ]
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
                   }
                 }
               ]
@@ -4460,146 +4460,6 @@ WHERE a = c AND d = e AND b + d > 42
       "id": "Explained Query",
       "plan": {
         "Join": {
-          "inputs": [
-            {
-              "Get": {
-                "id": {
-                  "Global": {
-                    "User": 1
-                  }
-                },
-                "keys": {
-                  "raw": false,
-                  "arranged": [
-                    [
-                      [
-                        {
-                          "Column": 0
-                        }
-                      ],
-                      {
-                        "0": 0,
-                        "1": 1
-                      },
-                      [
-                        1
-                      ]
-                    ]
-                  ]
-                },
-                "plan": "PassArrangements"
-              }
-            },
-            {
-              "ArrangeBy": {
-                "input": {
-                  "Get": {
-                    "id": {
-                      "Global": {
-                        "User": 2
-                      }
-                    },
-                    "keys": {
-                      "raw": true,
-                      "arranged": []
-                    },
-                    "plan": {
-                      "Collection": {
-                        "expressions": [],
-                        "predicates": [],
-                        "projection": [
-                          0,
-                          1
-                        ],
-                        "input_arity": 2
-                      }
-                    }
-                  }
-                },
-                "forms": {
-                  "raw": true,
-                  "arranged": [
-                    [
-                      [
-                        {
-                          "Column": 1
-                        }
-                      ],
-                      {
-                        "0": 1,
-                        "1": 0
-                      },
-                      [
-                        0
-                      ]
-                    ]
-                  ]
-                },
-                "input_key": null,
-                "input_mfp": {
-                  "expressions": [],
-                  "predicates": [],
-                  "projection": [
-                    0,
-                    1
-                  ],
-                  "input_arity": 2
-                }
-              }
-            },
-            {
-              "ArrangeBy": {
-                "input": {
-                  "Get": {
-                    "id": {
-                      "Global": {
-                        "User": 3
-                      }
-                    },
-                    "keys": {
-                      "raw": true,
-                      "arranged": []
-                    },
-                    "plan": {
-                      "Collection": {
-                        "expressions": [],
-                        "predicates": [],
-                        "projection": [
-                          0
-                        ],
-                        "input_arity": 1
-                      }
-                    }
-                  }
-                },
-                "forms": {
-                  "raw": true,
-                  "arranged": [
-                    [
-                      [
-                        {
-                          "Column": 0
-                        }
-                      ],
-                      {
-                        "0": 0
-                      },
-                      []
-                    ]
-                  ]
-                },
-                "input_key": null,
-                "input_mfp": {
-                  "expressions": [],
-                  "predicates": [],
-                  "projection": [
-                    0
-                  ],
-                  "input_arity": 1
-                }
-              }
-            }
-          ],
           "plan": {
             "Linear": {
               "source_relation": 2,
@@ -4739,7 +4599,147 @@ WHERE a = c AND d = e AND b + d > 42
                 }
               }
             }
-          }
+          },
+          "inputs": [
+            {
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 1
+                  }
+                },
+                "keys": {
+                  "raw": false,
+                  "arranged": [
+                    [
+                      [
+                        {
+                          "Column": 0
+                        }
+                      ],
+                      {
+                        "0": 0,
+                        "1": 1
+                      },
+                      [
+                        1
+                      ]
+                    ]
+                  ]
+                },
+                "plan": "PassArrangements"
+              }
+            },
+            {
+              "ArrangeBy": {
+                "forms": {
+                  "raw": true,
+                  "arranged": [
+                    [
+                      [
+                        {
+                          "Column": 1
+                        }
+                      ],
+                      {
+                        "0": 1,
+                        "1": 0
+                      },
+                      [
+                        0
+                      ]
+                    ]
+                  ]
+                },
+                "input_key": null,
+                "input_mfp": {
+                  "expressions": [],
+                  "predicates": [],
+                  "projection": [
+                    0,
+                    1
+                  ],
+                  "input_arity": 2
+                },
+                "input": {
+                  "Get": {
+                    "id": {
+                      "Global": {
+                        "User": 2
+                      }
+                    },
+                    "keys": {
+                      "raw": true,
+                      "arranged": []
+                    },
+                    "plan": {
+                      "Collection": {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0,
+                          1
+                        ],
+                        "input_arity": 2
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "ArrangeBy": {
+                "forms": {
+                  "raw": true,
+                  "arranged": [
+                    [
+                      [
+                        {
+                          "Column": 0
+                        }
+                      ],
+                      {
+                        "0": 0
+                      },
+                      []
+                    ]
+                  ]
+                },
+                "input_key": null,
+                "input_mfp": {
+                  "expressions": [],
+                  "predicates": [],
+                  "projection": [
+                    0
+                  ],
+                  "input_arity": 1
+                },
+                "input": {
+                  "Get": {
+                    "id": {
+                      "Global": {
+                        "User": 3
+                      }
+                    },
+                    "keys": {
+                      "raw": true,
+                      "arranged": []
+                    },
+                    "plan": {
+                      "Collection": {
+                        "expressions": [],
+                        "predicates": [],
+                        "projection": [
+                          0
+                        ],
+                        "input_arity": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
         }
       }
     }
@@ -4858,281 +4858,6 @@ WHERE a = c AND d = e AND f = a
       "id": "Explained Query",
       "plan": {
         "Join": {
-          "inputs": [
-            {
-              "Get": {
-                "id": {
-                  "Global": {
-                    "User": 1
-                  }
-                },
-                "keys": {
-                  "raw": false,
-                  "arranged": [
-                    [
-                      [
-                        {
-                          "Column": 0
-                        }
-                      ],
-                      {
-                        "0": 0,
-                        "1": 1
-                      },
-                      [
-                        1
-                      ]
-                    ]
-                  ]
-                },
-                "plan": "PassArrangements"
-              }
-            },
-            {
-              "ArrangeBy": {
-                "input": {
-                  "Get": {
-                    "id": {
-                      "Global": {
-                        "User": 2
-                      }
-                    },
-                    "keys": {
-                      "raw": false,
-                      "arranged": [
-                        [
-                          [
-                            {
-                              "Column": 0
-                            }
-                          ],
-                          {
-                            "0": 0,
-                            "1": 1
-                          },
-                          [
-                            1
-                          ]
-                        ]
-                      ]
-                    },
-                    "plan": {
-                      "Arrangement": [
-                        [
-                          {
-                            "Column": 0
-                          }
-                        ],
-                        null,
-                        {
-                          "expressions": [],
-                          "predicates": [
-                            [
-                              1,
-                              {
-                                "CallUnary": {
-                                  "func": {
-                                    "Not": null
-                                  },
-                                  "expr": {
-                                    "CallUnary": {
-                                      "func": {
-                                        "IsNull": null
-                                      },
-                                      "expr": {
-                                        "Column": 0
-                                      }
-                                    }
-                                  }
-                                }
-                              }
-                            ],
-                            [
-                              2,
-                              {
-                                "CallUnary": {
-                                  "func": {
-                                    "Not": null
-                                  },
-                                  "expr": {
-                                    "CallUnary": {
-                                      "func": {
-                                        "IsNull": null
-                                      },
-                                      "expr": {
-                                        "Column": 1
-                                      }
-                                    }
-                                  }
-                                }
-                              }
-                            ]
-                          ],
-                          "projection": [
-                            0,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      ]
-                    }
-                  }
-                },
-                "forms": {
-                  "raw": true,
-                  "arranged": [
-                    [
-                      [
-                        {
-                          "Column": 0
-                        },
-                        {
-                          "Column": 1
-                        }
-                      ],
-                      {
-                        "0": 0,
-                        "1": 1
-                      },
-                      []
-                    ]
-                  ]
-                },
-                "input_key": null,
-                "input_mfp": {
-                  "expressions": [],
-                  "predicates": [],
-                  "projection": [
-                    0,
-                    1
-                  ],
-                  "input_arity": 2
-                }
-              }
-            },
-            {
-              "ArrangeBy": {
-                "input": {
-                  "Get": {
-                    "id": {
-                      "Global": {
-                        "User": 3
-                      }
-                    },
-                    "keys": {
-                      "raw": false,
-                      "arranged": [
-                        [
-                          [
-                            {
-                              "Column": 0
-                            }
-                          ],
-                          {
-                            "0": 0,
-                            "1": 1
-                          },
-                          [
-                            1
-                          ]
-                        ]
-                      ]
-                    },
-                    "plan": {
-                      "Arrangement": [
-                        [
-                          {
-                            "Column": 0
-                          }
-                        ],
-                        null,
-                        {
-                          "expressions": [],
-                          "predicates": [
-                            [
-                              1,
-                              {
-                                "CallUnary": {
-                                  "func": {
-                                    "Not": null
-                                  },
-                                  "expr": {
-                                    "CallUnary": {
-                                      "func": {
-                                        "IsNull": null
-                                      },
-                                      "expr": {
-                                        "Column": 0
-                                      }
-                                    }
-                                  }
-                                }
-                              }
-                            ],
-                            [
-                              2,
-                              {
-                                "CallUnary": {
-                                  "func": {
-                                    "Not": null
-                                  },
-                                  "expr": {
-                                    "CallUnary": {
-                                      "func": {
-                                        "IsNull": null
-                                      },
-                                      "expr": {
-                                        "Column": 1
-                                      }
-                                    }
-                                  }
-                                }
-                              }
-                            ]
-                          ],
-                          "projection": [
-                            0,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      ]
-                    }
-                  }
-                },
-                "forms": {
-                  "raw": true,
-                  "arranged": [
-                    [
-                      [
-                        {
-                          "Column": 1
-                        },
-                        {
-                          "Column": 0
-                        }
-                      ],
-                      {
-                        "0": 1,
-                        "1": 0
-                      },
-                      []
-                    ]
-                  ]
-                },
-                "input_key": null,
-                "input_mfp": {
-                  "expressions": [],
-                  "predicates": [],
-                  "projection": [
-                    0,
-                    1
-                  ],
-                  "input_arity": 2
-                }
-              }
-            }
-          ],
           "plan": {
             "Linear": {
               "source_relation": 2,
@@ -5231,28 +4956,7 @@ WHERE a = c AND d = e AND f = a
                 }
               }
             }
-          }
-        }
-      }
-    }
-  ],
-  "sources": []
-}
-EOF
-
-# Test Join::Delta (star).
-query T multiline
-EXPLAIN PHYSICAL PLAN WITH(non_negative) AS JSON FOR
-SELECT a, b, c, d, e, f
-FROM t, u, v
-WHERE a = c and a = e
-----
-{
-  "plans": [
-    {
-      "id": "Explained Query",
-      "plan": {
-        "Join": {
+          },
           "inputs": [
             {
               "Get": {
@@ -5284,64 +4988,271 @@ WHERE a = c and a = e
               }
             },
             {
-              "Get": {
-                "id": {
-                  "Global": {
-                    "User": 2
-                  }
-                },
-                "keys": {
-                  "raw": false,
+              "ArrangeBy": {
+                "forms": {
+                  "raw": true,
                   "arranged": [
                     [
                       [
                         {
                           "Column": 0
+                        },
+                        {
+                          "Column": 1
                         }
                       ],
                       {
                         "0": 0,
                         "1": 1
                       },
-                      [
-                        1
-                      ]
+                      []
                     ]
                   ]
                 },
-                "plan": "PassArrangements"
+                "input_key": null,
+                "input_mfp": {
+                  "expressions": [],
+                  "predicates": [],
+                  "projection": [
+                    0,
+                    1
+                  ],
+                  "input_arity": 2
+                },
+                "input": {
+                  "Get": {
+                    "id": {
+                      "Global": {
+                        "User": 2
+                      }
+                    },
+                    "keys": {
+                      "raw": false,
+                      "arranged": [
+                        [
+                          [
+                            {
+                              "Column": 0
+                            }
+                          ],
+                          {
+                            "0": 0,
+                            "1": 1
+                          },
+                          [
+                            1
+                          ]
+                        ]
+                      ]
+                    },
+                    "plan": {
+                      "Arrangement": [
+                        [
+                          {
+                            "Column": 0
+                          }
+                        ],
+                        null,
+                        {
+                          "expressions": [],
+                          "predicates": [
+                            [
+                              1,
+                              {
+                                "CallUnary": {
+                                  "func": {
+                                    "Not": null
+                                  },
+                                  "expr": {
+                                    "CallUnary": {
+                                      "func": {
+                                        "IsNull": null
+                                      },
+                                      "expr": {
+                                        "Column": 0
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            ],
+                            [
+                              2,
+                              {
+                                "CallUnary": {
+                                  "func": {
+                                    "Not": null
+                                  },
+                                  "expr": {
+                                    "CallUnary": {
+                                      "func": {
+                                        "IsNull": null
+                                      },
+                                      "expr": {
+                                        "Column": 1
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          ],
+                          "projection": [
+                            0,
+                            1
+                          ],
+                          "input_arity": 2
+                        }
+                      ]
+                    }
+                  }
+                }
               }
             },
             {
-              "Get": {
-                "id": {
-                  "Global": {
-                    "User": 3
-                  }
-                },
-                "keys": {
-                  "raw": false,
+              "ArrangeBy": {
+                "forms": {
+                  "raw": true,
                   "arranged": [
                     [
                       [
+                        {
+                          "Column": 1
+                        },
                         {
                           "Column": 0
                         }
                       ],
                       {
-                        "0": 0,
-                        "1": 1
+                        "0": 1,
+                        "1": 0
                       },
-                      [
-                        1
-                      ]
+                      []
                     ]
                   ]
                 },
-                "plan": "PassArrangements"
+                "input_key": null,
+                "input_mfp": {
+                  "expressions": [],
+                  "predicates": [],
+                  "projection": [
+                    0,
+                    1
+                  ],
+                  "input_arity": 2
+                },
+                "input": {
+                  "Get": {
+                    "id": {
+                      "Global": {
+                        "User": 3
+                      }
+                    },
+                    "keys": {
+                      "raw": false,
+                      "arranged": [
+                        [
+                          [
+                            {
+                              "Column": 0
+                            }
+                          ],
+                          {
+                            "0": 0,
+                            "1": 1
+                          },
+                          [
+                            1
+                          ]
+                        ]
+                      ]
+                    },
+                    "plan": {
+                      "Arrangement": [
+                        [
+                          {
+                            "Column": 0
+                          }
+                        ],
+                        null,
+                        {
+                          "expressions": [],
+                          "predicates": [
+                            [
+                              1,
+                              {
+                                "CallUnary": {
+                                  "func": {
+                                    "Not": null
+                                  },
+                                  "expr": {
+                                    "CallUnary": {
+                                      "func": {
+                                        "IsNull": null
+                                      },
+                                      "expr": {
+                                        "Column": 0
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            ],
+                            [
+                              2,
+                              {
+                                "CallUnary": {
+                                  "func": {
+                                    "Not": null
+                                  },
+                                  "expr": {
+                                    "CallUnary": {
+                                      "func": {
+                                        "IsNull": null
+                                      },
+                                      "expr": {
+                                        "Column": 1
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          ],
+                          "projection": [
+                            0,
+                            1
+                          ],
+                          "input_arity": 2
+                        }
+                      ]
+                    }
+                  }
+                }
               }
             }
-          ],
+          ]
+        }
+      }
+    }
+  ],
+  "sources": []
+}
+EOF
+
+# Test Join::Delta (star).
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(non_negative) AS JSON FOR
+SELECT a, b, c, d, e, f
+FROM t, u, v
+WHERE a = c and a = e
+----
+{
+  "plans": [
+    {
+      "id": "Explained Query",
+      "plan": {
+        "Join": {
           "plan": {
             "Delta": {
               "path_plans": [
@@ -5732,7 +5643,96 @@ WHERE a = c and a = e
                 }
               ]
             }
-          }
+          },
+          "inputs": [
+            {
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 1
+                  }
+                },
+                "keys": {
+                  "raw": false,
+                  "arranged": [
+                    [
+                      [
+                        {
+                          "Column": 0
+                        }
+                      ],
+                      {
+                        "0": 0,
+                        "1": 1
+                      },
+                      [
+                        1
+                      ]
+                    ]
+                  ]
+                },
+                "plan": "PassArrangements"
+              }
+            },
+            {
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 2
+                  }
+                },
+                "keys": {
+                  "raw": false,
+                  "arranged": [
+                    [
+                      [
+                        {
+                          "Column": 0
+                        }
+                      ],
+                      {
+                        "0": 0,
+                        "1": 1
+                      },
+                      [
+                        1
+                      ]
+                    ]
+                  ]
+                },
+                "plan": "PassArrangements"
+              }
+            },
+            {
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 3
+                  }
+                },
+                "keys": {
+                  "raw": false,
+                  "arranged": [
+                    [
+                      [
+                        {
+                          "Column": 0
+                        }
+                      ],
+                      {
+                        "0": 0,
+                        "1": 1
+                      },
+                      [
+                        1
+                      ]
+                    ]
+                  ]
+                },
+                "plan": "PassArrangements"
+              }
+            }
+          ]
         }
       }
     }

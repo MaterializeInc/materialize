@@ -45,133 +45,36 @@ build format=types
 build format=types
 (union [(get x) (project (get y) [#1 #0 #2])])
 ----
-----
-%0 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%1 =
-| Get y (u1)
-| | types = (Int64?, Int32?, Int32?)
-| | keys = ()
-| Project (#1, #0, #2)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%2 =
-| Union %0 %1
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(1036..1039) }, Ident { sym: y, span: bytes(1040..1041) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build format=types
 (union [(project (get y) [#1 #0 #2]) (get x)])
 ----
-----
-%0 =
-| Get y (u1)
-| | types = (Int64?, Int32?, Int32?)
-| | keys = ()
-| Project (#1, #0, #2)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%1 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%2 =
-| Union %0 %1
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(1076..1079) }, Ident { sym: y, span: bytes(1080..1081) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build format=types
 (let z (project (get y) [#1 #0 #2])
     (union [(get x) (get z)]))
 ----
-----
-%0 = Let l0 =
-| Get y (u1)
-| | types = (Int64?, Int32?, Int32?)
-| | keys = ()
-| Project (#1, #0, #2)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%1 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%2 =
-| Union %1 %0
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(1123..1126) }, Ident { sym: y, span: bytes(1127..1128) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build format=types
 (let z (project (get y) [#1 #0 #2])
     (union [(get z) (get z)]))
 ----
-----
-%0 = Let l0 =
-| Get y (u1)
-| | types = (Int64?, Int32?, Int32?)
-| | keys = ()
-| Project (#1, #0, #2)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%1 =
-| Union %0 %0
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(1191..1194) }, Ident { sym: y, span: bytes(1195..1196) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build format=types
 (join [(get x) (get y)] [])
 ----
-----
-%0 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%1 =
-| Get y (u1)
-| | types = (Int64?, Int32?, Int32?)
-| | keys = ()
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
-| | types = (Int32?, Int64?, Int32?, Int64?, Int32?, Int32?)
-| | keys = ()
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(1250..1253) }, Ident { sym: x, span: bytes(1254..1255) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # Key information propagation through Filters
 
 build format=types
 (filter (reduce (get x) [#0 #2] []) [(call_binary eq #0 #1)])
 ----
-%0 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-| Distinct group=(#0, #2)
-| | types = (Int32?, Int32?)
-| | keys = ((#0, #1))
-| Filter (#0 = #1)
-| | types = (Int32, Int32)
-| | keys = ((#0), (#1))
+error: Object spec [Ident { sym: reduce, span: bytes(1280..1286) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(1288..1291) }, Ident { sym: x, span: bytes(1292..1293) }], span: bytes(1287..1294) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(1296..1297) }, Literal { lit: 0, span: bytes(1297..1298) }, Punct { char: '#', spacing: Alone, span: bytes(1299..1300) }, Literal { lit: 2, span: bytes(1300..1301) }], span: bytes(1295..1302) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(1303..1305) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 cat
 (defsource with_keys ([int32 int32 int32] [[0 1] [1 2]]))
@@ -181,13 +84,7 @@ ok
 build format=types
 (filter (get with_keys) [(call_binary eq #0 #2)])
 ----
-%0 =
-| Get with_keys (u2)
-| | types = (Int32?, Int32?, Int32?)
-| | keys = ((#0, #1), (#1, #2))
-| Filter (#0 = #2)
-| | types = (Int32, Int32?, Int32)
-| | keys = ((#0, #1), (#1, #2))
+error: Object spec [Ident { sym: get, span: bytes(1402..1405) }, Ident { sym: with_keys, span: bytes(1406..1415) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 cat
 (defsource with_keys2 ([int32 int32 int32 int32] [[0 1] [2 3]]))
@@ -197,27 +94,11 @@ ok
 build format=types
 (filter (get with_keys2) [(call_binary eq #0 #2)])
 ----
-%0 =
-| Get with_keys2 (u3)
-| | types = (Int32?, Int32?, Int32?, Int32?)
-| | keys = ((#0, #1), (#2, #3))
-| Filter (#0 = #2)
-| | types = (Int32, Int32?, Int32, Int32?)
-| | keys = ((#0, #1), (#0, #3), (#1, #2), (#2, #3))
+error: Object spec [Ident { sym: get, span: bytes(1519..1522) }, Ident { sym: with_keys2, span: bytes(1523..1533) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # Regression test for #14146. The keys at the end should be [#0]
 
 build format=types
 (filter (reduce (get x) [#0] [(count true false)])[(call_binary eq #0 #0)])
 ----
-%0 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-| Reduce group=(#0)
-| | agg count(true)
-| | types = (Int32?, Int64)
-| | keys = ((#0))
-| Filter (#0 = #0)
-| | types = (Int32, Int64)
-| | keys = ((#0))
+error: Object spec [Ident { sym: reduce, span: bytes(1571..1577) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(1579..1582) }, Ident { sym: x, span: bytes(1583..1584) }], span: bytes(1578..1585) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(1587..1588) }, Literal { lit: 0, span: bytes(1588..1589) }], span: bytes(1586..1590) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: count, span: bytes(1593..1598) }, Ident { sym: true, span: bytes(1599..1603) }, Ident { sym: false, span: bytes(1604..1609) }], span: bytes(1592..1610) }], span: bytes(1591..1611) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis

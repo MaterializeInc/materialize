@@ -39,64 +39,13 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
 ----
 {
   "Project": {
+    "outputs": [
+      2,
+      1,
+      3
+    ],
     "input": {
       "Map": {
-        "input": {
-          "Filter": {
-            "input": {
-              "Get": {
-                "id": {
-                  "Global": {
-                    "User": 5
-                  }
-                },
-                "typ": {
-                  "column_types": [
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": true
-                    }
-                  ],
-                  "keys": []
-                }
-              }
-            },
-            "predicates": [
-              {
-                "CallBinary": {
-                  "func": "Gt",
-                  "expr1": {
-                    "Column": {
-                      "level": 0,
-                      "column": 0
-                    }
-                  },
-                  "expr2": {
-                    "Literal": [
-                      {
-                        "data": [
-                          4,
-                          0,
-                          0,
-                          0,
-                          0
-                        ]
-                      },
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": false
-                      }
-                    ]
-                  }
-                }
-              }
-            ]
-          }
-        },
         "scalars": [
           {
             "CallBinary": {
@@ -143,14 +92,65 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
               }
             ]
           }
-        ]
+        ],
+        "input": {
+          "Filter": {
+            "predicates": [
+              {
+                "CallBinary": {
+                  "func": "Gt",
+                  "expr1": {
+                    "Column": {
+                      "level": 0,
+                      "column": 0
+                    }
+                  },
+                  "expr2": {
+                    "Literal": [
+                      {
+                        "data": [
+                          4,
+                          0,
+                          0,
+                          0,
+                          0
+                        ]
+                      },
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": false
+                      }
+                    ]
+                  }
+                }
+              }
+            ],
+            "input": {
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 5
+                  }
+                },
+                "typ": {
+                  "column_types": [
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": false
+                    },
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": true
+                    }
+                  ],
+                  "keys": []
+                }
+              }
+            }
+          }
+        }
       }
-    },
-    "outputs": [
-      2,
-      1,
-      3
-    ]
+    }
   }
 }
 EOF
@@ -233,10 +233,24 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
           "Distinct": {
             "input": {
               "Project": {
+                "outputs": [
+                  1
+                ],
                 "input": {
                   "Map": {
+                    "scalars": [
+                      {
+                        "Column": {
+                          "level": 0,
+                          "column": 0
+                        }
+                      }
+                    ],
                     "input": {
                       "Project": {
+                        "outputs": [
+                          0
+                        ],
                         "input": {
                           "Get": {
                             "id": {
@@ -258,25 +272,11 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                               "keys": []
                             }
                           }
-                        },
-                        "outputs": [
-                          0
-                        ]
-                      }
-                    },
-                    "scalars": [
-                      {
-                        "Column": {
-                          "level": 0,
-                          "column": 0
                         }
                       }
-                    ]
+                    }
                   }
-                },
-                "outputs": [
-                  1
-                ]
+                }
               }
             }
           }
@@ -288,10 +288,24 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                 "Distinct": {
                   "input": {
                     "Project": {
+                      "outputs": [
+                        1
+                      ],
                       "input": {
                         "Map": {
+                          "scalars": [
+                            {
+                              "Column": {
+                                "level": 0,
+                                "column": 0
+                              }
+                            }
+                          ],
                           "input": {
                             "Project": {
+                              "outputs": [
+                                1
+                              ],
                               "input": {
                                 "Get": {
                                   "id": {
@@ -313,25 +327,11 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                                     "keys": []
                                   }
                                 }
-                              },
-                              "outputs": [
-                                1
-                              ]
-                            }
-                          },
-                          "scalars": [
-                            {
-                              "Column": {
-                                "level": 0,
-                                "column": 0
                               }
                             }
-                          ]
+                          }
                         }
-                      },
-                      "outputs": [
-                        1
-                      ]
+                      }
                     }
                   }
                 }
@@ -352,8 +352,27 @@ VIEW ov
 ----
 {
   "Project": {
+    "outputs": [
+      0,
+      1
+    ],
     "input": {
       "TopK": {
+        "group_key": [],
+        "order_key": [
+          {
+            "column": 1,
+            "desc": false,
+            "nulls_last": true
+          },
+          {
+            "column": 0,
+            "desc": true,
+            "nulls_last": false
+          }
+        ],
+        "limit": 5,
+        "offset": 0,
         "input": {
           "Get": {
             "id": {
@@ -375,28 +394,9 @@ VIEW ov
               "keys": []
             }
           }
-        },
-        "group_key": [],
-        "order_key": [
-          {
-            "column": 1,
-            "desc": false,
-            "nulls_last": true
-          },
-          {
-            "column": 0,
-            "desc": true,
-            "nulls_last": false
-          }
-        ],
-        "limit": 5,
-        "offset": 0
+        }
       }
-    },
-    "outputs": [
-      0,
-      1
-    ]
+    }
   }
 }
 EOF
@@ -437,58 +437,11 @@ SELECT abs(min(a) - max(a)) FROM t
 ----
 {
   "Project": {
+    "outputs": [
+      2
+    ],
     "input": {
       "Map": {
-        "input": {
-          "Reduce": {
-            "input": {
-              "Get": {
-                "id": {
-                  "Global": {
-                    "User": 1
-                  }
-                },
-                "typ": {
-                  "column_types": [
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": true
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": true
-                    }
-                  ],
-                  "keys": []
-                }
-              }
-            },
-            "group_key": [],
-            "aggregates": [
-              {
-                "func": "MinInt32",
-                "expr": {
-                  "Column": {
-                    "level": 0,
-                    "column": 0
-                  }
-                },
-                "distinct": false
-              },
-              {
-                "func": "MaxInt32",
-                "expr": {
-                  "Column": {
-                    "level": 0,
-                    "column": 0
-                  }
-                },
-                "distinct": false
-              }
-            ],
-            "expected_group_size": null
-          }
-        },
         "scalars": [
           {
             "CallUnary": {
@@ -514,64 +467,10 @@ SELECT abs(min(a) - max(a)) FROM t
               }
             }
           }
-        ]
-      }
-    },
-    "outputs": [
-      2
-    ]
-  }
-}
-EOF
-
-# Test Reduce (local).
-query T multiline
-EXPLAIN RAW PLAN AS JSON FOR
-SELECT abs(min(a) - max(a)) FROM t GROUP BY b
-----
-{
-  "Project": {
-    "input": {
-      "Map": {
+        ],
         "input": {
           "Reduce": {
-            "input": {
-              "Map": {
-                "input": {
-                  "Get": {
-                    "id": {
-                      "Global": {
-                        "User": 1
-                      }
-                    },
-                    "typ": {
-                      "column_types": [
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": true
-                        },
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": true
-                        }
-                      ],
-                      "keys": []
-                    }
-                  }
-                },
-                "scalars": [
-                  {
-                    "Column": {
-                      "level": 0,
-                      "column": 1
-                    }
-                  }
-                ]
-              }
-            },
-            "group_key": [
-              2
-            ],
+            "group_key": [],
             "aggregates": [
               {
                 "func": "MinInt32",
@@ -594,9 +493,49 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                 "distinct": false
               }
             ],
-            "expected_group_size": null
+            "expected_group_size": null,
+            "input": {
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 1
+                  }
+                },
+                "typ": {
+                  "column_types": [
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": true
+                    },
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": true
+                    }
+                  ],
+                  "keys": []
+                }
+              }
+            }
           }
-        },
+        }
+      }
+    }
+  }
+}
+EOF
+
+# Test Reduce (local).
+query T multiline
+EXPLAIN RAW PLAN AS JSON FOR
+SELECT abs(min(a) - max(a)) FROM t GROUP BY b
+----
+{
+  "Project": {
+    "outputs": [
+      3
+    ],
+    "input": {
+      "Map": {
         "scalars": [
           {
             "CallUnary": {
@@ -622,12 +561,73 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
               }
             }
           }
-        ]
+        ],
+        "input": {
+          "Reduce": {
+            "group_key": [
+              2
+            ],
+            "aggregates": [
+              {
+                "func": "MinInt32",
+                "expr": {
+                  "Column": {
+                    "level": 0,
+                    "column": 0
+                  }
+                },
+                "distinct": false
+              },
+              {
+                "func": "MaxInt32",
+                "expr": {
+                  "Column": {
+                    "level": 0,
+                    "column": 0
+                  }
+                },
+                "distinct": false
+              }
+            ],
+            "expected_group_size": null,
+            "input": {
+              "Map": {
+                "scalars": [
+                  {
+                    "Column": {
+                      "level": 0,
+                      "column": 1
+                    }
+                  }
+                ],
+                "input": {
+                  "Get": {
+                    "id": {
+                      "Global": {
+                        "User": 1
+                      }
+                    },
+                    "typ": {
+                      "column_types": [
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
+                        },
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
+                        }
+                      ],
+                      "keys": []
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
-    },
-    "outputs": [
-      3
-    ]
+    }
   }
 }
 EOF
@@ -643,6 +643,25 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
     "id": 2,
     "value": {
       "Filter": {
+        "predicates": [
+          {
+            "CallBinary": {
+              "func": "Gt",
+              "expr1": {
+                "Column": {
+                  "level": 1,
+                  "column": 1
+                }
+              },
+              "expr2": {
+                "Column": {
+                  "level": 0,
+                  "column": 1
+                }
+              }
+            }
+          }
+        ],
         "input": {
           "Get": {
             "id": {
@@ -664,26 +683,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
               "keys": []
             }
           }
-        },
-        "predicates": [
-          {
-            "CallBinary": {
-              "func": "Gt",
-              "expr1": {
-                "Column": {
-                  "level": 1,
-                  "column": 1
-                }
-              },
-              "expr2": {
-                "Column": {
-                  "level": 0,
-                  "column": 1
-                }
-              }
-            }
-          }
-        ]
+        }
       }
     },
     "body": {
@@ -692,6 +692,25 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
         "id": 1,
         "value": {
           "Filter": {
+            "predicates": [
+              {
+                "CallBinary": {
+                  "func": "Lt",
+                  "expr1": {
+                    "Column": {
+                      "level": 1,
+                      "column": 0
+                    }
+                  },
+                  "expr2": {
+                    "Column": {
+                      "level": 0,
+                      "column": 0
+                    }
+                  }
+                }
+              }
+            ],
             "input": {
               "Get": {
                 "id": {
@@ -713,52 +732,11 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                   "keys": []
                 }
               }
-            },
-            "predicates": [
-              {
-                "CallBinary": {
-                  "func": "Lt",
-                  "expr1": {
-                    "Column": {
-                      "level": 1,
-                      "column": 0
-                    }
-                  },
-                  "expr2": {
-                    "Column": {
-                      "level": 0,
-                      "column": 0
-                    }
-                  }
-                }
-              }
-            ]
+            }
           }
         },
         "body": {
           "Filter": {
-            "input": {
-              "Get": {
-                "id": {
-                  "Global": {
-                    "User": 1
-                  }
-                },
-                "typ": {
-                  "column_types": [
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": true
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": true
-                    }
-                  ],
-                  "keys": []
-                }
-              }
-            },
             "predicates": [
               {
                 "CallVariadic": {
@@ -793,7 +771,29 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                   ]
                 }
               }
-            ]
+            ],
+            "input": {
+              "Get": {
+                "id": {
+                  "Global": {
+                    "User": 1
+                  }
+                },
+                "typ": {
+                  "column_types": [
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": true
+                    },
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": true
+                    }
+                  ],
+                  "keys": []
+                }
+              }
+            }
           }
         }
       }
@@ -809,16 +809,46 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
 ----
 {
   "Project": {
+    "outputs": [
+      2,
+      3
+    ],
     "input": {
       "Let": {
         "name": "subquery-2",
         "id": 2,
         "value": {
           "Project": {
+            "outputs": [
+              0
+            ],
             "input": {
               "TopK": {
+                "group_key": [],
+                "order_key": [],
+                "limit": 1,
+                "offset": 0,
                 "input": {
                   "Filter": {
+                    "predicates": [
+                      {
+                        "CallBinary": {
+                          "func": "Eq",
+                          "expr1": {
+                            "Column": {
+                              "level": 0,
+                              "column": 1
+                            }
+                          },
+                          "expr2": {
+                            "Column": {
+                              "level": 1,
+                              "column": 1
+                            }
+                          }
+                        }
+                      }
+                    ],
                     "input": {
                       "Get": {
                         "id": {
@@ -840,37 +870,11 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                           "keys": []
                         }
                       }
-                    },
-                    "predicates": [
-                      {
-                        "CallBinary": {
-                          "func": "Eq",
-                          "expr1": {
-                            "Column": {
-                              "level": 0,
-                              "column": 1
-                            }
-                          },
-                          "expr2": {
-                            "Column": {
-                              "level": 1,
-                              "column": 1
-                            }
-                          }
-                        }
-                      }
-                    ]
+                    }
                   }
-                },
-                "group_key": [],
-                "order_key": [],
-                "limit": 1,
-                "offset": 0
+                }
               }
-            },
-            "outputs": [
-              0
-            ]
+            }
           }
         },
         "body": {
@@ -879,10 +883,36 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
             "id": 1,
             "value": {
               "Project": {
+                "outputs": [
+                  0
+                ],
                 "input": {
                   "TopK": {
+                    "group_key": [],
+                    "order_key": [],
+                    "limit": 1,
+                    "offset": 0,
                     "input": {
                       "Filter": {
+                        "predicates": [
+                          {
+                            "CallBinary": {
+                              "func": "Eq",
+                              "expr1": {
+                                "Column": {
+                                  "level": 0,
+                                  "column": 1
+                                }
+                              },
+                              "expr2": {
+                                "Column": {
+                                  "level": 1,
+                                  "column": 1
+                                }
+                              }
+                            }
+                          }
+                        ],
                         "input": {
                           "Get": {
                             "id": {
@@ -904,63 +934,15 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                               "keys": []
                             }
                           }
-                        },
-                        "predicates": [
-                          {
-                            "CallBinary": {
-                              "func": "Eq",
-                              "expr1": {
-                                "Column": {
-                                  "level": 0,
-                                  "column": 1
-                                }
-                              },
-                              "expr2": {
-                                "Column": {
-                                  "level": 1,
-                                  "column": 1
-                                }
-                              }
-                            }
-                          }
-                        ]
+                        }
                       }
-                    },
-                    "group_key": [],
-                    "order_key": [],
-                    "limit": 1,
-                    "offset": 0
+                    }
                   }
-                },
-                "outputs": [
-                  0
-                ]
+                }
               }
             },
             "body": {
               "Map": {
-                "input": {
-                  "Get": {
-                    "id": {
-                      "Global": {
-                        "User": 1
-                      }
-                    },
-                    "typ": {
-                      "column_types": [
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": true
-                        },
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": true
-                        }
-                      ],
-                      "keys": []
-                    }
-                  }
-                },
                 "scalars": [
                   {
                     "Select": {
@@ -988,17 +970,35 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                       }
                     }
                   }
-                ]
+                ],
+                "input": {
+                  "Get": {
+                    "id": {
+                      "Global": {
+                        "User": 1
+                      }
+                    },
+                    "typ": {
+                      "column_types": [
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
+                        },
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
+                        }
+                      ],
+                      "keys": []
+                    }
+                  }
+                }
               }
             }
           }
         }
       }
-    },
-    "outputs": [
-      2,
-      3
-    ]
+    }
   }
 }
 EOF
@@ -1010,8 +1010,26 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
 ----
 {
   "Project": {
+    "outputs": [
+      0,
+      2
+    ],
     "input": {
       "Join": {
+        "on": {
+          "Literal": [
+            {
+              "data": [
+                2
+              ]
+            },
+            {
+              "scalar_type": "Bool",
+              "nullable": false
+            }
+          ]
+        },
+        "kind": "Inner",
         "left": {
           "Get": {
             "id": {
@@ -1055,27 +1073,9 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
               "keys": []
             }
           }
-        },
-        "on": {
-          "Literal": [
-            {
-              "data": [
-                2
-              ]
-            },
-            {
-              "scalar_type": "Bool",
-              "nullable": false
-            }
-          ]
-        },
-        "kind": "Inner"
+        }
       }
-    },
-    "outputs": [
-      0,
-      2
-    ]
+    }
   }
 }
 EOF
@@ -1092,12 +1092,87 @@ WHERE t1.b = t2.b AND t2.b = t3.b
 ----
 {
   "Project": {
+    "outputs": [
+      0,
+      2
+    ],
     "input": {
       "Filter": {
+        "predicates": [
+          {
+            "CallVariadic": {
+              "func": "And",
+              "exprs": [
+                {
+                  "CallBinary": {
+                    "func": "Eq",
+                    "expr1": {
+                      "Column": {
+                        "level": 0,
+                        "column": 1
+                      }
+                    },
+                    "expr2": {
+                      "Column": {
+                        "level": 0,
+                        "column": 3
+                      }
+                    }
+                  }
+                },
+                {
+                  "CallBinary": {
+                    "func": "Eq",
+                    "expr1": {
+                      "Column": {
+                        "level": 0,
+                        "column": 3
+                      }
+                    },
+                    "expr2": {
+                      "Column": {
+                        "level": 0,
+                        "column": 5
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ],
         "input": {
           "Join": {
+            "on": {
+              "Literal": [
+                {
+                  "data": [
+                    2
+                  ]
+                },
+                {
+                  "scalar_type": "Bool",
+                  "nullable": false
+                }
+              ]
+            },
+            "kind": "Inner",
             "left": {
               "Join": {
+                "on": {
+                  "Literal": [
+                    {
+                      "data": [
+                        2
+                      ]
+                    },
+                    {
+                      "scalar_type": "Bool",
+                      "nullable": false
+                    }
+                  ]
+                },
+                "kind": "Inner",
                 "left": {
                   "Get": {
                     "id": {
@@ -1141,21 +1216,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                       "keys": []
                     }
                   }
-                },
-                "on": {
-                  "Literal": [
-                    {
-                      "data": [
-                        2
-                      ]
-                    },
-                    {
-                      "scalar_type": "Bool",
-                      "nullable": false
-                    }
-                  ]
-                },
-                "kind": "Inner"
+                }
               }
             },
             "right": {
@@ -1179,72 +1240,11 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                   "keys": []
                 }
               }
-            },
-            "on": {
-              "Literal": [
-                {
-                  "data": [
-                    2
-                  ]
-                },
-                {
-                  "scalar_type": "Bool",
-                  "nullable": false
-                }
-              ]
-            },
-            "kind": "Inner"
-          }
-        },
-        "predicates": [
-          {
-            "CallVariadic": {
-              "func": "And",
-              "exprs": [
-                {
-                  "CallBinary": {
-                    "func": "Eq",
-                    "expr1": {
-                      "Column": {
-                        "level": 0,
-                        "column": 1
-                      }
-                    },
-                    "expr2": {
-                      "Column": {
-                        "level": 0,
-                        "column": 3
-                      }
-                    }
-                  }
-                },
-                {
-                  "CallBinary": {
-                    "func": "Eq",
-                    "expr1": {
-                      "Column": {
-                        "level": 0,
-                        "column": 3
-                      }
-                    },
-                    "expr2": {
-                      "Column": {
-                        "level": 0,
-                        "column": 5
-                      }
-                    }
-                  }
-                }
-              ]
             }
           }
-        ]
+        }
       }
-    },
-    "outputs": [
-      0,
-      2
-    ]
+    }
   }
 }
 EOF
@@ -1260,19 +1260,6 @@ WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM
     "id": 0,
     "value": {
       "Map": {
-        "input": {
-          "Constant": {
-            "rows": [
-              {
-                "data": []
-              }
-            ],
-            "typ": {
-              "column_types": [],
-              "keys": []
-            }
-          }
-        },
         "scalars": [
           {
             "Literal": [
@@ -1291,7 +1278,20 @@ WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM
               }
             ]
           }
-        ]
+        ],
+        "input": {
+          "Constant": {
+            "rows": [
+              {
+                "data": []
+              }
+            ],
+            "typ": {
+              "column_types": [],
+              "keys": []
+            }
+          }
+        }
       }
     },
     "body": {
@@ -1300,22 +1300,6 @@ WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM
         "id": 1,
         "value": {
           "Filter": {
-            "input": {
-              "Get": {
-                "id": {
-                  "Local": 0
-                },
-                "typ": {
-                  "column_types": [
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
-                    }
-                  ],
-                  "keys": []
-                }
-              }
-            },
             "predicates": [
               {
                 "CallBinary": {
@@ -1345,11 +1329,41 @@ WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM
                   }
                 }
               }
-            ]
+            ],
+            "input": {
+              "Get": {
+                "id": {
+                  "Local": 0
+                },
+                "typ": {
+                  "column_types": [
+                    {
+                      "scalar_type": "Int32",
+                      "nullable": false
+                    }
+                  ],
+                  "keys": []
+                }
+              }
+            }
           }
         },
         "body": {
           "Join": {
+            "on": {
+              "Literal": [
+                {
+                  "data": [
+                    2
+                  ]
+                },
+                {
+                  "scalar_type": "Bool",
+                  "nullable": false
+                }
+              ]
+            },
+            "kind": "Inner",
             "left": {
               "Get": {
                 "id": {
@@ -1381,21 +1395,7 @@ WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM
                   "keys": []
                 }
               }
-            },
-            "on": {
-              "Literal": [
-                {
-                  "data": [
-                    2
-                  ]
-                },
-                {
-                  "scalar_type": "Bool",
-                  "nullable": false
-                }
-              ]
-            },
-            "kind": "Inner"
+            }
           }
         }
       }

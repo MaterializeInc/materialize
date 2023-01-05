@@ -17,250 +17,191 @@ ok
 build apply=TopKFusion
 (top_k (top_k (get x) [] [] 3 2) [] [] 1 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=() order=() limit=1 offset=3
+error: Object spec [Ident { sym: top_k, span: bytes(11379..11384) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(11386..11389) }, Ident { sym: x, span: bytes(11390..11391) }], span: bytes(11385..11392) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(11393..11395) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(11396..11398) }, Literal { lit: 3, span: bytes(11399..11400) }, Literal { lit: 2, span: bytes(11401..11402) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build apply=TopKFusion
 (top_k (top_k (get x) [0] [#0] 3 2) [0] [#0] 1 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#0 asc nulls_first) limit=1 offset=3
+error: Object spec [Ident { sym: top_k, span: bytes(11424..11429) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(11431..11434) }, Ident { sym: x, span: bytes(11435..11436) }], span: bytes(11430..11437) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 0, span: bytes(11439..11440) }], span: bytes(11438..11441) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(11443..11444) }, Literal { lit: 0, span: bytes(11444..11445) }], span: bytes(11442..11446) }, Literal { lit: 3, span: bytes(11447..11448) }, Literal { lit: 2, span: bytes(11449..11450) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # outer limit is greater than inner limit plus outer offset
 
 build apply=TopKFusion
 (top_k (top_k (get x) [0] [#0] 3 2) [0] [#0] 10 0)
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#0 asc nulls_first) limit=3 offset=2
+error: Object spec [Ident { sym: top_k, span: bytes(11475..11480) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(11482..11485) }, Ident { sym: x, span: bytes(11486..11487) }], span: bytes(11481..11488) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 0, span: bytes(11490..11491) }], span: bytes(11489..11492) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(11494..11495) }, Literal { lit: 0, span: bytes(11495..11496) }], span: bytes(11493..11497) }, Literal { lit: 3, span: bytes(11498..11499) }, Literal { lit: 2, span: bytes(11500..11501) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build apply=TopKFusion
 (top_k (top_k (get x) [0] [#0] 3 2) [0] [#0] 10 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#0 asc nulls_first) limit=2 offset=3
+error: Object spec [Ident { sym: top_k, span: bytes(11527..11532) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(11534..11537) }, Ident { sym: x, span: bytes(11538..11539) }], span: bytes(11533..11540) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 0, span: bytes(11542..11543) }], span: bytes(11541..11544) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(11546..11547) }, Literal { lit: 0, span: bytes(11547..11548) }], span: bytes(11545..11549) }, Literal { lit: 3, span: bytes(11550..11551) }, Literal { lit: 2, span: bytes(11552..11553) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # outer offset is equal to inner limit
 
 build apply=TopKFusion
 (top_k (top_k (get x) [] [] 3 2) [] [] 1 3)
 ----
-%0 =
-| Constant
+error: Object spec [Ident { sym: top_k, span: bytes(11579..11584) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(11586..11589) }, Ident { sym: x, span: bytes(11590..11591) }], span: bytes(11585..11592) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(11593..11595) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(11596..11598) }, Literal { lit: 3, span: bytes(11599..11600) }, Literal { lit: 2, span: bytes(11601..11602) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # outer offset is greater than the inner offset
 
 build apply=TopKFusion
 (top_k (top_k (get x) [] [] 3 0) [] [] null 4)
 ----
-%0 =
-| Constant
+error: Object spec [Ident { sym: top_k, span: bytes(11624..11629) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(11631..11634) }, Ident { sym: x, span: bytes(11635..11636) }], span: bytes(11630..11637) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(11638..11640) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(11641..11643) }, Literal { lit: 3, span: bytes(11644..11645) }, Literal { lit: 0, span: bytes(11646..11647) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # inner has no limit, but both have offset
 
 build apply=TopKFusion
 (top_k (top_k (get x) [0] [#0] null 2) [0] [#0] 10 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#0 asc nulls_first) limit=10 offset=3
+error: Object spec [Ident { sym: top_k, span: bytes(11672..11677) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(11679..11682) }, Ident { sym: x, span: bytes(11683..11684) }], span: bytes(11678..11685) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 0, span: bytes(11687..11688) }], span: bytes(11686..11689) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(11691..11692) }, Literal { lit: 0, span: bytes(11692..11693) }], span: bytes(11690..11694) }, Ident { sym: null, span: bytes(11695..11699) }, Literal { lit: 2, span: bytes(11700..11701) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # both have no limit, but offset
 
 build apply=TopKFusion
 (top_k (top_k (get x) [0] [#0] null 2) [0] [#0] null 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#0 asc nulls_first) offset=3
+error: Object spec [Ident { sym: top_k, span: bytes(11727..11732) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(11734..11737) }, Ident { sym: x, span: bytes(11738..11739) }], span: bytes(11733..11740) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 0, span: bytes(11742..11743) }], span: bytes(11741..11744) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(11746..11747) }, Literal { lit: 0, span: bytes(11747..11748) }], span: bytes(11745..11749) }, Ident { sym: null, span: bytes(11750..11754) }, Literal { lit: 2, span: bytes(11755..11756) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # outer has no limit, but both have offset
 
 build apply=TopKFusion
 (top_k (top_k (get x) [] [#0] 3 2) [] [#0] null 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=() order=(#0 asc nulls_first) limit=2 offset=3
+error: Object spec [Ident { sym: top_k, span: bytes(11784..11789) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(11791..11794) }, Ident { sym: x, span: bytes(11795..11796) }], span: bytes(11790..11797) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(11798..11800) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(11802..11803) }, Literal { lit: 0, span: bytes(11803..11804) }], span: bytes(11801..11805) }, Literal { lit: 3, span: bytes(11806..11807) }, Literal { lit: 2, span: bytes(11808..11809) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # outer has no limit and no offset
 
 build apply=TopKFusion
 (top_k (top_k (get x) [] [#0] 3 2) [] [#0] null 0)
 ----
-%0 =
-| Get x (u0)
-| TopK group=() order=(#0 asc nulls_first) limit=3 offset=2
+error: Object spec [Ident { sym: top_k, span: bytes(11836..11841) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(11843..11846) }, Ident { sym: x, span: bytes(11847..11848) }], span: bytes(11842..11849) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(11850..11852) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(11854..11855) }, Literal { lit: 0, span: bytes(11855..11856) }], span: bytes(11853..11857) }, Literal { lit: 3, span: bytes(11858..11859) }, Literal { lit: 2, span: bytes(11860..11861) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # inner has no limit and no offset
 
 build apply=TopKFusion
 (top_k (top_k (get x) [] [#0] null 0) [] [#0] 3 2)
 ----
-%0 =
-| Get x (u0)
-| TopK group=() order=(#0 asc nulls_first) limit=3 offset=2
+error: Object spec [Ident { sym: top_k, span: bytes(11888..11893) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(11895..11898) }, Ident { sym: x, span: bytes(11899..11900) }], span: bytes(11894..11901) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(11902..11904) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(11906..11907) }, Literal { lit: 0, span: bytes(11907..11908) }], span: bytes(11905..11909) }, Ident { sym: null, span: bytes(11910..11914) }, Literal { lit: 0, span: bytes(11915..11916) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # inner has no limit and no offset, and outer has only limit
 
 build apply=TopKFusion
 (top_k (top_k (get x) [] [#0] null 0) [] [#0] 3 0)
 ----
-%0 =
-| Get x (u0)
-| TopK group=() order=(#0 asc nulls_first) limit=3 offset=0
+error: Object spec [Ident { sym: top_k, span: bytes(11940..11945) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(11947..11950) }, Ident { sym: x, span: bytes(11951..11952) }], span: bytes(11946..11953) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(11954..11956) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(11958..11959) }, Literal { lit: 0, span: bytes(11959..11960) }], span: bytes(11957..11961) }, Ident { sym: null, span: bytes(11962..11966) }, Literal { lit: 0, span: bytes(11967..11968) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # inner has no limit and no offset, and outer has only offset
 
 build apply=TopKFusion
 (top_k (top_k (get x) [] [#0] null 0) [] [#0] null 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=() order=(#0 asc nulls_first) offset=1
+error: Object spec [Ident { sym: top_k, span: bytes(11992..11997) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(11999..12002) }, Ident { sym: x, span: bytes(12003..12004) }], span: bytes(11998..12005) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12006..12008) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(12010..12011) }, Literal { lit: 0, span: bytes(12011..12012) }], span: bytes(12009..12013) }, Ident { sym: null, span: bytes(12014..12018) }, Literal { lit: 0, span: bytes(12019..12020) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # both have no limit and no offset
 
 build apply=TopKFusion
 (top_k (top_k (get x) [] [#0] null 0) [] [#0] null 0)
 ----
-%0 =
-| Get x (u0)
-| TopK group=() order=(#0 asc nulls_first) offset=0
+error: Object spec [Ident { sym: top_k, span: bytes(12047..12052) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(12054..12057) }, Ident { sym: x, span: bytes(12058..12059) }], span: bytes(12053..12060) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12061..12063) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(12065..12066) }, Literal { lit: 0, span: bytes(12066..12067) }], span: bytes(12064..12068) }, Ident { sym: null, span: bytes(12069..12073) }, Literal { lit: 0, span: bytes(12074..12075) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # both have limit 0 and no offset
 
 build apply=TopKFusion
 (top_k (top_k (get x) [] [#0] 0 0) [] [#0] 0 0)
 ----
-%0 =
-| Constant
+error: Object spec [Ident { sym: top_k, span: bytes(12102..12107) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(12109..12112) }, Ident { sym: x, span: bytes(12113..12114) }], span: bytes(12108..12115) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12116..12118) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(12120..12121) }, Literal { lit: 0, span: bytes(12121..12122) }], span: bytes(12119..12123) }, Literal { lit: 0, span: bytes(12124..12125) }, Literal { lit: 0, span: bytes(12126..12127) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # outer has limit 0
 
 build apply=TopKFusion
 (top_k (top_k (get x) [] [#0] null 0) [] [#0] 0 0)
 ----
-%0 =
-| Constant
+error: Object spec [Ident { sym: top_k, span: bytes(12151..12156) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(12158..12161) }, Ident { sym: x, span: bytes(12162..12163) }], span: bytes(12157..12164) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12165..12167) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(12169..12170) }, Literal { lit: 0, span: bytes(12170..12171) }], span: bytes(12168..12172) }, Ident { sym: null, span: bytes(12173..12177) }, Literal { lit: 0, span: bytes(12178..12179) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # inner has limit 0
 
 build apply=TopKFusion
 (top_k (top_k (get x) [] [#0] 0 0) [] [#0] null 0)
 ----
-%0 =
-| Constant
+error: Object spec [Ident { sym: top_k, span: bytes(12203..12208) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(12210..12213) }, Ident { sym: x, span: bytes(12214..12215) }], span: bytes(12209..12216) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12217..12219) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(12221..12222) }, Literal { lit: 0, span: bytes(12222..12223) }], span: bytes(12220..12224) }, Literal { lit: 0, span: bytes(12225..12226) }, Literal { lit: 0, span: bytes(12227..12228) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build
 (top_k (top_k (constant [[5][4][2][3][2][1]] [int32]) [] [] 3 2) [] [] 1 1)
 ----
-%0 =
-| Constant (5) (4) (2) (3) (2) (1)
-| TopK group=() order=() limit=3 offset=2
-| TopK group=() order=() limit=1 offset=1
+error: Object spec [Ident { sym: top_k, span: bytes(12255..12260) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: constant, span: bytes(12262..12270) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 5, span: bytes(12273..12274) }], span: bytes(12272..12275) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 4, span: bytes(12276..12277) }], span: bytes(12275..12278) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 2, span: bytes(12279..12280) }], span: bytes(12278..12281) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 3, span: bytes(12282..12283) }], span: bytes(12281..12284) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 2, span: bytes(12285..12286) }], span: bytes(12284..12287) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(12288..12289) }], span: bytes(12287..12290) }], span: bytes(12271..12291) }, Group { delimiter: Bracket, stream: TokenStream [Ident { sym: int32, span: bytes(12293..12298) }], span: bytes(12292..12299) }], span: bytes(12261..12300) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12301..12303) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12304..12306) }, Literal { lit: 3, span: bytes(12307..12308) }, Literal { lit: 2, span: bytes(12309..12310) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build apply=TopKFusion
 (top_k (top_k (constant [[5][4][2][3][2][1]] [int32]) [] [] 3 2) [] [] 1 1)
 ----
-%0 =
-| Constant (5) (4) (2) (3) (2) (1)
-| TopK group=() order=() limit=1 offset=3
+error: Object spec [Ident { sym: top_k, span: bytes(12332..12337) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: constant, span: bytes(12339..12347) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 5, span: bytes(12350..12351) }], span: bytes(12349..12352) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 4, span: bytes(12353..12354) }], span: bytes(12352..12355) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 2, span: bytes(12356..12357) }], span: bytes(12355..12358) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 3, span: bytes(12359..12360) }], span: bytes(12358..12361) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 2, span: bytes(12362..12363) }], span: bytes(12361..12364) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(12365..12366) }], span: bytes(12364..12367) }], span: bytes(12348..12368) }, Group { delimiter: Bracket, stream: TokenStream [Ident { sym: int32, span: bytes(12370..12375) }], span: bytes(12369..12376) }], span: bytes(12338..12377) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12378..12380) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12381..12383) }, Literal { lit: 3, span: bytes(12384..12385) }, Literal { lit: 2, span: bytes(12386..12387) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 opt
 (top_k (top_k (constant [[5][4][2][3][2][1]] [int32]) [] [] 3 2) [] [] 1 1)
 ----
-%0 =
-| Constant (3)
+error: Object spec [Ident { sym: top_k, span: bytes(12409..12414) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: constant, span: bytes(12416..12424) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 5, span: bytes(12427..12428) }], span: bytes(12426..12429) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 4, span: bytes(12430..12431) }], span: bytes(12429..12432) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 2, span: bytes(12433..12434) }], span: bytes(12432..12435) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 3, span: bytes(12436..12437) }], span: bytes(12435..12438) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 2, span: bytes(12439..12440) }], span: bytes(12438..12441) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(12442..12443) }], span: bytes(12441..12444) }], span: bytes(12425..12445) }, Group { delimiter: Bracket, stream: TokenStream [Ident { sym: int32, span: bytes(12447..12452) }], span: bytes(12446..12453) }], span: bytes(12415..12454) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12455..12457) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12458..12460) }, Literal { lit: 3, span: bytes(12461..12462) }, Literal { lit: 2, span: bytes(12463..12464) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 
 build apply=TopKFusion
 (top_k (top_k (constant [[5][4][2][3][2][1]] [int32]) [] [] 3 2) [] [] 1 3)
 ----
-%0 =
-| Constant
+error: Object spec [Ident { sym: top_k, span: bytes(12486..12491) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: constant, span: bytes(12493..12501) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 5, span: bytes(12504..12505) }], span: bytes(12503..12506) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 4, span: bytes(12507..12508) }], span: bytes(12506..12509) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 2, span: bytes(12510..12511) }], span: bytes(12509..12512) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 3, span: bytes(12513..12514) }], span: bytes(12512..12515) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 2, span: bytes(12516..12517) }], span: bytes(12515..12518) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(12519..12520) }], span: bytes(12518..12521) }], span: bytes(12502..12522) }, Group { delimiter: Bracket, stream: TokenStream [Ident { sym: int32, span: bytes(12524..12529) }], span: bytes(12523..12530) }], span: bytes(12492..12531) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12532..12534) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12535..12537) }, Literal { lit: 3, span: bytes(12538..12539) }, Literal { lit: 2, span: bytes(12540..12541) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build apply=TopKFusion
 (top_k (top_k (constant [[5 4] [3 2] [1 0]] [int32 int32]) [] [#1] 3 2) [] [#0] 1 0)
 ----
-%0 =
-| Constant (5, 4) (3, 2) (1, 0)
-| TopK group=() order=(#1 asc nulls_first) limit=3 offset=2
-| TopK group=() order=(#0 asc nulls_first) limit=1 offset=0
+error: Object spec [Ident { sym: top_k, span: bytes(12563..12568) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: constant, span: bytes(12570..12578) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 5, span: bytes(12581..12582) }, Literal { lit: 4, span: bytes(12583..12584) }], span: bytes(12580..12585) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 3, span: bytes(12587..12588) }, Literal { lit: 2, span: bytes(12589..12590) }], span: bytes(12586..12591) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(12593..12594) }, Literal { lit: 0, span: bytes(12595..12596) }], span: bytes(12592..12597) }], span: bytes(12579..12598) }, Group { delimiter: Bracket, stream: TokenStream [Ident { sym: int32, span: bytes(12600..12605) }, Ident { sym: int32, span: bytes(12606..12611) }], span: bytes(12599..12612) }], span: bytes(12569..12613) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12614..12616) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(12618..12619) }, Literal { lit: 1, span: bytes(12619..12620) }], span: bytes(12617..12621) }, Literal { lit: 3, span: bytes(12622..12623) }, Literal { lit: 2, span: bytes(12624..12625) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build apply=TopKFusion
 (top_k (top_k (constant [[5 4] [3 2] [1 0]] [int32 int32]) [] [#1] 3 2) [] [#1] 1 0)
 ----
-%0 =
-| Constant (5, 4) (3, 2) (1, 0)
-| TopK group=() order=(#1 asc nulls_first) limit=1 offset=2
+error: Object spec [Ident { sym: top_k, span: bytes(12649..12654) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: constant, span: bytes(12656..12664) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 5, span: bytes(12667..12668) }, Literal { lit: 4, span: bytes(12669..12670) }], span: bytes(12666..12671) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 3, span: bytes(12673..12674) }, Literal { lit: 2, span: bytes(12675..12676) }], span: bytes(12672..12677) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(12679..12680) }, Literal { lit: 0, span: bytes(12681..12682) }], span: bytes(12678..12683) }], span: bytes(12665..12684) }, Group { delimiter: Bracket, stream: TokenStream [Ident { sym: int32, span: bytes(12686..12691) }, Ident { sym: int32, span: bytes(12692..12697) }], span: bytes(12685..12698) }], span: bytes(12655..12699) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12700..12702) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(12704..12705) }, Literal { lit: 1, span: bytes(12705..12706) }], span: bytes(12703..12707) }, Literal { lit: 3, span: bytes(12708..12709) }, Literal { lit: 2, span: bytes(12710..12711) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build apply=TopKFusion
 (top_k (top_k (constant [[5 4] [3 2] [1 0]] [int32 int32]) [0] [#0] 3 2) [1] [#1] 1 0)
 ----
-%0 =
-| Constant (5, 4) (3, 2) (1, 0)
-| TopK group=(#0) order=(#0 asc nulls_first) limit=3 offset=2
-| TopK group=(#1) order=(#1 asc nulls_first) limit=1 offset=0
+error: Object spec [Ident { sym: top_k, span: bytes(12735..12740) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: constant, span: bytes(12742..12750) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 5, span: bytes(12753..12754) }, Literal { lit: 4, span: bytes(12755..12756) }], span: bytes(12752..12757) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 3, span: bytes(12759..12760) }, Literal { lit: 2, span: bytes(12761..12762) }], span: bytes(12758..12763) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(12765..12766) }, Literal { lit: 0, span: bytes(12767..12768) }], span: bytes(12764..12769) }], span: bytes(12751..12770) }, Group { delimiter: Bracket, stream: TokenStream [Ident { sym: int32, span: bytes(12772..12777) }, Ident { sym: int32, span: bytes(12778..12783) }], span: bytes(12771..12784) }], span: bytes(12741..12785) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 0, span: bytes(12787..12788) }], span: bytes(12786..12789) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(12791..12792) }, Literal { lit: 0, span: bytes(12792..12793) }], span: bytes(12790..12794) }, Literal { lit: 3, span: bytes(12795..12796) }, Literal { lit: 2, span: bytes(12797..12798) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build apply=TopKFusion
 (top_k (top_k (constant [[5 4] [3 2] [1 0]] [int32 int32]) [0] [] 3 2) [0] [#1] 1 0)
 ----
-%0 =
-| Constant (5, 4) (3, 2) (1, 0)
-| TopK group=(#0) order=() limit=3 offset=2
-| TopK group=(#0) order=(#1 asc nulls_first) limit=1 offset=0
+error: Object spec [Ident { sym: top_k, span: bytes(12823..12828) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: constant, span: bytes(12830..12838) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 5, span: bytes(12841..12842) }, Literal { lit: 4, span: bytes(12843..12844) }], span: bytes(12840..12845) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 3, span: bytes(12847..12848) }, Literal { lit: 2, span: bytes(12849..12850) }], span: bytes(12846..12851) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(12853..12854) }, Literal { lit: 0, span: bytes(12855..12856) }], span: bytes(12852..12857) }], span: bytes(12839..12858) }, Group { delimiter: Bracket, stream: TokenStream [Ident { sym: int32, span: bytes(12860..12865) }, Ident { sym: int32, span: bytes(12866..12871) }], span: bytes(12859..12872) }], span: bytes(12829..12873) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 0, span: bytes(12875..12876) }], span: bytes(12874..12877) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12878..12880) }, Literal { lit: 3, span: bytes(12881..12882) }, Literal { lit: 2, span: bytes(12883..12884) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # Fusionable TopK operators with grouping key
 
 build apply=TopKFusion
 (top_k (top_k (constant [[5 4] [3 2] [1 0] [1 1]] [int32 int32]) [0] [] 3 1) [0] [] 1 0)
 ----
-%0 =
-| Constant (5, 4) (3, 2) (1, 0) (1, 1)
-| TopK group=(#0) order=() limit=1 offset=1
+error: Object spec [Ident { sym: top_k, span: bytes(12909..12914) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: constant, span: bytes(12916..12924) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 5, span: bytes(12927..12928) }, Literal { lit: 4, span: bytes(12929..12930) }], span: bytes(12926..12931) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 3, span: bytes(12933..12934) }, Literal { lit: 2, span: bytes(12935..12936) }], span: bytes(12932..12937) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(12939..12940) }, Literal { lit: 0, span: bytes(12941..12942) }], span: bytes(12938..12943) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(12945..12946) }, Literal { lit: 1, span: bytes(12947..12948) }], span: bytes(12944..12949) }], span: bytes(12925..12950) }, Group { delimiter: Bracket, stream: TokenStream [Ident { sym: int32, span: bytes(12952..12957) }, Ident { sym: int32, span: bytes(12958..12963) }], span: bytes(12951..12964) }], span: bytes(12915..12965) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 0, span: bytes(12967..12968) }], span: bytes(12966..12969) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(12970..12972) }, Literal { lit: 3, span: bytes(12973..12974) }, Literal { lit: 1, span: bytes(12975..12976) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build apply=FoldConstants
 (top_k (constant [[5 4] [3 2] [1 0] [1 1]] [int32 int32]) [0] [] 1 1)
 ----
-%0 =
-| Constant (1, 1)
+error: Object spec [Ident { sym: constant, span: bytes(12999..13007) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 5, span: bytes(13010..13011) }, Literal { lit: 4, span: bytes(13012..13013) }], span: bytes(13009..13014) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 3, span: bytes(13016..13017) }, Literal { lit: 2, span: bytes(13018..13019) }], span: bytes(13015..13020) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(13022..13023) }, Literal { lit: 0, span: bytes(13024..13025) }], span: bytes(13021..13026) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(13028..13029) }, Literal { lit: 1, span: bytes(13030..13031) }], span: bytes(13027..13032) }], span: bytes(13008..13033) }, Group { delimiter: Bracket, stream: TokenStream [Ident { sym: int32, span: bytes(13035..13040) }, Ident { sym: int32, span: bytes(13041..13046) }], span: bytes(13034..13047) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build apply=FoldConstants
 (top_k (top_k (constant [[5 4] [3 2] [1 0] [1 1]] [int32 int32]) [0] [] 3 1) [0] [] 1 0)
 ----
-%0 =
-| Constant (1, 1)
+error: Object spec [Ident { sym: top_k, span: bytes(13070..13075) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: constant, span: bytes(13077..13085) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 5, span: bytes(13088..13089) }, Literal { lit: 4, span: bytes(13090..13091) }], span: bytes(13087..13092) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 3, span: bytes(13094..13095) }, Literal { lit: 2, span: bytes(13096..13097) }], span: bytes(13093..13098) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(13100..13101) }, Literal { lit: 0, span: bytes(13102..13103) }], span: bytes(13099..13104) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(13106..13107) }, Literal { lit: 1, span: bytes(13108..13109) }], span: bytes(13105..13110) }], span: bytes(13086..13111) }, Group { delimiter: Bracket, stream: TokenStream [Ident { sym: int32, span: bytes(13113..13118) }, Ident { sym: int32, span: bytes(13119..13124) }], span: bytes(13112..13125) }], span: bytes(13076..13126) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 0, span: bytes(13128..13129) }], span: bytes(13127..13130) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(13131..13133) }, Literal { lit: 3, span: bytes(13134..13135) }, Literal { lit: 1, span: bytes(13136..13137) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # Both nulls_last
 
 build apply=TopKFusion
 (top_k (top_k (get x) [0] [(#0 false true)] 3 2) [0] [(#0 false true)] 1 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#0 asc nulls_last) limit=1 offset=3
+error: Object spec [Ident { sym: top_k, span: bytes(13160..13165) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(13167..13170) }, Ident { sym: x, span: bytes(13171..13172) }], span: bytes(13166..13173) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 0, span: bytes(13175..13176) }], span: bytes(13174..13177) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(13180..13181) }, Literal { lit: 0, span: bytes(13181..13182) }, Ident { sym: false, span: bytes(13183..13188) }, Ident { sym: true, span: bytes(13189..13193) }], span: bytes(13179..13194) }], span: bytes(13178..13195) }, Literal { lit: 3, span: bytes(13196..13197) }, Literal { lit: 2, span: bytes(13198..13199) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # Cannot be fused, because nulls_last differs
 
 build apply=TopKFusion
 (top_k (top_k (get x) [0] [(#0 false false)] 3 2) [0] [(#0 false true)] 1 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#0 asc nulls_first) limit=3 offset=2
-| TopK group=(#0) order=(#0 asc nulls_last) limit=1 offset=1
+error: Object spec [Ident { sym: top_k, span: bytes(13237..13242) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(13244..13247) }, Ident { sym: x, span: bytes(13248..13249) }], span: bytes(13243..13250) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 0, span: bytes(13252..13253) }], span: bytes(13251..13254) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(13257..13258) }, Literal { lit: 0, span: bytes(13258..13259) }, Ident { sym: false, span: bytes(13260..13265) }, Ident { sym: false, span: bytes(13266..13271) }], span: bytes(13256..13272) }], span: bytes(13255..13273) }, Literal { lit: 3, span: bytes(13274..13275) }, Literal { lit: 2, span: bytes(13276..13277) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # Cannot be fused, because asc-desc differs
 
 build apply=TopKFusion
 (top_k (top_k (get x) [0] [(#0 false false)] 3 2) [0] [(#0 true false)] 1 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#0 asc nulls_first) limit=3 offset=2
-| TopK group=(#0) order=(#0 desc nulls_first) limit=1 offset=1
+error: Object spec [Ident { sym: top_k, span: bytes(13315..13320) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(13322..13325) }, Ident { sym: x, span: bytes(13326..13327) }], span: bytes(13321..13328) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 0, span: bytes(13330..13331) }], span: bytes(13329..13332) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(13335..13336) }, Literal { lit: 0, span: bytes(13336..13337) }, Ident { sym: false, span: bytes(13338..13343) }, Ident { sym: false, span: bytes(13344..13349) }], span: bytes(13334..13350) }], span: bytes(13333..13351) }, Literal { lit: 3, span: bytes(13352..13353) }, Literal { lit: 2, span: bytes(13354..13355) }] (type Vec<usize>) has unsupported delimiter Parenthesis

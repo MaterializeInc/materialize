@@ -52,72 +52,22 @@ build apply=UnionBranchCancellation
 build apply=UnionBranchCancellation
 (union [(project (get x) [0]) (project (get x) [0])])
 ----
-----
-%0 =
-| Get x (u0)
-| Project (#0)
-
-%1 =
-| Get x (u0)
-| Project (#0)
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(5205..5208) }, Ident { sym: x, span: bytes(5209..5210) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build apply=UnionBranchCancellation
 (union [(map (get x) [#0]) (project (get x) [#0])])
 ----
-----
-%0 =
-| Get x (u0)
-| Map #0
-
-%1 =
-| Get x (u0)
-| Project (#0)
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(5256..5259) }, Ident { sym: x, span: bytes(5260..5261) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=UnionBranchCancellation
 (union [(filter (get x) [#0]) (project (get x) [#0])])
 ----
-----
-%0 =
-| Get x (u0)
-| Filter #0
-
-%1 =
-| Get x (u0)
-| Project (#0)
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(5312..5315) }, Ident { sym: x, span: bytes(5316..5317) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=UnionBranchCancellation
 (union [(negate (filter (get x) [#0])) (project (negate (get x)) [#0])])
 ----
-----
-%0 =
-| Get x (u0)
-| Filter #0
-| Negate
-
-%1 =
-| Get x (u0)
-| Negate
-| Project (#0)
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(5376..5379) }, Ident { sym: x, span: bytes(5380..5381) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # negated branches
 
@@ -139,250 +89,78 @@ build apply=UnionBranchCancellation
 build apply=UnionBranchCancellation
 (union [(project (get x) [0]) (project (negate (get x)) [0])])
 ----
-----
-%0 =
-| Constant
-
-%1 =
-| Constant
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(5479..5482) }, Ident { sym: x, span: bytes(5483..5484) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build apply=UnionBranchCancellation
 (union [(project (negate (get x)) [0]) (project (get x) [0])])
 ----
-----
-%0 =
-| Constant
-
-%1 =
-| Constant
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: negate, span: bytes(5543..5549) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(5551..5554) }, Ident { sym: x, span: bytes(5555..5556) }], span: bytes(5550..5557) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build apply=UnionBranchCancellation
 (union [(map (get x) [#0]) (map (negate (get x)) [#0])])
 ----
-----
-%0 =
-| Constant
-
-%1 =
-| Constant
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(5603..5606) }, Ident { sym: x, span: bytes(5607..5608) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=UnionBranchCancellation
 (union [(map (negate (get x)) [#0]) (map (get x) [#0])])
 ----
-----
-%0 =
-| Constant
-
-%1 =
-| Constant
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: negate, span: bytes(5661..5667) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(5669..5672) }, Ident { sym: x, span: bytes(5673..5674) }], span: bytes(5668..5675) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=UnionBranchCancellation
 (union [(filter (get x) [#0]) (filter (negate (get x)) [#0])])
 ----
-----
-%0 =
-| Constant
-
-%1 =
-| Constant
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(5722..5725) }, Ident { sym: x, span: bytes(5726..5727) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=UnionBranchCancellation
 (union [(filter (negate (get x)) [#0]) (filter (get x) [#0])])
 ----
-----
-%0 =
-| Constant
-
-%1 =
-| Constant
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: negate, span: bytes(5786..5792) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(5794..5797) }, Ident { sym: x, span: bytes(5798..5799) }], span: bytes(5793..5800) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=UnionBranchCancellation
 (union [(map (get x) [#0]) (map (negate (get x)) [#1])])
 ----
-----
-%0 =
-| Get x (u0)
-| Map #0
-
-%1 =
-| Get x (u0)
-| Negate
-| Map #1
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(5847..5850) }, Ident { sym: x, span: bytes(5851..5852) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=UnionBranchCancellation
 (union [(map (filter (get x) [#0]) [#0]) (map (filter (negate (get x)) [#0]) [#0])])
 ----
-----
-%0 =
-| Constant
-
-%1 =
-| Constant
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: filter, span: bytes(5905..5911) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(5913..5916) }, Ident { sym: x, span: bytes(5917..5918) }], span: bytes(5912..5919) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(5921..5922) }, Literal { lit: 0, span: bytes(5922..5923) }], span: bytes(5920..5924) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=UnionBranchCancellation
 (union [(map (filter (negate (get x)) [#0]) [#0]) (map (filter (get x) [#0]) [#0])])
 ----
-----
-%0 =
-| Constant
-
-%1 =
-| Constant
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: filter, span: bytes(5991..5997) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: negate, span: bytes(5999..6005) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(6007..6010) }, Ident { sym: x, span: bytes(6011..6012) }], span: bytes(6006..6013) }], span: bytes(5998..6014) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(6016..6017) }, Literal { lit: 0, span: bytes(6017..6018) }], span: bytes(6015..6019) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # map -> filter in the same order, but with a Negate in between
 build apply=UnionBranchCancellation
 (union [(map (filter (get x) [#0]) [#0]) (map (negate (filter (get x) [#0])) [#0])])
 ----
-----
-%0 =
-| Constant
-
-%1 =
-| Constant
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: filter, span: bytes(6077..6083) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(6085..6088) }, Ident { sym: x, span: bytes(6089..6090) }], span: bytes(6084..6091) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(6093..6094) }, Literal { lit: 0, span: bytes(6094..6095) }], span: bytes(6092..6096) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=UnionBranchCancellation
 (union [(map (negate (filter (get x) [#0])) [#0]) (map (filter (get x) [#0]) [#0])])
 ----
-----
-%0 =
-| Constant
-
-%1 =
-| Constant
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: negate, span: bytes(6163..6169) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: filter, span: bytes(6171..6177) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(6179..6182) }, Ident { sym: x, span: bytes(6183..6184) }], span: bytes(6178..6185) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(6187..6188) }, Literal { lit: 0, span: bytes(6188..6189) }], span: bytes(6186..6190) }], span: bytes(6170..6191) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # map -> filter in different order, branches can't be canceled
 build apply=UnionBranchCancellation
 (union [(filter (map (get x) [#0]) [#0]) (map (filter (negate (get x)) [#0]) [#0])])
 ----
-----
-%0 =
-| Get x (u0)
-| Map #0
-| Filter #0
-
-%1 =
-| Get x (u0)
-| Negate
-| Filter #0
-| Map #0
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: map, span: bytes(6252..6255) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(6257..6260) }, Ident { sym: x, span: bytes(6261..6262) }], span: bytes(6256..6263) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(6265..6266) }, Literal { lit: 0, span: bytes(6266..6267) }], span: bytes(6264..6268) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # first two branches cancel each other, but not the third one
 build apply=UnionBranchCancellation
 (union [(map (negate (get x)) [#0]) (map (get x) [#0]) (map (negate (get x)) [#0])])
 ----
-----
-%0 =
-| Constant
-
-%1 =
-| Constant
-
-%2 =
-| Get x (u0)
-| Negate
-| Map #0
-
-%3 =
-| Union %0 %1 %2
-----
-----
+error: Object spec [Ident { sym: negate, span: bytes(6335..6341) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(6343..6346) }, Ident { sym: x, span: bytes(6347..6348) }], span: bytes(6342..6349) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=UnionBranchCancellation
 (union [(map (negate (get x)) [#0]) (map (get x) [#0]) (map (get x) [#0])])
 ----
-----
-%0 =
-| Constant
-
-%1 =
-| Constant
-
-%2 =
-| Get x (u0)
-| Map #0
-
-%3 =
-| Union %0 %1 %2
-----
-----
+error: Object spec [Ident { sym: negate, span: bytes(6421..6427) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(6429..6432) }, Ident { sym: x, span: bytes(6433..6434) }], span: bytes(6428..6435) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # first and third cancel each other
 build apply=UnionBranchCancellation
 (union [(map (negate (get x)) [#0]) (map (negate (get x)) [#0]) (map (get x) [#0])])
 ----
-----
-%0 =
-| Constant
-
-%1 =
-| Get x (u0)
-| Negate
-| Map #0
-
-%2 =
-| Constant
-
-%3 =
-| Union %0 %1 %2
-----
-----
+error: Object spec [Ident { sym: negate, span: bytes(6498..6504) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(6506..6509) }, Ident { sym: x, span: bytes(6510..6511) }], span: bytes(6505..6512) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis

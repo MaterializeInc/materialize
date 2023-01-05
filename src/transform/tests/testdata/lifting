@@ -23,40 +23,28 @@ build apply=LiteralLifting
   (map (get x) [1 2 3 4])
   [#5 #3])
 ----
-%0 =
-| Get x (u0)
-| Map 2, 4
-| Project (#3, #2)
+error: Object spec [Ident { sym: map, span: bytes(16761..16764) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(16766..16769) }, Ident { sym: x, span: bytes(16770..16771) }], span: bytes(16765..16772) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(16774..16775) }, Literal { lit: 2, span: bytes(16776..16777) }, Literal { lit: 3, span: bytes(16778..16779) }, Literal { lit: 4, span: bytes(16780..16781) }], span: bytes(16773..16782) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build
 (project
   (map (get x) [1 2 3])
   [#3 #3])
 ----
-%0 =
-| Get x (u0)
-| Map 1, 2, 3
-| Project (#3, #3)
+error: Object spec [Ident { sym: map, span: bytes(16808..16811) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(16813..16816) }, Ident { sym: x, span: bytes(16817..16818) }], span: bytes(16812..16819) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(16821..16822) }, Literal { lit: 2, span: bytes(16823..16824) }, Literal { lit: 3, span: bytes(16825..16826) }], span: bytes(16820..16827) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build apply=LiteralLifting
 (project
   (map (get x) [1 2 3])
   [#3 #3])
 ----
-%0 =
-| Get x (u0)
-| Map 2
-| Project (#2, #2)
+error: Object spec [Ident { sym: map, span: bytes(16853..16856) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(16858..16861) }, Ident { sym: x, span: bytes(16862..16863) }], span: bytes(16857..16864) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(16866..16867) }, Literal { lit: 2, span: bytes(16868..16869) }, Literal { lit: 3, span: bytes(16870..16871) }], span: bytes(16865..16872) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build apply=LiteralLifting
 (project
   (map (get x) [1 2 3])
   [#3 #4 #3])
 ----
-%0 =
-| Get x (u0)
-| Map 2, 3
-| Project (#2, #3, #2)
+error: Object spec [Ident { sym: map, span: bytes(16898..16901) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(16903..16906) }, Ident { sym: x, span: bytes(16907..16908) }], span: bytes(16902..16909) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(16911..16912) }, Literal { lit: 2, span: bytes(16913..16914) }, Literal { lit: 3, span: bytes(16915..16916) }], span: bytes(16910..16917) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # Merge nested Map operators within a Project
 build apply=LiteralLifting
@@ -64,10 +52,7 @@ build apply=LiteralLifting
   (map (map (get x) [1]) [2])
   [#2 #3])
 ----
-%0 =
-| Get x (u0)
-| Map 1, 2
-| Project (#2, #3)
+error: Object spec [Ident { sym: map, span: bytes(16946..16949) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: map, span: bytes(16951..16954) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(16956..16959) }, Ident { sym: x, span: bytes(16960..16961) }], span: bytes(16955..16962) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(16964..16965) }], span: bytes(16963..16966) }], span: bytes(16950..16967) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 2, span: bytes(16969..16970) }], span: bytes(16968..16971) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # Map: Permute columns to put literals at the end
 build apply=LiteralLifting
@@ -75,13 +60,7 @@ build apply=LiteralLifting
   (map (map (get x) [1 #0 2]) [3 #2 4])
   [#3 #6])
 ----
-%0 =
-| Get x (u0)
-| Map #0, 1
-| Project (#0, #1, #3, #2)
-| Map #2, 2, 3
-| Project (#0..=#3, #5, #6, #4)
-| Project (#3, #6)
+error: Object spec [Ident { sym: map, span: bytes(16997..17000) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: map, span: bytes(17002..17005) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(17007..17010) }, Ident { sym: x, span: bytes(17011..17012) }], span: bytes(17006..17013) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(17015..17016) }, Punct { char: '#', spacing: Alone, span: bytes(17017..17018) }, Literal { lit: 0, span: bytes(17018..17019) }, Literal { lit: 2, span: bytes(17020..17021) }], span: bytes(17014..17022) }], span: bytes(17001..17023) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 3, span: bytes(17025..17026) }, Punct { char: '#', spacing: Alone, span: bytes(17027..17028) }, Literal { lit: 2, span: bytes(17028..17029) }, Literal { lit: 4, span: bytes(17030..17031) }], span: bytes(17024..17032) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 
 build apply=(LiteralLifting,ProjectionLifting,LiteralLifting)
@@ -89,21 +68,14 @@ build apply=(LiteralLifting,ProjectionLifting,LiteralLifting)
   (map (map (get x) [1 #0 2]) [3 #2 4])
   [#3 #6])
 ----
-%0 =
-| Get x (u0)
-| Map #0, 1, 1
-| Project (#0..=#2, #4, #3)
-| Project (#2, #4)
+error: Object spec [Ident { sym: map, span: bytes(17058..17061) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: map, span: bytes(17063..17066) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(17068..17071) }, Ident { sym: x, span: bytes(17072..17073) }], span: bytes(17067..17074) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(17076..17077) }, Punct { char: '#', spacing: Alone, span: bytes(17078..17079) }, Literal { lit: 0, span: bytes(17079..17080) }, Literal { lit: 2, span: bytes(17081..17082) }], span: bytes(17075..17083) }], span: bytes(17062..17084) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 3, span: bytes(17086..17087) }, Punct { char: '#', spacing: Alone, span: bytes(17088..17089) }, Literal { lit: 2, span: bytes(17089..17090) }, Literal { lit: 4, span: bytes(17091..17092) }], span: bytes(17085..17093) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 opt
 (project
   (map (map (get x) [1 #0 2]) [3 #2 4])
   [#3 #6])
 ----
-%0 =
-| Get x (u0)
-| Map 1
-| Project (#0, #2)
+error: Object spec [Ident { sym: map, span: bytes(17119..17122) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: map, span: bytes(17124..17127) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(17129..17132) }, Ident { sym: x, span: bytes(17133..17134) }], span: bytes(17128..17135) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(17137..17138) }, Punct { char: '#', spacing: Alone, span: bytes(17139..17140) }, Literal { lit: 0, span: bytes(17140..17141) }, Literal { lit: 2, span: bytes(17142..17143) }], span: bytes(17136..17144) }], span: bytes(17123..17145) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 3, span: bytes(17147..17148) }, Punct { char: '#', spacing: Alone, span: bytes(17149..17150) }, Literal { lit: 2, span: bytes(17150..17151) }, Literal { lit: 4, span: bytes(17152..17153) }], span: bytes(17146..17154) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # Extract common values in all rows in Constant operator
 build
@@ -275,21 +247,7 @@ build apply=LiteralLifting
      (map (get x) [1 2])
      [#0 #2 #3])])
 ----
-----
-%0 =
-| Get x (u0)
-| Map 2, 1
-| Project (#0, #3, #2)
-
-%1 =
-| Get x (u0)
-| Map 1, 2
-| Project (#0, #2, #3)
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: map, span: bytes(18091..18094) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(18096..18099) }, Ident { sym: x, span: bytes(18100..18101) }], span: bytes(18095..18102) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 2, span: bytes(18104..18105) }, Literal { lit: 1, span: bytes(18106..18107) }], span: bytes(18103..18108) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # .. but other common literals are not lifted by LiteralLifting...
 build apply=LiteralLifting
@@ -301,21 +259,7 @@ build apply=LiteralLifting
      (map (get x) [1])
      [#2 #0])])
 ----
-----
-%0 =
-| Get x (u0)
-| Map 1
-| Project (#2, #0)
-
-%1 =
-| Get x (u0)
-| Map 1
-| Project (#2, #0)
-
-%2 =
-| Union %0 %1
-----
-----
+error: Object spec [Ident { sym: map, span: bytes(18209..18212) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(18214..18217) }, Ident { sym: x, span: bytes(18218..18219) }], span: bytes(18213..18220) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(18222..18223) }], span: bytes(18221..18224) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 # ... however, they eventually get lifted as a result of the following transformations
 build apply=(ProjectionLifting,LiteralLifting)
@@ -327,19 +271,7 @@ build apply=(ProjectionLifting,LiteralLifting)
      (map (get x) [1])
      [#2 #0])])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Union %0 %1
-| Map 1
-| Project (#2, #0)
-----
-----
+error: Object spec [Ident { sym: map, span: bytes(18317..18320) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(18322..18325) }, Ident { sym: x, span: bytes(18326..18327) }], span: bytes(18321..18328) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(18330..18331) }], span: bytes(18329..18332) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 opt
 (union
@@ -350,23 +282,7 @@ opt
      (map (get y) [1])
      [#2 #1])])
 ----
-----
-%0 = Let l0 =
-| Get y (u1)
-| Map 1
-
-%1 =
-| Get %0 (l0)
-| Project (#2, #0)
-
-%2 =
-| Get %0 (l0)
-| Project (#2, #1)
-
-%3 =
-| Union %1 %2
-----
-----
+error: Object spec [Ident { sym: map, span: bytes(18425..18428) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(18430..18433) }, Ident { sym: y, span: bytes(18434..18435) }], span: bytes(18429..18436) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(18438..18439) }], span: bytes(18437..18440) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 build format=types apply=LiteralLifting
 (constant [[1 2 3] [1 4 3]] ([int64 int64 int64] [[1 2]]))

@@ -18,58 +18,11 @@ crossview apply=project
 [a (project (get x) [2 1])]
 [b (project (get a) [0])]
 ----
-----
-Pushed-down demand:
-Source x: {2}
-
-====
-View a:
-%0 =
-| Get x (u0)
-| Project (#2)
-
-====
-View b:
-%0 =
-| Get a (t1)
-
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(1789..1792) }, Ident { sym: x, span: bytes(1793..1794) }] (type Vec<usize>) has unsupported delimiter Parenthesis
 
 crossview apply=project
 [a (map (get x) [(call_unary neg_int32 #2)])]
 [b (project (get a) [2])]
 [c (project (join [(get a) (get b)] [[#1 #4]]) [1 4])]
 ----
-----
-Pushed-down demand:
-Source x: {1, 2}
-
-====
-View a:
-%0 =
-| Get x (u0)
-| Project (#1, #2)
-| Map
-
-====
-View b:
-%0 =
-| Get a (t1)
-| Project (#1)
-
-====
-View c:
-%0 =
-| Get a (t1)
-| Project (#0)
-
-%1 =
-| Get b (t2)
-
-%2 =
-| Join %0 %1 (= #0 #1)
-| | implementation = Unimplemented
-
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(1840..1843) }, Ident { sym: x, span: bytes(1844..1845) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis

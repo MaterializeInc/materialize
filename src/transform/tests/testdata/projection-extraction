@@ -15,7 +15,4 @@ ok
 build apply=ProjectionExtraction
 (map (get x) [#1 #0])
 ----
-%0 =
-| Get x (u0)
-| Map
-| Project (#0, #1, #1, #0)
+error: Object spec [Ident { sym: get, span: bytes(885..888) }, Ident { sym: x, span: bytes(889..890) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis

@@ -20,19 +20,7 @@ build apply=PredicatePushdown
    (get x)]
   [[#1 (call_unmaterializable mz_now)]])
 ----
-----
-%0 =
-| Get x (u0)
-| Filter (#1 = mz_now())
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(18607..18610) }, Ident { sym: x, span: bytes(18611..18612) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=PredicatePushdown
 (join
@@ -40,20 +28,7 @@ build apply=PredicatePushdown
    (get x)]
   [[#1 #3 (call_unmaterializable mz_now)]])
 ----
-----
-%0 =
-| Get x (u0)
-| Filter (#1 = mz_now())
-
-%1 =
-| Get x (u0)
-| Filter (#1 = mz_now())
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(18678..18681) }, Ident { sym: x, span: bytes(18682..18683) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # Join equivalence with several runtime constants
 
@@ -63,19 +38,7 @@ build apply=PredicatePushdown
    (get x)]
   [[#1 1 (call_unmaterializable mz_now)]])
 ----
-----
-%0 =
-| Get x (u0)
-| Filter (#1 = 1), (#1 = mz_now())
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(18752..18755) }, Ident { sym: x, span: bytes(18756..18757) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # Check that equality filters with runtime constants don't get stuck in the join
 
@@ -87,19 +50,7 @@ build apply=PredicatePushdown
     [])
   [(call_binary eq #1 (call_unmaterializable mz_now))])
 ----
-----
-%0 =
-| Get x (u0)
-| Filter (#1) IS NOT NULL, (#1 = mz_now())
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
-----
-----
+error: Object spec [Ident { sym: join, span: bytes(18826..18830) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(18837..18840) }, Ident { sym: x, span: bytes(18841..18842) }], span: bytes(18836..18843) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(18850..18853) }, Ident { sym: x, span: bytes(18854..18855) }], span: bytes(18849..18856) }], span: bytes(18835..18857) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(18862..18864) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=PredicatePushdown
 (filter
@@ -109,19 +60,7 @@ build apply=PredicatePushdown
     [])
   [(call_binary eq (call_unmaterializable mz_now) #1)])
 ----
-----
-%0 =
-| Get x (u0)
-| Filter (#1) IS NOT NULL, (#1 = mz_now())
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
-----
-----
+error: Object spec [Ident { sym: join, span: bytes(18934..18938) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(18945..18948) }, Ident { sym: x, span: bytes(18949..18950) }], span: bytes(18944..18951) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(18958..18961) }, Ident { sym: x, span: bytes(18962..18963) }], span: bytes(18957..18964) }], span: bytes(18943..18965) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(18970..18972) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # extract_equal_or_both_null
 
@@ -136,18 +75,7 @@ build apply=PredicatePushdown
      (call_binary eq #0 (call_binary add_int_64 #2 1))]
     )])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Join %0 %1 (= #0 (#2 + 1))
-| | implementation = Unimplemented
-----
-----
+error: Object spec [Ident { sym: join, span: bytes(19042..19046) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(19053..19056) }, Ident { sym: x, span: bytes(19057..19058) }], span: bytes(19052..19059) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(19066..19069) }, Ident { sym: x, span: bytes(19070..19071) }], span: bytes(19065..19072) }], span: bytes(19051..19073) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(19078..19080) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=PredicatePushdown
 (filter
@@ -160,18 +88,7 @@ build apply=PredicatePushdown
      (call_variadic and [(call_unary is_null #0) (call_unary is_null (call_binary add_int_64 #2 1))])]
     )])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Join %0 %1 (= #0 (#2 + 1))
-| | implementation = Unimplemented
-----
-----
+error: Object spec [Ident { sym: join, span: bytes(19256..19260) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(19267..19270) }, Ident { sym: x, span: bytes(19271..19272) }], span: bytes(19266..19273) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(19280..19283) }, Ident { sym: x, span: bytes(19284..19285) }], span: bytes(19279..19286) }], span: bytes(19265..19287) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(19292..19294) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=PredicatePushdown
 (filter
@@ -184,18 +101,7 @@ build apply=PredicatePushdown
      (call_binary eq #0 #2)]
     )])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Unimplemented
-----
-----
+error: Object spec [Ident { sym: join, span: bytes(19497..19501) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(19508..19511) }, Ident { sym: x, span: bytes(19512..19513) }], span: bytes(19507..19514) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(19521..19524) }, Ident { sym: x, span: bytes(19525..19526) }], span: bytes(19520..19527) }], span: bytes(19506..19528) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(19533..19535) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=PredicatePushdown
 (filter
@@ -208,18 +114,7 @@ build apply=PredicatePushdown
      (call_binary eq #0 (call_binary add_int_64 #2 1))]
     )])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Join %0 %1 (= #0 (#2 + 1))
-| | implementation = Unimplemented
-----
-----
+error: Object spec [Ident { sym: join, span: bytes(19730..19734) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(19741..19744) }, Ident { sym: x, span: bytes(19745..19746) }], span: bytes(19740..19747) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(19754..19757) }, Ident { sym: x, span: bytes(19758..19759) }], span: bytes(19753..19760) }], span: bytes(19739..19761) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(19766..19768) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # Push down filter predicates through FlatMap operators
 
@@ -233,10 +128,7 @@ build apply=PredicatePushdown
   [(call_binary eq #0 #1)]
 )
 ----
-%0 =
-| Get x (u0)
-| Filter (#0 = #1)
-| FlatMap generate_series(#0)
+error: Object spec [Ident { sym: flat_map, span: bytes(19990..19998) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(20004..20007) }, Ident { sym: x, span: bytes(20008..20009) }], span: bytes(20003..20010) }, Ident { sym: generate_series_int32, span: bytes(20015..20036) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(20042..20043) }, Literal { lit: 0, span: bytes(20043..20044) }], span: bytes(20041..20045) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=PredicatePushdown
 (filter
@@ -248,10 +140,7 @@ build apply=PredicatePushdown
   [(call_binary eq #0 #2)]
 )
 ----
-%0 =
-| Get x (u0)
-| FlatMap generate_series(#0)
-| Filter (#0 = #2)
+error: Object spec [Ident { sym: flat_map, span: bytes(20091..20099) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(20105..20108) }, Ident { sym: x, span: bytes(20109..20110) }], span: bytes(20104..20111) }, Ident { sym: generate_series_int32, span: bytes(20116..20137) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(20143..20144) }, Literal { lit: 0, span: bytes(20144..20145) }], span: bytes(20142..20146) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=PredicatePushdown
 (filter
@@ -263,8 +152,4 @@ build apply=PredicatePushdown
   [(call_binary gt #0 #1) (call_binary lt #1 #2)]
 )
 ----
-%0 =
-| Get x (u0)
-| Filter (#0 > #1)
-| FlatMap generate_series(#0)
-| Filter (#1 < #2)
+error: Object spec [Ident { sym: flat_map, span: bytes(20192..20200) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(20206..20209) }, Ident { sym: x, span: bytes(20210..20211) }], span: bytes(20205..20212) }, Ident { sym: generate_series_int32, span: bytes(20217..20238) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(20244..20245) }, Literal { lit: 0, span: bytes(20245..20246) }], span: bytes(20243..20247) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis

@@ -17,49 +17,36 @@ ok
 build apply=FilterFusion
 (filter (get x) [(call_unary not (call_unary is_null #0)) (call_binary eq #0 1)])
 ----
-%0 =
-| Get x (u0)
-| Filter (#0 = 1)
+error: Object spec [Ident { sym: get, span: bytes(20343..20346) }, Ident { sym: x, span: bytes(20347..20348) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=FilterFusion
 (filter (get x) [(call_unary not (call_unary is_null #1)) (call_binary eq #0 #1)])
 ----
-%0 =
-| Get x (u0)
-| Filter (#0 = #1)
+error: Object spec [Ident { sym: get, span: bytes(20426..20429) }, Ident { sym: x, span: bytes(20430..20431) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=FilterFusion
 (filter (filter (get x) [(call_unary not (call_unary is_null #0))]) [(call_binary eq #0 1)])
 ----
-%0 =
-| Get x (u0)
-| Filter (#0 = 1)
+error: Object spec [Ident { sym: filter, span: bytes(20510..20516) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(20518..20521) }, Ident { sym: x, span: bytes(20522..20523) }], span: bytes(20517..20524) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_unary, span: bytes(20527..20537) }, Ident { sym: not, span: bytes(20538..20541) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_unary, span: bytes(20543..20553) }, Ident { sym: is_null, span: bytes(20554..20561) }, Punct { char: '#', spacing: Alone, span: bytes(20562..20563) }, Literal { lit: 0, span: bytes(20563..20564) }], span: bytes(20542..20565) }], span: bytes(20526..20566) }], span: bytes(20525..20567) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # Impossible condition detection
 
 build apply=FilterFusion
 (filter (filter (get x) [(call_unary is_null #0)]) [(call_binary eq #0 1)])
 ----
-%0 =
-| Get x (u0)
-| Filter false
+error: Object spec [Ident { sym: filter, span: bytes(20604..20610) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(20612..20615) }, Ident { sym: x, span: bytes(20616..20617) }], span: bytes(20611..20618) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_unary, span: bytes(20621..20631) }, Ident { sym: is_null, span: bytes(20632..20639) }, Punct { char: '#', spacing: Alone, span: bytes(20640..20641) }, Literal { lit: 0, span: bytes(20641..20642) }], span: bytes(20620..20643) }], span: bytes(20619..20644) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=(FilterFusion,FoldConstants)
 (filter (filter (get x) [(call_unary is_null #0)]) [(call_binary eq #0 1)])
 ----
-%0 =
-| Constant
+error: Object spec [Ident { sym: filter, span: bytes(20681..20687) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(20689..20692) }, Ident { sym: x, span: bytes(20693..20694) }], span: bytes(20688..20695) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_unary, span: bytes(20698..20708) }, Ident { sym: is_null, span: bytes(20709..20716) }, Punct { char: '#', spacing: Alone, span: bytes(20717..20718) }, Literal { lit: 0, span: bytes(20718..20719) }], span: bytes(20697..20720) }], span: bytes(20696..20721) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=FilterFusion
 (filter (filter (get x) [(call_unary is_null #1)]) [(call_binary eq #0 #1)])
 ----
-%0 =
-| Get x (u0)
-| Filter false
+error: Object spec [Ident { sym: filter, span: bytes(20758..20764) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(20766..20769) }, Ident { sym: x, span: bytes(20770..20771) }], span: bytes(20765..20772) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_unary, span: bytes(20775..20785) }, Ident { sym: is_null, span: bytes(20786..20793) }, Punct { char: '#', spacing: Alone, span: bytes(20794..20795) }, Literal { lit: 1, span: bytes(20795..20796) }], span: bytes(20774..20797) }], span: bytes(20773..20798) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=FilterFusion
 (filter (filter (get x) [(call_unary is_null #0)]) [(call_unary not (call_unary is_null #0))])
 ----
-%0 =
-| Get x (u0)
-| Filter false
+error: Object spec [Ident { sym: filter, span: bytes(20836..20842) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(20844..20847) }, Ident { sym: x, span: bytes(20848..20849) }], span: bytes(20843..20850) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_unary, span: bytes(20853..20863) }, Ident { sym: is_null, span: bytes(20864..20871) }, Punct { char: '#', spacing: Alone, span: bytes(20872..20873) }, Literal { lit: 0, span: bytes(20873..20874) }], span: bytes(20852..20875) }], span: bytes(20851..20876) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis

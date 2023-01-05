@@ -25,26 +25,7 @@ build
      [#1])]
    [[#0 #2]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Get y (u1)
-
-%3 =
-| Join %1 %2 (= #0 #2)
-| | implementation = Unimplemented
-| Filter #1
-
-%4 =
-| Join %0 %3 (= #0 #2)
-| | implementation = Unimplemented
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(2027..2030) }, Ident { sym: x, span: bytes(2031..2032) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=JoinFusion
 (join
@@ -54,22 +35,7 @@ build apply=JoinFusion
      [#1])]
    [[#0 #2]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Get y (u1)
-
-%3 =
-| Join %0 %1 %2 (= #0 #2 #4)
-| | implementation = Unimplemented
-| Filter #3
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(2122..2125) }, Ident { sym: x, span: bytes(2126..2127) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=JoinFusion
 (join
@@ -79,19 +45,7 @@ build apply=JoinFusion
      [#1])]
    [[#0 #2]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Get y (u1)
-| Filter #1
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Unimplemented
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(2217..2220) }, Ident { sym: x, span: bytes(2221..2222) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # Check that filters around non-join operators are handled properly
 build apply=JoinFusion
@@ -105,26 +59,7 @@ build apply=JoinFusion
      [#1])]
    [[#0 #2 #6]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Get y (u1)
-
-%3 =
-| Get y (u1)
-| Filter #1
-
-%4 =
-| Join %0 %1 %2 %3 (= #0 #2 #4 #6)
-| | implementation = Unimplemented
-| Filter #3
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(2285..2288) }, Ident { sym: x, span: bytes(2289..2290) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=(JoinFusion,PredicatePushdown)
 (join
@@ -137,23 +72,4 @@ build apply=(JoinFusion,PredicatePushdown)
      [#1])]
    [[#0 #2 #6]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Get x (u0)
-| Filter #1
-
-%2 =
-| Get y (u1)
-
-%3 =
-| Get y (u1)
-| Filter #1
-
-%4 =
-| Join %0 %1 %2 %3 (= #0 #2 #4 #6)
-| | implementation = Unimplemented
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(2418..2421) }, Ident { sym: x, span: bytes(2422..2423) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis

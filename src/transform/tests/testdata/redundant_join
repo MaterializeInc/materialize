@@ -19,17 +19,7 @@ build apply=RedundantJoin
    (get x)]
   [[#0 #1]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Join %0
-| | implementation = Unimplemented
-| Map #0
-| Project (#2, #0, #1)
-----
-----
+error: Object spec [Ident { sym: reduce, span: bytes(24047..24053) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(24055..24058) }, Ident { sym: x, span: bytes(24059..24060) }], span: bytes(24054..24061) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(24063..24064) }, Literal { lit: 0, span: bytes(24064..24065) }], span: bytes(24062..24066) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(24067..24069) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=RedundantJoin
 (join
@@ -37,17 +27,7 @@ build apply=RedundantJoin
    (reduce (get x) [#0] [])]
   [[#0 #2]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Join %0
-| | implementation = Unimplemented
-| Map #0
-| Project (#0..=#2)
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(24107..24110) }, Ident { sym: x, span: bytes(24111..24112) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # self-join on primary key
 
@@ -57,17 +37,7 @@ build apply=RedundantJoin
    (get y)]
   [[#0 #2]])
 ----
-----
-%0 =
-| Get y (u1)
-
-%1 =
-| Join %0
-| | implementation = Unimplemented
-| Map #0, #1
-| Project (#0..=#3)
-----
-----
+error: Object spec [Ident { sym: get, span: bytes(24167..24170) }, Ident { sym: y, span: bytes(24171..24172) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # Expressions that can be built from the other projection.
 
@@ -77,17 +47,7 @@ build apply=RedundantJoin
    (get x)]
   [[#0 #6]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Join %0
-| | implementation = Unimplemented
-| Map #0, #0, (#0 + 1), (#0) IS NULL, record_create(#0), if (#0 = 0) then {1} else {2}
-| Project (#2..=#7, #0, #1)
-----
-----
+error: Object spec [Ident { sym: map, span: bytes(24210..24213) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: reduce, span: bytes(24215..24221) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(24223..24226) }, Ident { sym: x, span: bytes(24227..24228) }], span: bytes(24222..24229) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(24231..24232) }, Literal { lit: 0, span: bytes(24232..24233) }], span: bytes(24230..24234) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(24235..24237) }], span: bytes(24214..24238) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(24240..24241) }, Literal { lit: 0, span: bytes(24241..24242) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_binary, span: bytes(24244..24255) }, Ident { sym: add_int64, span: bytes(24256..24265) }, Punct { char: '#', spacing: Alone, span: bytes(24266..24267) }, Literal { lit: 0, span: bytes(24267..24268) }, Literal { lit: 1, span: bytes(24269..24270) }], span: bytes(24243..24271) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_unary, span: bytes(24273..24283) }, Ident { sym: is_null, span: bytes(24284..24291) }, Punct { char: '#', spacing: Alone, span: bytes(24292..24293) }, Literal { lit: 0, span: bytes(24293..24294) }], span: bytes(24272..24295) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_variadic, span: bytes(24297..24310) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: record_create, span: bytes(24312..24325) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: "f1", span: bytes(24327..24331) }], span: bytes(24326..24332) }], span: bytes(24311..24333) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(24335..24336) }, Literal { lit: 0, span: bytes(24336..24337) }], span: bytes(24334..24338) }], span: bytes(24296..24339) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: if, span: bytes(24341..24343) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_binary, span: bytes(24345..24356) }, Ident { sym: eq, span: bytes(24357..24359) }, Punct { char: '#', spacing: Alone, span: bytes(24360..24361) }, Literal { lit: 0, span: bytes(24361..24362) }, Literal { lit: 0, span: bytes(24363..24364) }], span: bytes(24344..24365) }, Literal { lit: 1, span: bytes(24366..24367) }, Literal { lit: 2, span: bytes(24368..24369) }], span: bytes(24340..24370) }], span: bytes(24239..24371) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=RedundantJoin
 (join
@@ -99,17 +59,7 @@ build apply=RedundantJoin
    (get x)]
   [[#0 #4]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Join %0
-| | implementation = Unimplemented
-| Map #0, #0, (#0 + 1), (#0) IS NULL
-| Project (#2..=#5, #0, #1)
-----
-----
+error: Object spec [Ident { sym: map, span: bytes(24409..24412) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: map, span: bytes(24419..24422) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: map, span: bytes(24431..24434) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: reduce, span: bytes(24436..24442) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(24444..24447) }, Ident { sym: x, span: bytes(24448..24449) }], span: bytes(24443..24450) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(24452..24453) }, Literal { lit: 0, span: bytes(24453..24454) }], span: bytes(24451..24455) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(24456..24458) }], span: bytes(24435..24459) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(24461..24462) }, Literal { lit: 0, span: bytes(24462..24463) }], span: bytes(24460..24464) }], span: bytes(24430..24465) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_binary, span: bytes(24475..24486) }, Ident { sym: add_int64, span: bytes(24487..24496) }, Punct { char: '#', spacing: Alone, span: bytes(24497..24498) }, Literal { lit: 0, span: bytes(24498..24499) }, Literal { lit: 1, span: bytes(24500..24501) }], span: bytes(24474..24502) }], span: bytes(24473..24503) }], span: bytes(24418..24504) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_unary, span: bytes(24514..24524) }, Ident { sym: is_null, span: bytes(24525..24532) }, Punct { char: '#', spacing: Alone, span: bytes(24533..24534) }, Literal { lit: 0, span: bytes(24534..24535) }], span: bytes(24513..24536) }], span: bytes(24512..24537) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=RedundantJoin
 (join
@@ -123,17 +73,7 @@ build apply=RedundantJoin
    (get x)]
   [[#3 #4]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Join %0
-| | implementation = Unimplemented
-| Map (#0) IS NULL, (#0 + 1), #0, #0
-| Project (#2..=#5, #0, #1)
-----
-----
+error: Object spec [Ident { sym: project, span: bytes(24575..24582) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: map, span: bytes(24588..24591) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: map, span: bytes(24600..24603) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: map, span: bytes(24614..24617) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: reduce, span: bytes(24619..24625) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(24627..24630) }, Ident { sym: x, span: bytes(24631..24632) }], span: bytes(24626..24633) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(24635..24636) }, Literal { lit: 0, span: bytes(24636..24637) }], span: bytes(24634..24638) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(24639..24641) }], span: bytes(24618..24642) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(24644..24645) }, Literal { lit: 0, span: bytes(24645..24646) }], span: bytes(24643..24647) }], span: bytes(24613..24648) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_binary, span: bytes(24660..24671) }, Ident { sym: add_int64, span: bytes(24672..24681) }, Punct { char: '#', spacing: Alone, span: bytes(24682..24683) }, Literal { lit: 0, span: bytes(24683..24684) }, Literal { lit: 1, span: bytes(24685..24686) }], span: bytes(24659..24687) }], span: bytes(24658..24688) }], span: bytes(24599..24689) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_unary, span: bytes(24701..24711) }, Ident { sym: is_null, span: bytes(24712..24719) }, Punct { char: '#', spacing: Alone, span: bytes(24720..24721) }, Literal { lit: 0, span: bytes(24721..24722) }], span: bytes(24700..24723) }], span: bytes(24699..24724) }], span: bytes(24587..24725) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(24732..24733) }, Literal { lit: 3, span: bytes(24733..24734) }, Punct { char: '#', spacing: Alone, span: bytes(24735..24736) }, Literal { lit: 2, span: bytes(24736..24737) }, Punct { char: '#', spacing: Alone, span: bytes(24738..24739) }, Literal { lit: 1, span: bytes(24739..24740) }, Punct { char: '#', spacing: Alone, span: bytes(24741..24742) }, Literal { lit: 0, span: bytes(24742..24743) }], span: bytes(24731..24744) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=RedundantJoin
 (join
@@ -141,19 +81,7 @@ build apply=RedundantJoin
    (reduce (get x) [(call_binary add_int64 #0 1)] [])]
   [[#0 #1]])
 ----
-----
-%0 =
-| Get x (u0)
-| Map (#0 + 1)
-| Project (#2)
-
-%1 =
-| Join %0
-| | implementation = Unimplemented
-| Map #0
-| Project (#0, #1)
-----
-----
+error: Object spec [Ident { sym: project, span: bytes(24782..24789) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: map, span: bytes(24791..24794) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(24796..24799) }, Ident { sym: x, span: bytes(24800..24801) }], span: bytes(24795..24802) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_binary, span: bytes(24805..24816) }, Ident { sym: add_int64, span: bytes(24817..24826) }, Punct { char: '#', spacing: Alone, span: bytes(24827..24828) }, Literal { lit: 0, span: bytes(24828..24829) }, Literal { lit: 1, span: bytes(24830..24831) }], span: bytes(24804..24832) }], span: bytes(24803..24833) }], span: bytes(24790..24834) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(24836..24837) }, Literal { lit: 2, span: bytes(24837..24838) }], span: bytes(24835..24839) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=RedundantJoin
 (join
@@ -163,27 +91,7 @@ build apply=RedundantJoin
    (reduce (get x) [(call_binary add_int64 #0 1)] [])]
   [[#0 #1]])
 ----
-----
-%0 =
-| Get x (u0)
-| Map (#0 + 1)
-| Project (#2)
-
-%1 =
-| Get x (u0)
-| Map (#0 + 1)
-| Project (#2)
-
-%2 =
-| Union %0 %1
-
-%3 =
-| Join %2
-| | implementation = Unimplemented
-| Map #0
-| Project (#0, #1)
-----
-----
+error: Object spec [Ident { sym: union, span: bytes(24920..24925) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: project, span: bytes(24932..24939) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: map, span: bytes(24941..24944) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(24946..24949) }, Ident { sym: x, span: bytes(24950..24951) }], span: bytes(24945..24952) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_binary, span: bytes(24955..24966) }, Ident { sym: add_int64, span: bytes(24967..24976) }, Punct { char: '#', spacing: Alone, span: bytes(24977..24978) }, Literal { lit: 0, span: bytes(24978..24979) }, Literal { lit: 1, span: bytes(24980..24981) }], span: bytes(24954..24982) }], span: bytes(24953..24983) }], span: bytes(24940..24984) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(24986..24987) }, Literal { lit: 2, span: bytes(24987..24988) }], span: bytes(24985..24989) }], span: bytes(24931..24990) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: project, span: bytes(24997..25004) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: map, span: bytes(25006..25009) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(25011..25014) }, Ident { sym: x, span: bytes(25015..25016) }], span: bytes(25010..25017) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_binary, span: bytes(25020..25031) }, Ident { sym: add_int64, span: bytes(25032..25041) }, Punct { char: '#', spacing: Alone, span: bytes(25042..25043) }, Literal { lit: 0, span: bytes(25043..25044) }, Literal { lit: 1, span: bytes(25045..25046) }], span: bytes(25019..25047) }], span: bytes(25018..25048) }], span: bytes(25005..25049) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(25051..25052) }, Literal { lit: 2, span: bytes(25052..25053) }], span: bytes(25050..25054) }], span: bytes(24996..25055) }], span: bytes(24930..25056) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # different dereferenced projection in union branches
 
@@ -195,29 +103,7 @@ build apply=RedundantJoin
    (reduce (get x) [(call_binary add_int64 #0 1)] [])]
   [[#0 #1]])
 ----
-----
-%0 =
-| Get x (u0)
-| Map (#0 + 1)
-| Project (#2)
-
-%1 =
-| Get x (u0)
-| Map (#0 + 2)
-| Project (#2)
-
-%2 =
-| Union %0 %1
-
-%3 =
-| Get x (u0)
-| Distinct group=((#0 + 1))
-
-%4 =
-| Join %2 %3 (= #0 #1)
-| | implementation = Unimplemented
-----
-----
+error: Object spec [Ident { sym: union, span: bytes(25137..25142) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: project, span: bytes(25149..25156) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: map, span: bytes(25158..25161) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(25163..25166) }, Ident { sym: x, span: bytes(25167..25168) }], span: bytes(25162..25169) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_binary, span: bytes(25172..25183) }, Ident { sym: add_int64, span: bytes(25184..25193) }, Punct { char: '#', spacing: Alone, span: bytes(25194..25195) }, Literal { lit: 0, span: bytes(25195..25196) }, Literal { lit: 1, span: bytes(25197..25198) }], span: bytes(25171..25199) }], span: bytes(25170..25200) }], span: bytes(25157..25201) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(25203..25204) }, Literal { lit: 2, span: bytes(25204..25205) }], span: bytes(25202..25206) }], span: bytes(25148..25207) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: project, span: bytes(25214..25221) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: map, span: bytes(25223..25226) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(25228..25231) }, Ident { sym: x, span: bytes(25232..25233) }], span: bytes(25227..25234) }, Group { delimiter: Bracket, stream: TokenStream [Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: call_binary, span: bytes(25237..25248) }, Ident { sym: add_int64, span: bytes(25249..25258) }, Punct { char: '#', spacing: Alone, span: bytes(25259..25260) }, Literal { lit: 0, span: bytes(25260..25261) }, Literal { lit: 2, span: bytes(25262..25263) }], span: bytes(25236..25264) }], span: bytes(25235..25265) }], span: bytes(25222..25266) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(25268..25269) }, Literal { lit: 2, span: bytes(25269..25270) }], span: bytes(25267..25271) }], span: bytes(25213..25272) }], span: bytes(25147..25273) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 # We can't remove the join unless the literal is lifted
 
@@ -227,20 +113,7 @@ build apply=RedundantJoin
    (get x)]
   [[#0 #2]])
 ----
-----
-%0 =
-| Get x (u0)
-| Distinct group=(#0)
-| Map 1
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Unimplemented
-----
-----
+error: Object spec [Ident { sym: map, span: bytes(25354..25357) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: reduce, span: bytes(25359..25365) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(25367..25370) }, Ident { sym: x, span: bytes(25371..25372) }], span: bytes(25366..25373) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(25375..25376) }, Literal { lit: 0, span: bytes(25376..25377) }], span: bytes(25374..25378) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(25379..25381) }], span: bytes(25358..25382) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(25384..25385) }], span: bytes(25383..25386) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
 
 build apply=(LiteralLifting,RedundantJoin)
 (join
@@ -248,16 +121,4 @@ build apply=(LiteralLifting,RedundantJoin)
    (get x)]
   [[#0 #2]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Join %0
-| | implementation = Unimplemented
-| Map #0
-| Project (#2, #0, #1)
-| Map 1
-| Project (#0, #3, #1, #2)
-----
-----
+error: Object spec [Ident { sym: map, span: bytes(25424..25427) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: reduce, span: bytes(25429..25435) }, Group { delimiter: Parenthesis, stream: TokenStream [Ident { sym: get, span: bytes(25437..25440) }, Ident { sym: x, span: bytes(25441..25442) }], span: bytes(25436..25443) }, Group { delimiter: Bracket, stream: TokenStream [Punct { char: '#', spacing: Alone, span: bytes(25445..25446) }, Literal { lit: 0, span: bytes(25446..25447) }], span: bytes(25444..25448) }, Group { delimiter: Bracket, stream: TokenStream [], span: bytes(25449..25451) }], span: bytes(25428..25452) }, Group { delimiter: Bracket, stream: TokenStream [Literal { lit: 1, span: bytes(25454..25455) }], span: bytes(25453..25456) }] (type Vec<MirScalarExpr>) has unsupported delimiter Parenthesis
