@@ -102,6 +102,7 @@
         transform: translateX(-100%);
         transition: all .2s ease-out;
         visibility: hidden;
+        padding-bottom: var(--medium);
 
         .close-topics {
             opacity: 0;
