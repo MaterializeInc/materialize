@@ -181,7 +181,7 @@ With JSON-formatted messages, we don't know the schema so the [JSON is pulled in
     SELECT * FROM abandoned_cart LIMIT 10;
     ```
 
-1. Use [`SUBSCRIBE`](/sql/subscribe) to the `abandoned_cart` view to see the results in real-time:
+1. To see the changes in the `abandoned_cart` materialized view as new data arrives, you can use [`SUBSCRIBE`](/sql/subscribe):
 
     ```sql
     COPY ( SUBSCRIBE ( SELECT * FROM abandoned_cart ) ) TO STDOUT;
