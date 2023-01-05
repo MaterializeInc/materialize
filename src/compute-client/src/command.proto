@@ -41,21 +41,20 @@ message ProtoComputeCommand {
         ProtoComputeStartupEpoch epoch = 2;
     }
 
+    message ProtoUpdateConfiguration {
+        repeated ProtoComputeParameter params = 1;
+    }
+
     oneof kind {
         ProtoCreateTimely create_timely = 1;
-        ProtoInstanceConfig create_instance = 2;
+        logging.ProtoLoggingConfig create_instance = 2;
         ProtoCreateDataflows create_dataflows = 3;
         mz_storage_client.client.ProtoAllowCompaction allow_compaction = 4;
         ProtoPeek peek = 5;
         ProtoCancelPeeks cancel_peeks = 6;
         google.protobuf.Empty initialization_complete = 7;
-        ProtoUpdateMaxResultSize update_max_result_size = 8;
+        ProtoUpdateConfiguration update_configuration = 8;
     }
-}
-
-message ProtoInstanceConfig {
-    logging.ProtoLoggingConfig logging = 1;
-    uint32 max_result_size = 2;
 }
 
 message ProtoCommunicationConfig {
@@ -74,6 +73,8 @@ message ProtoPeek {
     map<string, string> otel_ctx = 7;
 }
 
-message ProtoUpdateMaxResultSize {
-    uint32 max_result_size = 1;
+message ProtoComputeParameter {
+    oneof kind {
+        uint32 max_result_size = 1;
+    }
 }

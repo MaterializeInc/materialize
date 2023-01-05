@@ -307,14 +307,13 @@ struct CommandSpecialization {
 }
 
 impl CommandSpecialization {
-    /// Specialize a command for the given `Replica` and `ReplicaId`.
+    /// Specialize a command for the given replica configuration.
     ///
     /// Most `ComputeCommand`s are independent of the target replica, but some
     /// contain replica-specific fields that must be adjusted before sending.
     fn specialize_command<T>(&self, command: &mut ComputeCommand<T>) {
-        // Set new replica ID and obtain set the sinked logs specific to this replica
-        if let ComputeCommand::CreateInstance(config) = command {
-            config.logging = self.logging_config.clone();
+        if let ComputeCommand::CreateInstance(logging) = command {
+            *logging = self.logging_config.clone();
         }
 
         if let ComputeCommand::CreateTimely { comm_config, epoch } = command {
