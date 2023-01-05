@@ -92,7 +92,7 @@ where
         let state = metrics
             .cmds
             .init_state
-            .run_cmd(|_cas_mismatch_metric| {
+            .run_cmd(&shard_metrics, |_cas_mismatch_metric| {
                 // No cas_mismatch retries because we just use the returned
                 // state on a mismatch.
                 state_versions.maybe_init_shard(&shard_metrics)
@@ -832,7 +832,8 @@ where
     ) -> Result<(SeqNo, Result<R, E>, RoutineMaintenance), Indeterminate> {
         let is_write = cmd.name == self.metrics.cmds.compare_and_append.name;
         let is_rollup = cmd.name == self.metrics.cmds.add_and_remove_rollups.name;
-        cmd.run_cmd(|cas_mismatch_metric| async move {
+        let shard_metrics = Arc::clone(&self.shard_metrics);
+        cmd.run_cmd(&shard_metrics, |cas_mismatch_metric| async move {
             let mut garbage_collection;
 
             loop {

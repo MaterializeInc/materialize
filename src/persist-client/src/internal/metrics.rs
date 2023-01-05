@@ -461,7 +461,11 @@ pub struct CmdMetrics {
 }
 
 impl CmdMetrics {
-    pub async fn run_cmd<R, E, F, CmdFn>(&self, cmd_fn: CmdFn) -> Result<R, E>
+    pub async fn run_cmd<R, E, F, CmdFn>(
+        &self,
+        shard_metrics: &ShardMetrics,
+        cmd_fn: CmdFn,
+    ) -> Result<R, E>
     where
         F: std::future::Future<Output = Result<R, E>>,
         CmdFn: FnOnce(CmdCasMismatchMetric) -> F,
@@ -471,7 +475,10 @@ impl CmdMetrics {
         let res = cmd_fn(CmdCasMismatchMetric(self.cas_mismatch.clone())).await;
         self.seconds.inc_by(start.elapsed().as_secs_f64());
         match res.as_ref() {
-            Ok(_) => self.succeeded.inc(),
+            Ok(_) => {
+                self.succeeded.inc();
+                shard_metrics.cmd_succeeded.inc();
+            }
             Err(_) => self.failed.inc(),
         };
         res
@@ -980,6 +987,7 @@ pub struct ShardsMetrics {
     seqnos_held: mz_ore::metrics::UIntGaugeVec,
     gc_finished: mz_ore::metrics::IntCounterVec,
     compaction_applied: mz_ore::metrics::IntCounterVec,
+    cmd_succeeded: mz_ore::metrics::IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1057,6 +1065,11 @@ impl ShardsMetrics {
                 help: "count of compactions applied to state by shard",
                 var_labels: ["shard"],
             )),
+            cmd_succeeded: registry.register(metric!(
+                name: "mz_persist_shard_cmd_succeeded",
+                help: "count of commands succeeded by shard",
+                var_labels: ["shard"],
+            )),
             shards,
         }
     }
@@ -1112,6 +1125,7 @@ pub struct ShardMetrics {
     // remove per-shard labels.
     pub gc_finished: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub compaction_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub cmd_succeeded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
@@ -1151,6 +1165,9 @@ impl ShardMetrics {
                 .get_delete_on_drop_counter(vec![shard.clone()]),
             compaction_applied: shards_metrics
                 .compaction_applied
+                .get_delete_on_drop_counter(vec![shard.clone()]),
+            cmd_succeeded: shards_metrics
+                .cmd_succeeded
                 .get_delete_on_drop_counter(vec![shard]),
         }
     }
