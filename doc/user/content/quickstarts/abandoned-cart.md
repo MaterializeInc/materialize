@@ -10,8 +10,14 @@ aliases:
   - /demos/abandoned-cart
 ---
 
-In this quickstart, you will learn how to use Materialize to send out abandoned cart notifications.
+**tl;dr** In this quickstart, you will learn how to use Materialize to send out abandoned cart notifications.
 At the end of the guide, you will have a live view with a list of users who have abandoned their carts.
+
+Microservices that work with large data sets often use a job scheduler to process incoming data in batches. These tools can range from basic (e.g. `cron`) to complex.
+
+When an online shopper doesn't make a purchase after adding items to their cart, the likelihood of them completing the purchase decreases over time. Materialize can be used to reduce cart abandonment by sending a notification when a user has not completed their purchase after a certain amount of time.
+
+Materialize allows you to eliminate the need for scheduling and jobs by simply sending data, describing transformations with SQL, and reading the results. Additionally, it can maintain the results of these transformations with sub-second latencies, enabling more agile services.
 
 The key concepts present in this quickstart will also apply to many other real-time projects:
 
@@ -121,7 +127,7 @@ With JSON-formatted messages, we don't know the schema so the [JSON is pulled in
 1. Define a view containing the incomplete orders:
 
     ```sql
-    CREATE VIEW incomplate_purchases AS
+    CREATE VIEW incomplete_purchases AS
         SELECT
             users.id AS user_id,
             users.email AS email,
@@ -137,9 +143,9 @@ With JSON-formatted messages, we don't know the schema so the [JSON is pulled in
         WHERE purchases.status = 0;
     ```
 
-1. Create a [`MATERIALIZED VIEW`](/sql/create-materialized-view/) to get all the users that are no longer browsing the site.
+1. Create a [materialized view](/sql/create-materialized-view/) to get all the users that are no longer browsing the site.
 
-    A `MATERIALIZED VIEW` is persisted in a durable storage and is incrementally updated as new data arrives.
+    A materialized view is persisted in durable storage and is incrementally updated as new data arrives.
 
     ```sql
     CREATE MATERIALIZED VIEW inactive_users_last_3_mins AS
@@ -158,18 +164,18 @@ With JSON-formatted messages, we don't know the schema so the [JSON is pulled in
     ```sql
     CREATE MATERIALIZED VIEW abandoned_cart AS
         SELECT
-            incomplate_purchases.user_id,
-            incomplate_purchases.email,
-            incomplate_purchases.item_id,
-            incomplate_purchases.purchase_price,
-            incomplate_purchases.status
-        FROM incomplate_purchases
+            incomplete_purchases.user_id,
+            incomplete_purchases.email,
+            incomplete_purchases.item_id,
+            incomplete_purchases.purchase_price,
+            incomplete_purchases.status
+        FROM incomplete_purchases
         JOIN inactive_users_last_3_mins
-            ON inactive_users_last_3_mins.user_id = incomplate_purchases.user_id
+            ON inactive_users_last_3_mins.user_id = incomplete_purchases.user_id
         GROUP BY 1, 2, 3, 4, 5;
     ```
 
-1. Select from the `abandoned_cart` view to see the results:
+1. To see the changes in the `abandoned_cart` materialized view as new data arrives, you can use [`SUBSCRIBE`](/sql/subscribe):
 
     ```sql
     SELECT * FROM abandoned_cart LIMIT 10;
@@ -181,137 +187,7 @@ With JSON-formatted messages, we don't know the schema so the [JSON is pulled in
     COPY ( SUBSCRIBE ( SELECT * FROM abandoned_cart ) ) TO STDOUT;
     ```
 
-    You can use that real-time data to send an email to the user or send a push notification.
-
-## Send notifications to Telegram
-
-Materialize is wire-compatible with PostgreSQL, so you can use any PostgreSQL client to connect to Materialize. In this example, we'll use [Node.js](/integrations/node-js) and the `node-postgres` library to create a script that pushes a message to Telegram when a user is inactive for 3 minutes and has incomplete purchases.
-
-### Create a Telegram bot
-
-1. Sign up for a [Telegram account](https://telegram.org/).
-1. Next, create a bot on Telegram by talking to the `BotFather`.
-1. Use the `/newbot` command to create a new bot, and follow the instructions to set a name and username for your bot.
-1. The `BotFather` will give you a token that you will use to authenticate your bot. Keep this token safe, as it will allow anyone to control your bot.
-1. Create a group on Telegram and add your bot to the group.
-1. Get the group's chat ID, which you can obtain by using the `/getUpdates` method of the Bot API:
-
-    ```bash
-    curl https://api.telegram.org/bot<token>/getUpdates | jq '.result[0].message.chat.id'
-    ```
-
-### Create a Node.js script
-
-1. Create a new directory for your project and install the [`node-telegram-bot-api`](https://www.npmjs.com/package/node-telegram-bot-api) package from `npm`:
-
-    ```bash
-    mkdir abandoned-cart-telegram-bot
-    cd abandoned-cart-telegram-bot
-    npm init -y
-    npm install node-telegram-bot-api
-    npm install pg
-    ```
-
-    The `node-telegram-bot-api` package provides an interface for the Telegram Bot API.
-
-    The `pg` package is the official PostgreSQL client for Node.js, which we'll use to connect to Materialize.
-
-1. Here is an example of how you might use the `node-telegram-bot-api` package to send a message to the Telegram group:
-
-    ```javascript
-    const TelegramBot = require('node-telegram-bot-api');
-
-    const token = '<YOUR_TELEGRAM_BOT_TOKEN>';
-    const chatId = '<YOUR_CHAT_ID>';
-
-    const bot = new TelegramBot(token, {polling: true});
-
-    bot.sendMessage(chatId, 'Hello, world!');
-
-    console.log('Message sent');
-    ```
-
-    This code will send a message saying "Hello, world!" to the user or group with the specified chat ID.
-
-    Let's expand this example to send a message to the Telegram group when a user abandons a cart.
-
-1. Next, create a file called `index.js` and add the following code to it:
-
-    ```javascript
-    const TelegramBot = require('node-telegram-bot-api');
-    const { Client } = require('pg');
-
-    // Define your Telegram bot token and chat ID
-    const token = '<YOUR_TELEGRAM_BOT_TOKEN>';
-    const chatId = '<YOUR_CHAT_ID>';
-
-    // Define your Materialize connection details
-    const client = new Client({
-        user: MATERIALIZE_USERNAME,
-        password: MATERIALIZE_PASSWORD,
-        host: MATERIALIZE_HOST,
-        port: 6875,
-        database: 'materialize',
-        ssl: true
-    });
-
-    const bot = new TelegramBot(token, {polling: true});
-
-    async function main() {
-        // Connect to Materialize
-        await client.connect();
-
-        // Subscribe to the abandoned_cart view
-        await client.query('BEGIN');
-        await client.query(`
-            DECLARE c CURSOR FOR SUBSCRIBE abandoned_cart WITH (SNAPSHOT = false)
-        `);
-
-        // Send a message to the Telegram group when a user abandons a cart
-        while (true) {
-            const res = await client.query('FETCH ALL c');
-            if (res.rows.length > 0) {
-                bot.sendMessage(chatId, JSON.stringify(res.rows));
-            }
-            console.log(res.rows);
-        }
-    }
-
-    main();
-    ```
-
-   Run the script:
-
-    ```bash
-    node index.js
-    ```
-
-    Once you run the script, you will see the following output:
-
-    ```javascript
-    [
-        {
-            mz_timestamp: '1671102162899',
-            mz_diff: '1',
-            user_id: 1,
-            email: 'test@test.com',
-            item_id: 1,
-            purchase_price: 2,
-            status: 3
-        },
-        {
-            mz_timestamp: '1671102162899',
-            mz_diff: '1',
-            user_id: 2,
-            email: 'test2@test.com',
-            item_id: 2,
-            purchase_price: 3,
-            status: 3
-        }
-    ]
-    ```
-
-    Each time a user abandons a cart, the script will send a message to the Telegram group.
+    You can use that real-time data to trigger a customer workflow downstream, like sending an email or push notification to the user.
 
 ## Recap
 
@@ -321,7 +197,6 @@ In this quickstart, you saw:
 - How to use temporal filters
 - How to subscribe to materialized views
 - Materialize's features to process and serve results for real-time applications
-- How to use Materialize with a PostgreSQL client to send notifications to Telegram
 
 As a next step, you can create a [Kafka sink](/sql/create-sink/) to write the results to a Kafka topic so that you can use the results in other applications.
 
