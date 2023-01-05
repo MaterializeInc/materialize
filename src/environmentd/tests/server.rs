@@ -77,7 +77,7 @@
 //! Integration tests for Materialize server.
 
 use bytes::Buf;
-use mz_environmentd::WebSocketResponse;
+use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use std::error::Error;
 use std::fmt::Write;
 use std::thread;
@@ -269,6 +269,30 @@ fn test_http_sql() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+
+        ws.write_message(Message::Text(
+            serde_json::to_string(&WebSocketAuth {
+                user: "materialize".into(),
+                password: "".into(),
+            })
+            .unwrap(),
+        ))
+        .unwrap();
+        // Wait for initial ready response.
+        loop {
+            let resp = ws.read_message().unwrap();
+            match resp {
+                Message::Text(msg) => {
+                    let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
+                    match msg {
+                        WebSocketResponse::ReadyForQuery(_) => break,
+                        _ => {}
+                    }
+                }
+                Message::Ping(_) => continue,
+                _ => panic!("unexpected response: {:?}", resp),
+            }
+        }
 
         f.run(|tc| {
             let msg = match tc.directive.as_str() {
