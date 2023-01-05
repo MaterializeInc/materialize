@@ -102,7 +102,6 @@
         transform: translateX(-100%);
         transition: all .2s ease-out;
         visibility: hidden;
-        padding-bottom: var(--medium);
 
         .close-topics {
             opacity: 0;
@@ -146,6 +145,10 @@
     @media (max-width: 1570px) {
         padding-left: var(--milli);
         padding-right: var(--nano);
+    }
+
+    @media(max-width: 850px) {
+        padding-bottom: var(--large);
     }
 
     &>ul>li:last-child {
