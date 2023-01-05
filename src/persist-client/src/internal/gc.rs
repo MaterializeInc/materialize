@@ -238,6 +238,9 @@ where
 
         let mut deleteable_batch_blobs = HashSet::new();
         let mut deleteable_rollup_blobs = Vec::new();
+        let mut live_diffs = 0;
+        let mut live_batch_blobs = HashSet::new();
+
         while let Some(state) = states.next() {
             match state.seqno.cmp(&req.new_seqno_since) {
                 Ordering::Less => {
@@ -251,12 +254,14 @@ where
                     });
                 }
                 Ordering::Equal => {
+                    live_diffs += 1;
                     state.collections.trace.map_batches(|b| {
                         for part in b.parts.iter() {
                             // It's okay (expected) if the key doesn't exist in
                             // deleteable_batch_blobs, it may have been added in
                             // this version of state.
                             let _ = deleteable_batch_blobs.remove(&part.key);
+                            live_batch_blobs.insert(part.key.to_owned());
                         }
                     });
                     // We only need to detect deletable rollups in the last iter
@@ -307,13 +312,13 @@ where
         // NB: We write rollups periodically (via maintenance) to cover the case
         // when GC is being held up by a long seqno hold (such as the 15m read
         // lease timeouts whenever environmentd restarts).
-        let state = states.into_inner();
+        let state = states.state();
         assert_eq!(state.seqno, req.new_seqno_since);
         let rollup_seqno = state.seqno;
         let rollup_key = PartialRollupKey::new(rollup_seqno, &RollupId::new());
         let () = machine
             .state_versions
-            .write_rollup_blob(&machine.shard_metrics, &state, &rollup_key)
+            .write_rollup_blob(&machine.shard_metrics, state, &rollup_key)
             .await;
         let (applied, maintenance) = machine
             .add_and_remove_rollups((rollup_seqno, &rollup_key), &deleteable_rollup_blobs)
@@ -362,6 +367,40 @@ where
             "gc {} truncated diffs through seqno {}",
             req.shard_id, req.new_seqno_since
         );
+
+        // Finally, apply the remaining diffs and calculate the live / current
+        // set of diffs and blobs for metrics.
+        while let Some(state) = states.next() {
+            live_diffs += 1;
+            state.collections.trace.map_batches(|b| {
+                for part in b.parts.iter() {
+                    live_batch_blobs.insert(part.key.to_owned());
+                }
+            });
+        }
+
+        let state = states.state();
+
+        let live_batch_blobs: u64 = live_batch_blobs
+            .len()
+            .try_into()
+            .expect("live blob count fits into u64");
+
+        let current_batch_blobs: u64 = {
+            // Blobs within a single state are unique
+            let mut current_batch_blobs = 0;
+            state.collections.trace.map_batches(|b| {
+                current_batch_blobs += b.parts.len();
+            });
+            current_batch_blobs
+                .try_into()
+                .expect("current blob count fits into u64")
+        };
+
+        let shard_metrics = machine.metrics.shards.shard(&req.shard_id);
+        shard_metrics.current_blobs.set(current_batch_blobs);
+        shard_metrics.live_blobs.set(live_batch_blobs);
+        shard_metrics.live_diffs.set(live_diffs);
 
         maintenance
     }

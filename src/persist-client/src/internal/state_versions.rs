@@ -780,7 +780,7 @@ impl<K, V, T: Timestamp + Lattice + Codec64, D> StateVersionsIter<K, V, T, D> {
         Some(&self.state)
     }
 
-    pub fn into_inner(self) -> State<K, V, T, D> {
-        self.state
+    pub fn state(&self) -> &State<K, V, T, D> {
+        &self.state
     }
 }
