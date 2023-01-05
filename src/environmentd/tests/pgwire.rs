@@ -364,12 +364,15 @@ fn test_conn_user() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
-    // Attempting to connect as a nonexistent user should fail.
-    let err = server
+    // Attempting to connect as a nonexistent user should fail. The initial
+    // connection succeeds due to our delayed startup, but the first query will
+    // fail.
+    let mut conn = server
         .pg_config()
         .user("rj")
         .connect(postgres::NoTls)
-        .unwrap_db_error();
+        .unwrap();
+    let err = conn.batch_execute("SELECT 1").unwrap_db_error();
     assert_eq!(err.severity(), "FATAL");
     assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
     assert_eq!(err.message(), "role \"rj\" does not exist");

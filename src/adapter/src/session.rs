@@ -17,6 +17,7 @@ use std::mem;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use rand::Rng;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::OwnedMutexGuard;
 use uuid::Uuid;
@@ -89,6 +90,7 @@ pub struct Session<T = mz_repr::Timestamp> {
     notices_tx: mpsc::UnboundedSender<AdapterNotice>,
     notices_rx: mpsc::UnboundedReceiver<AdapterNotice>,
     next_transaction_id: TransactionId,
+    secret_key: u32,
 }
 
 impl<T: TimestampManipulation> Session<T> {
@@ -124,12 +126,18 @@ impl<T: TimestampManipulation> Session<T> {
             notices_tx,
             notices_rx,
             next_transaction_id: 0,
+            secret_key: rand::thread_rng().gen(),
         }
     }
 
     /// Returns the connection ID associated with the session.
     pub fn conn_id(&self) -> ConnectionId {
         self.conn_id
+    }
+
+    /// Returns the secret key associated with the session.
+    pub fn secret_key(&self) -> ConnectionId {
+        self.secret_key
     }
 
     /// Returns the current transaction's PlanContext. Panics if there is not a
