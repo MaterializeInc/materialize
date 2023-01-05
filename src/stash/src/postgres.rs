@@ -279,7 +279,6 @@ impl PostgresFactory {
             schema,
             tls: tls.clone(),
             client: None,
-            is_cockroach: None,
             statements: None,
             epoch: None,
             // The call to rand::random here assumes that the seed source is from a secure
@@ -375,7 +374,6 @@ pub struct Postgres {
     schema: Option<String>,
     tls: MakeTlsConnector,
     client: Option<Client>,
-    is_cockroach: Option<bool>,
     statements: Option<PreparedStatements>,
     epoch: Option<NonZeroI64>,
     nonce: [u8; 16],
@@ -503,28 +501,23 @@ impl Postgres {
                 NonZeroI64::new(row.get(0)).unwrap()
             };
 
-            let version: String = tx.query_one("SELECT version()", &[]).await?.get(0);
-            let is_cockroach = version.starts_with("CockroachDB");
-            if is_cockroach {
-                // The `data`, `sinces`, and `uppers` tables can create and delete
-                // rows at a high frequency, generating many tombstoned rows. If
-                // Cockroach's GC interval is set high (the default is 25h) and
-                // these tombstones accumulate, scanning over the table will take
-                // increasingly and prohibitively long.
-                //
-                // See: https://github.com/MaterializeInc/materialize/issues/15842
-                // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
-                tx.batch_execute("ALTER TABLE data CONFIGURE ZONE USING gc.ttlseconds = 600;")
-                    .await?;
-                tx.batch_execute("ALTER TABLE sinces CONFIGURE ZONE USING gc.ttlseconds = 600;")
-                    .await?;
-                tx.batch_execute("ALTER TABLE uppers CONFIGURE ZONE USING gc.ttlseconds = 600;")
-                    .await?;
-            }
+            // The `data`, `sinces`, and `uppers` tables can create and delete
+            // rows at a high frequency, generating many tombstoned rows. If
+            // Cockroach's GC interval is set high (the default is 25h) and
+            // these tombstones accumulate, scanning over the table will take
+            // increasingly and prohibitively long.
+            //
+            // See: https://github.com/MaterializeInc/materialize/issues/15842
+            // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
+            tx.batch_execute("ALTER TABLE data CONFIGURE ZONE USING gc.ttlseconds = 600;")
+                .await?;
+            tx.batch_execute("ALTER TABLE sinces CONFIGURE ZONE USING gc.ttlseconds = 600;")
+                .await?;
+            tx.batch_execute("ALTER TABLE uppers CONFIGURE ZONE USING gc.ttlseconds = 600;")
+                .await?;
 
             tx.commit().await?;
             self.epoch = Some(epoch);
-            self.is_cockroach = Some(is_cockroach);
         }
 
         self.statements = Some(PreparedStatements::from(&client).await?);
@@ -533,16 +526,7 @@ impl Postgres {
         // Use a low priority so the rw stash won't ever block waiting for the
         // savepoint stash to complete its transaction.
         if matches!(self.txn_mode, TransactionMode::Savepoint) {
-            client
-                .batch_execute(if self.is_cockroach.unwrap_or(false) {
-                    "BEGIN PRIORITY LOW"
-                } else {
-                    // PRIORITY is a Cockroach extension, so disable it if we
-                    // are connecting to Postgres. Needed because some testdrive
-                    // tests still use Postgres as the stash backend.
-                    "BEGIN"
-                })
-                .await?;
+            client.batch_execute("BEGIN PRIORITY LOW").await?;
         }
 
         self.client = Some(client);
