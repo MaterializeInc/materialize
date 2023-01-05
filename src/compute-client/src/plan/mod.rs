@@ -1746,7 +1746,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         .collect()
                 }
                 Plan::LetRec { ids, values, body } => {
-                    let mut values_parts: Vec<Vec<Self>> = Vec::with_capacity(parts);
+                    let mut values_parts: Vec<Vec<Self>> = vec![Vec::new(); parts];
                     for value in values.into_iter() {
                         for (index, part) in value.partition_among(parts).into_iter().enumerate() {
                             values_parts[index].push(part);
