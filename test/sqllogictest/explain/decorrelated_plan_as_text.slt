@@ -47,27 +47,19 @@ EXPLAIN DECORRELATED PLAN AS TEXT FOR
 (SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
 ----
 Union
-  Project (#2, #3)
-    Map (#0, #1)
-      Union
-        Project (#2, #3)
-          Map (#0, #1)
-            Project (#0, #1)
-              Map (1, 2)
-                Constant
-                  - ()
-        Project (#2, #3)
-          Map (#0, #1)
-            Project (#0, #1)
-              Map (1, 2)
-                Constant
-                  - ()
-  Project (#2, #3)
-    Map (#0, #1)
-      Project (#0, #1)
-        Map (3, 4)
-          Constant
-            - ()
+  Union
+    Project (#0, #1)
+      Map (1, 2)
+        Constant
+          - ()
+    Project (#0, #1)
+      Map (1, 2)
+        Constant
+          - ()
+  Project (#0, #1)
+    Map (3, 4)
+      Constant
+        - ()
 
 EOF
 
@@ -109,22 +101,18 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
 Threshold
   Union
     Distinct group_by=[#0]
-      Project (#1)
-        Map (#0)
-          Project (#0)
-            CrossJoin
-              Constant
-                - ()
-              Get materialize.public.t
+      Project (#0)
+        CrossJoin
+          Constant
+            - ()
+          Get materialize.public.t
     Negate
       Distinct group_by=[#0]
         Project (#1)
-          Map (#0)
-            Project (#1)
-              CrossJoin
-                Constant
-                  - ()
-                Get materialize.public.mv
+          CrossJoin
+            Constant
+              - ()
+            Get materialize.public.mv
 
 EOF
 
@@ -135,21 +123,17 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
 ----
 Threshold
   Union
-    Project (#1)
-      Map (#0)
-        Project (#0)
-          CrossJoin
-            Constant
-              - ()
-            Get materialize.public.t
+    Project (#0)
+      CrossJoin
+        Constant
+          - ()
+        Get materialize.public.t
     Negate
       Project (#1)
-        Map (#0)
-          Project (#1)
-            CrossJoin
-              Constant
-                - ()
-              Get materialize.public.mv
+        CrossJoin
+          Constant
+            - ()
+          Get materialize.public.mv
 
 EOF
 
@@ -258,14 +242,12 @@ Return
                 - (false)
 With
   cte l5 =
-    CrossJoin
+    Map (true)
       Distinct group_by=[#0]
         Filter (#0 > #2)
           CrossJoin
             Get l4
             Get materialize.public.mv
-      Constant
-        - (true)
   cte l4 =
     Distinct group_by=[#1]
       Get l3
@@ -290,14 +272,12 @@ With
                 Constant
                   - (false)
   cte l2 =
-    CrossJoin
+    Map (true)
       Distinct group_by=[#0]
         Filter (#0 < #1)
           CrossJoin
             Get l1
             Get materialize.public.mv
-      Constant
-        - (true)
   cte l1 =
     Distinct group_by=[#0]
       Get l0

@@ -194,9 +194,9 @@ Return // { arity: 1 }
                 - (false)
 With
   cte l2 =
-    CrossJoin // { arity: 2 }
+    Map (true) // { arity: 2 }
       Distinct group_by=[#0] // { arity: 1 }
-        Filter ((integer_to_bigint(#0) = #1) AND true) // { arity: 2 }
+        Filter (integer_to_bigint(#0) = #1) // { arity: 2 }
           Project (#0, #4) // { arity: 2 }
             Map (#3) // { arity: 5 }
               Project (#3..=#6) // { arity: 4 }
@@ -206,8 +206,6 @@ With
                       CrossJoin // { arity: 3 }
                         Get l1 // { arity: 1 }
                         Get materialize.public.t2 // { arity: 2 }
-      Constant // { arity: 1 }
-        - (true)
   cte l1 =
     Distinct group_by=[#0] // { arity: 1 }
       Get l0 // { arity: 2 }

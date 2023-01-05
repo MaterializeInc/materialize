@@ -234,48 +234,29 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
             "input": {
               "Project": {
                 "input": {
-                  "Map": {
-                    "input": {
-                      "Project": {
-                        "input": {
-                          "Get": {
-                            "id": {
-                              "Global": {
-                                "User": 1
-                              }
-                            },
-                            "typ": {
-                              "column_types": [
-                                {
-                                  "scalar_type": "Int32",
-                                  "nullable": true
-                                },
-                                {
-                                  "scalar_type": "Int32",
-                                  "nullable": true
-                                }
-                              ],
-                              "keys": []
-                            }
-                          }
-                        },
-                        "outputs": [
-                          0
-                        ]
+                  "Get": {
+                    "id": {
+                      "Global": {
+                        "User": 1
                       }
                     },
-                    "scalars": [
-                      {
-                        "Column": {
-                          "level": 0,
-                          "column": 0
+                    "typ": {
+                      "column_types": [
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
+                        },
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
                         }
-                      }
-                    ]
+                      ],
+                      "keys": []
+                    }
                   }
                 },
                 "outputs": [
-                  1
+                  0
                 ]
               }
             }
@@ -289,44 +270,25 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                   "input": {
                     "Project": {
                       "input": {
-                        "Map": {
-                          "input": {
-                            "Project": {
-                              "input": {
-                                "Get": {
-                                  "id": {
-                                    "Global": {
-                                      "User": 5
-                                    }
-                                  },
-                                  "typ": {
-                                    "column_types": [
-                                      {
-                                        "scalar_type": "Int32",
-                                        "nullable": false
-                                      },
-                                      {
-                                        "scalar_type": "Int32",
-                                        "nullable": true
-                                      }
-                                    ],
-                                    "keys": []
-                                  }
-                                }
-                              },
-                              "outputs": [
-                                1
-                              ]
+                        "Get": {
+                          "id": {
+                            "Global": {
+                              "User": 5
                             }
                           },
-                          "scalars": [
-                            {
-                              "Column": {
-                                "level": 0,
-                                "column": 0
+                          "typ": {
+                            "column_types": [
+                              {
+                                "scalar_type": "Int32",
+                                "nullable": false
+                              },
+                              {
+                                "scalar_type": "Int32",
+                                "nullable": true
                               }
-                            }
-                          ]
+                            ],
+                            "keys": []
+                          }
                         }
                       },
                       "outputs": [

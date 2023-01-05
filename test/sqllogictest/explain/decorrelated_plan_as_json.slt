@@ -160,277 +160,138 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
     "body": {
       "Union": {
         "base": {
-          "Project": {
-            "input": {
-              "Map": {
+          "Union": {
+            "base": {
+              "Project": {
                 "input": {
-                  "Let": {
-                    "id": 3,
-                    "value": {
-                      "Union": {
-                        "base": {
-                          "Project": {
-                            "input": {
-                              "Map": {
-                                "input": {
-                                  "Let": {
-                                    "id": 1,
-                                    "value": {
-                                      "Project": {
-                                        "input": {
-                                          "Map": {
-                                            "input": {
-                                              "Get": {
-                                                "id": {
-                                                  "Local": 0
-                                                },
-                                                "typ": {
-                                                  "column_types": [],
-                                                  "keys": [
-                                                    []
-                                                  ]
-                                                }
-                                              }
-                                            },
-                                            "scalars": [
-                                              {
-                                                "Literal": [
-                                                  {
-                                                    "Ok": {
-                                                      "data": [
-                                                        4,
-                                                        1,
-                                                        0,
-                                                        0,
-                                                        0
-                                                      ]
-                                                    }
-                                                  },
-                                                  {
-                                                    "scalar_type": "Int32",
-                                                    "nullable": false
-                                                  }
-                                                ]
-                                              },
-                                              {
-                                                "Literal": [
-                                                  {
-                                                    "Ok": {
-                                                      "data": [
-                                                        4,
-                                                        2,
-                                                        0,
-                                                        0,
-                                                        0
-                                                      ]
-                                                    }
-                                                  },
-                                                  {
-                                                    "scalar_type": "Int32",
-                                                    "nullable": false
-                                                  }
-                                                ]
-                                              }
-                                            ]
-                                          }
-                                        },
-                                        "outputs": [
-                                          0,
-                                          1
-                                        ]
-                                      }
-                                    },
-                                    "body": {
-                                      "Get": {
-                                        "id": {
-                                          "Local": 1
-                                        },
-                                        "typ": {
-                                          "column_types": [
-                                            {
-                                              "scalar_type": "Int32",
-                                              "nullable": false
-                                            },
-                                            {
-                                              "scalar_type": "Int32",
-                                              "nullable": false
-                                            }
-                                          ],
-                                          "keys": [
-                                            []
-                                          ]
-                                        }
-                                      }
-                                    }
-                                  }
-                                },
-                                "scalars": [
-                                  {
-                                    "Column": 0
-                                  },
-                                  {
-                                    "Column": 1
-                                  }
-                                ]
-                              }
-                            },
-                            "outputs": [
-                              2,
-                              3
-                            ]
-                          }
+                  "Map": {
+                    "input": {
+                      "Get": {
+                        "id": {
+                          "Local": 0
                         },
-                        "inputs": [
+                        "typ": {
+                          "column_types": [],
+                          "keys": [
+                            []
+                          ]
+                        }
+                      }
+                    },
+                    "scalars": [
+                      {
+                        "Literal": [
                           {
-                            "Project": {
-                              "input": {
-                                "Map": {
-                                  "input": {
-                                    "Let": {
-                                      "id": 2,
-                                      "value": {
-                                        "Project": {
-                                          "input": {
-                                            "Map": {
-                                              "input": {
-                                                "Get": {
-                                                  "id": {
-                                                    "Local": 0
-                                                  },
-                                                  "typ": {
-                                                    "column_types": [],
-                                                    "keys": [
-                                                      []
-                                                    ]
-                                                  }
-                                                }
-                                              },
-                                              "scalars": [
-                                                {
-                                                  "Literal": [
-                                                    {
-                                                      "Ok": {
-                                                        "data": [
-                                                          4,
-                                                          1,
-                                                          0,
-                                                          0,
-                                                          0
-                                                        ]
-                                                      }
-                                                    },
-                                                    {
-                                                      "scalar_type": "Int32",
-                                                      "nullable": false
-                                                    }
-                                                  ]
-                                                },
-                                                {
-                                                  "Literal": [
-                                                    {
-                                                      "Ok": {
-                                                        "data": [
-                                                          4,
-                                                          2,
-                                                          0,
-                                                          0,
-                                                          0
-                                                        ]
-                                                      }
-                                                    },
-                                                    {
-                                                      "scalar_type": "Int32",
-                                                      "nullable": false
-                                                    }
-                                                  ]
-                                                }
-                                              ]
-                                            }
-                                          },
-                                          "outputs": [
-                                            0,
-                                            1
-                                          ]
-                                        }
-                                      },
-                                      "body": {
-                                        "Get": {
-                                          "id": {
-                                            "Local": 2
-                                          },
-                                          "typ": {
-                                            "column_types": [
-                                              {
-                                                "scalar_type": "Int32",
-                                                "nullable": false
-                                              },
-                                              {
-                                                "scalar_type": "Int32",
-                                                "nullable": false
-                                              }
-                                            ],
-                                            "keys": [
-                                              []
-                                            ]
-                                          }
-                                        }
-                                      }
-                                    }
-                                  },
-                                  "scalars": [
-                                    {
-                                      "Column": 0
-                                    },
-                                    {
-                                      "Column": 1
-                                    }
-                                  ]
-                                }
-                              },
-                              "outputs": [
-                                2,
-                                3
+                            "Ok": {
+                              "data": [
+                                4,
+                                1,
+                                0,
+                                0,
+                                0
                               ]
                             }
+                          },
+                          {
+                            "scalar_type": "Int32",
+                            "nullable": false
+                          }
+                        ]
+                      },
+                      {
+                        "Literal": [
+                          {
+                            "Ok": {
+                              "data": [
+                                4,
+                                2,
+                                0,
+                                0,
+                                0
+                              ]
+                            }
+                          },
+                          {
+                            "scalar_type": "Int32",
+                            "nullable": false
                           }
                         ]
                       }
-                    },
-                    "body": {
-                      "Get": {
-                        "id": {
-                          "Local": 3
-                        },
-                        "typ": {
-                          "column_types": [
+                    ]
+                  }
+                },
+                "outputs": [
+                  0,
+                  1
+                ]
+              }
+            },
+            "inputs": [
+              {
+                "Project": {
+                  "input": {
+                    "Map": {
+                      "input": {
+                        "Get": {
+                          "id": {
+                            "Local": 0
+                          },
+                          "typ": {
+                            "column_types": [],
+                            "keys": [
+                              []
+                            ]
+                          }
+                        }
+                      },
+                      "scalars": [
+                        {
+                          "Literal": [
                             {
-                              "scalar_type": "Int32",
-                              "nullable": false
+                              "Ok": {
+                                "data": [
+                                  4,
+                                  1,
+                                  0,
+                                  0,
+                                  0
+                                ]
+                              }
                             },
                             {
                               "scalar_type": "Int32",
                               "nullable": false
                             }
-                          ],
-                          "keys": []
+                          ]
+                        },
+                        {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  4,
+                                  2,
+                                  0,
+                                  0,
+                                  0
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "Int32",
+                              "nullable": false
+                            }
+                          ]
                         }
-                      }
+                      ]
                     }
-                  }
-                },
-                "scalars": [
-                  {
-                    "Column": 0
                   },
-                  {
-                    "Column": 1
-                  }
-                ]
+                  "outputs": [
+                    0,
+                    1
+                  ]
+                }
               }
-            },
-            "outputs": [
-              2,
-              3
             ]
           }
         },
@@ -440,110 +301,63 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
               "input": {
                 "Map": {
                   "input": {
-                    "Let": {
-                      "id": 4,
-                      "value": {
-                        "Project": {
-                          "input": {
-                            "Map": {
-                              "input": {
-                                "Get": {
-                                  "id": {
-                                    "Local": 0
-                                  },
-                                  "typ": {
-                                    "column_types": [],
-                                    "keys": [
-                                      []
-                                    ]
-                                  }
-                                }
-                              },
-                              "scalars": [
-                                {
-                                  "Literal": [
-                                    {
-                                      "Ok": {
-                                        "data": [
-                                          4,
-                                          3,
-                                          0,
-                                          0,
-                                          0
-                                        ]
-                                      }
-                                    },
-                                    {
-                                      "scalar_type": "Int32",
-                                      "nullable": false
-                                    }
-                                  ]
-                                },
-                                {
-                                  "Literal": [
-                                    {
-                                      "Ok": {
-                                        "data": [
-                                          4,
-                                          4,
-                                          0,
-                                          0,
-                                          0
-                                        ]
-                                      }
-                                    },
-                                    {
-                                      "scalar_type": "Int32",
-                                      "nullable": false
-                                    }
-                                  ]
-                                }
-                              ]
-                            }
-                          },
-                          "outputs": [
-                            0,
-                            1
-                          ]
-                        }
+                    "Get": {
+                      "id": {
+                        "Local": 0
                       },
-                      "body": {
-                        "Get": {
-                          "id": {
-                            "Local": 4
-                          },
-                          "typ": {
-                            "column_types": [
-                              {
-                                "scalar_type": "Int32",
-                                "nullable": false
-                              },
-                              {
-                                "scalar_type": "Int32",
-                                "nullable": false
-                              }
-                            ],
-                            "keys": [
-                              []
-                            ]
-                          }
-                        }
+                      "typ": {
+                        "column_types": [],
+                        "keys": [
+                          []
+                        ]
                       }
                     }
                   },
                   "scalars": [
                     {
-                      "Column": 0
+                      "Literal": [
+                        {
+                          "Ok": {
+                            "data": [
+                              4,
+                              3,
+                              0,
+                              0,
+                              0
+                            ]
+                          }
+                        },
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": false
+                        }
+                      ]
                     },
                     {
-                      "Column": 1
+                      "Literal": [
+                        {
+                          "Ok": {
+                            "data": [
+                              4,
+                              4,
+                              0,
+                              0,
+                              0
+                            ]
+                          }
+                        },
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": false
+                        }
+                      ]
                     }
                   ]
                 }
               },
               "outputs": [
-                2,
-                3
+                0,
+                1
               ]
             }
           }
@@ -998,87 +812,50 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                 "input": {
                   "Project": {
                     "input": {
-                      "Map": {
-                        "input": {
-                          "Let": {
-                            "id": 1,
-                            "value": {
-                              "Project": {
-                                "input": {
-                                  "Join": {
-                                    "inputs": [
-                                      {
-                                        "Get": {
-                                          "id": {
-                                            "Local": 0
-                                          },
-                                          "typ": {
-                                            "column_types": [],
-                                            "keys": [
-                                              []
-                                            ]
-                                          }
-                                        }
-                                      },
-                                      {
-                                        "Get": {
-                                          "id": {
-                                            "Global": {
-                                              "User": 1
-                                            }
-                                          },
-                                          "typ": {
-                                            "column_types": [
-                                              {
-                                                "scalar_type": "Int32",
-                                                "nullable": true
-                                              },
-                                              {
-                                                "scalar_type": "Int32",
-                                                "nullable": true
-                                              }
-                                            ],
-                                            "keys": []
-                                          }
-                                        }
-                                      }
-                                    ],
-                                    "equivalences": [],
-                                    "implementation": "Unimplemented"
-                                  }
-                                },
-                                "outputs": [
-                                  0
+                      "Join": {
+                        "inputs": [
+                          {
+                            "Get": {
+                              "id": {
+                                "Local": 0
+                              },
+                              "typ": {
+                                "column_types": [],
+                                "keys": [
+                                  []
                                 ]
                               }
-                            },
-                            "body": {
-                              "Get": {
-                                "id": {
-                                  "Local": 1
-                                },
-                                "typ": {
-                                  "column_types": [
-                                    {
-                                      "scalar_type": "Int32",
-                                      "nullable": true
-                                    }
-                                  ],
-                                  "keys": []
+                            }
+                          },
+                          {
+                            "Get": {
+                              "id": {
+                                "Global": {
+                                  "User": 1
                                 }
+                              },
+                              "typ": {
+                                "column_types": [
+                                  {
+                                    "scalar_type": "Int32",
+                                    "nullable": true
+                                  },
+                                  {
+                                    "scalar_type": "Int32",
+                                    "nullable": true
+                                  }
+                                ],
+                                "keys": []
                               }
                             }
                           }
-                        },
-                        "scalars": [
-                          {
-                            "Column": 0
-                          }
-                        ]
+                        ],
+                        "equivalences": [],
+                        "implementation": "Unimplemented"
                       }
                     },
                     "outputs": [
-                      1
+                      0
                     ]
                   }
                 },
@@ -1100,83 +877,46 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                       "input": {
                         "Project": {
                           "input": {
-                            "Map": {
-                              "input": {
-                                "Let": {
-                                  "id": 2,
-                                  "value": {
-                                    "Project": {
-                                      "input": {
-                                        "Join": {
-                                          "inputs": [
-                                            {
-                                              "Get": {
-                                                "id": {
-                                                  "Local": 0
-                                                },
-                                                "typ": {
-                                                  "column_types": [],
-                                                  "keys": [
-                                                    []
-                                                  ]
-                                                }
-                                              }
-                                            },
-                                            {
-                                              "Get": {
-                                                "id": {
-                                                  "Global": {
-                                                    "User": 5
-                                                  }
-                                                },
-                                                "typ": {
-                                                  "column_types": [
-                                                    {
-                                                      "scalar_type": "Int32",
-                                                      "nullable": false
-                                                    },
-                                                    {
-                                                      "scalar_type": "Int32",
-                                                      "nullable": true
-                                                    }
-                                                  ],
-                                                  "keys": []
-                                                }
-                                              }
-                                            }
-                                          ],
-                                          "equivalences": [],
-                                          "implementation": "Unimplemented"
-                                        }
-                                      },
-                                      "outputs": [
-                                        1
+                            "Join": {
+                              "inputs": [
+                                {
+                                  "Get": {
+                                    "id": {
+                                      "Local": 0
+                                    },
+                                    "typ": {
+                                      "column_types": [],
+                                      "keys": [
+                                        []
                                       ]
                                     }
-                                  },
-                                  "body": {
-                                    "Get": {
-                                      "id": {
-                                        "Local": 2
-                                      },
-                                      "typ": {
-                                        "column_types": [
-                                          {
-                                            "scalar_type": "Int32",
-                                            "nullable": true
-                                          }
-                                        ],
-                                        "keys": []
+                                  }
+                                },
+                                {
+                                  "Get": {
+                                    "id": {
+                                      "Global": {
+                                        "User": 5
                                       }
+                                    },
+                                    "typ": {
+                                      "column_types": [
+                                        {
+                                          "scalar_type": "Int32",
+                                          "nullable": false
+                                        },
+                                        {
+                                          "scalar_type": "Int32",
+                                          "nullable": true
+                                        }
+                                      ],
+                                      "keys": []
                                     }
                                   }
                                 }
-                              },
-                              "scalars": [
-                                {
-                                  "Column": 0
-                                }
-                              ]
+                              ],
+                              "equivalences": [],
+                              "implementation": "Unimplemented"
                             }
                           },
                           "outputs": [
@@ -1238,87 +978,50 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
             "base": {
               "Project": {
                 "input": {
-                  "Map": {
-                    "input": {
-                      "Let": {
-                        "id": 1,
-                        "value": {
-                          "Project": {
-                            "input": {
-                              "Join": {
-                                "inputs": [
-                                  {
-                                    "Get": {
-                                      "id": {
-                                        "Local": 0
-                                      },
-                                      "typ": {
-                                        "column_types": [],
-                                        "keys": [
-                                          []
-                                        ]
-                                      }
-                                    }
-                                  },
-                                  {
-                                    "Get": {
-                                      "id": {
-                                        "Global": {
-                                          "User": 1
-                                        }
-                                      },
-                                      "typ": {
-                                        "column_types": [
-                                          {
-                                            "scalar_type": "Int32",
-                                            "nullable": true
-                                          },
-                                          {
-                                            "scalar_type": "Int32",
-                                            "nullable": true
-                                          }
-                                        ],
-                                        "keys": []
-                                      }
-                                    }
-                                  }
-                                ],
-                                "equivalences": [],
-                                "implementation": "Unimplemented"
-                              }
-                            },
-                            "outputs": [
-                              0
+                  "Join": {
+                    "inputs": [
+                      {
+                        "Get": {
+                          "id": {
+                            "Local": 0
+                          },
+                          "typ": {
+                            "column_types": [],
+                            "keys": [
+                              []
                             ]
                           }
-                        },
-                        "body": {
-                          "Get": {
-                            "id": {
-                              "Local": 1
-                            },
-                            "typ": {
-                              "column_types": [
-                                {
-                                  "scalar_type": "Int32",
-                                  "nullable": true
-                                }
-                              ],
-                              "keys": []
+                        }
+                      },
+                      {
+                        "Get": {
+                          "id": {
+                            "Global": {
+                              "User": 1
                             }
+                          },
+                          "typ": {
+                            "column_types": [
+                              {
+                                "scalar_type": "Int32",
+                                "nullable": true
+                              },
+                              {
+                                "scalar_type": "Int32",
+                                "nullable": true
+                              }
+                            ],
+                            "keys": []
                           }
                         }
                       }
-                    },
-                    "scalars": [
-                      {
-                        "Column": 0
-                      }
-                    ]
+                    ],
+                    "equivalences": [],
+                    "implementation": "Unimplemented"
                   }
                 },
                 "outputs": [
-                  1
+                  0
                 ]
               }
             },
@@ -1328,83 +1031,46 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                   "input": {
                     "Project": {
                       "input": {
-                        "Map": {
-                          "input": {
-                            "Let": {
-                              "id": 2,
-                              "value": {
-                                "Project": {
-                                  "input": {
-                                    "Join": {
-                                      "inputs": [
-                                        {
-                                          "Get": {
-                                            "id": {
-                                              "Local": 0
-                                            },
-                                            "typ": {
-                                              "column_types": [],
-                                              "keys": [
-                                                []
-                                              ]
-                                            }
-                                          }
-                                        },
-                                        {
-                                          "Get": {
-                                            "id": {
-                                              "Global": {
-                                                "User": 5
-                                              }
-                                            },
-                                            "typ": {
-                                              "column_types": [
-                                                {
-                                                  "scalar_type": "Int32",
-                                                  "nullable": false
-                                                },
-                                                {
-                                                  "scalar_type": "Int32",
-                                                  "nullable": true
-                                                }
-                                              ],
-                                              "keys": []
-                                            }
-                                          }
-                                        }
-                                      ],
-                                      "equivalences": [],
-                                      "implementation": "Unimplemented"
-                                    }
-                                  },
-                                  "outputs": [
-                                    1
+                        "Join": {
+                          "inputs": [
+                            {
+                              "Get": {
+                                "id": {
+                                  "Local": 0
+                                },
+                                "typ": {
+                                  "column_types": [],
+                                  "keys": [
+                                    []
                                   ]
                                 }
-                              },
-                              "body": {
-                                "Get": {
-                                  "id": {
-                                    "Local": 2
-                                  },
-                                  "typ": {
-                                    "column_types": [
-                                      {
-                                        "scalar_type": "Int32",
-                                        "nullable": true
-                                      }
-                                    ],
-                                    "keys": []
+                              }
+                            },
+                            {
+                              "Get": {
+                                "id": {
+                                  "Global": {
+                                    "User": 5
                                   }
+                                },
+                                "typ": {
+                                  "column_types": [
+                                    {
+                                      "scalar_type": "Int32",
+                                      "nullable": false
+                                    },
+                                    {
+                                      "scalar_type": "Int32",
+                                      "nullable": true
+                                    }
+                                  ],
+                                  "keys": []
                                 }
                               }
                             }
-                          },
-                          "scalars": [
-                            {
-                              "Column": 0
-                            }
-                          ]
+                          ],
+                          "equivalences": [],
+                          "implementation": "Unimplemented"
                         }
                       },
                       "outputs": [
@@ -2304,115 +1970,103 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                             "Let": {
                                               "id": 3,
                                               "value": {
-                                                "Join": {
-                                                  "inputs": [
-                                                    {
-                                                      "Reduce": {
-                                                        "input": {
-                                                          "Filter": {
-                                                            "input": {
-                                                              "Join": {
-                                                                "inputs": [
-                                                                  {
-                                                                    "Get": {
-                                                                      "id": {
-                                                                        "Local": 2
-                                                                      },
-                                                                      "typ": {
-                                                                        "column_types": [
-                                                                          {
-                                                                            "scalar_type": "Int32",
-                                                                            "nullable": true
-                                                                          }
-                                                                        ],
-                                                                        "keys": [
-                                                                          [
-                                                                            0
-                                                                          ]
-                                                                        ]
-                                                                      }
-                                                                    }
-                                                                  },
-                                                                  {
-                                                                    "Get": {
-                                                                      "id": {
-                                                                        "Global": {
-                                                                          "User": 5
+                                                "Map": {
+                                                  "input": {
+                                                    "Reduce": {
+                                                      "input": {
+                                                        "Filter": {
+                                                          "input": {
+                                                            "Join": {
+                                                              "inputs": [
+                                                                {
+                                                                  "Get": {
+                                                                    "id": {
+                                                                      "Local": 2
+                                                                    },
+                                                                    "typ": {
+                                                                      "column_types": [
+                                                                        {
+                                                                          "scalar_type": "Int32",
+                                                                          "nullable": true
                                                                         }
-                                                                      },
-                                                                      "typ": {
-                                                                        "column_types": [
-                                                                          {
-                                                                            "scalar_type": "Int32",
-                                                                            "nullable": false
-                                                                          },
-                                                                          {
-                                                                            "scalar_type": "Int32",
-                                                                            "nullable": true
-                                                                          }
-                                                                        ],
-                                                                        "keys": []
-                                                                      }
+                                                                      ],
+                                                                      "keys": [
+                                                                        [
+                                                                          0
+                                                                        ]
+                                                                      ]
                                                                     }
                                                                   }
-                                                                ],
-                                                                "equivalences": [],
-                                                                "implementation": "Unimplemented"
-                                                              }
-                                                            },
-                                                            "predicates": [
-                                                              {
-                                                                "CallBinary": {
-                                                                  "func": "Lt",
-                                                                  "expr1": {
-                                                                    "Column": 0
-                                                                  },
-                                                                  "expr2": {
-                                                                    "Column": 1
+                                                                },
+                                                                {
+                                                                  "Get": {
+                                                                    "id": {
+                                                                      "Global": {
+                                                                        "User": 5
+                                                                      }
+                                                                    },
+                                                                    "typ": {
+                                                                      "column_types": [
+                                                                        {
+                                                                          "scalar_type": "Int32",
+                                                                          "nullable": false
+                                                                        },
+                                                                        {
+                                                                          "scalar_type": "Int32",
+                                                                          "nullable": true
+                                                                        }
+                                                                      ],
+                                                                      "keys": []
+                                                                    }
                                                                   }
                                                                 }
-                                                              }
-                                                            ]
-                                                          }
-                                                        },
-                                                        "group_key": [
-                                                          {
-                                                            "Column": 0
-                                                          }
-                                                        ],
-                                                        "aggregates": [],
-                                                        "monotonic": false,
-                                                        "expected_group_size": null
-                                                      }
-                                                    },
-                                                    {
-                                                      "Constant": {
-                                                        "rows": {
-                                                          "Ok": [
-                                                            [
-                                                              {
-                                                                "data": [
-                                                                  2
-                                                                ]
-                                                              },
-                                                              1
-                                                            ]
-                                                          ]
-                                                        },
-                                                        "typ": {
-                                                          "column_types": [
-                                                            {
-                                                              "scalar_type": "Bool",
-                                                              "nullable": false
+                                                              ],
+                                                              "equivalences": [],
+                                                              "implementation": "Unimplemented"
                                                             }
-                                                          ],
-                                                          "keys": []
+                                                          },
+                                                          "predicates": [
+                                                            {
+                                                              "CallBinary": {
+                                                                "func": "Lt",
+                                                                "expr1": {
+                                                                  "Column": 0
+                                                                },
+                                                                "expr2": {
+                                                                  "Column": 1
+                                                                }
+                                                              }
+                                                            }
+                                                          ]
                                                         }
-                                                      }
+                                                      },
+                                                      "group_key": [
+                                                        {
+                                                          "Column": 0
+                                                        }
+                                                      ],
+                                                      "aggregates": [],
+                                                      "monotonic": false,
+                                                      "expected_group_size": null
                                                     }
-                                                  ],
-                                                  "equivalences": [],
-                                                  "implementation": "Unimplemented"
+                                                  },
+                                                  "scalars": [
+                                                    {
+                                                      "Literal": [
+                                                        {
+                                                          "Ok": {
+                                                            "data": [
+                                                              2
+                                                            ]
+                                                          }
+                                                        },
+                                                        {
+                                                          "scalar_type": "Bool",
+                                                          "nullable": false
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
                                                 }
                                               },
                                               "body": {
@@ -2704,115 +2358,103 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                 "Let": {
                                   "id": 6,
                                   "value": {
-                                    "Join": {
-                                      "inputs": [
-                                        {
-                                          "Reduce": {
-                                            "input": {
-                                              "Filter": {
-                                                "input": {
-                                                  "Join": {
-                                                    "inputs": [
-                                                      {
-                                                        "Get": {
-                                                          "id": {
-                                                            "Local": 5
-                                                          },
-                                                          "typ": {
-                                                            "column_types": [
-                                                              {
-                                                                "scalar_type": "Int32",
-                                                                "nullable": true
-                                                              }
-                                                            ],
-                                                            "keys": [
-                                                              [
-                                                                0
-                                                              ]
-                                                            ]
-                                                          }
-                                                        }
-                                                      },
-                                                      {
-                                                        "Get": {
-                                                          "id": {
-                                                            "Global": {
-                                                              "User": 5
+                                    "Map": {
+                                      "input": {
+                                        "Reduce": {
+                                          "input": {
+                                            "Filter": {
+                                              "input": {
+                                                "Join": {
+                                                  "inputs": [
+                                                    {
+                                                      "Get": {
+                                                        "id": {
+                                                          "Local": 5
+                                                        },
+                                                        "typ": {
+                                                          "column_types": [
+                                                            {
+                                                              "scalar_type": "Int32",
+                                                              "nullable": true
                                                             }
-                                                          },
-                                                          "typ": {
-                                                            "column_types": [
-                                                              {
-                                                                "scalar_type": "Int32",
-                                                                "nullable": false
-                                                              },
-                                                              {
-                                                                "scalar_type": "Int32",
-                                                                "nullable": true
-                                                              }
-                                                            ],
-                                                            "keys": []
-                                                          }
+                                                          ],
+                                                          "keys": [
+                                                            [
+                                                              0
+                                                            ]
+                                                          ]
                                                         }
                                                       }
-                                                    ],
-                                                    "equivalences": [],
-                                                    "implementation": "Unimplemented"
-                                                  }
-                                                },
-                                                "predicates": [
-                                                  {
-                                                    "CallBinary": {
-                                                      "func": "Gt",
-                                                      "expr1": {
-                                                        "Column": 0
-                                                      },
-                                                      "expr2": {
-                                                        "Column": 2
+                                                    },
+                                                    {
+                                                      "Get": {
+                                                        "id": {
+                                                          "Global": {
+                                                            "User": 5
+                                                          }
+                                                        },
+                                                        "typ": {
+                                                          "column_types": [
+                                                            {
+                                                              "scalar_type": "Int32",
+                                                              "nullable": false
+                                                            },
+                                                            {
+                                                              "scalar_type": "Int32",
+                                                              "nullable": true
+                                                            }
+                                                          ],
+                                                          "keys": []
+                                                        }
                                                       }
                                                     }
-                                                  }
-                                                ]
-                                              }
-                                            },
-                                            "group_key": [
-                                              {
-                                                "Column": 0
-                                              }
-                                            ],
-                                            "aggregates": [],
-                                            "monotonic": false,
-                                            "expected_group_size": null
-                                          }
-                                        },
-                                        {
-                                          "Constant": {
-                                            "rows": {
-                                              "Ok": [
-                                                [
-                                                  {
-                                                    "data": [
-                                                      2
-                                                    ]
-                                                  },
-                                                  1
-                                                ]
-                                              ]
-                                            },
-                                            "typ": {
-                                              "column_types": [
-                                                {
-                                                  "scalar_type": "Bool",
-                                                  "nullable": false
+                                                  ],
+                                                  "equivalences": [],
+                                                  "implementation": "Unimplemented"
                                                 }
-                                              ],
-                                              "keys": []
+                                              },
+                                              "predicates": [
+                                                {
+                                                  "CallBinary": {
+                                                    "func": "Gt",
+                                                    "expr1": {
+                                                      "Column": 0
+                                                    },
+                                                    "expr2": {
+                                                      "Column": 2
+                                                    }
+                                                  }
+                                                }
+                                              ]
                                             }
-                                          }
+                                          },
+                                          "group_key": [
+                                            {
+                                              "Column": 0
+                                            }
+                                          ],
+                                          "aggregates": [],
+                                          "monotonic": false,
+                                          "expected_group_size": null
                                         }
-                                      ],
-                                      "equivalences": [],
-                                      "implementation": "Unimplemented"
+                                      },
+                                      "scalars": [
+                                        {
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  2
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "Bool",
+                                              "nullable": false
+                                            }
+                                          ]
+                                        }
+                                      ]
                                     }
                                   },
                                   "body": {
