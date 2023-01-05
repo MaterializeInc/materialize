@@ -27,13 +27,11 @@ class MzcomposeAction(Action):
 
 
 class StartMz(MzcomposeAction):
-    DEFAULT_MZ_OPTIONS = " ".join(
-        [
-            "--persist-consensus-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=consensus",
-            "--storage-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=storage",
-            "--adapter-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=adapter",
-        ]
-    )
+    DEFAULT_MZ_OPTIONS = [
+        "--persist-consensus-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=consensus",
+        "--storage-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=storage",
+        "--adapter-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=adapter",
+    ]
 
     def __init__(
         self, tag: Optional[str] = None, environment_extra: List[str] = []

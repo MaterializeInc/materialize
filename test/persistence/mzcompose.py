@@ -167,9 +167,7 @@ def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
 
 def workflow_compaction(c: Composition) -> None:
     with c.override(
-        Materialized(
-            options=f"--metrics-scraping-interval=1s",
-        )
+        Materialized(options=["--metrics-scraping-interval=1s"]),
     ):
         c.up("materialized")
         c.wait_for_materialized()

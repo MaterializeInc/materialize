@@ -845,7 +845,7 @@ class ServiceConfig(TypedDict, total=False):
     entrypoint: List[str]
     """Override the entrypoint specified in the image."""
 
-    command: str
+    command: List[str]
     """Override the command specified in the image."""
 
     init: bool

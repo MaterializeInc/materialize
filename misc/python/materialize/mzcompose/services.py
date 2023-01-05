@@ -45,7 +45,7 @@ class Materialized(Service):
         volumes_extra: List[str] = [],
         depends_on: Optional[List[str]] = None,
         memory: Optional[str] = None,
-        options: Optional[Union[str, List[str]]] = "",
+        options: List[str] = [],
         persist_blob_url: Optional[str] = None,
         default_size: int = Size.DEFAULT_SIZE,
         environment_id: Optional[str] = None,
@@ -85,7 +85,7 @@ class Materialized(Service):
         command += [f"--environment-id={environment_id}"]
 
         if persist_blob_url:
-            command.append(f"--persist-blob-url='{persist_blob_url}'")
+            command.append(f"--persist-blob-url={persist_blob_url}")
 
         if propagate_crashes:
             command += ["--orchestrator-process-propagate-crashes"]
@@ -102,11 +102,7 @@ class Materialized(Service):
             f"--default-storage-host-size={self.default_storage_size}",
         ]
 
-        if options:
-            if isinstance(options, str):
-                command.append(options)
-            else:
-                command.extend(options)
+        command += options
 
         config: ServiceConfig = {}
 
@@ -124,7 +120,7 @@ class Materialized(Service):
         config.update(
             {
                 "depends_on": depends_on or [],
-                "command": " ".join(command),
+                "command": command,
                 "ports": [6875, 6876, 6877, 6878, 26257],
                 "environment": environment,
                 "volumes": [*DEFAULT_MZ_VOLUMES, *volumes_extra],
@@ -142,7 +138,7 @@ class Clusterd(Service):
         image: Optional[str] = None,
         environment_extra: List[str] = [],
         memory: Optional[str] = None,
-        options: Optional[Union[str, List[str]]] = "",
+        options: List[str] = [],
         storage_workers: Optional[int] = Materialized.Size.DEFAULT_SIZE,
     ) -> None:
         environment = [
@@ -152,14 +148,11 @@ class Clusterd(Service):
         ]
 
         command = []
-        if options:
-            if isinstance(options, str):
-                command.append(options)
-            else:
-                command.extend(options)
 
         if storage_workers:
-            command.append(f"--storage-workers {storage_workers}")
+            command += [f"--storage-workers={storage_workers}"]
+
+        command += options
 
         config: ServiceConfig = {}
 
@@ -176,7 +169,7 @@ class Clusterd(Service):
 
         config.update(
             {
-                "command": " ".join(command),
+                "command": command,
                 "ports": [2100, 2101],
                 "environment": environment,
                 "volumes": DEFAULT_MZ_VOLUMES,
@@ -289,16 +282,20 @@ class Redpanda(Service):
             "--reserve-memory=0M",
             "--node-id=0",
             "--check=false",
-            '--set "redpanda.enable_transactions=true"',
-            '--set "redpanda.enable_idempotence=true"',
-            f'--set "redpanda.auto_create_topics_enabled={auto_create_topics}"',
-            f"--advertise-kafka-addr kafka:{ports[0]}",
+            "--set",
+            "redpanda.enable_transactions=true",
+            "--set",
+            "redpanda.enable_idempotence=true",
+            "--set",
+            f"redpanda.auto_create_topics_enabled={auto_create_topics}",
+            "--set",
+            f"--advertise-kafka-addr=kafka:{ports[0]}",
         ]
 
         config: ServiceConfig = {
             "image": image,
             "ports": ports,
-            "command": " ".join(command_list),
+            "command": command_list,
             "networks": {"default": {"aliases": aliases}},
         }
 
@@ -349,30 +346,21 @@ class MySql(Service):
         mysql_root_password: str,
         name: str = "mysql",
         image: str = "mysql:8.0.27",
-        command: Optional[str] = None,
         port: int = 3306,
-        environment: Optional[List[str]] = None,
         volumes: list[str] = ["mydata:/var/lib/mysql-files"],
     ) -> None:
-        if environment is None:
-            environment = []
-        environment.append(f"MYSQL_ROOT_PASSWORD={mysql_root_password}")
-
-        if not command:
-            command = "\n".join(
-                [
-                    "--default-authentication-plugin=mysql_native_password",
-                    "--secure-file-priv=/var/lib/mysql-files",
-                ]
-            )
-
         super().__init__(
             name=name,
             config={
                 "image": image,
                 "ports": [port],
-                "environment": environment,
-                "command": command,
+                "environment": [
+                    f"MYSQL_ROOT_PASSWORD={mysql_root_password}",
+                ],
+                "command": [
+                    "--default-authentication-plugin=mysql_native_password",
+                    "--secure-file-priv=/var/lib/mysql-files",
+                ],
                 "volumes": volumes,
             },
         )
@@ -390,7 +378,7 @@ class Cockroach(Service):
             config={
                 "image": "cockroachdb/cockroach:v22.2.0",
                 "ports": [26257],
-                "command": "start-single-node --insecure",
+                "command": ["start-single-node", "--insecure"],
                 "volumes": ["/cockroach/cockroach-data"],
             },
         )
@@ -403,7 +391,17 @@ class Postgres(Service):
         mzbuild: str = "postgres",
         image: Optional[str] = None,
         port: int = 5432,
-        command: str = "postgres -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20 -c max_connections=5000",
+        command: List[str] = [
+            "postgres",
+            "-c",
+            "wal_level=logical",
+            "-c",
+            "max_wal_senders=20",
+            "-c",
+            "max_replication_slots=20",
+            "-c",
+            "max_connections=5000",
+        ],
         environment: List[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
     ) -> None:
         config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
@@ -537,7 +535,7 @@ class Minio(Service):
         super().__init__(
             name=name,
             config={
-                "command": "minio server /data --console-address :9001",
+                "command": ["minio", "server", "/data", "--console-address", ":9001"],
                 "image": image,
                 "ports": [9000, 9001],
             },

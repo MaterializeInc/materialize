@@ -50,7 +50,7 @@ SERVICES = [
     ),
     Postgres(),
     Materialized(
-        options=" ".join(mz_options.values()),
+        options=list(mz_options.values()),
         environment_extra=[
             "SSL_KEY_PASSWORD=mzmzmz",
         ],
@@ -172,11 +172,11 @@ def test_upgrade_from_version(
 
         mz_from = Materialized(
             image=f"materialize/materialized:{from_version}",
-            options=" ".join(
+            options=[
                 opt
                 for start_version, opt in mz_options.items()
                 if from_version[1:] >= start_version
-            ),
+            ],
             environment_extra=environment_extra,
             volumes_extra=["secrets:/share/secrets"],
         )
