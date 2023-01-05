@@ -286,12 +286,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         .insert(ingestion.id, ingestion.description.clone());
 
                     // Initialize shared frontier tracking.
-                    for export_id in ingestion.description.source_exports.keys() {
+                    for (export_id, export) in ingestion.description.source_exports.iter() {
                         self.storage_state.source_statistics.insert(
                             *export_id,
                             SourceStatistics::new(
                                 *export_id,
                                 self.storage_state.timely_worker_index,
+                                &self.storage_state.source_metrics,
+                                ingestion.id,
+                                &export.storage_metadata.data_shard,
                             ),
                         );
 
