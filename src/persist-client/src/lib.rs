@@ -1127,7 +1127,7 @@ mod tests {
             // Tests for the BatchBuilder.
             assert_eq!(
                 write0
-                    .builder(0, Antichain::from_elem(3))
+                    .builder(Antichain::from_elem(3))
                     .finish(Antichain::from_elem(2))
                     .await
                     .unwrap_err(),
@@ -1821,7 +1821,7 @@ mod tests {
                     let current_upper_chain = Antichain::from_elem(current_upper);
                     current_upper = new_upper;
                     let new_upper_chain = Antichain::from_elem(new_upper);
-                    let mut builder = write.builder(batch.len(), current_upper_chain);
+                    let mut builder = write.builder(current_upper_chain);
 
                     for ((k, v), t, d) in batch.iter() {
                         builder

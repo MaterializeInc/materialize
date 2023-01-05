@@ -569,6 +569,10 @@ pub struct BatchWriteMetrics {
     pub(crate) goodbytes: IntCounter,
     pub(crate) seconds: Counter,
     pub(crate) write_stalls: IntCounter,
+
+    pub(crate) step_consolidation: Counter,
+    pub(crate) step_columnar_encoding: Counter,
+    pub(crate) step_part_writing: Counter,
 }
 
 impl BatchWriteMetrics {
@@ -592,6 +596,18 @@ impl BatchWriteMetrics {
                     "count of {} writes stalling to await max outstanding reqs",
                     name
                 ),
+            )),
+            step_consolidation: registry.register(metric!(
+                name: format!("mz_persist_{}_step_consolidation", name),
+                help: format!("time spent consolidating {} updates", name),
+            )),
+            step_columnar_encoding: registry.register(metric!(
+                name: format!("mz_persist_{}_step_columnar_encoding", name),
+                help: format!("time spent columnar encoding {} updates", name),
+            )),
+            step_part_writing: registry.register(metric!(
+                name: format!("mz_persist_{}_step_part_writing", name),
+                help: format!("blocking time spent writing parts for {} updates", name),
             )),
         }
     }
@@ -727,9 +743,6 @@ impl CompactionMetrics {
 pub struct CompactionStepTimings {
     pub(crate) part_fetch_seconds: Counter,
     pub(crate) heap_population_seconds: Counter,
-    pub(crate) consolidation_seconds: Counter,
-    pub(crate) part_columnar_encoding_seconds: Counter,
-    pub(crate) part_write_seconds: Counter,
 }
 
 impl CompactionStepTimings {
@@ -737,10 +750,6 @@ impl CompactionStepTimings {
         CompactionStepTimings {
             part_fetch_seconds: step_timings.with_label_values(&["part_fetch"]),
             heap_population_seconds: step_timings.with_label_values(&["heap_population"]),
-            consolidation_seconds: step_timings.with_label_values(&["consolidation"]),
-            part_columnar_encoding_seconds: step_timings
-                .with_label_values(&["part_columnar_encoding"]),
-            part_write_seconds: step_timings.with_label_values(&["part_write_seconds"]),
         }
     }
 }

@@ -10,13 +10,11 @@
 //! A columnar representation of ((Key, Val), Time, i64) data suitable for in-memory
 //! reads and persistent storage.
 
-use std::iter::FromIterator;
 use std::mem::size_of;
 use std::{cmp, fmt};
 
 use arrow2::buffer::Buffer;
 use arrow2::types::Index;
-use mz_persist_types::Codec64;
 
 pub mod arrow;
 pub mod parquet;
@@ -140,61 +138,6 @@ impl ColumnarRecords {
     /// Iterate through the records in Self.
     pub fn iter<'a>(&'a self) -> ColumnarRecordsIter<'a> {
         self.borrow().iter()
-    }
-}
-
-// TODO: deduplicate this with the other FromIterator implementation.
-impl<'a, K, V> FromIterator<&'a ((K, V), u64, i64)> for ColumnarRecordsVec
-where
-    K: AsRef<[u8]> + 'a,
-    V: AsRef<[u8]> + 'a,
-{
-    fn from_iter<T: IntoIterator<Item = &'a ((K, V), u64, i64)>>(iter: T) -> Self {
-        let iter = iter.into_iter();
-        let size_hint = iter.size_hint();
-
-        let mut builder = ColumnarRecordsVecBuilder::default();
-        for record in iter {
-            let ((key, val), ts, diff) = record;
-            let (key, val) = (key.as_ref(), val.as_ref());
-            if builder.len() == 0 {
-                // Use the first record to attempt to pre-size the builder
-                // allocations. This uses the iter's size_hint's lower+1 to
-                // match the logic in Vec.
-                let (lower, _) = size_hint;
-                let additional = usize::saturating_add(lower, 1);
-                builder.reserve(additional, key.len(), val.len());
-            }
-            builder.push(((key, val), Codec64::encode(ts), Codec64::encode(diff)))
-        }
-        ColumnarRecordsVec(builder.finish())
-    }
-}
-
-impl<K, V> FromIterator<((K, V), u64, i64)> for ColumnarRecordsVec
-where
-    K: AsRef<[u8]>,
-    V: AsRef<[u8]>,
-{
-    fn from_iter<T: IntoIterator<Item = ((K, V), u64, i64)>>(iter: T) -> Self {
-        let iter = iter.into_iter();
-        let size_hint = iter.size_hint();
-
-        let mut builder = ColumnarRecordsVecBuilder::default();
-        for record in iter {
-            let ((key, val), ts, diff) = record;
-            let (key, val) = (key.as_ref(), val.as_ref());
-            if builder.len() == 0 {
-                // Use the first record to attempt to pre-size the builder
-                // allocations. This uses the iter's size_hint's lower+1 to
-                // match the logic in Vec.
-                let (lower, _) = size_hint;
-                let additional = usize::saturating_add(lower, 1);
-                builder.reserve(additional, key.len(), val.len());
-            }
-            builder.push(((key, val), Codec64::encode(&ts), Codec64::encode(&diff)));
-        }
-        ColumnarRecordsVec(builder.finish())
     }
 }
 
@@ -450,6 +393,19 @@ impl ColumnarRecordsBuilder {
         debug_assert_eq!(self.borrow().validate(), Ok(()));
     }
 
+    /// Reserve space for `additional` more records, with exact sizes for the key and value data.
+    pub fn reserve_exact(&mut self, additional: usize, key_bytes: usize, val_bytes: usize) {
+        self.key_offsets.reserve(additional);
+        self.key_data
+            .reserve(cmp::min(key_bytes, KEY_VAL_DATA_MAX_LEN));
+        self.val_offsets.reserve(additional);
+        self.val_data
+            .reserve(cmp::min(val_bytes, KEY_VAL_DATA_MAX_LEN));
+        self.timestamps.reserve(additional);
+        self.diffs.reserve(additional);
+        debug_assert_eq!(self.borrow().validate(), Ok(()));
+    }
+
     /// Returns if the given key_offsets+key_data or val_offsets+val_data fits
     /// in the limits imposed by ColumnarRecords.
     ///
@@ -518,125 +474,9 @@ impl ColumnarRecordsBuilder {
     }
 }
 
-/// A new-type so we can impl FromIterator for `Vec<ColumnarRecords>`.
-#[derive(Debug)]
-pub struct ColumnarRecordsVec(pub Vec<ColumnarRecords>);
-
-impl ColumnarRecordsVec {
-    /// Unwraps this ColumnarRecordsVec, returning the underlying
-    /// `Vec<ColumnarRecords>`.
-    pub fn into_inner(self) -> Vec<ColumnarRecords> {
-        self.0
-    }
-}
-
-/// A wrapper around ColumnarRecordsBuilder that chunks as necessary to keep
-/// each ColumnarRecords within the required size bounds.
-#[derive(Debug)]
-pub struct ColumnarRecordsVecBuilder {
-    current: ColumnarRecordsBuilder,
-    filled: Vec<ColumnarRecords>,
-    // Defaults to the KEY_VAL_DATA_MAX_LEN const but override-able for testing.
-    key_val_data_max_len: usize,
-}
-
-impl Default for ColumnarRecordsVecBuilder {
-    fn default() -> Self {
-        Self {
-            current: ColumnarRecordsBuilder::default(),
-            filled: Vec::with_capacity(1),
-            key_val_data_max_len: KEY_VAL_DATA_MAX_LEN,
-        }
-    }
-}
-
-impl ColumnarRecordsVecBuilder {
-    /// Create a new ColumnarRecordsVecBuilder with a specified max size.
-    pub fn new_with_len(key_val_data_max_len: usize) -> Self {
-        assert!(key_val_data_max_len <= KEY_VAL_DATA_MAX_LEN);
-        ColumnarRecordsVecBuilder {
-            current: ColumnarRecordsBuilder::default(),
-            filled: Vec::with_capacity(1),
-            key_val_data_max_len,
-        }
-    }
-
-    /// The number of (potentially duplicated) ((Key, Val), Time, i64) records
-    /// stored in Self.
-    pub fn len(&self) -> usize {
-        self.current.len() + self.filled.iter().map(|x| x.len()).sum::<usize>()
-    }
-
-    /// Reserve space for `additional` more records, based on `key_size_guess` and
-    /// `val_size_guess`.
-    ///
-    /// The guesses for key and val sizes are best effort, and if they end up being
-    /// too small, the underlying buffers will be resized.
-    pub fn reserve(&mut self, additional: usize, key_size_guess: usize, val_size_guess: usize) {
-        // TODO: This logic very much breaks down if we do end up having to
-        // return multiple batches. Tune this later.
-        //
-        // In particular, it can break down in at least the following ways:
-        // - Only the batch currently being built is pre-sized. This can be
-        //   fixed by keeping track on `self` of how much of our reservation (if
-        //   any) didn't fit in the current ColumnarRecords and rolling it over
-        //   to future one if/when we hit them.
-        // - The reservation is blindly truncated at the ColumnarRecords size
-        //   limit. This means that whichever of key or val is smaller will
-        //   likely end up over-reserving. This can be fixed with some more math
-        //   inside reserve.
-        self.current
-            .reserve(additional, key_size_guess, val_size_guess)
-    }
-
-    /// Add a record to Self.
-    pub fn push(&mut self, record: ((&[u8], &[u8]), [u8; 8], [u8; 8])) {
-        let ((key, val), ts, diff) = record;
-        let mut needs_flush = !self.current.can_fit(key, val, self.key_val_data_max_len);
-        if needs_flush && self.current.len() > 0 {
-            // We don't have room in this ColumnarRecords, finish it up and
-            // try in a fresh one.
-            let prev = std::mem::take(&mut self.current);
-            self.filled.push(prev.finish());
-            needs_flush = false;
-        }
-        // If it fails now, this individual record is too big to fit
-        // in a ColumnarRecords by itself. The limits are big, so this
-        // is a pretty extreme case that we intentionally don't handle
-        // right now.
-        assert!(self.current.push(((key, val), ts, diff)));
-        if needs_flush {
-            // This only happens when an individual record is larger than the
-            // max len, which probably only happens in tests where we set it
-            // artificially small.
-            let prev = std::mem::take(&mut self.current);
-            self.filled.push(prev.finish());
-        }
-    }
-
-    /// Finalize constructing a `Vec<ColumnarRecords>`.
-    pub fn finish(self) -> Vec<ColumnarRecords> {
-        let mut ret = self.filled;
-        if self.current.len > 0 {
-            ret.push(self.current.finish());
-        }
-        ret
-    }
-
-    /// Returns the list of filled [ColumnarRecords].
-    pub fn take_filled(&mut self) -> Vec<ColumnarRecords> {
-        if self.filled.len() > 0 {
-            std::mem::take(&mut self.filled)
-        } else {
-            vec![]
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_ore::cast::CastFrom;
     use mz_persist_types::Codec64;
 
     /// Smoke test some edge cases around empty sets of records and empty keys/vals
@@ -667,73 +507,5 @@ mod tests {
             .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), u64::decode(t), i64::decode(d)))
             .collect();
         assert_eq!(reads, updates);
-    }
-
-    #[test]
-    fn vec_builder() {
-        fn testcase(
-            max_len: usize,
-            kv: (&str, &str),
-            num_records: usize,
-            expected_num_columnar_records: usize,
-        ) {
-            let (key, val) = kv;
-            let expected = (0..num_records)
-                .map(|x| ((key.as_bytes(), val.as_bytes()), u64::cast_from(x), 1))
-                .collect::<Vec<_>>();
-            let mut builder = ColumnarRecordsVecBuilder::new_with_len(max_len);
-            // Call reserve once at the beginning to match the usage in the
-            // FromIterator impls.
-            builder.reserve(num_records, key.len(), 0);
-            for (idx, (kv, t, d)) in expected.iter().enumerate() {
-                builder.push((*kv, u64::encode(t), i64::encode(d)));
-                assert_eq!(builder.len(), idx + 1);
-            }
-            let columnar = builder.finish();
-            assert_eq!(columnar.len(), expected_num_columnar_records);
-            let actual = columnar
-                .iter()
-                .flat_map(|x| x.iter())
-                .map(|(kv, t, d)| (kv, u64::decode(t), i64::decode(d)))
-                .collect::<Vec<_>>();
-            assert_eq!(actual, expected);
-        }
-
-        let ten_k = "kkkkkkkkkk";
-        let ten_v = "vvvvvvvvvv";
-
-        let k_record_size = ten_k.len() + BYTES_PER_KEY_VAL_OFFSET;
-        let v_record_size = ten_v.len() + BYTES_PER_KEY_VAL_OFFSET;
-        // We use `len + 1` offsets to store `len` records.
-        let extra_offset = BYTES_PER_KEY_VAL_OFFSET;
-
-        // Tests for the production value. We intentionally don't make a 2GB
-        // alloc in unit tests, the rollover edge cases are tested below.
-        testcase(KEY_VAL_DATA_MAX_LEN, ("", ""), 0, 0);
-        testcase(KEY_VAL_DATA_MAX_LEN, (ten_k, ""), 10, 1);
-        testcase(KEY_VAL_DATA_MAX_LEN, ("", ten_v), 10, 1);
-
-        // Tests for exactly filling ColumnarRecords
-        testcase(k_record_size + extra_offset, (ten_k, ""), 1, 1);
-        testcase(v_record_size + extra_offset, ("", ten_v), 1, 1);
-        testcase(k_record_size + extra_offset, (ten_k, ""), 10, 10);
-        testcase(v_record_size + extra_offset, ("", ten_v), 10, 10);
-        testcase(10 * k_record_size + extra_offset, (ten_k, ""), 10, 1);
-        testcase(10 * v_record_size + extra_offset, ("", ten_v), 10, 1);
-
-        // Tests for not exactly filling ColumnarRecords
-        testcase(40, (ten_k, ""), 23, 12);
-        testcase(40, ("", ten_v), 23, 12);
-    }
-
-    // Regression test for a bug where an empty ColumnarRecords would be
-    // produced if the first record added was larger than
-    // `key_val_data_max_len`. This really only comes up in tests.
-    #[test]
-    fn regression_empty_chunk() {
-        let mut builder = ColumnarRecordsVecBuilder::new_with_len(0);
-        builder.push(((&[], &[]), [0u8; 8], [0u8; 8]));
-        assert_eq!(builder.take_filled().len(), 1);
-        assert_eq!(builder.finish().len(), 0);
     }
 }

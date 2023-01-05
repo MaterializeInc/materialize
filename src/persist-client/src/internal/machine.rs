@@ -1385,6 +1385,9 @@ pub mod datadriven {
         let output = args.expect_str("output");
         let lower = args.expect_antichain("lower");
         let upper = args.expect_antichain("upper");
+        let since = args
+            .optional_antichain("since")
+            .unwrap_or_else(|| Antichain::from_elem(0));
         let target_size = args.optional("target_size");
         let parts_size_override = args.optional("parts_size_override");
         let updates = args.input.split('\n').flat_map(DirectiveArgs::parse_update);
@@ -1396,21 +1399,19 @@ pub mod datadriven {
         let mut builder = BatchBuilder::new(
             cfg,
             Arc::clone(&datadriven.client.metrics),
-            0,
+            datadriven.client.metrics.user.clone(),
             lower,
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.cpu_heavy_runtime),
             datadriven.shard_id.clone(),
             WriterId::new(),
+            since,
+            Some(upper.clone()),
         );
         for ((k, ()), t, d) in updates {
             builder.add(&k, &(), &t, &d).await.expect("invalid batch");
         }
-        let batch = builder
-            .finish(upper)
-            .await
-            .expect("invalid batch")
-            .into_hollow_batch();
+        let batch = builder.finish(upper).await?.into_hollow_batch();
 
         if let Some(size) = parts_size_override {
             let mut batch = batch.clone();

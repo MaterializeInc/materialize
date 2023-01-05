@@ -1,0 +1,246 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# batches are sorted
+write-batch output=b0 lower=0 upper=2
+d 0 1
+a 0 1
+b 0 1
+c 0 1
+----
+parts=1 len=4
+
+fetch-batch input=b0
+----
+<part 0>
+a 0 1
+b 0 1
+c 0 1
+d 0 1
+<run 0>
+part 0
+
+# batches consolidate updates
+write-batch output=b0 lower=0 upper=10
+a 0 1
+a 0 -1
+b 0 1
+----
+parts=1 len=1
+
+fetch-batch input=b0
+----
+<part 0>
+b 0 1
+<run 0>
+part 0
+
+# no part is written if the updates fully consolidate out
+write-batch output=b0 lower=0 upper=10
+a 3 1
+a 3 -1
+b 4 -1
+b 4 1
+----
+parts=0 len=0
+
+fetch-batch input=b0
+----
+<empty>
+
+# regression: runs after the first one can contain multiple parts.
+# note: target part size set so that each part contains 2 keys.
+write-batch output=b0 lower=0 upper=2 target_size=50
+a 0 1
+b 0 1
+a 0 1
+d 0 1
+e 0 1
+f 0 1
+g 0 1
+h 0 1
+----
+parts=4 len=8
+
+fetch-batch input=b0
+----
+<part 0>
+a 0 1
+b 0 1
+<part 1>
+a 0 1
+d 0 1
+<part 2>
+e 0 1
+f 0 1
+<part 3>
+g 0 1
+h 0 1
+<run 0>
+part 0
+<run 1>
+part 1
+part 2
+part 3
+
+# regression: new runs are cut when the _least_ key within a part is less than the greatest in the prior run
+# note: target part size set so that each part contains 2 keys.
+write-batch output=b0 lower=0 upper=2 target_size=50
+a 0 1
+m 0 1
+b 0 1
+z 0 1
+----
+parts=2 len=4
+
+fetch-batch input=b0
+----
+<part 0>
+a 0 1
+m 0 1
+<part 1>
+b 0 1
+z 0 1
+<run 0>
+part 0
+<run 1>
+part 1
+
+# track runs with a more complicated case, mixing the above scenarios
+# note: target part size set so that each part contains 2 keys.
+write-batch output=b0 lower=0 upper=2 target_size=50
+a 0 1
+b 0 1
+d 0 1
+c 0 1
+g 0 1
+h 0 1
+f 0 1
+e 0 1
+a 0 1
+x 0 1
+y 0 1
+z 0 1
+----
+parts=6 len=12
+
+fetch-batch input=b0
+----
+<part 0>
+a 0 1
+b 0 1
+<part 1>
+c 0 1
+d 0 1
+<part 2>
+g 0 1
+h 0 1
+<part 3>
+e 0 1
+f 0 1
+<part 4>
+a 0 1
+x 0 1
+<part 5>
+y 0 1
+z 0 1
+<run 0>
+part 0
+part 1
+part 2
+<run 1>
+part 3
+<run 2>
+part 4
+part 5
+
+# edge case: T is considered when determining runs
+write-batch output=b0 lower=0 upper=10 target_size=0
+a 9 1
+a 1 1
+----
+parts=2 len=2
+
+fetch-batch input=b0
+----
+<part 0>
+a 9 1
+<part 1>
+a 1 1
+<run 0>
+part 0
+<run 1>
+part 1
+
+# write a batch that doesn't cleanly divide into target part size (each update is 25 bytes)
+write-batch output=b0 lower=0 upper=2 target_size=50
+a 0 1
+b 0 1
+d 0 1
+----
+parts=2 len=3
+
+fetch-batch input=b0
+----
+<part 0>
+a 0 1
+b 0 1
+<part 1>
+d 0 1
+<run 0>
+part 0
+part 1
+
+# write a batch that exactly divides into target part size (each update is 25 bytes)
+write-batch output=b0 lower=0 upper=2 target_size=50
+a 0 1
+b 0 1
+c 0 1
+d 0 1
+----
+parts=2 len=4
+
+fetch-batch input=b0
+----
+<part 0>
+a 0 1
+b 0 1
+<part 1>
+c 0 1
+d 0 1
+<run 0>
+part 0
+part 1
+
+# write an empty batch. should contain no parts.
+write-batch output=b0 lower=0 upper=2 target_size=50
+----
+parts=0 len=0
+
+fetch-batch input=b0
+----
+<empty>
+
+# normally batches cannot contain updates with a timestamp beyond upper
+write-batch output=b0 lower=0 upper=2
+a 3 1
+----
+error: maximum timestamp 3 is beyond the expected batch upper: Antichain { elements: [2] }
+
+# but batches with since > upper are allowed to have updates with timestamps beyond upper
+write-batch output=b0 lower=0 upper=2 since=10
+a 10 1
+----
+parts=1 len=1
+
+# however when since is an advance of upper, our update cannot be in advance of since
+write-batch output=b0 lower=0 upper=2 since=10
+a 100 1
+----
+error: maximum timestamp 100 is beyond the expected batch since: Antichain { elements: [10] }
