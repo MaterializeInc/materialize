@@ -189,6 +189,83 @@ With JSON-formatted messages, we don't know the schema so the [JSON is pulled in
 
     You can use that real-time data to trigger a customer workflow downstream, like sending an email or push notification to the user.
 
+## Trigger a customer workflow
+
+Materialize is wire-compatible with PostgreSQL, so you can use any PostgreSQL client to connect to Materialize. In this example, we'll use [Node.js](/integrations/node-js) and the `node-postgres` library to create a script that connects to Materialize and subscribes to the `abandoned_cart` view.
+
+1. Create a new directory for your project and install the `node-postgres` library:
+    ```bash
+    mkdir abandoned-cart-demo
+    cd abandoned-cart-demo
+    npm init -y
+    npm install pg
+    ```
+    The `pg` package is the official PostgreSQL client for Node.js, which we'll use to connect to Materialize.
+
+1. Next, create a file called `index.js` and add the following code to it:
+
+    ```javascript
+    const { Client } = require('pg');
+    // Define your Materialize connection details
+    const client = new Client({
+        user: MATERIALIZE_USERNAME,
+        password: MATERIALIZE_PASSWORD,
+        host: MATERIALIZE_HOST,
+        port: 6875,
+        database: 'materialize',
+        ssl: true
+    });
+    async function main() {
+        // Connect to Materialize
+        await client.connect();
+        // Subscribe to the abandoned_cart view
+        await client.query('BEGIN');
+        await client.query(`
+            DECLARE c CURSOR FOR SUBSCRIBE abandoned_cart WITH (SNAPSHOT = false)
+        `);
+        while (true) {
+            const res = await client.query('FETCH ALL c');
+            if (res.rows.length > 0) {
+                console.log(res.rows);
+            }
+        }
+    }
+    main();
+    ```
+
+    Run the script:
+    ```bash
+    node index.js
+    ```
+
+    Once you run the script, you will see the following output:
+    ```javascript
+    [
+        {
+            mz_timestamp: '1671102162899',
+            mz_diff: '1',
+            user_id: 1,
+            email: 'test@test.com',
+            item_id: 1,
+            purchase_price: 2,
+            status: 3
+        },
+        {
+            mz_timestamp: '1671102162899',
+            mz_diff: '1',
+            user_id: 2,
+            email: 'test2@test.com',
+            item_id: 2,
+            purchase_price: 3,
+            status: 3
+        }
+    ]
+    ```
+
+    The script is continuously running and will print the results as they arrive.
+
+    Alternatively, you can create a [Kafka sink](/sql/create-sink/) to write the results to a Kafka topic so that you can use the results in other applications.
+
 ## Recap
 
 In this quickstart, you saw:
