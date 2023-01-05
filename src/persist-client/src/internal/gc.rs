@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -238,44 +239,46 @@ where
         let mut deleteable_batch_blobs = HashSet::new();
         let mut deleteable_rollup_blobs = Vec::new();
         while let Some(state) = states.next() {
-            if state.seqno < req.new_seqno_since {
-                state.collections.trace.map_batches(|b| {
-                    for part in b.parts.iter() {
-                        // It's okay (expected) if the key already exists in
-                        // deleteable_batch_blobs, it may have been present in
-                        // previous versions of state.
-                        deleteable_batch_blobs.insert(part.key.to_owned());
-                    }
-                });
-            } else if state.seqno == req.new_seqno_since {
-                state.collections.trace.map_batches(|b| {
-                    for part in b.parts.iter() {
-                        // It's okay (expected) if the key doesn't exist in
-                        // deleteable_batch_blobs, it may have been added in
-                        // this version of state.
-                        let _ = deleteable_batch_blobs.remove(&part.key);
-                    }
-                });
-                // We only need to detect deletable rollups in the last iter
-                // through the live_diffs loop because they accumulate in state.
-                for (seqno, key) in state.collections.rollups.iter() {
-                    // SUBTLE: We only guarantee that a rollup exists for the
-                    // first live state. Anything before that is not allowed to
-                    // be used and so is free to be deleted and removed from
-                    // state.
-                    if seqno < &earliest_live_seqno {
-                        deleteable_rollup_blobs.push((*seqno, key.clone()));
-                    } else {
-                        // We iterate in order, may as well short circuit the
-                        // rollup loop.
-                        break;
-                    }
+            match state.seqno.cmp(&req.new_seqno_since) {
+                Ordering::Less => {
+                    state.collections.trace.map_batches(|b| {
+                        for part in b.parts.iter() {
+                            // It's okay (expected) if the key already exists in
+                            // deleteable_batch_blobs, it may have been present in
+                            // previous versions of state.
+                            deleteable_batch_blobs.insert(part.key.to_owned());
+                        }
+                    });
                 }
-                break;
-            } else {
-                // Sanity check the loop logic.
-                assert!(state.seqno > req.new_seqno_since);
-                break;
+                Ordering::Equal => {
+                    state.collections.trace.map_batches(|b| {
+                        for part in b.parts.iter() {
+                            // It's okay (expected) if the key doesn't exist in
+                            // deleteable_batch_blobs, it may have been added in
+                            // this version of state.
+                            let _ = deleteable_batch_blobs.remove(&part.key);
+                        }
+                    });
+                    // We only need to detect deletable rollups in the last iter
+                    // through the live_diffs loop because they accumulate in state.
+                    for (seqno, key) in state.collections.rollups.iter() {
+                        // SUBTLE: We only guarantee that a rollup exists for the
+                        // first live state. Anything before that is not allowed to
+                        // be used and so is free to be deleted and removed from
+                        // state.
+                        if seqno < &earliest_live_seqno {
+                            deleteable_rollup_blobs.push((*seqno, key.clone()));
+                        } else {
+                            // We iterate in order, may as well short circuit the
+                            // rollup loop.
+                            break;
+                        }
+                    }
+                    break;
+                }
+                Ordering::Greater => {
+                    break;
+                }
             }
         }
 
