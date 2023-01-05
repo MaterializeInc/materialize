@@ -198,7 +198,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         conn_id: ConnectionId,
     },
     LinearizeReads(Vec<PendingReadTxn>),
-    StorageUsageFetch(EpochMillis),
+    StorageUsageFetch,
     StorageUsageUpdate(HashMap<Option<ShardId>, u64>, EpochMillis),
     Consolidate(Vec<mz_stash::Id>),
 }

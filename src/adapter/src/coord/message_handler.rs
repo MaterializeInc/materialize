@@ -75,8 +75,8 @@ impl<S: Append + 'static> Coordinator<S> {
             Message::LinearizeReads(pending_read_txns) => {
                 self.message_linearize_reads(pending_read_txns).await;
             }
-            Message::StorageUsageFetch(collection_timestamp) => {
-                self.storage_usage_fetch(collection_timestamp).await;
+            Message::StorageUsageFetch => {
+                self.storage_usage_fetch().await;
             }
             Message::StorageUsageUpdate(sizes, collection_timestamp) => {
                 self.storage_usage_update(sizes, collection_timestamp).await;
@@ -95,9 +95,11 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_fetch(&self, collection_timestamp: EpochMillis) {
+    async fn storage_usage_fetch(&mut self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
+        // Similar to audit events, use the oracle ts so this is guaranteed to increase.
+        let collection_timestamp: EpochMillis = self.get_local_write_ts().await.timestamp.into();
         task::spawn(|| "storage_usage_fetch", async move {
             let shard_sizes = client.shard_sizes().await;
             // It is not an error for shard sizes to become ready after `internal_cmd_rx`
@@ -146,13 +148,9 @@ impl<S: Append + 'static> Coordinator<S> {
             .storage_usage_collection_interval
             .saturating_sub(Duration::from_millis(time_since_previous_collection));
         let internal_cmd_tx = self.internal_cmd_tx.clone();
-        let now_fn = self.now_fn();
         task::spawn(|| "storage_usage_collection", async move {
             tokio::time::sleep(next_collection_interval).await;
-            if internal_cmd_tx
-                .send(Message::StorageUsageFetch(now_fn()))
-                .is_err()
-            {
+            if internal_cmd_tx.send(Message::StorageUsageFetch).is_err() {
                 // If sending fails, the main thread has shutdown.
             }
         });

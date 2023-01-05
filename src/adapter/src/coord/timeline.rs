@@ -308,10 +308,6 @@ impl<S: Append + 'static> Coordinator<S> {
         to_datetime(self.now())
     }
 
-    pub(crate) fn now_fn(&self) -> NowFn {
-        self.catalog.config().now.clone()
-    }
-
     pub(crate) fn get_timestamp_oracle_mut(
         &mut self,
         timeline: &Timeline,
