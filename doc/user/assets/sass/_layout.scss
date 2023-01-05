@@ -124,9 +124,7 @@
     margin-left: auto;
     position: sticky;
     top: 0;
-    padding: var(--x-small) 0;
-    padding-left: var(--nano);
-    padding-right: var(--nano);
+    padding: var(--x-small) var(--nano);
     overflow-y: auto;
     height: 100vh;
     display: flex;
