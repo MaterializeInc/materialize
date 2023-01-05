@@ -20,7 +20,7 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Select, SelectItem, TableAlias,
-    TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, Value,
+    TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName,
 };
 
 use crate::normalize;
@@ -522,8 +522,12 @@ impl Desugarer {
                 }
                 match normalize::op(op)? {
                     "=" | "<>" => {
-                        let mut new = Expr::Value(Value::Boolean(true));
-                        for (l, r) in left.iter_mut().zip(right) {
+                        let mut pairs = left.iter_mut().zip(right);
+                        let mut new = pairs
+                            .next()
+                            .map(|(l, r)| l.take().equals(r.take()))
+                            .expect("cannot compare rows of zero length");
+                        for (l, r) in pairs {
                             new = l.take().equals(r.take()).and(new);
                         }
                         if normalize::op(op)? == "<>" {
