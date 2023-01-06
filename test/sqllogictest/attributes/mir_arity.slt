@@ -93,9 +93,14 @@ EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR
 SELECT sum(e * f), max(f) FROM v GROUP BY mod(e, 5)
 ----
 Explained Query:
-  Project (#1, #2) // { arity: 2 }
-    Reduce group_by=[(#0 % 5)] aggregates=[sum((#0 * #1)), max(#1)] // { arity: 3 }
-      Get materialize.public.v // { arity: 2 }
+  Project (#3, #1) // { arity: 2 }
+    Join on=(#0 = #2) type=differential // { arity: 4 }
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Reduce group_by=[(#0 % 5)] aggregates=[max(#1)] // { arity: 2 }
+          Get materialize.public.v // { arity: 2 }
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Reduce group_by=[(#0 % 5)] aggregates=[sum((#0 * #1))] // { arity: 2 }
+          Get materialize.public.v // { arity: 2 }
 
 EOF
 

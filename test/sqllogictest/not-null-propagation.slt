@@ -252,19 +252,33 @@ Explained Query:
     Project (#0, #1, #8, #9, #7) // { types: "(integer?, integer?, double precision?, numeric?, integer list?)" }
       Map ((bigint_to_double(#2) / bigint_to_double(case when (#3 = 0) then null else #3 end)), sqrtnumeric(((#4 - ((#5 * #5) / bigint_to_numeric(case when (#6 = 0) then null else #6 end))) / bigint_to_numeric(case when (0 = (#6 - 1)) then null else (#6 - 1) end)))) // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?, double precision?, numeric?)" }
         Union // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)" }
-          Get l0 // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
+          Project (#0, #1, #3..=#7, #2) // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
+            Get l1 // { types: "(integer, integer, integer list, bigint, bigint, numeric, numeric, bigint)" }
           Map (null, null, null, 0, null, null, 0, null) // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)" }
             Union // { types: "()" }
               Negate // { types: "()" }
                 Project () // { types: "()" }
-                  Get l0 // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
+                  Get l1 // { types: "(integer, integer, integer list, bigint, bigint, numeric, numeric, bigint)" }
               Constant // { types: "()" }
                 - ()
   With
+    cte l1 =
+      CrossJoin type=delta // { types: "(integer, integer, integer list, bigint, bigint, numeric, numeric, bigint)" }
+        ArrangeBy keys=[[]] // { types: "(integer)" }
+          Reduce aggregates=[min(#0)] // { types: "(integer)" }
+            Get l0 // { types: "(integer)" }
+        ArrangeBy keys=[[]] // { types: "(integer)" }
+          Reduce aggregates=[max(#0)] // { types: "(integer)" }
+            Get l0 // { types: "(integer)" }
+        ArrangeBy keys=[[]] // { types: "(integer list)" }
+          Reduce aggregates=[list_agg(row(list[#0]))] // { types: "(integer list)" }
+            Get l0 // { types: "(integer)" }
+        ArrangeBy keys=[[]] // { types: "(bigint, bigint, numeric, numeric, bigint)" }
+          Reduce aggregates=[sum(#0), count(*), sum((integer_to_numeric(#0) * integer_to_numeric(#0))), sum(integer_to_numeric(#0)), count(integer_to_numeric(#0))] // { types: "(bigint, bigint, numeric, numeric, bigint)" }
+            Get l0 // { types: "(integer)" }
     cte l0 =
-      Reduce aggregates=[min(#0), max(#0), sum(#0), count(*), sum((integer_to_numeric(#0) * integer_to_numeric(#0))), sum(integer_to_numeric(#0)), count(integer_to_numeric(#0)), list_agg(row(list[#0]))] // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
-        Project (#1) // { types: "(integer)" }
-          Get materialize.public.int_table // { types: "(integer?, integer)" }
+      Project (#1) // { types: "(integer)" }
+        Get materialize.public.int_table // { types: "(integer?, integer)" }
 
 EOF
 
