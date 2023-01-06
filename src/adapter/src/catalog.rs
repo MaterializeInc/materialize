@@ -1251,7 +1251,7 @@ impl CatalogState {
     // passing tx, session, and builtin_table_updates?
     fn add_to_audit_log<S: Append>(
         &self,
-        oracle_write_ts: Option<mz_repr::Timestamp>,
+        oracle_write_ts: mz_repr::Timestamp,
         session: Option<&Session>,
         tx: &mut storage::Transaction<S>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
@@ -1261,7 +1261,7 @@ impl CatalogState {
         details: EventDetails,
     ) -> Result<(), Error> {
         let user = session.map(|session| session.user().name.to_string());
-        let occurred_at = oracle_write_ts.expect("must exist").into();
+        let occurred_at = oracle_write_ts.into();
         let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
         let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
         builtin_table_updates.push(self.pack_audit_log_update(&event)?);
@@ -2739,7 +2739,12 @@ impl<S: Append> Catalog<S> {
         bootstrap_system_parameters: BTreeMap<String, String>,
         system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
     ) -> Result<(), AdapterError> {
-        let system_config = self.storage().await.load_system_configuration().await?;
+        let (system_config, boot_ts) = {
+            let mut storage = self.storage().await;
+            let system_config = storage.load_system_configuration().await?;
+            let boot_ts = storage.boot_ts();
+            (system_config, boot_ts)
+        };
         for (name, value) in &bootstrap_system_parameters {
             if !system_config.contains_key(name) {
                 self.state.insert_system_configuration(name, value)?;
@@ -2810,8 +2815,7 @@ impl<S: Append> Catalog<S> {
                         Op::UpdateSystemConfiguration { name, value }
                     }))
                     .collect::<Vec<_>>();
-
-                self.transact(None, None, ops, |_| Ok(())).await.unwrap();
+                self.transact(boot_ts, None, ops, |_| Ok(())).await.unwrap();
                 tracing::info!("parameter sync on boot: end sync");
             } else {
                 tracing::info!("parameter sync on boot: skipping sync as config has synced once");
@@ -3850,7 +3854,7 @@ impl<S: Append> Catalog<S> {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn transact<F, R>(
         &mut self,
-        oracle_write_ts: Option<mz_repr::Timestamp>,
+        oracle_write_ts: mz_repr::Timestamp,
         session: Option<&Session>,
         ops: Vec<Op>,
         f: F,
@@ -3915,7 +3919,7 @@ impl<S: Append> Catalog<S> {
     }
 
     fn transact_inner(
-        oracle_write_ts: Option<mz_repr::Timestamp>,
+        oracle_write_ts: mz_repr::Timestamp,
         session: Option<&Session>,
         ops: Vec<Op>,
         temporary_ids: Vec<GlobalId>,
@@ -6428,7 +6432,7 @@ mod tests {
         assert_eq!(catalog.transient_revision(), 1);
         catalog
             .transact(
-                Some(mz_repr::Timestamp::MIN),
+                mz_repr::Timestamp::MIN,
                 None,
                 vec![Op::CreateDatabase {
                     name: "test".to_string(),
@@ -6681,7 +6685,7 @@ mod tests {
                 .clone();
             catalog
                 .transact(
-                    Some(mz_repr::Timestamp::MIN),
+                    mz_repr::Timestamp::MIN,
                     None,
                     vec![Op::CreateItem {
                         id,

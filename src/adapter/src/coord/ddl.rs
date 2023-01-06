@@ -234,7 +234,7 @@ impl<S: Append + 'static> Coordinator<S> {
             result,
         } = self
             .catalog
-            .transact(Some(oracle_write_ts), session, ops, |catalog| {
+            .transact(oracle_write_ts, session, ops, |catalog| {
                 f(CatalogTxn {
                     dataflow_client: &self.controller,
                     catalog,

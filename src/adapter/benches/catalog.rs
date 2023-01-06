@@ -125,7 +125,7 @@ fn bench_transact(c: &mut Criterion) {
                     public_schema_oid: id,
                 }];
                 catalog
-                    .transact(Some(mz_repr::Timestamp::MIN), None, ops, |_| Ok(()))
+                    .transact(mz_repr::Timestamp::MIN, None, ops, |_| Ok(()))
                     .await
                     .unwrap();
             })
