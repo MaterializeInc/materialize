@@ -141,9 +141,9 @@ impl<S: Append + 'static> Coordinator<S> {
         // Instead of using an `tokio::timer::Interval`, we calculate the time since the last
         // collection and wait for however much time is left. This is so we can keep the intervals
         // consistent even across restarts.
-        let time_since_previous_collection = self
-            .now()
-            .saturating_sub(self.catalog.most_recent_storage_usage_collection());
+        let now: EpochMillis = self.peek_local_write_ts().into();
+        let time_since_previous_collection =
+            now.saturating_sub(self.catalog.most_recent_storage_usage_collection());
         let next_collection_interval = self
             .storage_usage_collection_interval
             .saturating_sub(Duration::from_millis(time_since_previous_collection));

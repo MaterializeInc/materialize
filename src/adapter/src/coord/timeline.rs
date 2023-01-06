@@ -368,7 +368,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     /// Peek the current timestamp used for operations on local inputs. Used to determine how much
     /// to block group commits by.
-    pub(crate) fn peek_local_write_ts(&mut self) -> Timestamp {
+    pub(crate) fn peek_local_write_ts(&self) -> Timestamp {
         self.get_local_timestamp_oracle().peek_write_ts()
     }
 
