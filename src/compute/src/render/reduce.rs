@@ -49,7 +49,6 @@ use crate::typedefs::{RowKeySpine, RowSpine};
 /// we just had a single reduce operator computing everything together, and
 /// this arrangement can also be re-used.
 fn render_reduce_plan<G, T>(
-    dataflow_id: usize,
     plan: ReducePlan,
     collection: Collection<G, (Row, Row), Diff>,
     err_input: Collection<G, DataflowError, Diff>,
@@ -63,24 +62,22 @@ where
     // Convenience wrapper to render the right kind of hierarchical plan.
     let build_hierarchical = |collection: Collection<G, (Row, Row), Diff>,
                               expr: HierarchicalPlan| match expr {
-        HierarchicalPlan::Monotonic(expr) => build_monotonic(dataflow_id, collection, expr),
-        HierarchicalPlan::Bucketed(expr) => build_bucketed(dataflow_id, collection, expr),
+        HierarchicalPlan::Monotonic(expr) => build_monotonic(collection, expr),
+        HierarchicalPlan::Bucketed(expr) => build_bucketed(collection, expr),
     };
 
     // Convenience wrapper to render the right kind of basic plan.
     let build_basic = |collection: Collection<G, (Row, Row), Diff>, expr: BasicPlan| match expr {
-        BasicPlan::Single(index, aggr) => {
-            build_basic_aggregate(dataflow_id, collection, index, &aggr)
-        }
-        BasicPlan::Multiple(aggrs) => build_basic_aggregates(dataflow_id, collection, aggrs),
+        BasicPlan::Single(index, aggr) => build_basic_aggregate(collection, index, &aggr),
+        BasicPlan::Multiple(aggrs) => build_basic_aggregates(collection, aggrs),
     };
 
     let arrangement_or_bundle: ArrangementOrCollection<G> = match plan {
         // If we have no aggregations or just a single type of reduction, we
         // can go ahead and render them directly.
-        ReducePlan::Distinct => build_distinct(dataflow_id, collection).into(),
-        ReducePlan::DistinctNegated => build_distinct_retractions(dataflow_id, collection).into(),
-        ReducePlan::Accumulable(expr) => build_accumulable(dataflow_id, collection, expr).into(),
+        ReducePlan::Distinct => build_distinct(collection).into(),
+        ReducePlan::DistinctNegated => build_distinct_retractions(collection).into(),
+        ReducePlan::Accumulable(expr) => build_accumulable(collection, expr).into(),
         ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr).into(),
         ReducePlan::Basic(expr) => build_basic(collection, expr).into(),
         // Otherwise, we need to render something different for each type of
@@ -92,7 +89,7 @@ where
             if let Some(accumulable) = expr.accumulable {
                 to_collate.push((
                     ReductionType::Accumulable,
-                    build_accumulable(dataflow_id, collection.clone(), accumulable),
+                    build_accumulable(collection.clone(), accumulable),
                 ));
             }
             if let Some(hierarchical) = expr.hierarchical {
@@ -105,13 +102,7 @@ where
                 to_collate.push((ReductionType::Basic, build_basic(collection.clone(), basic)));
             }
             // Now we need to collate them together.
-            build_collation(
-                dataflow_id,
-                to_collate,
-                expr.aggregate_types,
-                &mut collection.scope(),
-            )
-            .into()
+            build_collation(to_collate, expr.aggregate_types, &mut collection.scope()).into()
         }
     };
     arrangement_or_bundle.into_bundle(key_arity, err_input)
@@ -268,7 +259,7 @@ where
         err = err.concat(&err_input);
 
         // Render the reduce plan
-        render_reduce_plan(self.dataflow_id, reduce_plan, ok, err, key_arity)
+        render_reduce_plan(reduce_plan, ok, err, key_arity)
     }
 }
 
@@ -280,7 +271,6 @@ where
 /// arrangements present values in a way that respects the desired output order,
 /// so we can do a linear merge to form the output.
 fn build_collation<G>(
-    dataflow_id: usize,
     arrangements: Vec<(ReductionType, Arrangement<G, Row>)>,
     aggregate_types: Vec<ReductionType>,
     scope: &mut G,
@@ -305,6 +295,7 @@ where
         to_concat.push(collection);
     }
 
+    let scope_addr = scope.addr();
     use differential_dataflow::collection::concatenate;
     concatenate(scope, to_concat)
         .arrange_named::<RowSpine<_, _, _, _>>("Arrange ReduceCollation")
@@ -327,8 +318,8 @@ where
                 for (val, cnt) in input.iter() {
                     soft_assert_or_log!(
                         *cnt >= 0,
-                        "[customer-data] Negative accumulation in ReduceCollation: {:?} with count {:?} in dataflow id {}",
-                        val, cnt, dataflow_id
+                        "[customer-data] Negative accumulation in ReduceCollation: {:?} with count {:?} in dataflow scope {:?}",
+                        val, cnt, scope_addr
                     );
                 }
 
@@ -357,7 +348,7 @@ where
                     if let Some(datum) = datum {
                         row_packer.push(datum);
                     } else {
-                        panic!("[customer-data] Missing {typ:?} value for key: {key} in dataflow id {dataflow_id}");
+                        panic!("[customer-data] Missing {typ:?} value for key: {key} in dataflow scope {:?}", scope_addr);
                     }
                 }
                 output.push((row_buf.clone(), 1));
@@ -366,10 +357,7 @@ where
 }
 
 /// Build the dataflow to compute the set of distinct keys.
-fn build_distinct<G>(
-    _dataflow_id: usize,
-    collection: Collection<G, (Row, Row), Diff>,
-) -> Arrangement<G, Row>
+fn build_distinct<G>(collection: Collection<G, (Row, Row), Diff>) -> Arrangement<G, Row>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -389,7 +377,6 @@ where
 ///
 /// This implementation maintains the rows that don't appear in the output.
 fn build_distinct_retractions<G, T>(
-    _dataflow_id: usize,
     collection: Collection<G, (Row, Row), Diff>,
 ) -> Collection<G, Row, Diff>
 where
@@ -427,7 +414,6 @@ where
 /// results together into a final arrangement that presents all the results
 /// in the order specified by `aggrs`.
 fn build_basic_aggregates<G>(
-    dataflow_id: usize,
     input: Collection<G, (Row, Row), Diff>,
     aggrs: Vec<(usize, AggregateExpr)>,
 ) -> Arrangement<G, Row>
@@ -439,12 +425,12 @@ where
     // stitch them together. If that's not true we should complain.
     soft_assert_or_log!(
         aggrs.len() > 1,
-        "Unexpectedly computing {} basic aggregations together but we expected to be doing more than one in dataflow id {}",
-        aggrs.len(), dataflow_id
+        "Unexpectedly computing {} basic aggregations together but we expected to be doing more than one in dataflow scope {:?}",
+        aggrs.len(), input.scope().addr()
     );
     let mut to_collect = Vec::new();
     for (index, aggr) in aggrs {
-        let result = build_basic_aggregate(dataflow_id, input.clone(), index, &aggr);
+        let result = build_basic_aggregate(input.clone(), index, &aggr);
         to_collect.push(result.as_collection(move |key, val| (key.clone(), (index, val.clone()))));
     }
     differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
@@ -466,7 +452,6 @@ where
 ///
 /// This method also applies distinctness if required.
 fn build_basic_aggregate<G>(
-    dataflow_id: usize,
     input: Collection<G, (Row, Row), Diff>,
     index: usize,
     aggr: &AggregateExpr,
@@ -495,6 +480,7 @@ where
         partial = partial.distinct_core();
     }
 
+    let scope_addr = input.scope().addr();
     // TODO(#16549): Use explicit arrangement
     partial.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceInaccumulable", {
         let mut row_buf = Row::default();
@@ -507,8 +493,8 @@ where
                 for (val, cnt) in source.iter() {
                     soft_assert_or_log!(
                         *cnt >= 0,
-                        "[customer-data] Negative accumulation in ReduceInaccumulable: {:?} with count {:?} in dataflow id {}",
-                        val, cnt, dataflow_id
+                        "[customer-data] Negative accumulation in ReduceInaccumulable: {:?} with count {:?} in dataflow {:?}",
+                        val, cnt, scope_addr
                     );
                 }
             } else {
@@ -539,7 +525,6 @@ where
 /// currently only perform min / max hierarchically and the reduction tree
 /// efficiently suppresses non-distinct updates.
 fn build_bucketed<G>(
-    dataflow_id: usize,
     input: Collection<G, (Row, Row), Diff>,
     BucketedPlan {
         aggr_funcs,
@@ -576,6 +561,7 @@ where
         // Discard the hash from the key and return to the format of the input data.
         let partial = stage.map(|((key, _hash), values)| (key, values));
 
+        let scope_addr = inner.addr();
         // Build a series of stages for the reduction
         // Arrange the final result into (key, Row)
         partial.arrange_named::<RowSpine<_,Vec<Row>,_,_>>("Arrange ReduceMinsMaxes")
@@ -589,7 +575,7 @@ where
                     // XXX: This reports user data, which we perhaps should not do!
                     for (val, cnt) in source.iter() {
                         if cnt < &0 {
-                            error!("[customer-data] Negative accumulation in ReduceMinsMaxes: {:?} with count {:?} in dataflow id {}", val, cnt, dataflow_id);
+                            error!("[customer-data] Negative accumulation in ReduceMinsMaxes: {:?} with count {:?} in dataflow scope {:?}", val, cnt, scope_addr);
                         }
                     }
                 } else {
@@ -666,7 +652,6 @@ where
 /// Build the dataflow to compute and arrange multiple hierarchical aggregations
 /// on monotonic inputs.
 fn build_monotonic<G>(
-    _dataflow_id: usize,
     collection: Collection<G, (Row, Row), Diff>,
     MonotonicPlan { aggr_funcs, skips }: MonotonicPlan,
 ) -> Arrangement<G, Row>
@@ -703,7 +688,7 @@ where
             let mut output = Vec::new();
             for (row, func) in values.into_iter().zip(aggr_funcs.iter()) {
                 output.push(monoids::get_monoid(row, func).expect(
-                    "hierarchical aggregations are expected to have monoid implementations in dataflow id {dataflow_id}",
+                    "hierarchical aggregations are expected to have monoid implementations",
                 ));
             }
 
@@ -1026,7 +1011,6 @@ impl Multiply<Diff> for Accum {
 /// values to data, at which point a final map applies operator-specific logic to
 /// yield the final aggregate.
 fn build_accumulable<G>(
-    dataflow_id: usize,
     collection: Collection<G, (Row, Row), Diff>,
     AccumulablePlan {
         full_aggrs,
@@ -1041,8 +1025,8 @@ where
     // we must have called this function with something to reduce
     soft_assert_or_log!(
         full_aggrs.len() > 0 && (simple_aggrs.len() + distinct_aggrs.len() == full_aggrs.len()),
-        "Building arrangement for accumulable plan requires aggregates ({} found) and that their counts match ({} + {}) in dataflow id {}",
-        full_aggrs.len(), simple_aggrs.len(), distinct_aggrs.len(), dataflow_id
+        "Building arrangement for accumulable plan requires aggregates ({} found) and that their counts match ({} + {}) in dataflow scope {:?}",
+        full_aggrs.len(), simple_aggrs.len(), distinct_aggrs.len(), collection.scope().addr()
     );
 
     // Some of the aggregations may have the `distinct` bit set, which means that they'll
@@ -1090,6 +1074,7 @@ where
         .collect();
 
     // Two aggregation-specific values for each aggregation.
+    let scope_addr = collection.scope().addr();
     let datum_to_accumulator = move |datum: Datum, aggr: &AggregateFunc| {
         let inner = match aggr {
             AggregateFunc::Count => AccumInner::SimpleNumber {
@@ -1110,8 +1095,8 @@ where
                     falses: 1,
                 },
                 x => panic!(
-                    "Invalid argument to AggregateFunc::Any: {:?} in dataflow id {}",
-                    x, dataflow_id
+                    "Invalid argument to AggregateFunc::Any: {:?} in dataflow scope {:?}",
+                    x, scope_addr
                 ),
             },
             AggregateFunc::Dummy => match datum {
@@ -1120,8 +1105,8 @@ where
                     non_nulls: 0,
                 },
                 x => panic!(
-                    "Invalid argument to AggregateFunc::Dummy: {:?} in dataflow id {}",
-                    x, dataflow_id
+                    "Invalid argument to AggregateFunc::Dummy: {:?} in dataflow socpe {:?}",
+                    x, scope_addr
                 ),
             },
             AggregateFunc::SumFloat32 | AggregateFunc::SumFloat64 => {
@@ -1130,8 +1115,8 @@ where
                     Datum::Float64(n) => *n,
                     Datum::Null => 0f64,
                     x => panic!(
-                        "Invalid argument to AggregateFunc::{:?}: {:?} in dataflow id {}",
-                        aggr, x, dataflow_id
+                        "Invalid argument to AggregateFunc::{:?}: {:?} in dataflow scope {:?}",
+                        aggr, x, scope_addr
                     ),
                 };
 
@@ -1194,8 +1179,8 @@ where
                     non_nulls: 0,
                 },
                 x => panic!(
-                    "Invalid argument to AggregateFunc::SumNumeric: {:?} in dataflow id {}",
-                    x, dataflow_id
+                    "Invalid argument to AggregateFunc::SumNumeric: {:?} in dataflow scope {:?}",
+                    x, scope_addr
                 ),
             },
             _ => {
@@ -1236,8 +1221,8 @@ where
                         non_nulls: 0,
                     },
                     x => panic!(
-                        "Accumulating non-integer data: {:?} in dataflow id {}",
-                        x, dataflow_id
+                        "Accumulating non-integer data: {:?} in dataflow scope {:?}",
+                        x, scope_addr
                     ),
                 }
             }
@@ -1250,6 +1235,7 @@ where
         // First, collect all non-distinct aggregations in one pass.
         let easy_cases = collection.explode_one({
             let zero_diffs = zero_diffs.clone();
+            let datum_to_accumulator = datum_to_accumulator.clone();
             move |(key, row)| {
                 let mut diffs = zero_diffs.clone();
                 // Try to unpack only the datums we need. Unfortunately, since we
@@ -1285,6 +1271,7 @@ where
             .distinct_core()
             .explode_one({
                 let zero_diffs = zero_diffs.clone();
+                let datum_to_accumulator = datum_to_accumulator.clone();
                 move |(key, row)| {
                     let datum = row.iter().next().unwrap();
                     let mut diffs = zero_diffs.clone();
@@ -1302,6 +1289,7 @@ where
         differential_dataflow::collection::concatenate(&mut collection.scope(), to_aggregate)
     };
 
+    let scope_addr = collection.scope().addr();
     collection
         .arrange_named::<RowKeySpine<_, _, Vec<Accum>>>("ArrangeAccumulable")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceAccumulable", {
@@ -1318,10 +1306,10 @@ where
                     soft_assert_or_log!(
                         accum.total != 0 || accum.inner.is_zero(),
                         "[customer-data] ReduceAccumulable observed net-zero records \
-                        with non-zero accumulation: {:?}: {:?} in dataflow id {}",
+                        with non-zero accumulation: {:?}: {:?} in dataflow scope {:?}",
                         aggr,
                         accum,
-                        dataflow_id
+                        scope_addr,
                     );
 
                     // The finished value depends on the aggregation function in a variety of ways.
@@ -1378,7 +1366,7 @@ where
                             | (
                                 AggregateFunc::SumUInt32,
                                 AccumInner::SimpleNumber { accum, .. },
-                            ) => Datum::UInt64(u64::try_from(*accum).unwrap_or_else(|_| panic!("Invalid accumulated result {accum} for unsigned function in dataflow {}", dataflow_id))),
+                            ) => Datum::UInt64(u64::try_from(*accum).unwrap_or_else(|_| panic!("Invalid accumulated result {accum} for unsigned function in dataflow scope {:?}", scope_addr))),
                             (
                                 AggregateFunc::SumUInt64,
                                 AccumInner::SimpleNumber { accum, .. },
@@ -1472,8 +1460,8 @@ where
                                 }
                             }
                             _ => panic!(
-                                "Unexpected accumulation (aggr={:?}, accum={:?}) in dataflow id {}",
-                                aggr.func, accum, dataflow_id
+                                "Unexpected accumulation (aggr={:?}, accum={:?}) in dataflow scope {:?}",
+                                aggr.func, accum, scope_addr
                             ),
                         }
                     };

@@ -76,8 +76,6 @@ where
     pub(crate) scope: S,
     /// The debug name of the dataflow associated with this context.
     pub debug_name: String,
-    /// The Timely ID of the dataflow associated with this context.
-    pub dataflow_id: usize,
     /// Indicates a frontier that can be used to compact input timestamps
     /// without affecting the results. We *should* apply it, to sources and
     /// imported traces, both because it improves performance, and because
@@ -99,8 +97,6 @@ where
         dataflow: &DataflowDescription<Plan, CollectionMetadata>,
         scope: S,
     ) -> Self {
-        use mz_ore::collections::CollectionExt as IteratorExt;
-        let dataflow_id = scope.addr().into_first();
         let as_of_frontier = dataflow
             .as_of
             .clone()
@@ -109,7 +105,6 @@ where
         Self {
             scope,
             debug_name: dataflow.debug_name.clone(),
-            dataflow_id,
             as_of_frontier,
             until: dataflow.until.clone(),
             bindings: BTreeMap::new(),

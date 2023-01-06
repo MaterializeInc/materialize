@@ -446,8 +446,9 @@ where
             );
         } else {
             panic!(
-                "import of index {} failed while building dataflow {}",
-                idx_id, self.dataflow_id
+                "failed to import index {} into dataflow scope {:?}",
+                idx_id,
+                self.scope.addr()
             );
         }
     }
