@@ -139,7 +139,7 @@ async fn datadriven() {
                             .clone();
                         catalog
                             .transact(
-                                Some(mz_repr::Timestamp::MIN),
+                                mz_repr::Timestamp::MIN,
                                 None,
                                 vec![Op::CreateItem {
                                     id,

@@ -529,6 +529,7 @@ pub struct BootstrapArgs {
 pub struct Connection<S> {
     stash: S,
     consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
+    boot_ts: mz_repr::Timestamp,
 }
 
 impl<S: Append> Connection<S> {
@@ -555,28 +556,45 @@ impl<S: Append> Connection<S> {
 
         // Initialize connection.
         initialize_stash(&mut stash).await?;
+
+        // Choose a time at which to boot. This is the time at which we will run
+        // internal migrations, and is also exposed upwards in case higher
+        // layers want to run their own migrations at the same timestamp.
+        //
+        // This time is usually the current system time, but with protection
+        // against backwards time jumps, even across restarts.
+        let previous_now_ts = try_get_persisted_timestamp(&mut stash, &Timeline::EpochMilliseconds)
+            .await?
+            .unwrap_or(mz_repr::Timestamp::MIN);
+        let boot_ts = timeline::monotonic_now(now, previous_now_ts);
+
         let mut conn = Connection {
             stash,
             consolidations_tx,
+            boot_ts,
         };
 
         if !conn.stash.is_readonly() {
-            // Choose a time at which to apply migrations. This is usually the
-            // current system time, but with protection against backwards time
-            // jumps, even across restarts.
-            let previous_now_ts = conn
-                .try_get_persisted_timestamp(&Timeline::EpochMilliseconds)
-                .await?
-                .unwrap_or(mz_repr::Timestamp::MIN);
-            let now_ts = timeline::monotonic_now(now, previous_now_ts);
             // IMPORTANT: we durably record the new timestamp before using it.
-            conn.persist_timestamp(&Timeline::EpochMilliseconds, now_ts)
+            conn.persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
                 .await?;
-
-            migrate(&mut conn.stash, skip, now_ts.into(), bootstrap_args).await?;
+            migrate(&mut conn.stash, skip, boot_ts.into(), bootstrap_args).await?;
         }
 
         Ok(conn)
+    }
+
+    /// Returns the timestamp at which the storage layer booted.
+    ///
+    /// This is the timestamp that will have been used to write any data during
+    /// migrations. It is exposed so that higher layers performing their own
+    /// migrations can write data at the same timestamp, if desired.
+    ///
+    /// The boot timestamp is derived from the durable timestamp oracle and is
+    /// guaranteed to never go backwards, even in the face of backwards time
+    /// jumps across restarts.
+    pub fn boot_ts(&self) -> mz_repr::Timestamp {
+        self.boot_ts
     }
 }
 
@@ -917,23 +935,6 @@ impl<S: Append> Connection<S> {
             .collect())
     }
 
-    /// Get a global timestamp for a timeline that has been persisted to disk.
-    ///
-    /// Returns `None` if no persisted timestamp for the specified timeline
-    /// exists.
-    pub async fn try_get_persisted_timestamp(
-        &mut self,
-        timeline: &Timeline,
-    ) -> Result<Option<mz_repr::Timestamp>, Error> {
-        let key = TimestampKey {
-            id: timeline.to_string(),
-        };
-        Ok(COLLECTION_TIMESTAMP
-            .peek_key_one(&mut self.stash, &key)
-            .await?
-            .map(|v| v.ts))
-    }
-
     /// Persist new global timestamp for a timeline to disk.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn persist_timestamp(
@@ -969,6 +970,25 @@ impl<S: Append> Connection<S> {
     pub async fn consolidate(&mut self, collections: &[mz_stash::Id]) -> Result<(), Error> {
         Ok(self.stash.consolidate_batch(collections).await?)
     }
+}
+
+/// Gets a global timestamp for a timeline that has been persisted to disk.
+///
+/// Returns `None` if no persisted timestamp for the specified timeline exists.
+async fn try_get_persisted_timestamp<S>(
+    stash: &mut S,
+    timeline: &Timeline,
+) -> Result<Option<mz_repr::Timestamp>, Error>
+where
+    S: Append,
+{
+    let key = TimestampKey {
+        id: timeline.to_string(),
+    };
+    Ok(COLLECTION_TIMESTAMP
+        .peek_key_one(stash, &key)
+        .await?
+        .map(|v| v.ts))
 }
 
 #[tracing::instrument(level = "trace", skip_all)]
