@@ -90,6 +90,9 @@ fn subscribe<G>(
         .inner
         .sink(Pipeline, &format!("subscribe-{}", sink_id), move |input| {
             if finished {
+                // Drain the input, to avoid the
+                // operator being constantly rescheduled
+                input.for_each(|_, _| {});
                 return;
             }
             input.for_each(|_, rows| {
