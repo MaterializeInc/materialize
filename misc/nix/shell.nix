@@ -32,5 +32,5 @@ stdenv.mkDerivation rec {
 
   hardeningDisable = [ "fortify" ];
 
-  RUSTFLAGS = "-C linker=clang -C link-arg=--ld-path=${pkgs.mold}/bin/mold -C link-arg=-Wl,--warn-unresolved-symbols -C debuginfo=1";
+  RUSTFLAGS = "-Clinker=clang -Clink-arg=--ld-path=${pkgs.mold}/bin/mold -Clink-arg=-Wl,--warn-unresolved-symbols -Cdebuginfo=1 -Csymbol-mangling-version=v0";
 }
