@@ -82,7 +82,7 @@ use rand::seq::SliceRandom;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{error, info, span, warn, Level};
+use tracing::{info, span, warn, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -127,9 +127,7 @@ use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn}
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
-use crate::coord::timeline::{
-    TimelineState, WriteTimestamp, TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
-};
+use crate::coord::timeline::{TimelineState, WriteTimestamp};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
@@ -1181,32 +1179,7 @@ pub async fn serve<S: Append + 'static>(
         .name("coordinator".to_string())
         .spawn(move || {
             let mut timestamp_oracles = BTreeMap::new();
-            for (timeline, mut initial_timestamp) in initial_timestamps {
-                if timeline == Timeline::EpochMilliseconds {
-                    let mut now_ts = now();
-                    initial_timestamp = std::cmp::max(initial_timestamp, now_ts.into());
-                    let mut upper_bound = timeline::upper_bound(&Timestamp::from(now_ts));
-                    while initial_timestamp > upper_bound {
-                        // Cap retry time to 1s. In cases where the system clock has retreated by
-                        // some large amount of time, this prevents against then waiting for that
-                        // large amount of time in case the system clock then advances back to near
-                        // what it was.
-                        let remaining_ms = std::cmp::min(
-                            initial_timestamp.saturating_sub(upper_bound),
-                            1_000.into(),
-                        );
-                        error!(
-                            "Coordinator tried to start with initial timestamp of \
-                            {initial_timestamp}, which is more than \
-                            {TIMESTAMP_INTERVAL_UPPER_BOUND} intervals of size {} larger than \
-                            now, {now_ts}. Sleeping for {remaining_ms} ms.",
-                            *TIMESTAMP_PERSIST_INTERVAL
-                        );
-                        std::thread::sleep(Duration::from_millis(remaining_ms.into()));
-                        now_ts = now();
-                        upper_bound = timeline::upper_bound(&Timestamp::from(now_ts));
-                    }
-                }
+            for (timeline, initial_timestamp) in initial_timestamps {
                 handle.block_on(Coordinator::<S>::ensure_timeline_state_with_initial_time(
                     &timeline,
                     initial_timestamp,

@@ -14,14 +14,13 @@ use std::time::Duration;
 
 use itertools::{max, Itertools};
 use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
 use tokio::sync::mpsc;
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::controller::{ComputeInstanceId, ComputeReplicaConfig, ReplicaId};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::EpochMillis;
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::GlobalId;
 use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType};
 use mz_sql::names::{
@@ -39,6 +38,7 @@ use crate::catalog::builtin::{
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::{is_reserved_name, SystemObjectMapping};
 use crate::catalog::{SerializedComputeReplicaConfig, DEFAULT_CLUSTER_REPLICA_NAME};
+use crate::coord::timeline;
 
 use super::{
     SerializedCatalogItem, SerializedComputeReplicaLocation, SerializedComputeReplicaLogging,
@@ -69,14 +69,16 @@ pub(crate) const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 async fn migrate<S: Append>(
     stash: &mut S,
     version: u64,
+    now: EpochMillis,
     bootstrap_args: &BootstrapArgs,
 ) -> Result<(), catalog::error::Error> {
     // Initial state.
     let migrations: &[for<'a> fn(
         &mut Transaction<'a, S>,
+        EpochMillis,
         &'a BootstrapArgs,
     ) -> Result<(), catalog::error::Error>] = &[
-        |txn: &mut Transaction<'_, S>, bootstrap_args| {
+        |txn: &mut Transaction<'_, S>, now, bootstrap_args| {
             txn.id_allocator.insert(
                 IdAllocKey {
                     name: "user".into(),
@@ -181,7 +183,7 @@ async fn migrate<S: Append>(
                             name: "materialize".into(),
                         }),
                         None,
-                        bootstrap_args.now,
+                        now,
                     ),
                 },
                 (),
@@ -227,7 +229,7 @@ async fn migrate<S: Append>(
                             database_name: "materialize".into(),
                         }),
                         None,
-                        bootstrap_args.now,
+                        now,
                     ),
                 },
                 (),
@@ -271,7 +273,7 @@ async fn migrate<S: Append>(
                             name: "materialize".into(),
                         }),
                         None,
-                        bootstrap_args.now,
+                        now,
                     ),
                 },
                 (),
@@ -309,7 +311,7 @@ async fn migrate<S: Append>(
                             name: default_instance.name.clone(),
                         }),
                         None,
-                        bootstrap_args.now,
+                        now,
                     ),
                 },
                 (),
@@ -332,20 +334,12 @@ async fn migrate<S: Append>(
                             },
                         ),
                         None,
-                        bootstrap_args.now,
+                        now,
                     ),
                 },
                 (),
                 1,
             ));
-            txn.timestamps.insert(
-                TimestampKey {
-                    id: Timeline::EpochMilliseconds.to_string(),
-                },
-                TimestampValue {
-                    ts: mz_repr::Timestamp::minimum(),
-                },
-            )?;
             txn.configs
                 .insert(USER_VERSION.to_string(), ConfigValue { value: 0 })?;
             Ok(())
@@ -353,16 +347,16 @@ async fn migrate<S: Append>(
         // These three migrations were removed, but we need to keep empty migrations because the
         // user version depends on the length of this array. New migrations should still go after
         // these empty migrations.
-        |_, _| Ok(()),
-        |_, _| Ok(()),
-        |_, _| Ok(()),
+        |_, _, _| Ok(()),
+        |_, _, _| Ok(()),
+        |_, _, _| Ok(()),
         // An optional field, `idle_arrangement_merge_effort`, was added to replica configs, which
         // should default to `None` for existing configs. The deserialization is able deserialize
         // the missing values as `None`. This migration updates the on-disk version to explicitly
         // have a `None` value instead of a missing value.
         //
         // Introduced in v0.39.0
-        |txn: &mut Transaction<'_, S>, _bootstrap_args| {
+        |txn: &mut Transaction<'_, S>, _now, _bootstrap_args| {
             txn.compute_replicas.update(|_k, v| Some(v.clone()))?;
             Ok(())
         },
@@ -391,7 +385,7 @@ async fn migrate<S: Append>(
         .enumerate()
         .skip(usize::cast_from(version))
     {
-        (migration)(&mut txn, bootstrap_args)?;
+        (migration)(&mut txn, now, bootstrap_args)?;
         txn.update_user_version(u64::cast_from(i))?;
     }
     add_new_builtin_roles_migration(&mut txn)?;
@@ -526,7 +520,6 @@ fn default_logging_config() -> SerializedComputeReplicaLogging {
 }
 
 pub struct BootstrapArgs {
-    pub now: EpochMillis,
     pub default_cluster_replica_size: String,
     pub builtin_cluster_replica_size: String,
     pub default_availability_zone: String,
@@ -541,12 +534,12 @@ pub struct Connection<S> {
 impl<S: Append> Connection<S> {
     pub async fn open(
         mut stash: S,
+        now: NowFn,
         bootstrap_args: &BootstrapArgs,
         consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
     ) -> Result<Connection<S>, Error> {
-        // Run unapplied migrations. The `user_version` field stores the index
-        // of the last migration that was run. If the upper is min, the config
-        // collection is empty.
+        // The `user_version` field stores the index of the last migration that
+        // was run. If the upper is min, the config collection is empty.
         let skip = if is_collection_uninitialized(&mut stash, &COLLECTION_CONFIG).await? {
             0
         } else {
@@ -559,13 +552,27 @@ impl<S: Append> Connection<S> {
                 .value
                 + 1
         };
-        initialize_stash(&mut stash).await?;
-        migrate(&mut stash, skip, bootstrap_args).await?;
 
-        let conn = Connection {
+        // Initialize connection.
+        initialize_stash(&mut stash).await?;
+        let mut conn = Connection {
             stash,
             consolidations_tx,
         };
+
+        // Choose a time at which to apply migrations. This is usually the
+        // current system time, but with protection against backwards time
+        // jumps, even across restarts.
+        let previous_now_ts = conn
+            .try_get_persisted_timestamp(&Timeline::EpochMilliseconds)
+            .await?
+            .unwrap_or(mz_repr::Timestamp::MIN);
+        let now_ts = timeline::monotonic_now(now, previous_now_ts);
+        // IMPORTANT: we durably record the new timestamp before using it.
+        conn.persist_timestamp(&Timeline::EpochMilliseconds, now_ts)
+            .await?;
+
+        migrate(&mut conn.stash, skip, now_ts.into(), bootstrap_args).await?;
 
         Ok(conn)
     }
@@ -909,18 +916,20 @@ impl<S: Append> Connection<S> {
     }
 
     /// Get a global timestamp for a timeline that has been persisted to disk.
-    pub async fn get_persisted_timestamp(
+    ///
+    /// Returns `None` if no persisted timestamp for the specified timeline
+    /// exists.
+    pub async fn try_get_persisted_timestamp(
         &mut self,
         timeline: &Timeline,
-    ) -> Result<mz_repr::Timestamp, Error> {
+    ) -> Result<Option<mz_repr::Timestamp>, Error> {
         let key = TimestampKey {
             id: timeline.to_string(),
         };
         Ok(COLLECTION_TIMESTAMP
             .peek_key_one(&mut self.stash, &key)
             .await?
-            .expect("must have a persisted timestamp")
-            .ts)
+            .map(|v| v.ts))
     }
 
     /// Persist new global timestamp for a timeline to disk.

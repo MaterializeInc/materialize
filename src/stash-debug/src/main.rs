@@ -381,8 +381,8 @@ impl Usage {
         std::mem::forget(consolidations_rx);
         let storage = mz_adapter::catalog::storage::Connection::open(
             stash,
+            now.clone(),
             &BootstrapArgs {
-                now: (now)(),
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
                 default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
