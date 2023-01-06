@@ -99,7 +99,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
         // Similar to audit events, use the oracle ts so this is guaranteed to increase.
-        let collection_timestamp: EpochMillis = self.get_local_write_ts().await.timestamp.into();
+        let collection_timestamp: EpochMillis = self.peek_local_write_ts().into();
         task::spawn(|| "storage_usage_fetch", async move {
             let shard_sizes = client.shard_sizes().await;
             // It is not an error for shard sizes to become ready after `internal_cmd_rx`
