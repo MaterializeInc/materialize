@@ -73,7 +73,8 @@ def cargo(
     _target_env = _target.upper().replace("-", "_")
 
     rustflags += [
-        "-Clink-arg=-Wl,--compress-debug-sections=zlib,-Csymbol-mangling-version=v0"
+        "-Clink-arg=-Wl,--compress-debug-sections=zlib",
+        "-Csymbol-mangling-version=v0",
     ]
 
     if sys.platform == "darwin":
