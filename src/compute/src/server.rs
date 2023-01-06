@@ -32,8 +32,8 @@ use timely::WorkerConfig;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
-use mz_compute_client::command::{CommunicationConfig, ComputeStartupEpoch};
 use mz_compute_client::command::{ComputeCommand, ComputeCommandHistory};
+use mz_compute_client::command::{ComputeStartupEpoch, TimelyConfig};
 use mz_compute_client::metrics::ComputeMetrics;
 use mz_compute_client::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
@@ -78,8 +78,8 @@ struct ClusterClient<C> {
 
 /// Metadata about timely workers in this process.
 pub struct TimelyContainer {
-    /// The current communication config in use
-    comm_config: CommunicationConfig,
+    /// The current timely config in use
+    config: TimelyConfig,
     /// Channels over which to send endpoints for wiring up a new Client
     client_txs: Vec<
         crossbeam_channel::Sender<(
@@ -143,34 +143,39 @@ impl ClusterClient<PartitionedClient> {
     }
 
     async fn build_timely(
-        comm_config: CommunicationConfig,
+        config: TimelyConfig,
         epoch: ComputeStartupEpoch,
         trace_metrics: TraceMetrics,
         compute_metrics: ComputeMetrics,
         persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
         tokio_executor: Handle,
     ) -> Result<TimelyContainer, Error> {
-        info!("Building timely container with config {comm_config:?}");
-        let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..comm_config.workers)
+        info!("Building timely container with config {config:?}");
+        let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
             .map(|_| crossbeam_channel::unbounded())
             .unzip();
         let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
-        let (builders, other) = initialize_networking(&comm_config, epoch).await?;
+        let (builders, other) = initialize_networking(
+            config.workers,
+            config.process,
+            config.addresses.clone(),
+            epoch,
+        )
+        .await?;
 
         let mut worker_config = WorkerConfig::default();
         differential_dataflow::configure(
             &mut worker_config,
             &differential_dataflow::Config {
-                idle_merge_effort: Some(1000),
+                idle_merge_effort: Some(isize::cast_from(config.idle_arrangement_merge_effort)),
             },
         );
 
-        let workers = comm_config.workers;
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
             let timely_worker_index = timely_worker.index();
             let _tokio_guard = tokio_executor.enter();
-            let client_rx = client_rxs.lock().unwrap()[timely_worker_index % workers]
+            let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
                 .take()
                 .unwrap();
             let _trace_metrics = trace_metrics.clone();
@@ -189,7 +194,7 @@ impl ClusterClient<PartitionedClient> {
         .map_err(|e| anyhow!("{e}"))?;
 
         Ok(TimelyContainer {
-            comm_config,
+            config,
             client_txs,
             _worker_guards: worker_guards,
         })
@@ -197,17 +202,16 @@ impl ClusterClient<PartitionedClient> {
 
     async fn build(
         &mut self,
-        comm_config: CommunicationConfig,
+        config: TimelyConfig,
         epoch: ComputeStartupEpoch,
     ) -> Result<(), Error> {
-        let workers = comm_config.workers;
+        let workers = config.workers;
 
         // Check if we can reuse the existing timely instance.
-        // We currently do not support reinstantiating timely, we simply panic
-        // if another communication config is requested. This
-        // code must panic before dropping the worker guards contained in timely_container.
-        // As we don't terminate timely workers, the thread join would hang forever, possibly
-        // creating a fair share of confusion in the orchestrator.
+        // We currently do not support reinstantiating timely, we simply panic if another config is
+        // requested. This code must panic before dropping the worker guards contained in
+        // timely_container. As we don't terminate timely workers, the thread join would hang
+        // forever, possibly creating a fair share of confusion in the orchestrator.
 
         let trace_metrics = self.trace_metrics.clone();
         let compute_metrics = self.compute_metrics.clone();
@@ -217,11 +221,11 @@ impl ClusterClient<PartitionedClient> {
         let mut timely_lock = self.timely_container.lock().await;
         let timely = match timely_lock.take() {
             Some(existing) => {
-                if comm_config != existing.comm_config {
+                if config != existing.config {
                     halt!(
                         "new timely configuration does not match existing timely configuration:\n{:?}\nvs\n{:?}",
-                        comm_config,
-                        existing.comm_config,
+                        config,
+                        existing.config,
                     );
                 }
                 info!("Timely already initialized; re-using.",);
@@ -229,7 +233,7 @@ impl ClusterClient<PartitionedClient> {
             }
             None => {
                 let build_timely_result = Self::build_timely(
-                    comm_config,
+                    config,
                     epoch,
                     trace_metrics,
                     compute_metrics,
@@ -293,9 +297,7 @@ impl GenericClient<ComputeCommand, ComputeResponse> for ClusterClient<Partitione
         // Changing this debug statement requires changing the replica-isolation test
         tracing::debug!("ClusterClient send={:?}", &cmd);
         match cmd {
-            ComputeCommand::CreateTimely { comm_config, epoch } => {
-                self.build(comm_config, epoch).await
-            }
+            ComputeCommand::CreateTimely { config, epoch } => self.build(config, epoch).await,
             _ => self.inner.as_mut().expect("intialized").send(cmd).await,
         }
     }

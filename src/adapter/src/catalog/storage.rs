@@ -356,6 +356,16 @@ async fn migrate<S: Append>(
         |_, _| Ok(()),
         |_, _| Ok(()),
         |_, _| Ok(()),
+        // An optional field, `idle_arrangement_merge_effort`, was added to replica configs, which
+        // should default to `None` for existing configs. The deserialization is able deserialize
+        // the missing values as `None`. This migration updates the on-disk version to explicitly
+        // have a `None` value instead of a missing value.
+        //
+        // Introduced in v0.39.0
+        |txn: &mut Transaction<'_, S>, _bootstrap_args| {
+            txn.compute_replicas.update(|_k, v| Some(v.clone()))?;
+            Ok(())
+        },
         // Add new migrations above.
         //
         // Migrations should be preceded with a comment of the following form:
@@ -488,6 +498,7 @@ fn default_compute_replica_config(
             az_user_specified: false,
         },
         logging: default_logging_config(),
+        idle_arrangement_merge_effort: None,
     }
 }
 
@@ -501,6 +512,7 @@ fn builtin_compute_replica_config(
             az_user_specified: false,
         },
         logging: default_logging_config(),
+        idle_arrangement_merge_effort: None,
     }
 }
 

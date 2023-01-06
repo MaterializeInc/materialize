@@ -3095,6 +3095,7 @@ impl<'a> Parser<'a> {
         let name = match self.expect_one_of_keywords(&[
             AVAILABILITY,
             COMPUTE,
+            IDLE,
             INTROSPECTION,
             REMOTE,
             SIZE,
@@ -3105,6 +3106,10 @@ impl<'a> Parser<'a> {
                 ReplicaOptionName::AvailabilityZone
             }
             COMPUTE => ReplicaOptionName::Compute,
+            IDLE => {
+                self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
+                ReplicaOptionName::IdleArrangementMergeEffort
+            }
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => ReplicaOptionName::IntrospectionDebugging,
                 INTERVAL => ReplicaOptionName::IntrospectionInterval,

@@ -109,6 +109,7 @@ Distinct
 Dot
 Double
 Drop
+Effort
 Element
 Else
 Enable
@@ -153,6 +154,7 @@ Hour
 Hours
 Id
 Idempotence
+Idle
 If
 Ignore
 Ilike
@@ -200,6 +202,7 @@ Materialize
 Materialized
 Max
 Mechanisms
+Merge
 Message
 Metadata
 Minute

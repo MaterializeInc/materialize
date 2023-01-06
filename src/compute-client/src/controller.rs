@@ -68,7 +68,7 @@ use self::error::{
 };
 use self::instance::{ActiveInstance, Instance};
 use self::orchestrator::ComputeOrchestrator;
-use self::replica::ReplicaResponse;
+use self::replica::{ReplicaConfig, ReplicaResponse};
 
 mod instance;
 mod orchestrator;
@@ -163,6 +163,10 @@ pub enum ComputeControllerResponse<T> {
 pub struct ComputeReplicaConfig {
     pub location: ComputeReplicaLocation,
     pub logging: ComputeReplicaLogging,
+    /// The amount of effort to be spent on arrangement compaction during idle times.
+    ///
+    /// See [`differential_dataflow::Config::idle_merge_effort`].
+    pub idle_arrangement_merge_effort: Option<u32>,
 }
 
 /// Size or location of a replica
@@ -553,6 +557,10 @@ impl<T> ActiveComputeController<'_, T> {
     }
 }
 
+/// Default value for `idle_arrangement_merge_effort` if none is supplied.
+// TODO(#16906): Test if 1000 is a good default.
+const DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT: u32 = 1000;
+
 impl<T> ActiveComputeController<'_, T>
 where
     T: Timestamp + Lattice,
@@ -581,16 +589,24 @@ where
             sink_logs.insert(variant, (id, storage_meta));
         }
 
-        let logging_config = LoggingConfig {
-            interval,
-            enable_logging,
-            log_logging: config.logging.log_logging,
-            index_logs: Default::default(),
-            sink_logs,
+        let idle_arrangement_merge_effort = config
+            .idle_arrangement_merge_effort
+            .unwrap_or(DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT);
+
+        let replica_config = ReplicaConfig {
+            location: config.location,
+            logging: LoggingConfig {
+                interval,
+                enable_logging,
+                log_logging: config.logging.log_logging,
+                index_logs: Default::default(),
+                sink_logs,
+            },
+            idle_arrangement_merge_effort,
         };
 
         self.instance(instance_id)?
-            .add_replica(replica_id, config.location, logging_config)?;
+            .add_replica(replica_id, replica_config)?;
         Ok(())
     }
 

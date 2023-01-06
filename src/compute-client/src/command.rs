@@ -56,10 +56,10 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.command.rs"));
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Create the timely runtime according to the supplied CommunicationConfig. Must be the first
-    /// command sent to a clusterd. This is the only command that is broadcasted by
-    /// ActiveReplication to all clusterd processes within a replica.
+    /// command sent to a clusterd. This is the only command that is broadcasted to all clusterd
+    /// processes within a replica.
     CreateTimely {
-        comm_config: CommunicationConfig,
+        config: TimelyConfig,
         epoch: ComputeStartupEpoch,
     },
 
@@ -107,15 +107,9 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         use proto_compute_command::*;
         ProtoComputeCommand {
             kind: Some(match self {
-                ComputeCommand::CreateTimely {
-                    comm_config,
-                    epoch: ComputeStartupEpoch { envd, replica },
-                } => CreateTimely(ProtoCreateTimely {
-                    comm_config: Some(comm_config.into_proto()),
-                    epoch: Some(ProtoComputeStartupEpoch {
-                        envd: envd.get().into_proto(),
-                        replica: replica.into_proto(),
-                    }),
+                ComputeCommand::CreateTimely { config, epoch } => CreateTimely(ProtoCreateTimely {
+                    config: Some(config.into_proto()),
+                    epoch: Some(epoch.into_proto()),
                 }),
                 ComputeCommand::CreateInstance(logging) => CreateInstance(logging.into_proto()),
                 ComputeCommand::InitializationComplete => InitializationComplete(()),
@@ -146,15 +140,10 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         use proto_compute_command::Kind::*;
         use proto_compute_command::*;
         match proto.kind {
-            Some(CreateTimely(ProtoCreateTimely { comm_config, epoch })) => {
-                let comm_config = comm_config.ok_or_else(|| {
-                    TryFromProtoError::missing_field("ProtoCreateTimely::comm_config")
-                })?;
-                let epoch = epoch
-                    .ok_or_else(|| TryFromProtoError::missing_field("ProtoCreateTimely::epoch"))?;
+            Some(CreateTimely(ProtoCreateTimely { config, epoch })) => {
                 Ok(ComputeCommand::CreateTimely {
-                    comm_config: comm_config.into_rust()?,
-                    epoch: epoch.into_rust()?,
+                    config: config.into_rust_if_some("ProtoCreateTimely::config")?,
+                    epoch: epoch.into_rust_if_some("ProtoCreateTimely::epoch")?,
                 })
             }
             Some(CreateInstance(logging)) => {
@@ -316,29 +305,35 @@ impl Ord for ComputeStartupEpoch {
 
 /// Configuration of the cluster we will spin up
 #[derive(Arbitrary, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct CommunicationConfig {
+pub struct TimelyConfig {
     /// Number of per-process worker threads
     pub workers: usize,
     /// Identity of this process
     pub process: usize,
     /// Addresses of all processes
     pub addresses: Vec<String>,
+    /// The amount of effort to be spent on arrangement compaction during idle times.
+    ///
+    /// See [`differential_dataflow::Config::idle_merge_effort`].
+    pub idle_arrangement_merge_effort: u32,
 }
 
-impl RustType<ProtoCommunicationConfig> for CommunicationConfig {
-    fn into_proto(&self) -> ProtoCommunicationConfig {
-        ProtoCommunicationConfig {
+impl RustType<ProtoTimelyConfig> for TimelyConfig {
+    fn into_proto(&self) -> ProtoTimelyConfig {
+        ProtoTimelyConfig {
             workers: self.workers.into_proto(),
             addresses: self.addresses.into_proto(),
             process: self.process.into_proto(),
+            idle_arrangement_merge_effort: self.idle_arrangement_merge_effort,
         }
     }
 
-    fn from_proto(proto: ProtoCommunicationConfig) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: ProtoTimelyConfig) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             process: proto.process.into_rust()?,
             workers: proto.workers.into_rust()?,
             addresses: proto.addresses.into_rust()?,
+            idle_arrangement_merge_effort: proto.idle_arrangement_merge_effort,
         })
     }
 }

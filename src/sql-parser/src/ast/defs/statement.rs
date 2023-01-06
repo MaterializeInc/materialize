@@ -1185,7 +1185,7 @@ pub enum ReplicaOptionName {
     Remote,
     /// The `SIZE [[=] <size>]` option.
     Size,
-    /// The `AVAILABILITY ZONE [[=] <size>]` option.
+    /// The `AVAILABILITY ZONE [[=] <id>]` option.
     AvailabilityZone,
     /// The `WORKERS [[=] <workers>]` option
     Workers,
@@ -1195,6 +1195,8 @@ pub enum ReplicaOptionName {
     IntrospectionInterval,
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>]` option.
     IntrospectionDebugging,
+    /// The `IDLE ARRANGEMENT MERGE EFFORT [=] <value>` option.
+    IdleArrangementMergeEffort,
 }
 
 impl AstDisplay for ReplicaOptionName {
@@ -1207,6 +1209,9 @@ impl AstDisplay for ReplicaOptionName {
             ReplicaOptionName::Compute => f.write_str("COMPUTE"),
             ReplicaOptionName::IntrospectionInterval => f.write_str("INTROSPECTION INTERVAL"),
             ReplicaOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
+            ReplicaOptionName::IdleArrangementMergeEffort => {
+                f.write_str("IDLE ARRANGEMENT MERGE EFFORT")
+            }
         }
     }
 }
