@@ -56,6 +56,7 @@ pub mod notice;
 pub mod ordering;
 pub mod predicate_pushdown;
 pub mod reduce_elision;
+pub mod reduce_reduction;
 pub mod reduction_pushdown;
 pub mod redundant_join;
 pub mod semijoin_idempotence;
@@ -610,6 +611,8 @@ impl Optimizer {
                     // Replaces reduces with maps when the group keys are
                     // unique with maps
                     Box::new(reduce_elision::ReduceElision),
+                    // Rips complex reduces apart.
+                    Box::new(reduce_reduction::ReduceReduction),
                     // Converts `Cross Join {Constant(Literal) + Input}` to
                     // `Map {Cross Join (Input, Constant()), Literal}`.
                     // Join fusion will clean this up to `Map{Input, Literal}`
