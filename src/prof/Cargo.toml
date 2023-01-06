@@ -13,18 +13,23 @@ axum = { version = "0.6.1", features = ["headers"] }
 backtrace = "0.3.66"
 bytesize = "1.1.0"
 cfg-if = "1.0.0"
+flate2 = "1.0.24"
 headers = "0.3.8"
 http = "0.2.8"
 include_dir = "0.7.3"
 libc = "0.2.138"
 once_cell = "1.16.0"
+pprof = { git = "https://github.com/MaterializeInc/pprof-rs.git" }
 mime = "0.3.16"
+mz-build-id = { path = "../build-id" }
 mz-build-info = { path = "../build-info" }
 mz-http-util = { path = "../http-util" }
 mz-ore = { path = "../ore" }
-pprof = { git = "https://github.com/MaterializeInc/pprof-rs.git" }
+mz-proto = { path = "../proto" }
+prost = { version = "0.11.2", features = ["no-recursion-limit"] }
 serde = { version = "1.0.152", features = ["derive"] }
 tempfile = "3.2.0"
+tower-http = { version = "0.3.4", features = ["compression-gzip"] }
 tracing = "0.1.37"
 tokio = { version = "1.23.0", features = ["time"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

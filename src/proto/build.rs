@@ -81,7 +81,11 @@ fn main() {
 
     prost_build::Config::new()
         .compile_protos(
-            &["proto/src/proto.proto", "proto/src/tokio_postgres.proto"],
+            &[
+                "proto/src/proto.proto",
+                "proto/src/tokio_postgres.proto",
+                "proto/src/profile.proto",
+            ],
             &[".."],
         )
         .unwrap();

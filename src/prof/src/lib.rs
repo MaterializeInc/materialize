@@ -74,7 +74,12 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::{collections::BTreeMap, ffi::c_void, sync::atomic::AtomicBool, time::Instant};
+use std::collections::{HashMap, BTreeMap};
+use std::ffi::c_void;
+use std::sync::atomic::AtomicBool;
+use std::time::Instant;
+
+use mz_ore::cast::CastFrom;
 
 pub mod http;
 #[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
@@ -101,6 +106,14 @@ pub struct StackProfile {
     annotations: Vec<String>,
     // The second element is the index in `annotations`, if one exists.
     stacks: Vec<(WeightedStack, Option<usize>)>,
+    mappings: Vec<Mapping>,
+}
+pub struct Mapping {
+    pub begin: usize,
+    pub end: usize,
+    pub offset: usize,
+    pub pathname: String,
+    pub build_id: Option<Vec<u8>>,
 }
 
 impl StackProfile {
@@ -152,6 +165,176 @@ mz_fg_version: 1
 
         builder
     }
+
+    /// Converts the profile into pprof's Profile format, which is
+    /// a gzipped protobuf message, of the message type defined
+    /// (and rather well-documented)
+    /// in `profile.proto` in the `mz-proto` crate.
+    pub fn to_pprof(
+        &self,
+        sample_type: &str,
+        sample_unit: &str,
+        resolution: usize,
+        anno_key: Option<&str>,
+        // Unlike `pprof`, Polar Signals requires that addresses in profile files be
+        // relative to file offsets, rather than memory offsets.
+        polar_signals_mode: bool,
+    ) -> Vec<u8> {
+        use mz_proto::profile::{
+            Label, Location, Mapping as ProtoMapping, Profile, Sample, ValueType,
+        };
+
+        let mut anno_indices = HashMap::new();
+        let mut pathname_indices = HashMap::new();
+        let mut recorded_locations = HashMap::new();
+        let mut build_id_indices = HashMap::new();
+
+        const SAMPLE_TYPE_IDX: i64 = 1;
+        const SAMPLE_UNIT_IDX: i64 = 2;
+        const ANNO_KEY_IDX: i64 = 3;
+
+        let mut profile = Profile {
+            sample_type: vec![ValueType {
+                ty: SAMPLE_TYPE_IDX,
+                unit: SAMPLE_UNIT_IDX,
+            }],
+            string_table: if let Some(anno_key) = anno_key {
+                vec![
+                    String::new(),
+                    sample_type.to_owned(),
+                    sample_unit.to_owned(),
+                    anno_key.to_owned(),
+                ]
+            } else {
+                vec![
+                    String::new(),
+                    sample_type.to_owned(),
+                    sample_unit.to_owned(),
+                ]
+            },
+            time_nanos: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+                .try_into()
+                .unwrap(),
+            ..Default::default()
+        };
+        for (
+            mapping_index,
+            Mapping {
+                begin,
+                end,
+                offset,
+                pathname,
+                build_id,
+            },
+        ) in self.mappings.iter().enumerate()
+        {
+            let build_id_index = {
+                build_id.as_ref().map(|bi| {
+                    let &mut idx = build_id_indices.entry(bi.clone()).or_insert_with(|| {
+                        let build_id_string = {
+                            let mut builder = String::with_capacity(40);
+                            for byte in bi {
+                                use std::fmt::Write;
+                                write!(&mut builder, "{byte:02x}")
+                                    .expect("Write is infallible for String");
+                            }
+                            builder
+                        };
+                        profile.string_table.push(build_id_string);
+                        profile.string_table.len() - 1
+                    });
+                    (idx).try_into().expect("vector length must fit into i64")
+                })
+            };
+            let &mut pathname_index =
+                pathname_indices
+                    .entry(pathname.as_str())
+                    .or_insert_with(|| {
+                        profile.string_table.push(pathname.to_string());
+                        profile.string_table.len() - 1
+                    });
+            profile.mapping.push(ProtoMapping {
+                id: u64::cast_from(mapping_index) + 1,
+                memory_start: u64::cast_from(*begin),
+                memory_limit: u64::cast_from(*end),
+                file_offset: u64::cast_from(*offset),
+                filename: pathname_index
+                    .try_into()
+                    .expect("vector length must fit into i64"),
+                build_id: build_id_index.unwrap_or(0),
+                ..Default::default()
+            })
+        }
+        for (WeightedStack { addrs, weight }, anno) in self.iter() {
+            let mut sample = Sample::default();
+            if let Some(anno) = anno {
+                assert!(anno_key.is_some());
+                let &mut index = anno_indices.entry(anno).or_insert_with(|| {
+                    profile.string_table.push(anno.to_string());
+                    profile.string_table.len() - 1
+                });
+                sample.label.push(Label {
+                    key: ANNO_KEY_IDX,
+                    str: index.try_into().expect("vector length must fit into i64"),
+                    ..Default::default()
+                });
+            }
+            sample.value = vec![(*weight * (resolution as f64)) as i64];
+            for &addr in addrs.iter().rev() {
+                let addr = u64::cast_from(addr);
+                let &mut loc_id = recorded_locations.entry(addr).or_insert_with(|| {
+                    let id = u64::cast_from(profile.location.len()) + 1;
+                    let mapping_id = profile
+                        .mapping
+                        .iter()
+                        .position(
+                            |&ProtoMapping {
+                                 memory_start,
+                                 memory_limit,
+                                 ..
+                             }| {
+                                memory_start <= addr && addr <= memory_limit
+                            },
+                        )
+                        .map(|x| x + 1)
+                        .unwrap_or(0);
+                    
+                    let addr = if polar_signals_mode && mapping_id > 0 {
+                        let mapping = &profile.mapping[mapping_id as usize - 1];
+                        addr - mapping.memory_start + mapping.file_offset
+                    } else {
+                        addr
+                    };
+
+                    let loc = Location {
+                        address: addr,
+                        id,
+                        mapping_id: u64::cast_from(mapping_id),
+                        ..Default::default()
+                    };
+                    profile.location.push(loc);
+                    id
+                });
+
+                sample.location_id.push(loc_id);
+            }
+            profile.sample.push(sample);
+        }
+
+        use prost::Message;
+        let out_uncompressed = profile.encode_to_vec();
+
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+
+        let mut e = GzEncoder::new(Vec::new(), Compression::default());
+        use std::io::Write;
+        e.write_all(&out_uncompressed).unwrap();
+        e.finish().unwrap()
+    }
 }
 
 pub struct StackProfileIter<'a> {
@@ -187,11 +370,17 @@ impl StackProfile {
         };
         self.stacks.push((stack, anno_idx))
     }
+    pub fn push_mapping(&mut self, mapping: Mapping) {
+        self.mappings.push(mapping);
+    }
     pub fn iter(&self) -> StackProfileIter<'_> {
         StackProfileIter {
             inner: self,
             idx: 0,
         }
+    }
+    pub fn mappings(&self) -> &[Mapping] {
+        &self.mappings
     }
 }
 

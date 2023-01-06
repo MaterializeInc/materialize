@@ -167,7 +167,12 @@ pub unsafe fn all_build_ids(
         } else {
             // SAFETY: `dl_iterate_phdr` documents this as being a null-terminated string.
             let fname = unsafe { CStr::from_ptr(info.dlpi_name) };
-            Some(Path::new(OsStr::from_bytes(fname.to_bytes())).to_path_buf())
+            let canonical = std::fs::canonicalize(OsStr::from_bytes(fname.to_bytes()))
+                .unwrap_or_else(|_e| {
+                    // TODO - communicate a warning here?
+                    Path::new(OsStr::from_bytes(fname.to_bytes())).to_path_buf()
+                });
+            Some(canonical)
         };
         state.is_first = false;
         if let Some(fname) = fname {

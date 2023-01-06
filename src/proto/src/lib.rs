@@ -86,6 +86,8 @@ use mz_ore::cast::CastFrom;
 #[cfg(feature = "tokio-postgres")]
 pub mod tokio_postgres;
 
+pub mod profile;
+
 include!(concat!(env!("OUT_DIR"), "/mz_proto.rs"));
 
 /// An error thrown when trying to convert from a `*.proto`-generated type
