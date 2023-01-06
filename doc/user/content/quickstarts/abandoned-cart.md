@@ -142,17 +142,25 @@ With JSON-formatted messages, we don't know the schema so the [JSON is pulled in
         JOIN purchases ON purchases.user_id = users.id
         WHERE purchases.status = 0;
     ```
-
-1. Create a [materialized view](/sql/create-materialized-view/) to get all the users that are no longer browsing the site.
+1. Create a [materialized view](/sql/create-materialized-view/) to get the last time a user visited the website using [`DISTINCT ON`](/sql/patterns/top-k/#top-1-using-distinct-on).
 
     A materialized view is persisted in durable storage and is incrementally updated as new data arrives.
+
+    ```sql
+    CREATE MATERIALIZED VIEW last_user_visit AS
+        SELECT DISTINCT ON(user_id) user_id, received_at
+        FROM v_pageviews
+        ORDER BY 1, 2 DESC;
+    ```
+
+1. Create materialized view to get all the users that have been inactive for the last 3 minutes:
 
     ```sql
     CREATE MATERIALIZED VIEW inactive_users_last_3_mins AS
         SELECT
             user_id,
             date_trunc('minute', to_timestamp(received_at)) as visited_at_minute
-        FROM v_pageviews
+        FROM last_user_visit
         WHERE mz_now() >= (received_at*1000 + 180000)::numeric
         GROUP BY 1,2;
     ```
