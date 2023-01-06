@@ -233,47 +233,22 @@ pub struct Args {
     /// If set to "require", then environmentd requires that all HTTP and
     /// PostgreSQL connections negotiate TLS. Unencrypted connections will be
     /// rejected.
-    ///
-    /// If set to "verify-ca", then environmentd requires that all HTTP and
-    /// PostgreSQL connections negotiate TLS and supply a certificate signed by
-    /// a trusted certificate authority (CA). HTTP connections will operate as
-    /// the system user in this mode, while PostgreSQL connections will assume
-    /// the name of whatever user is specified in the handshake.
-    ///
-    /// The "verify-full" mode is like "verify-ca", except that the Common Name
-    /// (CN) field of the certificate must match the name of a valid user. HTTP
-    /// and PostgreSQL connections will operate as this user. PostgreSQL
-    /// connections must additionally specify the same username in the
-    /// connection parameters.
-    ///
-    /// The most secure mode is "verify-full". This is the default mode when
-    /// the --tls-cert option is specified. Otherwise the default is "disable".
     #[clap(
         long, env = "TLS_MODE",
-        possible_values = &["disable", "require", "verify-ca", "verify-full"],
+        possible_values = &["disable", "require"],
         default_value = "disable",
         default_value_ifs = &[
             ("frontegg-tenant", None, Some("require")),
-            ("tls-cert", None, Some("verify-full")),
         ],
         value_name = "MODE",
     )]
     tls_mode: String,
-    /// The certificate authority for TLS connections.
-    #[clap(
-        long,
-        env = "TLS_CA",
-        required_if_eq("tls-mode", "verify-ca"),
-        required_if_eq("tls-mode", "verify-full"),
-        value_name = "PATH"
-    )]
-    tls_ca: Option<PathBuf>,
     /// Certificate file for TLS connections.
     #[clap(
         long,
         env = "TLS_CERT",
         requires = "tls-key",
-        required_if_eq_any(&[("tls-mode", "allow"), ("tls-mode", "require"), ("tls-mode", "verify-ca"), ("tls-mode", "verify-full")]),
+        required_if_eq_any(&[("tls-mode", "require")]),
         value_name = "PATH"
     )]
     tls_cert: Option<PathBuf>,
@@ -282,7 +257,7 @@ pub struct Args {
         long,
         env = "TLS_KEY",
         requires = "tls-cert",
-        required_if_eq_any(&[("tls-mode", "allow"), ("tls-mode", "require"), ("tls-mode", "verify-ca"), ("tls-mode", "verify-full")]),
+        required_if_eq_any(&[("tls-mode", "require")]),
         value_name = "PATH"
     )]
     tls_key: Option<PathBuf>,
@@ -605,9 +580,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     // Configure connections.
     let tls = if args.tls_mode == "disable" {
-        if args.tls_ca.is_some() {
-            bail!("cannot specify --tls-mode=disable and --tls-ca simultaneously");
-        }
         if args.tls_cert.is_some() {
             bail!("cannot specify --tls-mode=disable and --tls-cert simultaneously");
         }
@@ -617,18 +589,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         None
     } else {
         let mode = match args.tls_mode.as_str() {
-            "require" => {
-                if args.tls_ca.is_some() {
-                    bail!("cannot specify --tls-mode=require and --tls-ca simultaneously");
-                }
-                TlsMode::Require
-            }
-            "verify-ca" => TlsMode::VerifyCa {
-                ca: args.tls_ca.unwrap(),
-            },
-            "verify-full" => TlsMode::VerifyFull {
-                ca: args.tls_ca.unwrap(),
-            },
+            "require" => TlsMode::Require,
             _ => unreachable!(),
         };
         let cert = args.tls_cert.unwrap();

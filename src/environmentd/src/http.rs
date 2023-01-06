@@ -32,9 +32,7 @@ use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
-use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
-use openssl::x509::X509;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -77,8 +75,8 @@ pub struct TlsConfig {
 
 #[derive(Debug, Clone, Copy)]
 pub enum TlsMode {
-    Require,
-    AssumeUser,
+    Disable,
+    Enable,
 }
 
 #[derive(Clone)]
@@ -102,7 +100,7 @@ impl HttpServer {
             allowed_origin,
         }: HttpConfig,
     ) -> HttpServer {
-        let tls_mode = tls.as_ref().map(|tls| tls.mode);
+        let tls_mode = tls.as_ref().map(|tls| tls.mode).unwrap_or(TlsMode::Disable);
         let frontegg = Arc::new(frontegg);
         let base_frontegg = Arc::clone(&frontegg);
         let (adapter_client_tx, adapter_client_rx) = oneshot::channel();
@@ -158,11 +156,7 @@ impl Server for HttpServer {
                         let _ = ssl_stream.get_mut().shutdown().await;
                         return Err(e.into());
                     }
-                    let client_cert = ssl_stream.ssl().peer_certificate();
-                    (
-                        MaybeHttpsStream::Https(ssl_stream),
-                        ConnProtocol::Https { client_cert },
-                    )
+                    (MaybeHttpsStream::Https(ssl_stream), ConnProtocol::Https)
                 }
                 _ => (MaybeHttpsStream::Http(conn), ConnProtocol::Http),
             };
@@ -264,7 +258,7 @@ type Delayed<T> = Shared<oneshot::Receiver<T>>;
 #[derive(Clone)]
 enum ConnProtocol {
     Http,
-    Https { client_cert: Option<X509> },
+    Https,
 }
 
 #[derive(Clone, Debug)]
@@ -324,8 +318,6 @@ enum AuthError {
     #[error("HTTPS is required")]
     HttpsRequired,
     #[error("invalid username in client certificate")]
-    InvalidCertUserName,
-    #[error("unauthorized login to user '{0}'")]
     InvalidLogin(String),
     #[error("{0}")]
     Frontegg(#[from] FronteggError),
@@ -358,24 +350,17 @@ impl IntoResponse for AuthError {
 async fn http_auth<B>(
     mut req: Request<B>,
     next: Next<B>,
-    tls_mode: Option<TlsMode>,
+    tls_mode: TlsMode,
     frontegg: &Option<FronteggAuthentication>,
 ) -> impl IntoResponse {
     // First, extract the username from the certificate, validating that the
     // connection matches the TLS configuration along the way.
     let conn_protocol = req.extensions().get::<ConnProtocol>().unwrap();
     let cert_user = match (tls_mode, &conn_protocol) {
-        (None, ConnProtocol::Http) => None,
-        (None, ConnProtocol::Https { .. }) => unreachable!(),
-        (Some(TlsMode::Require), ConnProtocol::Http) => return Err(AuthError::HttpsRequired),
-        (Some(TlsMode::Require), ConnProtocol::Https { .. }) => None,
-        (Some(TlsMode::AssumeUser), ConnProtocol::Http) => return Err(AuthError::HttpsRequired),
-        (Some(TlsMode::AssumeUser), ConnProtocol::Https { client_cert }) => client_cert
-            .as_ref()
-            .and_then(|cert| cert.subject_name().entries_by_nid(Nid::COMMONNAME).next())
-            .and_then(|cn| cn.data().as_utf8().ok())
-            .map(|cn| Some(cn.to_string()))
-            .ok_or(AuthError::InvalidCertUserName)?,
+        (TlsMode::Disable, ConnProtocol::Http) => None,
+        (TlsMode::Disable, ConnProtocol::Https { .. }) => unreachable!(),
+        (TlsMode::Enable, ConnProtocol::Http) => return Err(AuthError::HttpsRequired),
+        (TlsMode::Enable, ConnProtocol::Https { .. }) => None,
     };
     let creds = match frontegg {
         // If no Frontegg authentication, we can use the cert's username if
@@ -404,7 +389,7 @@ async fn http_auth<B>(
         }
     };
 
-    let user = auth(frontegg, tls_mode, creds).await?;
+    let user = auth(frontegg, creds).await?;
 
     // Add the authenticated user as an extension so downstream handlers can
     // inspect it if necessary.
@@ -448,7 +433,7 @@ async fn init_ws(
     } else {
         Credentials::User(Some(ws_auth.user))
     };
-    let user = auth(frontegg, None, creds).await?;
+    let user = auth(frontegg, creds).await?;
     AuthedClient::new(adapter_client, user).await.err_into()
 }
 
@@ -460,7 +445,6 @@ enum Credentials {
 
 async fn auth(
     frontegg: &Option<FronteggAuthentication>,
-    tls_mode: Option<TlsMode>,
     creds: Credentials,
 ) -> Result<AuthedUser, AuthError> {
     // There are three places a username may be specified:
@@ -515,7 +499,10 @@ async fn auth(
     }
     Ok(AuthedUser {
         user,
-        create_if_not_exists: frontegg.is_some() || !matches!(tls_mode, Some(TlsMode::AssumeUser)),
+        // The internal server adds this as false, but here the external server
+        // is either in local dev or in production, so we always want to auto
+        // create users.
+        create_if_not_exists: true,
     })
 }
 
