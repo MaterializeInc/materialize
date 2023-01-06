@@ -1,6 +1,6 @@
 ---
 title: "Upstash Kafka"
-description: "How to securely connect an Upstash Kafka cluster as a source to Materialize."
+description: "How to securely connect Materialize to an Upstash Kafka broker source and sink."
 menu:
   main:
     parent: "integration-guides"
@@ -112,3 +112,5 @@ The process to connect Materialize to Upstash Kafka consists of the following st
     ```
 
     Once you have created the sink, you can go to the [Upstash console](https://console.upstash.com/login) and click on the topic you defined in the `CREATE SINK` statement. You will see the messages that were written to the topic. Materialize will produce messages to the topic every time the underlying source, table, or materialized view has new changes.
+
+    The generated schema will have a Debezium-style diff envelope to capture changes in the input view or source as we defined in the `ENVELOPE` clause. You can find more details about the various different supported formats and possible configurations [here](/sql/create-sink/kafka/).
