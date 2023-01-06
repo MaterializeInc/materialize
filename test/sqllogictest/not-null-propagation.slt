@@ -734,22 +734,26 @@ EXPLAIN WITH(types, no_fast_path) SELECT 1 IN (SELECT col_not_null FROM int_tabl
 ----
 Explained Query:
   Return // { types: "(boolean, boolean)" }
-    Map (NOT(#0)) // { types: "(boolean, boolean)" }
-      CrossJoin type=differential // { types: "(boolean)" }
-        ArrangeBy keys=[[]] // { types: "()" }
-          Project () // { types: "()" }
-            Get materialize.public.int_table // { types: "(integer?, integer)" }
-        ArrangeBy keys=[[]] // { types: "(boolean)" }
-          Union // { types: "(boolean)" }
-            Map (true) // { types: "(boolean)" }
-              Get l0 // { types: "()" }
-            Map (false) // { types: "(boolean)" }
-              Union // { types: "()" }
-                Negate // { types: "()" }
-                  Get l0 // { types: "()" }
-                Constant // { types: "()" }
-                  - ()
+    Project (#0, #2) // { types: "(boolean, boolean)" }
+      Map (NOT(#1)) // { types: "(boolean, boolean, boolean)" }
+        CrossJoin type=delta // { types: "(boolean, boolean)" }
+          ArrangeBy keys=[[]] // { types: "()" }
+            Project () // { types: "()" }
+              Get materialize.public.int_table // { types: "(integer?, integer)" }
+          Get l1 // { types: "(boolean)" }
+          Get l1 // { types: "(boolean)" }
   With
+    cte l1 =
+      ArrangeBy keys=[[]] // { types: "(boolean)" }
+        Union // { types: "(boolean)" }
+          Map (true) // { types: "(boolean)" }
+            Get l0 // { types: "()" }
+          Map (false) // { types: "(boolean)" }
+            Union // { types: "()" }
+              Negate // { types: "()" }
+                Get l0 // { types: "()" }
+              Constant // { types: "()" }
+                - ()
     cte l0 =
       Distinct // { types: "()" }
         Project () // { types: "()" }

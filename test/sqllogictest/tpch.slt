@@ -1834,14 +1834,14 @@ Finish order_by=[#0 asc nulls_last] output=[#0, #1]
           Get materialize.public.nation
     Where
       cte l3 =
-        Reduce aggregates=[any(((#^0 = #0) AND true))]
+        Reduce aggregates=[any((#^0 = #0))]
           Project (#1)
             Return
               Filter (select(Get l1) AND (integer_to_numeric(#2) > select(Get l2)))
                 Get materialize.public.partsupp
             Where
               cte l1 =
-                Reduce aggregates=[any(((#^0 = #0) AND true))]
+                Reduce aggregates=[any((#^0 = #0))]
                   Project (#0)
                     Filter (varchar_to_text(#1) like "forest%")
                       Get materialize.public.part

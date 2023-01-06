@@ -1341,9 +1341,26 @@ fn plan_set_expr(
                     ),
                 }
             }
-            let project_key: Vec<_> = (left_type.arity()..left_type.arity() * 2).collect();
-            let lhs = left_expr.map(left_casts).project(project_key.clone());
-            let rhs = right_expr.map(right_casts).project(project_key);
+            let lhs = if left_casts
+                .iter()
+                .enumerate()
+                .any(|(i, e)| e != &HirScalarExpr::column(i))
+            {
+                let project_key: Vec<_> = (left_type.arity()..left_type.arity() * 2).collect();
+                left_expr.map(left_casts).project(project_key)
+            } else {
+                left_expr
+            };
+            let rhs = if right_casts
+                .iter()
+                .enumerate()
+                .any(|(i, e)| e != &HirScalarExpr::column(i))
+            {
+                let project_key: Vec<_> = (right_type.arity()..right_type.arity() * 2).collect();
+                right_expr.map(right_casts).project(project_key)
+            } else {
+                right_expr
+            };
 
             let relation_expr = match op {
                 SetOperator::Union => {
