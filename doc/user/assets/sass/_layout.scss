@@ -29,6 +29,10 @@
         padding: var(--xx-small);
     }
 
+    @media(max-width: 510px) {
+        padding: var(--xx-small) var(--milli);
+    }
+
     @media(max-width: 850px) {
         gap: 0;
     }

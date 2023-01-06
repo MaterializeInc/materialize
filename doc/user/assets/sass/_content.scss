@@ -542,7 +542,7 @@ p+p {
         border-radius: 1.2rem;
 
         @media(max-width: 510px) {
-            padding-left: 6rem;
+            padding: 1rem 1rem 1rem 6rem;
         }
 
         p:first-of-type {
@@ -566,6 +566,16 @@ p+p {
             font-size: 1.2rem;
             font-weight: bold;
             text-transform: uppercase;
+
+            @media(max-width: 510px) {
+                top: 1.2rem;
+            }
+        }
+    }
+
+    .warning {
+        @media(max-width: 510px) {
+            padding-left: 9rem;
         }
     }
 
@@ -677,6 +687,12 @@ p+p {
         list-style: none;
         padding: 0;
         border-bottom: 1px solid #9c86e0;
+        display: flex;
+        overflow-x: scroll;
+
+        padding-bottom: var(--xx-small);
+        @media(max-width: 850px) {
+        }
 
         li {
             display: inline-block;
