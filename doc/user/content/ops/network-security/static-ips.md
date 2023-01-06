@@ -12,7 +12,7 @@ When connecting Materialize to services in your private networks (e.g., Kafka
 clusters or PostgreSQL databases), you must configure any firewalls to allow
 connections from these IP addresses.
 
-# Details
+## Details
 
 Your Materialize region is associated with a static set of egress IP addresses.
 Most regions have four egress IP addresses, but this is not guaranteed. All
@@ -37,7 +37,7 @@ a region. We make every effort to provide advance notice of such changes.
 {{< /note >}}
 
 
-# Example
+## Example
 
 Show the static egress IPs associated with a region:
 
