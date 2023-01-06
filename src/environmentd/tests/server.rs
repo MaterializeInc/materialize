@@ -359,19 +359,33 @@ fn test_cancel_long_running_query() {
     let mut client = server.connect(postgres::NoTls).unwrap();
     let cancel_token = client.cancel_token();
 
-    thread::spawn(move || {
-        // Abort the query after 2s.
-        thread::sleep(Duration::from_secs(2));
-        let _ = cancel_token.cancel_query(postgres::NoTls);
-    });
-
     client.batch_execute("CREATE TABLE t (i INT)").unwrap();
+    let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
+
+    let handle = thread::spawn(move || {
+        // Repeatedly attempt to abort the query because we're not sure exactly
+        // when the SELECT will arrive.
+        loop {
+            thread::sleep(Duration::from_secs(1));
+            match shutdown_rx.try_recv() {
+                Ok(()) => return,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    let _ = cancel_token.cancel_query(postgres::NoTls);
+                }
+                _ => panic!("unexpected"),
+            }
+        }
+    });
 
     match client.simple_query("SELECT * FROM t AS OF 18446744073709551615") {
         Err(e) if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) => {}
         Err(e) => panic!("expected error SqlState::QUERY_CANCELED, but got {:?}", e),
         Ok(_) => panic!("expected error SqlState::QUERY_CANCELED, but query succeeded"),
     }
+
+    // Wait for the cancellation thread to stop.
+    shutdown_tx.send(()).unwrap();
+    handle.join().unwrap();
 
     client
         .simple_query("SELECT 1")
