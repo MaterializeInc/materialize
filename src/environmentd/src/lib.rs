@@ -344,8 +344,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         .expect("a real environmentd should always have an epoch number");
     let adapter_storage = mz_adapter::catalog::storage::Connection::open(
         stash,
+        config.now.clone(),
         &BootstrapArgs {
-            now: (config.now)(),
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size,
             builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
             // TODO(benesch, brennan): remove this after v0.27.0-alpha.4 has

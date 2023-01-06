@@ -3282,8 +3282,8 @@ impl<S: Append> Catalog<S> {
         std::mem::forget(consolidations_rx);
         let storage = storage::Connection::open(
             stash,
+            now.clone(),
             &BootstrapArgs {
-                now: (now)(),
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
                 default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
@@ -3442,14 +3442,6 @@ impl<S: Append> Catalog<S> {
         &mut self,
     ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
         self.storage().await.get_all_persisted_timestamps().await
-    }
-
-    /// Get a global timestamp for a timeline that has been persisted to disk.
-    pub async fn get_persisted_timestamp(
-        &mut self,
-        timeline: &Timeline,
-    ) -> Result<mz_repr::Timestamp, Error> {
-        self.storage().await.get_persisted_timestamp(timeline).await
     }
 
     /// Get the next user id without allocating it.
