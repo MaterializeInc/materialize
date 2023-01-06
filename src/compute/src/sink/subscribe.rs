@@ -86,6 +86,7 @@ fn subscribe<G>(
 {
     let mut results = Vec::new();
     let mut finished = false;
+    let mut rows = Default::default();
     sinked_collection
         .inner
         .sink(Pipeline, &format!("subscribe-{}", sink_id), move |input| {
@@ -95,16 +96,17 @@ fn subscribe<G>(
                 input.for_each(|_, _| {});
                 return;
             }
-            input.for_each(|_, rows| {
-                for (row, time, diff) in rows.iter() {
+            input.for_each(|_, data| {
+                data.swap(&mut rows);
+                for (row, time, diff) in rows.drain(..) {
                     let should_emit_as_of = if as_of.strict {
-                        as_of.frontier.less_than(time)
+                        as_of.frontier.less_than(&time)
                     } else {
-                        as_of.frontier.less_equal(time)
+                        as_of.frontier.less_equal(&time)
                     };
-                    let should_emit = should_emit_as_of && !up_to.less_equal(time);
+                    let should_emit = should_emit_as_of && !up_to.less_equal(&time);
                     if should_emit {
-                        results.push((*time, row.clone(), *diff));
+                        results.push((time, row, diff));
                     }
                 }
             });
