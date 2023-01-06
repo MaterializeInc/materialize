@@ -316,6 +316,10 @@ impl<S: Stash> Stash for Cache<S> {
     fn epoch(&self) -> Option<NonZeroI64> {
         self.stash.epoch()
     }
+
+    fn is_readonly(&self) -> bool {
+        self.stash.is_readonly()
+    }
 }
 
 #[async_trait]

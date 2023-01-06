@@ -398,6 +398,10 @@ impl Stash for Memory {
     fn epoch(&self) -> Option<NonZeroI64> {
         None
     }
+
+    fn is_readonly(&self) -> bool {
+        false
+    }
 }
 
 #[async_trait]
