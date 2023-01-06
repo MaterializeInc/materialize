@@ -99,26 +99,44 @@ users          true      false   true  true  false
 
 # Test upsert
 
-# Note that we see 9 messages received, but only 3 updates, because there are only
-# 3 active keys, as all the messages are received in 1 second.
-> SELECT s.name, MIN(u.snapshot_committed), SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0
+# Note that we always count 9 messages received, but can see as low as 3 updates.
+# This is because there are 3 active keys, as all the messages could be received in 1 second.
+# There could also be up to 11 updates, as updates cause inserts and deletes
+# (5 initial inserts, 2 deletes, and 2 updates).
+# We can't control this, so have to accept the range.
+> SELECT
+    s.name,
+    MIN(u.snapshot_committed),
+    SUM(u.messages_received),
+    SUM(u.updates_staged) BETWEEN 3 AND 11,
+    SUM(u.updates_committed) BETWEEN 3 AND 11,
+    SUM(u.bytes_received) > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 9 3 3 true
+upsert true 9 true true true
+
+# While we can't control how batching works above, we can ensure that this new, later update
+# causes 1 more messages to received, but 2 updates (1 insert and 1 delete). We use
+# `set-from-sql` to assert this.
+$ set-from-sql var=updates-committed
+SELECT
+    (SUM(u.updates_committed) + 2)::text
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name IN ('upsert')
 
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "mammalmore"} {"f1":"moose2", "f2": 2}
 
-# An update is 1 more messages received, but is 2 updates (1 insert and 1 delete).
 > SELECT s.name, MIN(u.snapshot_committed), SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 10 5 5 true
+upsert true 10 "${updates-committed}" "${updates-committed}" true
 
 > DROP SOURCE upsert
