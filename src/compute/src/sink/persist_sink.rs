@@ -65,7 +65,6 @@ where
         }
 
         persist_sink(
-            &sinked_collection.scope(),
             sink_id,
             &self.storage_metadata,
             desired_collection,
@@ -76,7 +75,6 @@ where
 }
 
 pub(crate) fn persist_sink<G>(
-    _scope: &G,
     sink_id: GlobalId,
     target: &CollectionMetadata,
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,

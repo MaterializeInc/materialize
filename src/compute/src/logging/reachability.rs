@@ -171,7 +171,7 @@ pub fn construct<A: Allocate>(
                         row_buf.clone()
                     },
                 );
-                persist_sink(scope, *id, meta, compute_state, sinked);
+                persist_sink(*id, meta, compute_state, sinked);
             }
 
             for variant in logs_active {
