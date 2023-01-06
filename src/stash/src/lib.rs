@@ -464,6 +464,11 @@ pub trait Stash: std::fmt::Debug + Send {
     /// Returns the stash's epoch number. If `Some`, it is a positive number that
     /// increases with each start of a stash.
     fn epoch(&self) -> Option<NonZeroI64>;
+
+    /// Reports whether the stash is in readonly mode.
+    ///
+    /// In readonly mode, any attempt to mutate the stash will fail.
+    fn is_readonly(&self) -> bool;
 }
 
 /// `StashCollection` is like a differential dataflow [`Collection`], but the

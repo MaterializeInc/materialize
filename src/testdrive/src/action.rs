@@ -29,7 +29,7 @@ use mz_adapter::catalog::{Catalog, ConnCatalog};
 use mz_adapter::session::Session;
 use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::NOW_ZERO;
+use mz_ore::now::SYSTEM_TIME;
 use mz_stash::PostgresFactory;
 use once_cell::sync::Lazy;
 use rand::Rng;
@@ -355,7 +355,7 @@ impl State {
                 .postgres_factory
                 .open_readonly(url.clone(), None, tls)
                 .await?;
-            let catalog = Catalog::open_debug(stash, NOW_ZERO.clone()).await?;
+            let catalog = Catalog::open_debug(stash, SYSTEM_TIME.clone()).await?;
             let res = f(catalog.for_session(&Session::dummy()));
             Ok(Some(res))
         } else {

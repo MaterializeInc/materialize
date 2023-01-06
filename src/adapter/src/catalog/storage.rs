@@ -560,19 +560,21 @@ impl<S: Append> Connection<S> {
             consolidations_tx,
         };
 
-        // Choose a time at which to apply migrations. This is usually the
-        // current system time, but with protection against backwards time
-        // jumps, even across restarts.
-        let previous_now_ts = conn
-            .try_get_persisted_timestamp(&Timeline::EpochMilliseconds)
-            .await?
-            .unwrap_or(mz_repr::Timestamp::MIN);
-        let now_ts = timeline::monotonic_now(now, previous_now_ts);
-        // IMPORTANT: we durably record the new timestamp before using it.
-        conn.persist_timestamp(&Timeline::EpochMilliseconds, now_ts)
-            .await?;
+        if !conn.stash.is_readonly() {
+            // Choose a time at which to apply migrations. This is usually the
+            // current system time, but with protection against backwards time
+            // jumps, even across restarts.
+            let previous_now_ts = conn
+                .try_get_persisted_timestamp(&Timeline::EpochMilliseconds)
+                .await?
+                .unwrap_or(mz_repr::Timestamp::MIN);
+            let now_ts = timeline::monotonic_now(now, previous_now_ts);
+            // IMPORTANT: we durably record the new timestamp before using it.
+            conn.persist_timestamp(&Timeline::EpochMilliseconds, now_ts)
+                .await?;
 
-        migrate(&mut conn.stash, skip, now_ts.into(), bootstrap_args).await?;
+            migrate(&mut conn.stash, skip, now_ts.into(), bootstrap_args).await?;
+        }
 
         Ok(conn)
     }

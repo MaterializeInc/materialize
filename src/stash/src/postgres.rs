@@ -1159,6 +1159,10 @@ impl Stash for Postgres {
         self.transact(|_, _| Box::pin(async { Ok(()) })).await
     }
 
+    fn is_readonly(&self) -> bool {
+        matches!(self.txn_mode, TransactionMode::Readonly)
+    }
+
     fn epoch(&self) -> Option<NonZeroI64> {
         self.epoch
     }
