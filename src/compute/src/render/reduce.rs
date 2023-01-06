@@ -739,7 +739,7 @@ where
 /// that the values of the accumulator overflow, thus we have to use wrapping arithmetic
 /// to preserve group guarantees.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-enum AccumInner {
+enum Accum {
     /// Accumulates boolean values.
     Bool {
         /// The number of `true` values observed.
@@ -783,12 +783,12 @@ enum AccumInner {
     },
 }
 
-impl Semigroup for AccumInner {
+impl Semigroup for Accum {
     fn is_zero(&self) -> bool {
         match self {
-            AccumInner::Bool { trues, falses } => trues.is_zero() && falses.is_zero(),
-            AccumInner::SimpleNumber { accum, non_nulls } => accum.is_zero() && non_nulls.is_zero(),
-            AccumInner::Float {
+            Accum::Bool { trues, falses } => trues.is_zero() && falses.is_zero(),
+            Accum::SimpleNumber { accum, non_nulls } => accum.is_zero() && non_nulls.is_zero(),
+            Accum::Float {
                 accum,
                 pos_infs,
                 neg_infs,
@@ -801,7 +801,7 @@ impl Semigroup for AccumInner {
                     && nans.is_zero()
                     && non_nulls.is_zero()
             }
-            AccumInner::Numeric {
+            Accum::Numeric {
                 accum,
                 pos_infs,
                 neg_infs,
@@ -817,11 +817,11 @@ impl Semigroup for AccumInner {
         }
     }
 
-    fn plus_equals(&mut self, other: &AccumInner) {
+    fn plus_equals(&mut self, other: &Accum) {
         match (&mut *self, other) {
             (
-                AccumInner::Bool { trues, falses },
-                AccumInner::Bool {
+                Accum::Bool { trues, falses },
+                Accum::Bool {
                     trues: other_trues,
                     falses: other_falses,
                 },
@@ -830,8 +830,8 @@ impl Semigroup for AccumInner {
                 *falses += other_falses;
             }
             (
-                AccumInner::SimpleNumber { accum, non_nulls },
-                AccumInner::SimpleNumber {
+                Accum::SimpleNumber { accum, non_nulls },
+                Accum::SimpleNumber {
                     accum: other_accum,
                     non_nulls: other_non_nulls,
                 },
@@ -840,14 +840,14 @@ impl Semigroup for AccumInner {
                 *non_nulls += other_non_nulls;
             }
             (
-                AccumInner::Float {
+                Accum::Float {
                     accum,
                     pos_infs,
                     neg_infs,
                     nans,
                     non_nulls,
                 },
-                AccumInner::Float {
+                Accum::Float {
                     accum: other_accum,
                     pos_infs: other_pos_infs,
                     neg_infs: other_neg_infs,
@@ -865,14 +865,14 @@ impl Semigroup for AccumInner {
                 *non_nulls += other_non_nulls;
             }
             (
-                AccumInner::Numeric {
+                Accum::Numeric {
                     accum,
                     pos_infs,
                     neg_infs,
                     nans,
                     non_nulls,
                 },
-                AccumInner::Numeric {
+                Accum::Numeric {
                     accum: other_accum,
                     pos_infs: other_pos_infs,
                     neg_infs: other_neg_infs,
@@ -887,7 +887,7 @@ impl Semigroup for AccumInner {
                 // associativity; nothing to be done here, so panic. For more
                 // context, see the DEC_Rounded definition at
                 // http://speleotrove.com/decimal/dncont.html
-                assert!(!cx_agg.status().rounded(), "AccumInner::Numeric overflow");
+                assert!(!cx_agg.status().rounded(), "Accum::Numeric overflow");
                 // Reduce to reclaim unused decimal precision. Note that this
                 // reduction must happen somewhere to make the following
                 // invertible:
@@ -920,27 +920,27 @@ impl Semigroup for AccumInner {
     }
 }
 
-impl Multiply<Diff> for AccumInner {
-    type Output = AccumInner;
+impl Multiply<Diff> for Accum {
+    type Output = Accum;
 
-    fn multiply(self, factor: &Diff) -> AccumInner {
+    fn multiply(self, factor: &Diff) -> Accum {
         let factor = *factor;
         match self {
-            AccumInner::Bool { trues, falses } => AccumInner::Bool {
+            Accum::Bool { trues, falses } => Accum::Bool {
                 trues: trues * factor,
                 falses: falses * factor,
             },
-            AccumInner::SimpleNumber { accum, non_nulls } => AccumInner::SimpleNumber {
+            Accum::SimpleNumber { accum, non_nulls } => Accum::SimpleNumber {
                 accum: accum * i128::from(factor),
                 non_nulls: non_nulls * factor,
             },
-            AccumInner::Float {
+            Accum::Float {
                 accum,
                 pos_infs,
                 neg_infs,
                 nans,
                 non_nulls,
-            } => AccumInner::Float {
+            } => Accum::Float {
                 accum: accum.checked_mul(i128::from(factor)).unwrap_or_else(|| {
                     tracing::warn!("Float accumulator overflow. Incorrect results possible");
                     accum.wrapping_mul(i128::from(factor))
@@ -950,7 +950,7 @@ impl Multiply<Diff> for AccumInner {
                 nans: nans * factor,
                 non_nulls: non_nulls * factor,
             },
-            AccumInner::Numeric {
+            Accum::Numeric {
                 accum,
                 pos_infs,
                 neg_infs,
@@ -968,11 +968,8 @@ impl Multiply<Diff> for AccumInner {
                 // associativity; nothing to be done here, so panic. For more
                 // context, see the DEC_Rounded definition at
                 // http://speleotrove.com/decimal/dncont.html
-                assert!(
-                    !cx.status().rounded(),
-                    "AccumInner::Numeric multiply overflow"
-                );
-                AccumInner::Numeric {
+                assert!(!cx.status().rounded(), "Accum::Numeric multiply overflow");
+                Accum::Numeric {
                     accum: OrderedDecimal(f),
                     pos_infs: pos_infs * factor,
                     neg_infs: neg_infs * factor,
@@ -980,41 +977,6 @@ impl Multiply<Diff> for AccumInner {
                     non_nulls: non_nulls * factor,
                 }
             }
-        }
-    }
-}
-
-/// Wraps an `AccumInner` with tracking of the total number of records observed,
-/// i.e., including null records.
-///
-/// It is important that `Accum.is_zero()` returns `false` if at least one null
-/// record has been observed. Differential dataflow will suppress output when
-/// `Accum.is_zero()` returns `true`, but SQL requires that we produce an
-/// explicit zero or null record as long as there is *some* input record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-struct Accum {
-    inner: AccumInner,
-    total: Diff,
-}
-
-impl Semigroup for Accum {
-    fn is_zero(&self) -> bool {
-        self.total.is_zero() && self.inner.is_zero()
-    }
-
-    fn plus_equals(&mut self, other: &Accum) {
-        self.inner.plus_equals(&other.inner);
-        self.total += other.total;
-    }
-}
-
-impl Multiply<Diff> for Accum {
-    type Output = Accum;
-
-    fn multiply(self, factor: &Diff) -> Accum {
-        Accum {
-            inner: self.inner.multiply(factor),
-            total: self.total * *factor,
         }
     }
 }
@@ -1058,54 +1020,54 @@ where
 
     // Instantiate a default vector for diffs with the correct types at each
     // position.
-    let zero_diffs: Vec<_> = full_aggrs
-        .iter()
-        .map(|f| {
-            let inner = match f.func {
-                AggregateFunc::Any | AggregateFunc::All => AccumInner::Bool {
+    let zero_diffs: (Vec<_>, Diff) = (
+        full_aggrs
+            .iter()
+            .map(|f| match f.func {
+                AggregateFunc::Any | AggregateFunc::All => Accum::Bool {
                     trues: 0,
                     falses: 0,
                 },
-                AggregateFunc::SumFloat32 | AggregateFunc::SumFloat64 => AccumInner::Float {
+                AggregateFunc::SumFloat32 | AggregateFunc::SumFloat64 => Accum::Float {
                     accum: 0,
                     pos_infs: 0,
                     neg_infs: 0,
                     nans: 0,
                     non_nulls: 0,
                 },
-                AggregateFunc::SumNumeric => AccumInner::Numeric {
+                AggregateFunc::SumNumeric => Accum::Numeric {
                     accum: OrderedDecimal(NumericAgg::zero()),
                     pos_infs: 0,
                     neg_infs: 0,
                     nans: 0,
                     non_nulls: 0,
                 },
-                _ => AccumInner::SimpleNumber {
+                _ => Accum::SimpleNumber {
                     accum: 0,
                     non_nulls: 0,
                 },
-            };
-            Accum { inner, total: 0 }
-        })
-        .collect();
+            })
+            .collect(),
+        0,
+    );
 
     // Two aggregation-specific values for each aggregation.
     let datum_to_accumulator = move |datum: Datum, aggr: &AggregateFunc| {
-        let inner = match aggr {
-            AggregateFunc::Count => AccumInner::SimpleNumber {
+        match aggr {
+            AggregateFunc::Count => Accum::SimpleNumber {
                 accum: 0, // unused for AggregateFunc::Count
                 non_nulls: if datum.is_null() { 0 } else { 1 },
             },
             AggregateFunc::Any | AggregateFunc::All => match datum {
-                Datum::True => AccumInner::Bool {
+                Datum::True => Accum::Bool {
                     trues: 1,
                     falses: 0,
                 },
-                Datum::Null => AccumInner::Bool {
+                Datum::Null => Accum::Bool {
                     trues: 0,
                     falses: 0,
                 },
-                Datum::False => AccumInner::Bool {
+                Datum::False => Accum::Bool {
                     trues: 0,
                     falses: 1,
                 },
@@ -1115,7 +1077,7 @@ where
                 ),
             },
             AggregateFunc::Dummy => match datum {
-                Datum::Dummy => AccumInner::SimpleNumber {
+                Datum::Dummy => Accum::SimpleNumber {
                     accum: 0,
                     non_nulls: 0,
                 },
@@ -1153,7 +1115,7 @@ where
                     }
                 };
 
-                AccumInner::Float {
+                Accum::Float {
                     accum,
                     pos_infs,
                     neg_infs,
@@ -1178,7 +1140,7 @@ where
                         (cx_agg.to_width(n.0), 0, 0, 0)
                     };
 
-                    AccumInner::Numeric {
+                    Accum::Numeric {
                         accum: OrderedDecimal(accum),
                         pos_infs,
                         neg_infs,
@@ -1186,7 +1148,7 @@ where
                         non_nulls: 1,
                     }
                 }
-                Datum::Null => AccumInner::Numeric {
+                Datum::Null => Accum::Numeric {
                     accum: OrderedDecimal(NumericAgg::zero()),
                     pos_infs: 0,
                     neg_infs: 0,
@@ -1203,35 +1165,35 @@ where
                 // value from its NULL-ness, which is not quite as easily
                 // accumulated.
                 match datum {
-                    Datum::Int16(i) => AccumInner::SimpleNumber {
+                    Datum::Int16(i) => Accum::SimpleNumber {
                         accum: i128::from(i),
                         non_nulls: 1,
                     },
-                    Datum::Int32(i) => AccumInner::SimpleNumber {
+                    Datum::Int32(i) => Accum::SimpleNumber {
                         accum: i128::from(i),
                         non_nulls: 1,
                     },
-                    Datum::Int64(i) => AccumInner::SimpleNumber {
+                    Datum::Int64(i) => Accum::SimpleNumber {
                         accum: i128::from(i),
                         non_nulls: 1,
                     },
-                    Datum::UInt16(u) => AccumInner::SimpleNumber {
+                    Datum::UInt16(u) => Accum::SimpleNumber {
                         accum: i128::from(u),
                         non_nulls: 1,
                     },
-                    Datum::UInt32(u) => AccumInner::SimpleNumber {
+                    Datum::UInt32(u) => Accum::SimpleNumber {
                         accum: i128::from(u),
                         non_nulls: 1,
                     },
-                    Datum::UInt64(u) => AccumInner::SimpleNumber {
+                    Datum::UInt64(u) => Accum::SimpleNumber {
                         accum: i128::from(u),
                         non_nulls: 1,
                     },
-                    Datum::MzTimestamp(t) => AccumInner::SimpleNumber {
+                    Datum::MzTimestamp(t) => Accum::SimpleNumber {
                         accum: i128::from(u64::from(t)),
                         non_nulls: 1,
                     },
-                    Datum::Null => AccumInner::SimpleNumber {
+                    Datum::Null => Accum::SimpleNumber {
                         accum: 0,
                         non_nulls: 0,
                     },
@@ -1241,8 +1203,7 @@ where
                     ),
                 }
             }
-        };
-        Accum { inner, total: 1 }
+        }
     };
 
     let mut to_aggregate = Vec::new();
@@ -1264,7 +1225,8 @@ where
                         datum = row_iter.next().unwrap();
                     }
                     let datum = datum.1;
-                    diffs[*accumulable_index] = datum_to_accumulator(datum, &aggr.func);
+                    diffs.0[*accumulable_index] = datum_to_accumulator(datum, &aggr.func);
+                    diffs.1 = 1;
                 }
                 ((key, ()), diffs)
             }
@@ -1288,7 +1250,8 @@ where
                 move |(key, row)| {
                     let datum = row.iter().next().unwrap();
                     let mut diffs = zero_diffs.clone();
-                    diffs[accumulable_index] = datum_to_accumulator(datum, &aggr.func);
+                    diffs.0[accumulable_index] = datum_to_accumulator(datum, &aggr.func);
+                    diffs.1 = 1;
                     ((key, ()), diffs)
                 }
             });
@@ -1303,11 +1266,11 @@ where
     };
 
     collection
-        .arrange_named::<RowKeySpine<_, _, Vec<Accum>>>("ArrangeAccumulable")
+        .arrange_named::<RowKeySpine<_, _, (Vec<Accum>, Diff)>>("ArrangeAccumulable")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceAccumulable", {
             let mut row_buf = Row::default();
             move |_key, input, output| {
-                let accum = &input[0].1;
+                let (ref accum, total) = input[0].1;
                 let mut row_packer = row_buf.packer();
 
                 for (aggr, accum) in full_aggrs.iter().zip(accum) {
@@ -1316,7 +1279,7 @@ where
                     // suppress the output for inputs without net-positive records, which *should* avoid
                     // that panic.
                     soft_assert_or_log!(
-                        accum.total != 0 || accum.inner.is_zero(),
+                        total != 0 || accum.is_zero(),
                         "[customer-data] ReduceAccumulable observed net-zero records \
                         with non-zero accumulation: {:?}: {:?} in dataflow id {}",
                         aggr,
@@ -1327,31 +1290,31 @@ where
                     // The finished value depends on the aggregation function in a variety of ways.
                     // For all aggregates but count, if only null values were
                     // accumulated, then the output is null.
-                    let value = if accum.total > 0
-                        && accum.inner.is_zero()
+                    let value = if total > 0
+                        && accum.is_zero()
                         && aggr.func != AggregateFunc::Count
                     {
                         Datum::Null
                     } else {
-                        match (&aggr.func, &accum.inner) {
-                            (AggregateFunc::Count, AccumInner::SimpleNumber { non_nulls, .. }) => {
+                        match (&aggr.func, &accum) {
+                            (AggregateFunc::Count, Accum::SimpleNumber { non_nulls, .. }) => {
                                 Datum::Int64(*non_nulls)
                             }
-                            (AggregateFunc::All, AccumInner::Bool { falses, trues }) => {
+                            (AggregateFunc::All, Accum::Bool { falses, trues }) => {
                                 // If any false, else if all true, else must be no false and some nulls.
                                 if *falses > 0 {
                                     Datum::False
-                                } else if *trues == accum.total {
+                                } else if *trues == total {
                                     Datum::True
                                 } else {
                                     Datum::Null
                                 }
                             }
-                            (AggregateFunc::Any, AccumInner::Bool { falses, trues }) => {
+                            (AggregateFunc::Any, Accum::Bool { falses, trues }) => {
                                 // If any true, else if all false, else must be no true and some nulls.
                                 if *trues > 0 {
                                     Datum::True
-                                } else if *falses == accum.total {
+                                } else if *falses == total {
                                     Datum::False
                                 } else {
                                     Datum::Null
@@ -1359,8 +1322,8 @@ where
                             }
                             (AggregateFunc::Dummy, _) => Datum::Dummy,
                             // If any non-nulls, just report the aggregate.
-                            (AggregateFunc::SumInt16, AccumInner::SimpleNumber { accum, .. })
-                            | (AggregateFunc::SumInt32, AccumInner::SimpleNumber { accum, .. }) => {
+                            (AggregateFunc::SumInt16, Accum::SimpleNumber { accum, .. })
+                            | (AggregateFunc::SumInt32, Accum::SimpleNumber { accum, .. }) => {
                                 // This conversion is safe, as long as we have less than 2^32
                                 // summands.
                                 // TODO(benesch): are we guaranteed to have less than 2^32 summands?
@@ -1368,24 +1331,24 @@ where
                                 #[allow(clippy::as_conversions)]
                                 Datum::Int64(*accum as i64)
                             }
-                            (AggregateFunc::SumInt64, AccumInner::SimpleNumber { accum, .. }) => {
+                            (AggregateFunc::SumInt64, Accum::SimpleNumber { accum, .. }) => {
                                 Datum::from(*accum)
                             }
                             (
                                 AggregateFunc::SumUInt16,
-                                AccumInner::SimpleNumber { accum, .. },
+                                Accum::SimpleNumber { accum, .. },
                             )
                             | (
                                 AggregateFunc::SumUInt32,
-                                AccumInner::SimpleNumber { accum, .. },
+                                Accum::SimpleNumber { accum, .. },
                             ) => Datum::UInt64(u64::try_from(*accum).unwrap_or_else(|_| panic!("Invalid accumulated result {accum} for unsigned function in dataflow {}", dataflow_id))),
                             (
                                 AggregateFunc::SumUInt64,
-                                AccumInner::SimpleNumber { accum, .. },
+                                Accum::SimpleNumber { accum, .. },
                             ) => Datum::from(*accum),
                             (
                                 AggregateFunc::SumFloat32,
-                                AccumInner::Float {
+                                Accum::Float {
                                     accum,
                                     pos_infs,
                                     neg_infs,
@@ -1411,7 +1374,7 @@ where
                             }
                             (
                                 AggregateFunc::SumFloat64,
-                                AccumInner::Float {
+                                Accum::Float {
                                     accum,
                                     pos_infs,
                                     neg_infs,
@@ -1437,7 +1400,7 @@ where
                             }
                             (
                                 AggregateFunc::SumNumeric,
-                                AccumInner::Numeric {
+                                Accum::Numeric {
                                     accum,
                                     pos_infs,
                                     neg_infs,
