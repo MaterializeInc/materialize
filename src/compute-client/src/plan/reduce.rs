@@ -833,7 +833,7 @@ pub fn convert_indexes_to_skips(mut indexes: Vec<usize>) -> Vec<usize> {
 /// significant input data). Hierarchical aggregates can be rendered more efficiently if the
 /// input stream is append-only as then we only need to retain the "currently winning" value.
 /// Every hierarchical aggregate needs to supply a corresponding ReductionMonoid implementation.
-fn reduction_type(func: &AggregateFunc) -> ReductionType {
+pub fn reduction_type(func: &AggregateFunc) -> ReductionType {
     match func {
         AggregateFunc::SumInt16
         | AggregateFunc::SumInt32
