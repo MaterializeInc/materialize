@@ -158,7 +158,7 @@ pub fn vpc_endpoint_name(id: GlobalId) -> String {
 
 /// Returns the host to use for the VPC endpoint with the given ID and
 /// optionally in the given availability zone.
-pub fn vpc_endpoint_host(id: GlobalId, availability_zone: Option<String>) -> String {
+pub fn vpc_endpoint_host(id: GlobalId, availability_zone: Option<&str>) -> String {
     let name = vpc_endpoint_name(id);
     // This naming scheme is part of the contract with the VpcEndpointController
     // in the cloud infrastructure layer.

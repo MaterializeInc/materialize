@@ -332,7 +332,7 @@ impl KafkaConnection {
                         &broker.address,
                         &mz_cloud_resources::vpc_endpoint_host(
                             aws_privatelink.connection_id,
-                            aws_privatelink.availability_zone.clone(),
+                            aws_privatelink.availability_zone.as_deref(),
                         ),
                         aws_privatelink.port,
                     );
@@ -570,7 +570,7 @@ impl CsrConnection {
                     .ok_or_else(|| anyhow!("url missing host"))?;
                 let privatelink_host = mz_cloud_resources::vpc_endpoint_host(
                     connection.connection_id,
-                    connection.availability_zone.clone(),
+                    connection.availability_zone.as_deref(),
                 );
                 let addrs: Vec<_> = net::lookup_host((privatelink_host, DUMMY_PORT))
                     .await
@@ -931,7 +931,7 @@ impl RustType<ProtoSshConnection> for SshConnection {
 pub struct AwsPrivatelink {
     /// The ID of the connection to the AWS PrivateLink service.
     pub connection_id: GlobalId,
-    // THe availability zone to use when connecting to the AWS PrivateLink service.
+    // The availability zone to use when connecting to the AWS PrivateLink service.
     pub availability_zone: Option<String>,
     /// The port to use when connecting to the AWS PrivateLink service, if
     /// different from the port in [`KafkaBroker::address`].
