@@ -55,10 +55,22 @@ The WebSocket API provides two modes with slightly different transactional seman
 wss://<MZ host address>/api/experimental/sql
 ```
 
-To authenticate, send an initial text or binary message containing a JSON object with keys:
+To authenticate using a username and password, send an initial text or binary message containing a JSON object:
 
-- `user`: Your email to access Materialize.
-- `password`: Your app password.
+```
+{
+			"user": "<Your email to access Materialize>"
+	"password": "<Your app password>",
+}
+```
+
+To authenticate using a token, send an initial text or binary message containing a JSON object:
+
+```
+{
+	"token": "<Your access token>",
+}
+```
 
 Successful authentication will result in an initial `ReadyForQuery` response from the server.
 Otherwise an error is indicated by a websocket Close message.
@@ -166,10 +178,15 @@ The payload is an array of JSON values corresponding to the columns from the `Ro
 You can model these with the following TypeScript definitions:
 
 ```typescript
-interface Auth {
+interface BasicAuth {
     user: string;
     password: string;
 }
+
+type Auth =
+    | { type: "Basic"; payload: BasicAuth }
+    | { type: "Token"; payload: string }
+    ;
 
 interface Simple {
     query: string;

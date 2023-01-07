@@ -271,7 +271,7 @@ fn test_http_sql() {
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
 
         ws.write_message(Message::Text(
-            serde_json::to_string(&WebSocketAuth {
+            serde_json::to_string(&WebSocketAuth::Basic {
                 user: "materialize".into(),
                 password: "".into(),
             })

@@ -441,12 +441,17 @@ async fn init_ws(
         }
     };
     let creds = if frontegg.is_some() {
-        Credentials::Password {
-            username: ws_auth.user,
-            password: ws_auth.password,
+        match ws_auth {
+            WebSocketAuth::Basic { user, password } => Credentials::Password {
+                username: user,
+                password,
+            },
+            WebSocketAuth::Bearer { token } => Credentials::Token { token },
         }
+    } else if let WebSocketAuth::Basic { user, .. } = ws_auth {
+        Credentials::User(Some(user))
     } else {
-        Credentials::User(Some(ws_auth.user))
+        anyhow::bail!("unexpected")
     };
     let user = auth(frontegg, None, creds).await?;
     AuthedClient::new(adapter_client, user).await.err_into()

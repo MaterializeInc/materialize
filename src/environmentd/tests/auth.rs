@@ -321,8 +321,7 @@ enum TestCase<'a> {
         assert: Assert<Box<dyn Fn(Option<StatusCode>, String) + 'a>>,
     },
     Ws {
-        user: &'a str,
-        password: &'a str,
+        auth: &'a WebSocketAuth,
         configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
         assert: Assert<Box<dyn Fn(CloseCode, String) + 'a>>,
     },
@@ -454,12 +453,11 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                 }
             }
             TestCase::Ws {
-                user,
-                password,
+                auth,
                 configure,
                 assert,
             } => {
-                println!("ws user={} password={}", user, password);
+                println!("ws auth={:?}", auth);
 
                 let uri = Uri::builder()
                     .scheme("wss")
@@ -474,14 +472,8 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                 let stream = make_ws_tls(&uri, configure);
                 let (mut ws, _resp) = tungstenite::client(uri, stream).unwrap();
                 //  let (mut ws, _resp) = tungstenite::connect(uri).unwrap();
-                ws.write_message(Message::Text(
-                    serde_json::to_string(&WebSocketAuth {
-                        user: user.to_string(),
-                        password: password.to_string(),
-                    })
-                    .unwrap(),
-                ))
-                .unwrap();
+                ws.write_message(Message::Text(serde_json::to_string(&auth).unwrap()))
+                    .unwrap();
 
                 ws.write_message(Message::Text(
                     r#"{"query": "SELECT pg_catalog.current_user()"}"#.into(),
@@ -969,14 +961,25 @@ fn test_auth_base() {
         &server,
         &[
             TestCase::Ws {
-                user: frontegg_user,
-                password: frontegg_password,
+                auth: &WebSocketAuth::Basic {
+                    user: frontegg_user.to_string(),
+                    password: frontegg_password.to_string(),
+                },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
             TestCase::Ws {
-                user: "bad user",
-                password: frontegg_password,
+                auth: &WebSocketAuth::Bearer {
+                    token: frontegg_jwt.clone(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            TestCase::Ws {
+                auth: &WebSocketAuth::Basic {
+                    user: "bad user".to_string(),
+                    password: frontegg_password.to_string(),
+                },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, CloseCode::Protocol);
