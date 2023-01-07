@@ -218,14 +218,14 @@ byteorder = { version = "1.4.3", default-features = false, features = ["i128"] }
 libc = { version = "0.2.138", default-features = false, features = ["use_std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["alloc", "race", "std", "unstable"] }
-tikv-jemalloc-sys = { version = "0.4.3+5.2.1-patched.2", features = ["background_threads", "background_threads_runtime_support", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
+tikv-jemalloc-sys = { version = "0.5.2+5.3.0-patched", features = ["background_threads", "background_threads_runtime_support", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 byteorder = { version = "1.4.3", default-features = false, features = ["i128"] }
 libc = { version = "0.2.138", default-features = false, features = ["use_std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["alloc", "race", "std", "unstable"] }
-tikv-jemalloc-sys = { version = "0.4.3+5.2.1-patched.2", features = ["background_threads", "background_threads_runtime_support", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
+tikv-jemalloc-sys = { version = "0.5.2+5.3.0-patched", features = ["background_threads", "background_threads_runtime_support", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-apple-darwin.dependencies]
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
