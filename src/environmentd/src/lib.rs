@@ -107,7 +107,6 @@ use mz_ore::now::NowFn;
 use mz_ore::task;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::usage::StorageUsageClient;
-use mz_prof::jemalloc_metrics;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash::Stash;
@@ -252,8 +251,6 @@ pub enum TlsMode {
 
 /// Start an `environmentd` server.
 pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
-    jemalloc_metrics::register_into(&config.metrics_registry);
-
     let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
         &config.adapter_stash_url,
     )?)?;

@@ -3390,6 +3390,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-alloc"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "mz-prof",
+ "tikv-jemallocator",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-audit-log"
 version = "0.0.0"
 dependencies = [
@@ -3499,6 +3509,7 @@ dependencies = [
  "clap",
  "fail",
  "futures",
+ "mz-alloc",
  "mz-build-info",
  "mz-cloud-resources",
  "mz-compute",
@@ -3514,7 +3525,6 @@ dependencies = [
  "mz-storage-client",
  "mz-timely-util",
  "once_cell",
- "tikv-jemallocator",
  "timely",
  "tokio",
  "tracing",
@@ -3655,6 +3665,7 @@ dependencies = [
  "libc",
  "mime",
  "mz-adapter",
+ "mz-alloc",
  "mz-build-info",
  "mz-cloud-resources",
  "mz-controller",
@@ -3704,7 +3715,6 @@ dependencies = [
  "sysctl",
  "tempfile",
  "thiserror",
- "tikv-jemallocator",
  "timely",
  "tokio",
  "tokio-openssl",

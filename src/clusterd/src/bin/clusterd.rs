@@ -98,27 +98,11 @@ use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistConfig;
 use mz_pid_file::PidFile;
-use mz_prof::jemalloc_metrics;
 use mz_service::emit_boot_diagnostics;
 use mz_service::grpc::GrpcServer;
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
 use mz_storage_client::types::connections::ConnectionContext;
-
-// Disable jemalloc on macOS, as it is not well supported [0][1][2].
-// The issues present as runaway latency on load test workloads that are
-// comfortably handled by the macOS system allocator. Consider re-evaluating if
-// jemalloc's macOS support improves.
-//
-// [0]: https://github.com/jemalloc/jemalloc/issues/26
-// [1]: https://github.com/jemalloc/jemalloc/issues/843
-// [2]: https://github.com/jemalloc/jemalloc/issues/1467
-//
-// Furthermore, as of Aug. 2022, some engineers are using profiling
-// tools, e.g. `heaptrack`, that only work with the system allocator.
-#[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
-#[global_allocator]
-static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 const BUILD_INFO: BuildInfo = build_info!();
 
@@ -214,6 +198,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     emit_boot_diagnostics!(&BUILD_INFO);
 
+    let metrics_registry = MetricsRegistry::new();
+    mz_alloc::register_metrics_into(&metrics_registry).await;
+
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {
         _pid_file = Some(PidFile::open(pid_file_location).unwrap());
@@ -224,9 +211,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .load()
         .await
         .context("loading secrets reader")?;
-
-    let metrics_registry = MetricsRegistry::new();
-    jemalloc_metrics::register_into(&metrics_registry);
 
     mz_ore::task::spawn(|| "clusterd_internal_http_server", {
         let metrics_registry = metrics_registry.clone();

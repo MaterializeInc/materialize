@@ -77,9 +77,8 @@
 use std::{collections::BTreeMap, ffi::c_void, sync::atomic::AtomicBool, time::Instant};
 
 pub mod http;
-#[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
+#[cfg(feature = "jemalloc")]
 pub mod jemalloc;
-pub mod jemalloc_metrics;
 pub mod time;
 
 #[derive(Copy, Clone, Debug)]

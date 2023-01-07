@@ -133,21 +133,6 @@ use mz_storage_client::types::connections::ConnectionContext;
 
 mod sys;
 
-// Disable jemalloc on macOS, as it is not well supported [0][1][2].
-// The issues present as runaway latency on load test workloads that are
-// comfortably handled by the macOS system allocator. Consider re-evaluating if
-// jemalloc's macOS support improves.
-//
-// [0]: https://github.com/jemalloc/jemalloc/issues/26
-// [1]: https://github.com/jemalloc/jemalloc/issues/843
-// [2]: https://github.com/jemalloc/jemalloc/issues/1467
-//
-// Furthermore, as of Aug. 2022, some engineers are using profiling
-// tools, e.g. `heaptrack`, that only work with the system allocator.
-#[cfg(all(not(target_os = "macos"), feature = "jemalloc"))]
-#[global_allocator]
-static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
-
 static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
 static LONG_VERSION: Lazy<String> = Lazy::new(|| {
     iter::once(BUILD_INFO.human_version())
@@ -598,6 +583,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     let metrics_registry = MetricsRegistry::new();
     let metrics = Metrics::register_into(&metrics_registry);
+
+    runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));
 
     // Configure tracing to log the service name when using the process
     // orchestrator, which intermingles log output from multiple services. Other
