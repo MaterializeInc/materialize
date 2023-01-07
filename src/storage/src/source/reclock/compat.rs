@@ -11,12 +11,12 @@
 //! timestamps
 
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::sync::Arc;
 
 use anyhow::Context;
 use differential_dataflow::lattice::Lattice;
 use futures::{stream::LocalBoxStream, StreamExt};
-use mz_persist_client::error::UpperMismatch;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
@@ -27,6 +27,7 @@ use mz_ore::halt;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::PersistClient;
@@ -43,7 +44,7 @@ use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, Recloc
 impl<FromTime, IntoTime> ReclockFollower<FromTime, IntoTime>
 where
     FromTime: SourceTimestamp,
-    IntoTime: Timestamp + Lattice + TotalOrder,
+    IntoTime: Timestamp + Lattice + TotalOrder + Display,
 {
     pub fn reclock_compat<'a, M>(
         &'a self,

@@ -1270,6 +1270,12 @@ where
 
     let bytes_read_counter = base_metrics.bytes_read.clone();
 
+    // TODO(petrosagg): figure out what this operator's read requirements are. The code currently
+    // relies on the other handle that is present in the source operator to not over compact, which
+    // is currently true since it's driven by the resumption frontier. Nevertheless, we should fix
+    // this and reason locally instead of globally.
+    timestamper.compact(Antichain::new());
+
     let operator_name = format!("reclock({})", id);
     let mut reclock_op = OperatorBuilder::new(operator_name, scope.clone());
     let (mut reclocked_output, reclocked_stream) = reclock_op.new_output();

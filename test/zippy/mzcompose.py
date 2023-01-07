@@ -95,7 +95,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     random.seed(args.seed)
 
-    environment_extra = ["MZ_LOG_FILTER=warn"]
+    environment_extra = ["MZ_LOG_FILTER=info"]
     mz_options = [
         "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
         "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
