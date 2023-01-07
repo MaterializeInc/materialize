@@ -30,7 +30,7 @@ tokio = { version = "1.23.0", features = ["time"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true }
+tikv-jemalloc-ctl = { version = "0.5.0", features = ["use_std"], optional = true }
 
 [build-dependencies]
 anyhow = "1.0.66"
