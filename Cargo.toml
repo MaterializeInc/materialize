@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "src/adapter",
+    "src/alloc",
     "src/audit-log",
     "src/avro",
     "src/avro-derive",

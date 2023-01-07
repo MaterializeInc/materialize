@@ -23,8 +23,9 @@ use once_cell::sync::Lazy;
 use tempfile::NamedTempFile;
 use tikv_jemalloc_ctl::{epoch, raw, stats};
 
+use mz_ore::cast::CastFrom;
 use mz_ore::metric;
-use mz_ore::metrics::{IntGauge, MetricsRegistry};
+use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 
 use super::{ProfStartTime, StackProfile, WeightedStack};
 
@@ -218,40 +219,45 @@ impl JemallocProfCtl {
     }
 }
 
-pub(crate) struct JemallocMetrics {
-    pub active: IntGauge,
-    pub allocated: IntGauge,
-    pub metadata: IntGauge,
-    pub resident: IntGauge,
-    pub retained: IntGauge,
+/// Metrics for jemalloc.
+pub struct JemallocMetrics {
+    pub active: UIntGauge,
+    pub allocated: UIntGauge,
+    pub metadata: UIntGauge,
+    pub resident: UIntGauge,
+    pub retained: UIntGauge,
 }
 
 impl JemallocMetrics {
-    pub(crate) fn register_into(registry: &MetricsRegistry) {
+    /// Registers the metrics into the provided metrics registry, and spawns
+    /// a task to keep the metrics up to date.
+    // `async` indicates that the Tokio runtime context is required.
+    #[allow(clippy::unused_async)]
+    pub async fn register_into(registry: &MetricsRegistry) {
         let m = JemallocMetrics {
             active: registry.register(metric!(
-            name: "jemalloc_active",
-            help: "Total number of bytes in active pages allocated by the application",
+                name: "jemalloc_active",
+                help: "Total number of bytes in active pages allocated by the application",
             )),
             allocated: registry.register(metric!(
-            name: "jemalloc_allocated",
-            help: "Total number of bytes allocated by the application",
+                name: "jemalloc_allocated",
+                help: "Total number of bytes allocated by the application",
             )),
             metadata: registry.register(metric!(
-            name: "jemalloc_metadata",
-            help: "Total number of bytes dedicated to metadata.",
+                name: "jemalloc_metadata",
+                help: "Total number of bytes dedicated to metadata.",
             )),
             resident: registry.register(metric!(
-            name: "jemalloc_resident",
-            help: "Maximum number of bytes in physically resident data pages mapped",
+                name: "jemalloc_resident",
+                help: "Maximum number of bytes in physically resident data pages mapped",
             )),
             retained: registry.register(metric!(
-            name: "jemalloc_retained",
-            help: "Total number of bytes in virtual memory mappings",
+                name: "jemalloc_retained",
+                help: "Total number of bytes in virtual memory mappings",
             )),
         };
 
-        mz_ore::task::spawn(|| "Jemalloc Stats Update", async move {
+        mz_ore::task::spawn(|| "jemalloc_stats_update", async move {
             let mut interval = tokio::time::interval(Duration::from_secs(10));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
@@ -263,13 +269,13 @@ impl JemallocMetrics {
         });
     }
 
-    pub(crate) fn update(&self) -> anyhow::Result<()> {
+    fn update(&self) -> anyhow::Result<()> {
         let s = JemallocStats::get()?;
-        self.active.set(s.active.try_into()?);
-        self.allocated.set(s.allocated.try_into()?);
-        self.metadata.set(s.metadata.try_into()?);
-        self.resident.set(s.resident.try_into()?);
-        self.retained.set(s.retained.try_into()?);
+        self.active.set(u64::cast_from(s.active));
+        self.allocated.set(u64::cast_from(s.allocated));
+        self.metadata.set(u64::cast_from(s.metadata));
+        self.resident.set(u64::cast_from(s.resident));
+        self.retained.set(u64::cast_from(s.retained));
         Ok(())
     }
 }

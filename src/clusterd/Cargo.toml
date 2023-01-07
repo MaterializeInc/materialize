@@ -12,6 +12,7 @@ axum = "0.6.1"
 clap = { version = "3.2.20", features = ["derive", "env"] }
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
+mz-alloc = { path = "../alloc" }
 mz-build-info = { path = "../build-info" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-compute = { path = "../compute" }
@@ -32,15 +33,7 @@ tokio = { version = "1.23.0", features = ["fs", "rt", "sync", "test-util"] }
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-# According to jemalloc developers, `background_threads` should always be
-# enabled, except in "esoteric" situations that don't apply to Materialize
-# (Namely: if the application relies on new threads not being created for whatever reason)
-#
-# See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
-tikv-jemallocator = { version = "0.5.0", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"], optional = true }
-
 [features]
 default = ["jemalloc"]
-jemalloc = ["tikv-jemallocator", "mz-prof/jemalloc"]
+jemalloc = ["mz-alloc/jemalloc"]
 tokio-console = ["mz-ore/tokio-console"]

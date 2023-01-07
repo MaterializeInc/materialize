@@ -1,0 +1,36 @@
+[package]
+name = "mz-alloc"
+description = "Activates the best memory allocator for the target platform."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+mz-ore = { path = "../ore" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+# Disable jemalloc on macOS, as it is not well supported [0][1][2]. The issues
+# present as runaway latency on load test workloads that are comfortably handled
+# by the macOS system allocator. Consider re-evaluating if jemalloc's macOS
+# support improves.
+#
+# [0]: https://github.com/jemalloc/jemalloc/issues/26
+# [1]: https://github.com/jemalloc/jemalloc/issues/843
+# [2]: https://github.com/jemalloc/jemalloc/issues/1467
+#
+# Furthermore, as of August 2022, some engineers are using profiling tools, e.g.
+# `heaptrack`, that only work with the system allocator.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+mz-prof = { path = "../prof" }
+# According to jemalloc developers, `background_threads` should always be
+# enabled, except in "esoteric" situations that don't apply to Materialize
+# (namely, if the application relies on new threads not being created for
+# whatever reason).
+#
+# See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
+tikv-jemallocator = { version = "0.5.0", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"], optional = true }
+
+[features]
+# Whether to enable the use of jemalloc on platforms that support it.
+jemalloc = ["tikv-jemallocator", "mz-prof/jemalloc"]
