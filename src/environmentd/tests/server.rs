@@ -92,23 +92,6 @@ use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
 
-#[derive(Debug)]
-struct UInt8(u64);
-
-impl<'a> FromSql<'a> for UInt8 {
-    fn from_sql(_: &Type, mut raw: &'a [u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
-        let v = raw.get_u64();
-        if !raw.is_empty() {
-            return Err("invalid buffer size".into());
-        }
-        Ok(Self(v))
-    }
-
-    fn accepts(ty: &Type) -> bool {
-        ty.oid() == mz_pgrepr::oid::TYPE_UINT8_OID
-    }
-}
-
 #[test]
 fn test_persistence() {
     let data_dir = tempfile::tempdir().unwrap();

@@ -40,7 +40,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
-use bytes::{Buf, BytesMut};
+use bytes::BytesMut;
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
@@ -70,7 +70,7 @@ use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
-use mz_pgrepr::{oid, Interval, Jsonb, Numeric, Value};
+use mz_pgrepr::{oid, Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
@@ -433,27 +433,9 @@ impl<'a> FromSql<'a> for Slt {
                     })
                 }
                 _ => match ty.oid() {
-                    oid::TYPE_UINT2_OID => {
-                        let v = raw.get_u16();
-                        if !raw.is_empty() {
-                            return Err("invalid buffer size".into());
-                        }
-                        Self(Value::UInt2(v))
-                    }
-                    oid::TYPE_UINT4_OID => {
-                        let v = raw.get_u32();
-                        if !raw.is_empty() {
-                            return Err("invalid buffer size".into());
-                        }
-                        Self(Value::UInt4(v))
-                    }
-                    oid::TYPE_UINT8_OID => {
-                        let v = raw.get_u64();
-                        if !raw.is_empty() {
-                            return Err("invalid buffer size".into());
-                        }
-                        Self(Value::UInt8(v))
-                    }
+                    oid::TYPE_UINT2_OID => Self(Value::UInt2(UInt2::from_sql(ty, raw)?)),
+                    oid::TYPE_UINT4_OID => Self(Value::UInt4(UInt4::from_sql(ty, raw)?)),
+                    oid::TYPE_UINT8_OID => Self(Value::UInt8(UInt8::from_sql(ty, raw)?)),
                     oid::TYPE_MZ_TIMESTAMP_OID => {
                         let s = types::text_from_sql(raw)?;
                         let t: mz_repr::Timestamp = s.parse()?;
@@ -543,9 +525,9 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         (Type::Integer, Value::Int2(i)) => i.to_string(),
         (Type::Integer, Value::Int4(i)) => i.to_string(),
         (Type::Integer, Value::Int8(i)) => i.to_string(),
-        (Type::Integer, Value::UInt2(u)) => u.to_string(),
-        (Type::Integer, Value::UInt4(u)) => u.to_string(),
-        (Type::Integer, Value::UInt8(u)) => u.to_string(),
+        (Type::Integer, Value::UInt2(u)) => u.0.to_string(),
+        (Type::Integer, Value::UInt4(u)) => u.0.to_string(),
+        (Type::Integer, Value::UInt8(u)) => u.0.to_string(),
         (Type::Integer, Value::Oid(i)) => i.to_string(),
         // TODO(benesch): rewrite to avoid `as`.
         #[allow(clippy::as_conversions)]

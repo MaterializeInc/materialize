@@ -100,4 +100,5 @@ pub use value::interval::Interval;
 pub use value::jsonb::Jsonb;
 pub use value::numeric::Numeric;
 pub use value::record::Record;
+pub use value::unsigned::{UInt2, UInt4, UInt8};
 pub use value::{values_from_row, Value};
