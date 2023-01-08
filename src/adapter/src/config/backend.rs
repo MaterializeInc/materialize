@@ -11,7 +11,7 @@ use mz_repr::Row;
 use mz_sql::ast::{Ident, Raw, ShowStatement, ShowVariableStatement, Statement};
 
 use crate::catalog::SYSTEM_USER;
-use crate::session::{EndTransactionAction, Session};
+use crate::session::EndTransactionAction;
 use crate::{AdapterError, Client, ExecuteResponse, PeekResponseUnary, SessionClient};
 
 use super::SynchronizedParameters;
@@ -27,7 +27,7 @@ pub struct SystemParameterBackend {
 impl SystemParameterBackend {
     pub async fn new(client: Client) -> Result<Self, AdapterError> {
         let conn_client = client.new_conn()?;
-        let session = Session::new(conn_client.conn_id(), SYSTEM_USER.clone());
+        let session = conn_client.new_session(SYSTEM_USER.clone());
         let (session_client, _) = conn_client.startup(session, true).await?;
         Ok(Self { session_client })
     }

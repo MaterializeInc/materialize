@@ -22,6 +22,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::OwnedMutexGuard;
 use uuid::Uuid;
 
+use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_pgrepr::Format;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
@@ -95,9 +96,13 @@ pub struct Session<T = mz_repr::Timestamp> {
 
 impl<T: TimestampManipulation> Session<T> {
     /// Creates a new session for the specified connection ID.
-    pub fn new(conn_id: ConnectionId, user: User) -> Session<T> {
+    pub(crate) fn new(
+        build_info: &'static BuildInfo,
+        conn_id: ConnectionId,
+        user: User,
+    ) -> Session<T> {
         assert_ne!(conn_id, DUMMY_CONNECTION_ID);
-        Self::new_internal(conn_id, user)
+        Self::new_internal(build_info, conn_id, user)
     }
 
     /// Creates a new dummy session.
@@ -105,15 +110,19 @@ impl<T: TimestampManipulation> Session<T> {
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
     pub fn dummy() -> Session<T> {
-        Self::new_internal(DUMMY_CONNECTION_ID, SYSTEM_USER.clone())
+        Self::new_internal(&DUMMY_BUILD_INFO, DUMMY_CONNECTION_ID, SYSTEM_USER.clone())
     }
 
-    fn new_internal(conn_id: ConnectionId, user: User) -> Session<T> {
+    fn new_internal(
+        build_info: &'static BuildInfo,
+        conn_id: ConnectionId,
+        user: User,
+    ) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
         let vars = if INTERNAL_USER_NAMES.contains(&user.name) {
-            SessionVars::for_cluster(&user.name)
+            SessionVars::for_cluster(build_info, &user.name)
         } else {
-            SessionVars::default()
+            SessionVars::new(build_info)
         };
         Session {
             conn_id,
@@ -593,7 +602,7 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn reset(&mut self) {
         let _ = self.clear_transaction();
         self.prepared_statements.clear();
-        self.vars = SessionVars::default();
+        self.vars = SessionVars::new(self.vars.build_info());
     }
 
     /// Returns the user who owns this session.

@@ -18,6 +18,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tracing::error;
 use uuid::Uuid;
 
+use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdAllocator;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
@@ -29,7 +30,7 @@ use crate::catalog::INTROSPECTION_USER;
 use crate::command::{Canceled, Command, ExecuteResponse, Response, StartupResponse};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
-use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
+use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId, User};
 use crate::PeekResponseUnary;
 
 /// An abstraction allowing us to name different connections.
@@ -71,14 +72,20 @@ impl Handle {
 /// outstanding clients have dropped.
 #[derive(Debug, Clone)]
 pub struct Client {
+    build_info: &'static BuildInfo,
     inner_cmd_tx: mpsc::UnboundedSender<Command>,
     id_alloc: Arc<IdAllocator<ConnectionId>>,
     metrics: Metrics,
 }
 
 impl Client {
-    pub(crate) fn new(cmd_tx: mpsc::UnboundedSender<Command>, metrics: Metrics) -> Client {
+    pub(crate) fn new(
+        build_info: &'static BuildInfo,
+        cmd_tx: mpsc::UnboundedSender<Command>,
+        metrics: Metrics,
+    ) -> Client {
         Client {
+            build_info,
             inner_cmd_tx: cmd_tx,
             id_alloc: Arc::new(IdAllocator::new(1, 1 << 16)),
             metrics,
@@ -88,6 +95,7 @@ impl Client {
     /// Allocates a client for an incoming connection.
     pub fn new_conn(&self) -> Result<ConnClient, AdapterError> {
         Ok(ConnClient {
+            build_info: self.build_info,
             conn_id: self
                 .id_alloc
                 .alloc()
@@ -101,7 +109,7 @@ impl Client {
     pub async fn introspection_execute_one(&self, sql: &str) -> Result<Vec<Row>, anyhow::Error> {
         // Connect to the coordinator.
         let conn_client = self.new_conn()?;
-        let session = Session::new(conn_client.conn_id(), INTROSPECTION_USER.clone());
+        let session = conn_client.new_session(INTROSPECTION_USER.clone());
         let (mut session_client, _) = conn_client.startup(session, false).await?;
 
         // Parse the SQL statement.
@@ -146,11 +154,20 @@ impl Client {
 /// See also [`Client`].
 #[derive(Debug)]
 pub struct ConnClient {
+    build_info: &'static BuildInfo,
     conn_id: ConnectionId,
     inner: Client,
 }
 
 impl ConnClient {
+    /// Creates a new session associated with this connection for the given
+    /// user.
+    ///
+    /// It is the caller's responsibility to have authenticated the user.
+    pub fn new_session(&self, user: User) -> Session {
+        Session::new(self.build_info, self.conn_id, user)
+    }
+
     /// Returns the ID of the connection associated with this client.
     pub fn conn_id(&self) -> ConnectionId {
         self.conn_id
