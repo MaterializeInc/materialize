@@ -44,7 +44,7 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
 use mz_adapter::catalog::{HTTP_DEFAULT_USER, SYSTEM_USER};
-use mz_adapter::session::{ExternalUserMetadata, Session, User};
+use mz_adapter::session::{ExternalUserMetadata, User};
 use mz_adapter::{AdapterError, Client, SessionClient};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
 use mz_ore::metrics::MetricsRegistry;
@@ -282,7 +282,7 @@ impl AuthedClient {
             create_if_not_exists,
         } = user;
         let adapter_client = adapter_client.new_conn()?;
-        let session = Session::new(adapter_client.conn_id(), user);
+        let session = adapter_client.new_session(user);
         let (adapter_client, _) = adapter_client
             .startup(session, create_if_not_exists)
             .await?;

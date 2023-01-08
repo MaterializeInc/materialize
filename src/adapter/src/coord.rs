@@ -1251,7 +1251,7 @@ pub async fn serve<S: Append + 'static>(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(cmd_tx.clone(), metrics_clone);
+            let client = Client::new(build_info, cmd_tx.clone(), metrics_clone);
             Ok((handle, client))
         }
         Err(e) => Err(e),

@@ -29,7 +29,7 @@ use mz_adapter::catalog::INTERNAL_USER_NAMES;
 use mz_adapter::session::User;
 use mz_adapter::session::{
     EndTransactionAction, ExternalUserMetadata, InProgressRows, Portal, PortalState,
-    RowBatchStream, Session, TransactionStatus,
+    RowBatchStream, TransactionStatus,
 };
 use mz_adapter::{ExecuteResponse, PeekResponseUnary, RowsFuture};
 use mz_frontegg_auth::FronteggAuthentication;
@@ -224,13 +224,10 @@ where
     };
 
     // Construct session.
-    let mut session = Session::new(
-        conn.id(),
-        User {
-            name: user,
-            external_metadata,
-        },
-    );
+    let mut session = adapter_client.new_session(User {
+        name: user,
+        external_metadata,
+    });
     for (name, value) in params {
         let local = false;
         let _ = session.vars_mut().set(&name, &value, local);

@@ -16,6 +16,7 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use uncased::UncasedStr;
 
+use mz_build_info::BuildInfo;
 use mz_ore::cast;
 use mz_sql::ast::{Ident, SetVariableValue, Value as AstValue};
 use mz_sql::DEFAULT_SCHEMA;
@@ -124,6 +125,8 @@ const INTERVAL_STYLE: ServerVar<str> = ServerVar {
     description: "Sets the display format for interval values (PostgreSQL).",
     internal: false,
 };
+
+const MZ_VERSION_NAME: &UncasedStr = UncasedStr::new("mz_version");
 
 const QGM_OPTIMIZATIONS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("qgm_optimizations_experimental"),
@@ -399,6 +402,7 @@ static EMIT_TRACE_ID_NOTICE: ServerVar<bool> = ServerVar {
 #[derive(Debug)]
 pub struct SessionVars {
     application_name: SessionVar<str>,
+    build_info: &'static BuildInfo,
     client_encoding: ServerVar<str>,
     client_min_messages: SessionVar<ClientSeverity>,
     cluster: SessionVar<str>,
@@ -424,10 +428,12 @@ pub struct SessionVars {
     emit_trace_id_notice: SessionVar<bool>,
 }
 
-impl Default for SessionVars {
-    fn default() -> SessionVars {
+impl SessionVars {
+    /// Creates a new [`SessionVars`].
+    pub fn new(build_info: &'static BuildInfo) -> SessionVars {
         SessionVars {
             application_name: SessionVar::new(&APPLICATION_NAME),
+            build_info,
             client_encoding: CLIENT_ENCODING,
             client_min_messages: SessionVar::new(&CLIENT_MIN_MESSAGES),
             cluster: SessionVar::new(&CLUSTER),
@@ -455,24 +461,20 @@ impl Default for SessionVars {
             emit_trace_id_notice: SessionVar::new(&EMIT_TRACE_ID_NOTICE),
         }
     }
-}
 
-impl SessionVars {
     /// Returns a new SessionVars with the cluster variable set to `cluster`.
-    pub fn for_cluster(cluster_name: &str) -> Self {
-        let mut cluster = SessionVar::new(&CLUSTER);
-        cluster.session_value = Some(cluster_name.into());
-        Self {
-            cluster,
-            ..Default::default()
-        }
+    pub fn for_cluster(build_info: &'static BuildInfo, cluster_name: &str) -> Self {
+        let mut vars = SessionVars::new(build_info);
+        vars.cluster.session_value = Some(cluster_name.into());
+        vars
     }
 
     /// Returns an iterator over the configuration parameters and their current
     /// values for this session.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 24] = [
+        let vars: [&dyn Var; 25] = [
             &self.application_name,
+            self.build_info,
             &self.client_encoding,
             &self.client_min_messages,
             &self.cluster,
@@ -504,7 +506,7 @@ impl SessionVars {
     /// values for this session) that are expected to be sent to the client when
     /// a new connection is established or when their value changes.
     pub fn notify_set(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 8] = [
+        let vars: [&dyn Var; 9] = [
             &self.application_name,
             &self.client_encoding,
             &self.date_style,
@@ -513,6 +515,13 @@ impl SessionVars {
             &self.standard_conforming_strings,
             &self.timezone,
             &self.interval_style,
+            // Including `mz_version` in the notify set is a Materialize
+            // extension. Doing so allows applications to detect whether they
+            // are talking to Materialize or PostgreSQL without an additional
+            // network roundtrip. This is known to be safe because CockroachDB
+            // has an analogous extension [0].
+            // [0]: https://github.com/cockroachdb/cockroach/blob/369c4057a/pkg/sql/pgwire/conn.go#L1840
+            self.build_info,
         ];
         vars.into_iter()
     }
@@ -550,6 +559,8 @@ impl SessionVars {
             Ok(&self.integer_datetimes)
         } else if name == INTERVAL_STYLE.name {
             Ok(&self.interval_style)
+        } else if name == MZ_VERSION_NAME {
+            Ok(self.build_info)
         } else if name == QGM_OPTIMIZATIONS.name {
             Ok(&self.qgm_optimizations)
         } else if name == SEARCH_PATH.name {
@@ -789,6 +800,7 @@ impl SessionVars {
         // call to `end_transaction` below.
         let SessionVars {
             application_name,
+            build_info: _,
             client_encoding: _,
             client_min_messages,
             cluster,
@@ -836,6 +848,11 @@ impl SessionVars {
         self.application_name.value()
     }
 
+    /// Returns the build info.
+    pub fn build_info(&self) -> &'static BuildInfo {
+        self.build_info
+    }
+
     /// Returns the value of the `client_encoding` configuration parameter.
     pub fn client_encoding(&self) -> &'static str {
         self.client_encoding.value
@@ -879,6 +896,11 @@ impl SessionVars {
     /// Returns the value of the `intervalstyle` configuration parameter.
     pub fn intervalstyle(&self) -> &'static str {
         self.interval_style.value
+    }
+
+    /// Returns the value of the `mz_version` configuration parameter.
+    pub fn mz_version(&self) -> String {
+        self.build_info.value()
     }
 
     /// Returns the value of the `qgm_optimizations` configuration parameter.
@@ -1586,6 +1608,28 @@ where
 
     fn visible(&self, user: &User) -> bool {
         self.parent.visible(user)
+    }
+}
+
+impl Var for BuildInfo {
+    fn name(&self) -> &'static str {
+        "mz_version"
+    }
+
+    fn value(&self) -> String {
+        self.human_version()
+    }
+
+    fn description(&self) -> &'static str {
+        "Shows the Materialize server version (Materialize)."
+    }
+
+    fn type_name(&self) -> &'static str {
+        str::TYPE_NAME
+    }
+
+    fn visible(&self, _: &User) -> bool {
+        true
     }
 }
 

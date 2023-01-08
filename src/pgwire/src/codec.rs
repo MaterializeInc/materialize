@@ -81,11 +81,6 @@ where
         }
     }
 
-    /// Returns the ID of this connection.
-    pub fn id(&self) -> u32 {
-        self.conn_id
-    }
-
     /// Reads and decodes one frontend message from the client.
     ///
     /// Blocks until the client sends a complete message. If the client
