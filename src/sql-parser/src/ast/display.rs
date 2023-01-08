@@ -80,8 +80,8 @@ pub enum FormatMode {
 
 #[derive(Debug)]
 pub struct AstFormatter<W> {
-    buf: W,
-    mode: FormatMode,
+    pub buf: W,
+    pub mode: FormatMode,
 }
 
 impl<W> AstFormatter<W>
@@ -186,6 +186,37 @@ impl AstDisplay for i64 {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(self);
     }
+}
+
+pub trait ToDoc {
+    fn to_doc(&self, mode: FormatMode) -> pretty::RcDoc<()>;
+}
+
+#[macro_export]
+macro_rules! impl_to_doc {
+    ($name:ident) => {
+        impl $crate::ast::display::ToDoc for $name {
+            fn to_doc(&self, mode: $crate::ast::display::FormatMode) -> pretty::RcDoc<()> {
+                let mut buf = String::new();
+                let mut f = $crate::ast::display::AstFormatter::new(&mut buf, mode);
+                <$name as $crate::ast::display::AstDisplay>::fmt(self, &mut f);
+                pretty::RcDoc::text(buf)
+            }
+        }
+    };
+}
+
+macro_rules! impl_to_doc_t {
+    ($name:ident) => {
+        impl<T: AstInfo> $crate::ast::display::ToDoc for $name<T> {
+            fn to_doc(&self, mode: $crate::ast::display::FormatMode) -> pretty::RcDoc<()> {
+                let mut buf = String::new();
+                let mut f = $crate::ast::display::AstFormatter::new(&mut buf, mode);
+                <$name<T> as $crate::ast::display::AstDisplay>::fmt(self, &mut f);
+                pretty::RcDoc::text(buf)
+            }
+        }
+    };
 }
 
 pub struct EscapeSingleQuoteString<'a>(&'a str);

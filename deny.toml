@@ -49,6 +49,7 @@ wrappers = [
     "os_info",
     "postgres",
     "pprof",
+    "pretty",
     "prost-build",
     # TODO(guswynn): switch to tracing in rdkafka
     "rdkafka",

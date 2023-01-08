@@ -618,14 +618,14 @@ DROP DATABASE mydb
 ----
 DROP DATABASE mydb
 =>
-DropDatabase(DropDatabaseStatement { name: UnresolvedDatabaseName(Ident("mydb")), if_exists: false, restrict: false })
+DropDatabase(DropDatabaseStatement { if_exists: false, name: UnresolvedDatabaseName(Ident("mydb")), restrict: false })
 
 parse-statement
 DROP DATABASE IF EXISTS mydb
 ----
 DROP DATABASE IF EXISTS mydb
 =>
-DropDatabase(DropDatabaseStatement { name: UnresolvedDatabaseName(Ident("mydb")), if_exists: true, restrict: false })
+DropDatabase(DropDatabaseStatement { if_exists: true, name: UnresolvedDatabaseName(Ident("mydb")), restrict: false })
 
 parse-statement
 DROP DATABASE mydb.nope
@@ -639,14 +639,14 @@ DROP DATABASE mydb CASCADE
 ----
 DROP DATABASE mydb
 =>
-DropDatabase(DropDatabaseStatement { name: UnresolvedDatabaseName(Ident("mydb")), if_exists: false, restrict: false })
+DropDatabase(DropDatabaseStatement { if_exists: false, name: UnresolvedDatabaseName(Ident("mydb")), restrict: false })
 
 parse-statement
 DROP DATABASE mydb RESTRICT
 ----
 DROP DATABASE mydb RESTRICT
 =>
-DropDatabase(DropDatabaseStatement { name: UnresolvedDatabaseName(Ident("mydb")), if_exists: false, restrict: true })
+DropDatabase(DropDatabaseStatement { if_exists: false, name: UnresolvedDatabaseName(Ident("mydb")), restrict: true })
 
 parse-statement
 DROP DATABASE mydb CASCADE RESTRICT
@@ -674,7 +674,7 @@ DROP SCHEMA mydb.myschema
 ----
 DROP SCHEMA mydb.myschema
 =>
-DropSchema(DropSchemaStatement { name: UnresolvedSchemaName([Ident("mydb"), Ident("myschema")]), if_exists: false, cascade: false })
+DropSchema(DropSchemaStatement { if_exists: false, name: UnresolvedSchemaName([Ident("mydb"), Ident("myschema")]), cascade: false })
 
 parse-statement
 DROP TABLE foo

@@ -1,0 +1,16 @@
+[package]
+name = "mz-display-derive"
+description = "Derive proc macros for AstDisplay and ToDoc."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "1.0.107", features = [ "extra-traits", "full" ] }
+quote = "1.0.23"
+proc-macro2 = "1.0.47"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

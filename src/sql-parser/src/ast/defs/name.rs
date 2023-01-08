@@ -101,6 +101,7 @@ impl AstDisplay for Ident {
     }
 }
 impl_display!(Ident);
+impl_to_doc!(Ident);
 
 /// A name of a table, view, custom type, etc., possibly multi-part, i.e. db.schema.obj
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -134,6 +135,7 @@ impl AstDisplay for UnresolvedObjectName {
     }
 }
 impl_display!(UnresolvedObjectName);
+impl_to_doc!(UnresolvedObjectName);
 
 impl AstDisplay for &UnresolvedObjectName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
@@ -151,6 +153,7 @@ impl AstDisplay for UnresolvedSchemaName {
     }
 }
 impl_display!(UnresolvedSchemaName);
+impl_to_doc!(UnresolvedSchemaName);
 
 /// A name of a database
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -162,6 +165,7 @@ impl AstDisplay for UnresolvedDatabaseName {
     }
 }
 impl_display!(UnresolvedDatabaseName);
+impl_to_doc!(UnresolvedDatabaseName);
 
 // The name of an object not yet created during name resolution, which should be
 // resolveable as an object name later.
@@ -180,3 +184,4 @@ impl<T: AstInfo> AstDisplay for DeferredObjectName<T> {
     }
 }
 impl_display_t!(DeferredObjectName);
+impl_to_doc_t!(DeferredObjectName);

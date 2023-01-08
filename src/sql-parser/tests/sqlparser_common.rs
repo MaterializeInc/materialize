@@ -129,7 +129,9 @@ fn datadriven() {
                 let stmt = s.into_element();
                 let parsed = match parser::parse_statements(&stmt.to_string()) {
                     Ok(parsed) => parsed.into_element(),
-                    Err(err) => return format!("reparse failed: {}\n", err),
+                    Err(err) => {
+                        return format!("reparse failed: {}\noriginal: {input}\ngot: {stmt}", err)
+                    }
                 };
                 if parsed != stmt {
                     return format!("reparse comparison failed:\n{:?}\n!=\n{:?}\n", stmt, parsed);

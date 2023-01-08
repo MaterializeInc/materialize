@@ -26,7 +26,9 @@ use std::fmt;
 
 use enum_kinds::EnumKind;
 
-use crate::ast::display::{self, AstDisplay, AstFormatter};
+use mz_display_derive::ToDoc;
+
+use crate::ast::display::{self, AstDisplay, AstFormatter, ToDoc};
 use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
     CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredObjectName, Envelope,
@@ -1533,47 +1535,19 @@ impl AstDisplay for DiscardTarget {
 }
 impl_display!(DiscardTarget);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, ToDoc)]
 pub struct DropDatabaseStatement {
-    pub name: UnresolvedDatabaseName,
     pub if_exists: bool,
+    pub name: UnresolvedDatabaseName,
     pub restrict: bool,
 }
 
-impl AstDisplay for DropDatabaseStatement {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("DROP DATABASE ");
-        if self.if_exists {
-            f.write_str("IF EXISTS ");
-        }
-        f.write_node(&self.name);
-        if self.restrict {
-            f.write_str(" RESTRICT");
-        }
-    }
-}
-impl_display!(DropDatabaseStatement);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, ToDoc)]
 pub struct DropSchemaStatement {
-    pub name: UnresolvedSchemaName,
     pub if_exists: bool,
+    pub name: UnresolvedSchemaName,
     pub cascade: bool,
 }
-
-impl AstDisplay for DropSchemaStatement {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("DROP SCHEMA ");
-        if self.if_exists {
-            f.write_str("IF EXISTS ");
-        }
-        f.write_node(&self.name);
-        if self.cascade {
-            f.write_str(" CASCADE");
-        }
-    }
-}
-impl_display!(DropSchemaStatement);
 
 /// `DROP`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2050,21 +2024,11 @@ impl AstDisplay for RollbackStatement {
 }
 impl_display!(RollbackStatement);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, ToDoc)]
 pub enum SubscribeOptionName {
     Snapshot,
     Progress,
 }
-
-impl AstDisplay for SubscribeOptionName {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            SubscribeOptionName::Snapshot => f.write_str("SNAPSHOT"),
-            SubscribeOptionName::Progress => f.write_str("PROGRESS"),
-        }
-    }
-}
-impl_display!(SubscribeOptionName);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SubscribeOption<T: AstInfo> {
@@ -2174,7 +2138,7 @@ impl<T: AstInfo> AstDisplay for InsertSource<T> {
 }
 impl_display_t!(InsertSource);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy, ToDoc)]
 pub enum ObjectType {
     Table,
     View,
@@ -2190,27 +2154,6 @@ pub enum ObjectType {
     Secret,
     Connection,
 }
-
-impl AstDisplay for ObjectType {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(match self {
-            ObjectType::Table => "TABLE",
-            ObjectType::View => "VIEW",
-            ObjectType::MaterializedView => "MATERIALIZED VIEW",
-            ObjectType::Source => "SOURCE",
-            ObjectType::Sink => "SINK",
-            ObjectType::Index => "INDEX",
-            ObjectType::Type => "TYPE",
-            ObjectType::Role => "ROLE",
-            ObjectType::Cluster => "CLUSTER",
-            ObjectType::ClusterReplica => "CLUSTER REPLICA",
-            ObjectType::Object => "OBJECT",
-            ObjectType::Secret => "SECRET",
-            ObjectType::Connection => "CONNECTION",
-        })
-    }
-}
-impl_display!(ObjectType);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ShowStatementFilter<T: AstInfo> {
@@ -2300,24 +2243,13 @@ impl AstDisplay for TransactionMode {
 }
 impl_display!(TransactionMode);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, ToDoc)]
 pub enum TransactionAccessMode {
     ReadOnly,
     ReadWrite,
 }
 
-impl AstDisplay for TransactionAccessMode {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        use TransactionAccessMode::*;
-        f.write_str(match self {
-            ReadOnly => "READ ONLY",
-            ReadWrite => "READ WRITE",
-        })
-    }
-}
-impl_display!(TransactionAccessMode);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, ToDoc)]
 pub enum TransactionIsolationLevel {
     ReadUncommitted,
     ReadCommitted,
@@ -2325,20 +2257,6 @@ pub enum TransactionIsolationLevel {
     Serializable,
     StrictSerializable,
 }
-
-impl AstDisplay for TransactionIsolationLevel {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        use TransactionIsolationLevel::*;
-        f.write_str(match self {
-            ReadUncommitted => "READ UNCOMMITTED",
-            ReadCommitted => "READ COMMITTED",
-            RepeatableRead => "REPEATABLE READ",
-            Serializable => "SERIALIZABLE",
-            StrictSerializable => "STRICT SERIALIZABLE",
-        })
-    }
-}
-impl_display!(TransactionIsolationLevel);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SetVariableValue {
