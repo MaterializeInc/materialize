@@ -74,7 +74,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
@@ -240,7 +240,7 @@ pub struct ServiceConfig<'a> {
     /// A function that generates the arguments for each process of the service
     /// given the assigned listen addresses for each named port.
     #[derivative(Debug = "ignore")]
-    pub args: &'a (dyn Fn(&HashMap<String, String>) -> Vec<String> + Send + Sync),
+    pub args: &'a (dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync),
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
@@ -253,7 +253,7 @@ pub struct ServiceConfig<'a> {
     /// backend.
     ///
     /// The orchestrator backend may apply a prefix to the key if appropriate.
-    pub labels: HashMap<String, String>,
+    pub labels: BTreeMap<String, String>,
     /// The availability zone the service should be run in. If no availability
     /// zone is specified, the orchestrator is free to choose one.
     pub availability_zone: Option<String>,
