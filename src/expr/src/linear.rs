@@ -6,7 +6,7 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Display;
 
 use proptest::prelude::*;
@@ -479,7 +479,7 @@ impl MapFilterProject {
 
         // Discover the locations of these columns after `self.projection`.
         let old_projection_len = self.projection.len();
-        let mut new_location = HashMap::with_capacity(support.len());
+        let mut new_location = BTreeMap::new();
         for original in support.iter() {
             if let Some(position) = self.projection.iter().position(|x| x == original) {
                 new_location.insert(*original, position);
@@ -541,7 +541,7 @@ impl MapFilterProject {
                     .cloned()
                     .enumerate()
                     .map(|(new, old)| (old, new))
-                    .collect::<HashMap<_, _>>();
+                    .collect::<BTreeMap<_, _>>();
                 for mfp in mfps.iter_mut() {
                     mfp.permute(remap.clone(), common_demand.len());
                 }
@@ -614,7 +614,7 @@ impl MapFilterProject {
     /// // The `partition` method requires a map from *expected* input columns to *actual*
     /// // input columns. In the example above, the columns a, b, and c exist, and are at
     /// // locations 2, 0, and 4 respectively. We must construct a map to this effect.
-    /// let mut available_columns = std::collections::HashMap::new();
+    /// let mut available_columns = std::collections::BTreeMap::new();
     /// available_columns.insert(0, 2);
     /// available_columns.insert(1, 0);
     /// available_columns.insert(2, 4);
@@ -644,7 +644,7 @@ impl MapFilterProject {
     /// // may not need all inputs. The `demand()` and `permute()` methods can
     /// // optimize the representation.
     /// ```
-    pub fn partition(self, available: HashMap<usize, usize>, input_arity: usize) -> (Self, Self) {
+    pub fn partition(self, available: BTreeMap<usize, usize>, input_arity: usize) -> (Self, Self) {
         // Map expressions, filter predicates, and projections for `before` and `after`.
         let mut before_expr = Vec::new();
         let mut before_pred = Vec::new();
@@ -738,7 +738,7 @@ impl MapFilterProject {
         // This map is used to correct references in `after`.
         // The presumption is that `after` will be presented with all input columns,
         // followed by the output columns introduced by `before` in order.
-        let mut after_map = HashMap::new();
+        let mut after_map = BTreeMap::new();
         for index in 0..self.input_arity {
             after_map.insert(index, index);
         }
@@ -818,7 +818,7 @@ impl MapFilterProject {
     /// The supplied `shuffle` may not list columns that are not "demanded" by the
     /// instance, and so we should ensure that `self` is optimized to not reference
     /// columns that are not demanded.
-    pub fn permute(&mut self, mut shuffle: HashMap<usize, usize>, new_input_arity: usize) {
+    pub fn permute(&mut self, mut shuffle: BTreeMap<usize, usize>, new_input_arity: usize) {
         let (mut map, mut filter, mut project) = self.as_map_filter_project();
         for index in 0..map.len() {
             // Intermediate columns are just shifted.
@@ -1007,7 +1007,7 @@ impl MapFilterProject {
     pub fn memoize_expressions(&mut self) {
         // Record the mapping from starting column references to new column
         // references.
-        let mut remaps = HashMap::new();
+        let mut remaps = BTreeMap::new();
         for index in 0..self.input_arity {
             remaps.insert(index, index);
         }
@@ -1256,7 +1256,7 @@ impl MapFilterProject {
 
         // Maintain a map from initial column identifiers to locations
         // once we have removed undemanded expressions.
-        let mut remap = HashMap::new();
+        let mut remap = BTreeMap::new();
         // This map only needs to map elements of `demand` to a new location,
         // but the logic is easier if we include all input columns (as the
         // new position is then determined by the size of the map).
@@ -1337,7 +1337,7 @@ pub fn memoize_expr(
 }
 
 pub mod util {
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
 
     use crate::MirScalarExpr;
 
@@ -1351,10 +1351,10 @@ pub mod util {
     /// The permutations and thinning expressions generated here will be tracked in
     /// `dataflow::plan::AvailableCollections`; see the
     /// documentation there for more details.
-    pub fn permutation_for_arrangement<B: FromIterator<(usize, usize)>>(
+    pub fn permutation_for_arrangement(
         key: &[MirScalarExpr],
         unthinned_arity: usize,
-    ) -> (B, Vec<usize>) {
+    ) -> (BTreeMap<usize, usize>, Vec<usize>) {
         let columns_in_key: HashMap<_, _> = key
             .iter()
             .enumerate()
@@ -1388,10 +1388,10 @@ pub mod util {
     /// computes the permutation for the result of joining them.
     pub fn join_permutations(
         key_arity: usize,
-        stream_permutation: HashMap<usize, usize>,
+        stream_permutation: BTreeMap<usize, usize>,
         thinned_stream_arity: usize,
-        lookup_permutation: HashMap<usize, usize>,
-    ) -> HashMap<usize, usize> {
+        lookup_permutation: BTreeMap<usize, usize>,
+    ) -> BTreeMap<usize, usize> {
         let stream_arity = stream_permutation
             .keys()
             .cloned()
@@ -1424,7 +1424,7 @@ pub mod util {
 }
 
 pub mod plan {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::iter;
 
     use proptest::prelude::*;
@@ -1460,7 +1460,7 @@ pub mod plan {
     }
 
     impl SafeMfpPlan {
-        pub fn permute(&mut self, map: HashMap<usize, usize>, new_arity: usize) {
+        pub fn permute(&mut self, map: BTreeMap<usize, usize>, new_arity: usize) {
             self.mfp.permute(map, new_arity);
         }
         /// Evaluates the linear operator on a supplied list of datums.

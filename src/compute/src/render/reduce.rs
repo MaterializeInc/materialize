@@ -11,6 +11,8 @@
 //!
 //! Consult [ReducePlan] documentation for details.
 
+use std::collections::BTreeMap;
+
 use dec::OrderedDecimal;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::difference::Multiply;
@@ -215,7 +217,7 @@ where
             demand.sort();
             demand.dedup();
             // remap column references to the subset we use.
-            let mut demand_map = std::collections::HashMap::new();
+            let mut demand_map = BTreeMap::new();
             for column in demand.iter() {
                 demand_map.insert(*column, demand_map.len());
             }

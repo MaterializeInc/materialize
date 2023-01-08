@@ -16,7 +16,7 @@
 //! determining the orders of collections, lifting predicates if useful arrangements exist,
 //! and identifying opportunities to use indexes to replace filters.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::JoinImplementation::IndexedFilter;
@@ -264,7 +264,7 @@ impl JoinImplementation {
                         .into_iter()
                         .enumerate()
                         .map(|(i, c)| (c, i))
-                        .collect::<HashMap<_, _>>();
+                        .collect::<BTreeMap<_, _>>();
                     // Eliminate arrangements referring to columns that have been
                     // projected away by surrounding MFPs.
                     available_arrangements[index].retain(|key| {

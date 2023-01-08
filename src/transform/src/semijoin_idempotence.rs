@@ -25,7 +25,7 @@
 //! Should we find such, allowing arbitrary filters of `Get{id}` on the equated columns,
 //! which we will transfer to the columns of `D` thereby forming `C`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use crate::TransformArgs;
 
@@ -187,7 +187,7 @@ fn attempt_join_simplification(
 ///
 /// Returns a projection to apply to `candidate.replacement` if everything checks out.
 fn validate_replacement(
-    map: &HashMap<usize, usize>,
+    map: &BTreeMap<usize, usize>,
     candidate: &mut Replacement,
 ) -> Option<Vec<usize>> {
     if candidate.columns.len() == map.len()
@@ -389,7 +389,7 @@ fn list_replacements_join(
 }
 
 /// True iff some unique key of `input` is contained in the keys of `map`.
-fn distinct_on_keys_of(expr: &MirRelationExpr, map: &HashMap<usize, usize>) -> bool {
+fn distinct_on_keys_of(expr: &MirRelationExpr, map: &BTreeMap<usize, usize>) -> bool {
     expr.typ()
         .keys
         .iter()
@@ -431,7 +431,7 @@ fn as_filtered_get(
 fn semijoin_bijection(
     inputs: &[MirRelationExpr],
     equivalences: &Vec<Vec<MirScalarExpr>>,
-) -> Option<(HashMap<usize, usize>, HashMap<usize, usize>)> {
+) -> Option<(BTreeMap<usize, usize>, BTreeMap<usize, usize>)> {
     // Useful join manipulation helper.
     let input_mapper = JoinInputMapper::new(inputs);
 
@@ -471,9 +471,8 @@ fn semijoin_bijection(
     }
 
     if inputs.len() == 2 && equiv_pairs.len() == equivalences.len() {
-        let ltr: std::collections::HashMap<_, _> = equiv_pairs.iter().cloned().collect();
-        let rtl: std::collections::HashMap<_, _> =
-            equiv_pairs.iter().map(|(c0, c1)| (*c1, *c0)).collect();
+        let ltr = equiv_pairs.iter().cloned().collect();
+        let rtl = equiv_pairs.iter().map(|(c0, c1)| (*c1, *c0)).collect();
 
         Some((ltr, rtl))
     } else {

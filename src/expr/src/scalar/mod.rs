@@ -10,6 +10,7 @@
 use itertools::Itertools;
 use mz_repr::adt::date::DateError;
 use mz_repr::adt::timestamp::TimestampError;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::mem;
@@ -561,7 +562,7 @@ impl MirScalarExpr {
     /// This method is applicable even when `permutation` is not a
     /// strict permutation, and it only needs to have entries for
     /// each column referenced in `self`.
-    pub fn permute_map(&mut self, permutation: &std::collections::HashMap<usize, usize>) {
+    pub fn permute_map(&mut self, permutation: &BTreeMap<usize, usize>) {
         #[allow(deprecated)]
         self.visit_mut_post_nolimit(&mut |e| {
             if let MirScalarExpr::Column(old_i) = e {

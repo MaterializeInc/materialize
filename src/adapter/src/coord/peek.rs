@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::{collections::HashMap, num::NonZeroUsize};
+use std::num::NonZeroUsize;
 
 use futures::TryFutureExt;
 use serde::{Deserialize, Serialize};
@@ -64,7 +64,7 @@ pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
     desc: DataflowDescription<mz_compute_client::plan::Plan<T>, (), T>,
     id: GlobalId,
     key: Vec<MirScalarExpr>,
-    permutation: HashMap<usize, usize>,
+    permutation: BTreeMap<usize, usize>,
     thinned_arity: usize,
 }
 
@@ -164,8 +164,7 @@ fn permute_oneshot_mfp_around_index(
         .map_err(|_e| {
             AdapterError::Unstructured(::anyhow::anyhow!("OneShot plan has temporal constraints"))
         })?;
-    let (permute, thinning) =
-        mz_expr::permutation_for_arrangement::<HashMap<_, _>>(key, mfp.input_arity);
+    let (permute, thinning) = mz_expr::permutation_for_arrangement(key, mfp.input_arity);
     safe_mfp.permute(permute, key.len() + thinning.len());
     Ok(safe_mfp)
 }
@@ -255,7 +254,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         compute_instance: ComputeInstanceId,
         index_id: GlobalId,
         key: Vec<MirScalarExpr>,
-        permutation: HashMap<usize, usize>,
+        permutation: BTreeMap<usize, usize>,
         thinned_arity: usize,
     ) -> Result<PeekPlan, AdapterError> {
         // try to produce a `FastPathPlan`
