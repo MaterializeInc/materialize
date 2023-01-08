@@ -191,6 +191,11 @@ pub trait StorageController: Debug + Send {
         id: GlobalId,
     ) -> Result<&mut CollectionState<Self::Timestamp>, StorageError>;
 
+    /// Acquire an iterator over all collection states.
+    fn collections(
+        &self,
+    ) -> Box<dyn Iterator<Item = (&GlobalId, &CollectionState<Self::Timestamp>)> + '_>;
+
     /// Create the sources described in the individual CreateSourceCommand commands.
     ///
     /// Each command carries the source id, the source description, and any associated metadata
@@ -795,6 +800,12 @@ where
             .collections
             .get_mut(&id)
             .ok_or(StorageError::IdentifierMissing(id))
+    }
+
+    fn collections(
+        &self,
+    ) -> Box<dyn Iterator<Item = (&GlobalId, &CollectionState<Self::Timestamp>)> + '_> {
+        Box::new(self.state.collections.iter())
     }
 
     #[tracing::instrument(level = "debug", skip_all)]

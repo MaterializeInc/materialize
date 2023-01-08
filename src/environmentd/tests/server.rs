@@ -76,17 +76,20 @@
 
 //! Integration tests for Materialize server.
 
-use bytes::Buf;
-use mz_environmentd::{WebSocketAuth, WebSocketResponse};
-use std::error::Error;
 use std::fmt::Write;
 use std::thread;
 use std::time::Duration;
+
+use anyhow::bail;
+use chrono::{DateTime, Utc};
+use reqwest::blocking::Client;
+use reqwest::Url;
+use tracing::info;
 use tungstenite::Message;
 
+use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_ore::retry::Retry;
-use reqwest::{blocking::Client, Url};
-use tokio_postgres::types::{FromSql, Type};
+use mz_pgrepr::UInt8;
 
 use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
 
@@ -447,45 +450,123 @@ fn test_cancel_dataflow_removal() {
 
 #[test]
 fn test_storage_usage_collection_interval() {
+    /// Waits for the next storage collection to occur, then returns the
+    /// timestamp at which the collection occured. The timestamp of the last
+    /// collection must be provided
+    fn wait_for_next_collection(
+        client: &mut postgres::Client,
+        last_timestamp: DateTime<Utc>,
+    ) -> DateTime<Utc> {
+        info!("waiting for next storage usage collection");
+        let ts = Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry(|_| {
+                let row = client.query_one(
+                    "SELECT max(collection_timestamp) FROM mz_internal.mz_storage_usage_by_shard",
+                    &[],
+                )?;
+                let ts = row.get::<_, DateTime<Utc>>("max");
+                if ts <= last_timestamp {
+                    bail!("next collection has not yet occurred")
+                }
+                Ok(ts)
+            })
+            .unwrap();
+        info!(%ts, "detected storage usage collection");
+        ts
+    }
+
+    fn get_shard_id(client: &mut postgres::Client, name: &str) -> String {
+        let row = Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry(|_| {
+                client.query_one(
+                    "SELECT shard_id
+                     FROM mz_internal.mz_storage_shards s
+                     JOIN mz_objects o ON o.id = s.object_id
+                     WHERE o.name = $1",
+                    &[&name],
+                )
+            })
+            .unwrap();
+        row.get("shard_id")
+    }
+
+    fn get_storage_usage(
+        client: &mut postgres::Client,
+        shard_id: &str,
+        collection_timestamp: DateTime<Utc>,
+    ) -> u64 {
+        let row = Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry(|_| {
+                client.query_one(
+                    "SELECT coalesce(sum(size_bytes), 0)::uint8 AS size
+                     FROM mz_internal.mz_storage_usage_by_shard
+                     WHERE shard_id = $1 AND collection_timestamp = $2",
+                    &[&shard_id, &collection_timestamp],
+                )
+            })
+            .unwrap();
+        row.get::<_, UInt8>("size").0
+    }
+
+    mz_ore::test::init_logging();
+
     let config =
         util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(1));
     let server = util::start_server(config).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
-    // Retry because it may take some time for the initial snapshot to be taken.
-    let initial_storage: i64 = Retry::default()
-        .retry(|_| {
-            client
-                .query_one(
-                    "SELECT SUM(size_bytes)::int8 FROM mz_catalog.mz_storage_usage;",
-                    &[],
-                )
-                .map_err(|e| e.to_string())
-                .unwrap()
-                .try_get::<_, i64>(0)
-                .map_err(|e| e.to_string())
-        })
-        .unwrap();
+    // Wait for the initial storage usage collection to occur.
+    let timestamp = wait_for_next_collection(&mut client, DateTime::<Utc>::MIN_UTC);
 
-    client.batch_execute("CREATE TABLE t (a INT)").unwrap();
+    // Create a table with no data.
     client
-        .batch_execute("INSERT INTO t VALUES (1), (2)")
+        .batch_execute("CREATE TABLE usage_test (a int)")
         .unwrap();
+    let shard_id = get_shard_id(&mut client, "usage_test");
+    info!(%shard_id, "created table");
 
-    // Retry until storage usage is updated.
-    Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
-        let updated_storage = client
-            .query_one("SELECT SUM(size_bytes)::int8 FROM mz_catalog.mz_storage_usage;", &[])
-            .map_err(|e| e.to_string()).unwrap()
-            .try_get::<_, i64>(0)
-            .map_err(|e| e.to_string()).unwrap();
+    // Test that the storage usage for the table was zero before it was
+    // created.
+    let pre_create_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
+    info!(%pre_create_storage_usage);
+    assert_eq!(pre_create_storage_usage, 0);
 
-        if updated_storage > initial_storage {
-            Ok(())
-        } else {
-            Err(format!("updated storage count {updated_storage} is not greater than initial storage {initial_storage}"))
-        }
-    }).unwrap();
+    // Test that the storage usage for the table is nonzero after it is created
+    // (there is some overhead even for empty tables). We wait out two storage
+    // collection intervals (here and below) because the next storage collection
+    // may have been concurrent with the previous operation.
+    let timestamp = wait_for_next_collection(&mut client, timestamp);
+    let timestamp = wait_for_next_collection(&mut client, timestamp);
+    let post_create_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
+    info!(%post_create_storage_usage);
+    assert!(post_create_storage_usage > 0);
+
+    // Insert some data into the table.
+    for _ in 0..3 {
+        client
+            .batch_execute("INSERT INTO usage_test VALUES (1)")
+            .unwrap();
+    }
+
+    // Test that the storage usage for the table is larger than it was before.
+    let timestamp = wait_for_next_collection(&mut client, timestamp);
+    let timestamp = wait_for_next_collection(&mut client, timestamp);
+    let after_insert_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
+    info!(%after_insert_storage_usage);
+    assert!(after_insert_storage_usage > post_create_storage_usage);
+
+    // Drop the table.
+    client.batch_execute("DROP TABLE usage_test").unwrap();
+
+    // Test that the storage usage is reported as zero.
+    let timestamp = wait_for_next_collection(&mut client, timestamp);
+    let timestamp = wait_for_next_collection(&mut client, timestamp);
+    let after_drop_storage_usage = get_storage_usage(&mut client, &shard_id, timestamp);
+    info!(%after_drop_storage_usage);
+    assert_eq!(after_drop_storage_usage, 0);
 }
 
 #[test]
