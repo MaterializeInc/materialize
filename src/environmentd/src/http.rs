@@ -58,6 +58,7 @@ pub use sql::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
 mod catalog;
 mod memory;
+mod probe;
 mod root;
 mod sql;
 
@@ -205,6 +206,7 @@ impl InternalHttpServer {
                 "/api/livez",
                 routing::get(mz_http_util::handle_liveness_check),
             )
+            .route("/api/readyz", routing::get(probe::handle_ready))
             .route(
                 "/api/opentelemetry/config",
                 routing::put({
