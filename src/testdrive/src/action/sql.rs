@@ -25,7 +25,7 @@ use tokio_postgres::types::{FromSql, Type};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
-use mz_pgrepr::{Interval, Jsonb, Numeric};
+use mz_pgrepr::{Interval, Jsonb, Numeric, UInt2, UInt4, UInt8};
 use mz_sql_parser::ast::Statement;
 
 use crate::action::{ControlFlow, State};
@@ -625,13 +625,13 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
                 .map(|v| v.to_string()),
             _ => match ty.oid() {
                 mz_pgrepr::oid::TYPE_UINT2_OID => {
-                    row.get::<_, Option<Uint2>>(i).map(|x| x.0.to_string())
+                    row.get::<_, Option<UInt2>>(i).map(|x| x.0.to_string())
                 }
                 mz_pgrepr::oid::TYPE_UINT4_OID => {
-                    row.get::<_, Option<Uint4>>(i).map(|x| x.0.to_string())
+                    row.get::<_, Option<UInt4>>(i).map(|x| x.0.to_string())
                 }
                 mz_pgrepr::oid::TYPE_UINT8_OID => {
-                    row.get::<_, Option<Uint8>>(i).map(|x| x.0.to_string())
+                    row.get::<_, Option<UInt8>>(i).map(|x| x.0.to_string())
                 }
                 mz_pgrepr::oid::TYPE_MZ_TIMESTAMP_OID => {
                     row.get::<_, Option<MzTimestamp>>(i).map(|x| x.0)
@@ -650,42 +650,6 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
         out.push(value);
     }
     Ok(out)
-}
-
-struct Uint2(u16);
-
-impl<'a> FromSql<'a> for Uint2 {
-    fn from_sql(_: &Type, raw: &'a [u8]) -> Result<Uint2, Box<dyn Error + Sync + Send>> {
-        Ok(Uint2(u16::from_be_bytes(raw.try_into()?)))
-    }
-
-    fn accepts(ty: &Type) -> bool {
-        ty.oid() == mz_pgrepr::oid::TYPE_UINT2_OID
-    }
-}
-
-struct Uint4(u32);
-
-impl<'a> FromSql<'a> for Uint4 {
-    fn from_sql(_: &Type, raw: &'a [u8]) -> Result<Uint4, Box<dyn Error + Sync + Send>> {
-        Ok(Uint4(u32::from_be_bytes(raw.try_into()?)))
-    }
-
-    fn accepts(ty: &Type) -> bool {
-        ty.oid() == mz_pgrepr::oid::TYPE_UINT4_OID
-    }
-}
-
-struct Uint8(u64);
-
-impl<'a> FromSql<'a> for Uint8 {
-    fn from_sql(_: &Type, raw: &'a [u8]) -> Result<Uint8, Box<dyn Error + Sync + Send>> {
-        Ok(Uint8(u64::from_be_bytes(raw.try_into()?)))
-    }
-
-    fn accepts(ty: &Type) -> bool {
-        ty.oid() == mz_pgrepr::oid::TYPE_UINT8_OID
-    }
 }
 
 struct MzTimestamp(String);
