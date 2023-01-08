@@ -10,7 +10,7 @@
 //! Logic for processing [`Coordinator`] messages. The [`Coordinator`] receives
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use chrono::DurationRound;
@@ -24,6 +24,7 @@ use mz_persist_client::ShardId;
 use mz_sql::ast::Statement;
 use mz_sql::plan::{Plan, SendDiffsPlan};
 use mz_stash::Append;
+use mz_storage_client::controller::CollectionMetadata;
 
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
@@ -98,10 +99,51 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn storage_usage_fetch(&mut self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
+
+        // Record the currently live shards.
+        let live_shards: HashSet<_> = self
+            .controller
+            .storage
+            .collections()
+            // A collection is dropped if its read capability has been advanced
+            // to the empty antichain.
+            .filter(|(_id, collection)| !collection.read_capabilities.is_empty())
+            .flat_map(|(_id, collection)| {
+                let CollectionMetadata {
+                    data_shard,
+                    remap_shard,
+                    status_shard,
+                    // No wildcards, to improve the odds that the addition of a
+                    // new shard type results in a compiler error here.
+                    //
+                    // ATTENTION: If you add a new type of shard that is
+                    // associated with a collection, almost surely you should
+                    // return it below, so that its usage is recorded in the
+                    // `mz_storage_usage_by_shard` table.
+                    persist_location: _,
+                } = &collection.collection_metadata;
+                [*data_shard, *remap_shard].into_iter().chain(*status_shard)
+            })
+            .collect();
+
         // Similar to audit events, use the oracle ts so this is guaranteed to increase.
         let collection_timestamp: EpochMillis = self.get_local_write_ts().await.timestamp.into();
+
+        // Spawn an asynchronous task to compute the storage usage, which
+        // requires a slow scan of the underlying storage engine.
         task::spawn(|| "storage_usage_fetch", async move {
-            let shard_sizes = client.shard_sizes().await;
+            let mut shard_sizes = client.shard_sizes().await;
+
+            // Don't record usage for shards that are no longer live.
+            // Technically the storage is in use, but we never free it, and
+            // we don't want to bill the customer for it.
+            //
+            // See: https://github.com/MaterializeInc/materialize/issues/8185
+            shard_sizes.retain(|shard_id, _| match shard_id {
+                None => true,
+                Some(shard_id) => live_shards.contains(shard_id),
+            });
+
             // It is not an error for shard sizes to become ready after `internal_cmd_rx`
             // is dropped.
             let result = internal_cmd_tx.send(Message::StorageUsageUpdate(
