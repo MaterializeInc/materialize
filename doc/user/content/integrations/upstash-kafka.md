@@ -52,7 +52,7 @@ The process to connect Materialize to Upstash Kafka consists of the following st
 
     If you want to create a [source](/sql/create-source/kafka/) in Materialize, you'll need to grant the **Read** permission. To create a [sink](/sql/create-sink/kafka/), you'll need to grant the **Read** and **Write** permissions.
 
-    Take note of the credentials you just created, you'll need them later on. Keep in mind that the credentials contain sensitive information, and you should store it somewhere safe!
+    Take note of the credentials you just created, you'll need them later on. Keep in mind that the credentials contain sensitive information, and you should store them somewhere safe!
 
 3. #### Create a topic
     To start using Materialize with Upstash, you need to point it to an existing Upstash Kafka topic you want to read data from.
