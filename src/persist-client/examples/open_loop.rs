@@ -643,7 +643,7 @@ mod raw_persist_benchmark {
             // record with the record count to avoid having to actually count
             // the number of records..
             let mut count = 0;
-            let events = self.next().await;
+            let events = self.fetch_next().await;
 
             for event in events {
                 if let ListenEvent::Progress(t) = event {

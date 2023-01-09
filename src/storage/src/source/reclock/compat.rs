@@ -106,7 +106,17 @@ where
 pub struct PersistHandle<FromTime: SourceTimestamp, IntoTime: Timestamp + Lattice + Codec64> {
     id: GlobalId,
     since_handle: SinceHandle<SourceData, (), IntoTime, Diff, PersistEpoch>,
-    events: LocalBoxStream<'static, ListenEvent<SourceData, (), IntoTime, Diff>>,
+    events: LocalBoxStream<
+        'static,
+        ListenEvent<
+            IntoTime,
+            (
+                (Result<SourceData, String>, Result<(), String>),
+                IntoTime,
+                Diff,
+            ),
+        >,
+    >,
     write_handle: WriteHandle<SourceData, (), IntoTime, Diff>,
     pending_batch: Vec<(FromTime, IntoTime, Diff)>,
 }
@@ -185,7 +195,7 @@ where
                 .expect("since <= as_of asserted");
 
             let listen_stream = stream::unfold(listener, |mut listener| async move {
-                let events = stream::iter(listener.next().await);
+                let events = stream::iter(listener.fetch_next().await);
                 Some((events, listener))
             })
             .flatten();

@@ -154,7 +154,7 @@ impl Healthchecker {
     /// Synchronizes internal state with state in the storage collection up until a given timestamp
     async fn sync(&mut self, target_upper: &Antichain<Timestamp>) {
         while PartialOrder::less_than(&self.upper, target_upper) {
-            for event in self.listener.next().await {
+            for event in self.listener.fetch_next().await {
                 match event {
                     ListenEvent::Progress(new_upper) => {
                         self.upper = new_upper;
