@@ -1206,7 +1206,10 @@ impl Append for Postgres {
                                 let current_upper =
                                     Self::upper_tx(stmts, tx, collection_id).await?;
                                 if current_upper != lower1 {
-                                    return Err(StashError::from("unexpected lower"));
+                                    return Err(StashError::from(format!(
+                                        "unexpected lower, got {:?}, expected {:?}",
+                                        current_upper, lower1
+                                    )));
                                 }
                                 Self::compact_batch_tx(
                                     stmts,
