@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Compute layer commands.
+//! Compute protocol commands.
 
 use std::collections::BTreeSet;
 use std::num::NonZeroI64;
@@ -34,72 +34,196 @@ include!(concat!(
     "/mz_compute_client.protocol.command.rs"
 ));
 
-/// Commands related to the computation and maintenance of views.
+/// Compute protocol commands, sent by the compute controller to replicas.
 ///
-/// A replica can consist of multiple clusterd processes. Upon startup, a clusterd will listen for
-/// a connection from environmentd. The first command sent to clusterd must be a CreateTimely
-/// command, which will build the timely runtime.
+/// Command sequences sent by the compute controller must be valid according to the [Protocol
+/// Stages].
 ///
-/// CreateTimely is the only command that is sent to every process of the replica by environmentd.
-/// The other commands are sent only to the first process, which in turn will disseminate the
-/// command to other timely workers using the timely communication fabric.
-///
-/// After a timely runtime has been built with CreateTimely, a sequence of commands that have to be
-/// handled in the timely runtime can be sent: First a CreateInstance must be sent which activates
-/// logging sources. After this, any combination of UpdateConfiguration, CreateDataflows,
-/// AllowCompaction, Peek, and CancelPeeks can be sent.
-///
-/// Within this sequence, exactly one InitializationComplete has to be sent. Commands sent before
-/// InitializationComplete are buffered and are compacted. For example a Peek followed by a
-/// CancelPeek will become a no-op if sent before InitializationComplete. After
-/// InitializationComplete, the clusterd is considered rehydrated and will immediately act upon the
-/// commands. If a new cluster is created, InitializationComplete will follow immediately after
-/// CreateInstance. If a replica is added to a cluster or environmentd restarts and rehydrates a
-/// clusterd, a potentially long command sequence will be sent before InitializationComplete.
+/// [Protocol Stages]: super#protocol-stages
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeCommand<T = mz_repr::Timestamp> {
-    /// Create the timely runtime according to the supplied CommunicationConfig. Must be the first
-    /// command sent to a clusterd. This is the only command that is broadcasted to all clusterd
-    /// processes within a replica.
+    /// `CreateTimely` is the first command sent to a replica after a connection was established.
+    /// It instructs the replica to initialize the timely dataflow runtime using the given
+    /// `config`.
+    ///
+    /// This command is special in that it is the only one that is broadcast to all processes of a
+    /// multi-process replica. All subsequent commands are only sent to the first process, which
+    /// then distributes them to the other processes using a dataflow. This method of command
+    /// distribution requires the timely dataflow runtime to be initialized, which is why the
+    /// `CreateTimely` command exists.
+    ///
+    /// The `epoch` value that imposes an ordering on iterations of the compute protocol. When the
+    /// compute controller connects to a replica, it must send an `epoch` that is greater than all
+    /// epochs it sent to the same replica on previous connections. Multi-process replicas should
+    /// use the `epoch` to ensure that their individual processes agree on which protocol iteration
+    /// they are in.
     CreateTimely {
         config: TimelyConfig,
         epoch: ComputeStartupEpoch,
     },
 
-    /// Setup and logging sources within a running timely instance. Must be the second command
-    /// after CreateTimely.
+    /// `CreateInstance` must be sent after `CreateTimely` to complete the [Creation Stage] of the
+    /// compute protocol. Unlike `CreateTimely`, and like all other commands, it is only sent to
+    /// the first process of the replica, and then distributed through the timely runtime.
+    /// `CreateInstance` instructs the replica to initialize its state to a point where it is ready
+    /// to start maintaining dataflows.
+    ///
+    /// Upon receiving a `CreateInstance` command, the replica must further initialize logging
+    /// dataflows according to the given [`LoggingConfig`].
+    ///
+    /// [Creation Stage]: super#creation-stage
     CreateInstance(LoggingConfig),
 
-    /// Indicates that the controller has sent all commands reflecting its
-    /// initial state.
+    /// `InitializationComplete` informs the replica about the end of the [Initialization Stage].
+    /// Upon receiving this command, the replica should perform a reconciliation process, to ensure
+    /// its dataflow state matches the state requested by the computation commands it received
+    /// previously. The replica must now start sending responses to commands received previously,
+    /// if it opted to defer them during the [Initialization Stage].
+    ///
+    /// [Initialization Stage]: super#initialization-stage
     InitializationComplete,
 
-    /// Update compute instance configuration.
+    /// `UpdateConfiguration` instructs the replica to update its configuration, according to the
+    /// given [`ComputeParameter`]s.
+    ///
+    /// Parameter updates transmitted through this command must be applied by the replica as soon
+    /// as it receives the command, and they must be apply globally to all replica state, even
+    /// dataflows and pending peeks that were created before the parameter update. This property
+    /// allows the replica to hoist `UpdateConiguration` commands during reconciliation.
+    ///
+    /// Configuration parameters that should not be applied globally, but only to specific
+    /// dataflows or peeks, should be added to the [`DataflowDescription`] or [`Peek`] types,
+    /// rather than as [`ComputeParameter`]s.
     UpdateConfiguration(BTreeSet<ComputeParameter>),
 
-    /// Create a sequence of dataflows.
+    /// `CreateDataflows` instructs the replica to create and start maintaining dataflows according
+    /// to the given [`DataflowDescription`]s.
     ///
-    /// Each of the dataflows must contain `as_of` members that are valid
-    /// for each of the referenced arrangements, meaning `AllowCompaction`
-    /// should be held back to those values until the command.
-    /// Subsequent commands may arbitrarily compact the arrangements;
-    /// the dataflow runners are responsible for ensuring that they can
-    /// correctly maintain the dataflows.
+    /// If a `CreateDataflows` command defines multiple dataflows, the list of
+    /// [`DataflowDescription`]s must be topologically ordered according to the dependency
+    /// relation.
+    ///
+    /// Each [`DataflowDescription`] must have the following properties:
+    ///
+    ///   * Dataflow imports are valid:
+    ///     * Imported storage collections specified in [`source_imports`] exist and are readable by
+    ///       the compute replica.
+    ///     * Imported indexes specified in [`index_imports`] have been created on the replica
+    ///       previously, either by previous `CreateDataflows` commands, or by the same
+    ///       `CreateDataflows` command.
+    ///   * Dataflow imports are readable at the specified [`as_of`]. In other words: The `since`s of
+    ///     imported collections are not beyond the dataflow [`as_of`].
+    ///   * Dataflow exports have unique IDs, i.e., the IDs of exports from dataflows a replica is
+    ///     instructed to create do not repeat (within a single protocol iteration).
+    ///   * The dataflow objects defined in [`objects_to_build`] are topologically ordered according
+    ///     to the dependency relation.
+    ///
+    /// A dataflow description that violates any of the above properties can cause the replica to
+    /// exhibit undefined behavior, such as panicking or production of incorrect results. A replica
+    /// should prefer panicking over producing incorrect results.
+    ///
+    /// After receiving a `CreateDataflows` command, for created dataflows that export indexes or
+    /// storage sinks, the replica must produce [`FrontierUppers`] responses that report the
+    /// advancement of the `upper` frontiers of these compute collections.
+    ///
+    /// After receiving a `CreateDataflows` command, for created dataflows that export subscribes,
+    /// the replica must produce [`SubscribeResponse`]s that report the progress and results of the
+    /// subscribes.
+    ///
+    /// During the [Initialization Stage], the controller must not send `CreateDataflows` commands
+    /// that instruct the creation of dataflows exporting subscribes. This is a limitation of our
+    /// current implementation that we indend to remove ([#16247]).
+    ///
+    /// [`objects_to_build`]: DataflowDescription::objects_to_build
+    /// [`source_imports`]: DataflowDescription::source_imports
+    /// [`index_imports`]: DataflowDescription::index_imports
+    /// [`as_of`]: DataflowDescription::as_of
+    /// [`FrontierUppers`]: super::response::ComputeResponse::FrontierUppers
+    /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
+    /// [Initialization Stage]: super#initialization-stage
+    /// [#16247]: https://github.com/MaterializeInc/materialize/issues/16247
     CreateDataflows(Vec<DataflowDescription<crate::plan::Plan<T>, CollectionMetadata, T>>),
 
-    /// Enable compaction in compute-managed collections.
+    /// `AllowCompaction` informs the replica about the relaxation of external read capabilities on
+    /// the compute collections exported by the replica’s dataflow.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
-    /// accumulations must be correct. The workers gain the liberty of compacting
-    /// the corresponding maintained traces up through that frontier.
+    /// accumulations must be correct. The replica gains the liberty of compacting the
+    /// corresponding maintained traces up through that frontier.
+    ///
+    /// It is invalid to send an `AllowCompaction` command that references compute collections that
+    /// were not created by a corresponding `CreateDataflows` command before. Doing so may cause
+    /// the replica to exhibit undefined behavior.
+    ///
+    /// The `AllowCompaction` command only informs about external read requirements, not internal
+    /// ones. The replica is responsible for ensuring that internal requirements are fulfilled at
+    /// all times, so local dataflow inputs are not compacted beyond times at which they are still
+    /// being read from.
+    ///
+    /// The read frontiers transmitted through `AllowCompactions` may be beyond the corresponding
+    /// collections' current `upper` frontiers. This signals that external readers are not
+    /// interested in times up to the specified new read frontiers. Consequently, an empty read
+    /// frontier signals that external readers are not interested in updates from the corresponding
+    /// collection ever again, so the collection is not required anymore.
+    ///
+    /// Sending an `AllowCompaction` command with the empty frontier is the canonical way to drop
+    /// compute collections.
+    ///
+    /// A replica that receives an `AllowCompaction` command with the empty frontier must
+    /// eventually respond with a [`FrontierUppers`] response reporting the empty frontier for the
+    /// same collection. ([#16275])
+    ///
+    /// [`FrontierUppers`]: super::response::ComputeResponse::FrontierUppers
+    /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
 
-    /// Peek at an arrangement.
+    /// `Peek` instructs the replica to perform a peek at an index.
+    ///
+    /// The [`Peek`] description must have the following properties:
+    ///
+    ///   * The target index has previously been created by a corresponding `CreateDataflows`
+    ///     command.
+    ///   * The [`Peek::uuid`] is unique, i.e., the UUIDs of peeks a replica gets instructed to
+    ///     perform do not repeat (within a single protocol iteration).
+    ///
+    /// A [`Peek`] description that violates any of the above properties can cause the replica to
+    /// exhibit undefined behavior.
+    ///
+    /// Specifying a [`Peek::timestamp`] that is less than the target index’s `since` frontier does
+    /// not provoke undefined behavior. Instead, the replica must produce a [`PeekResponse::Error`]
+    /// in response.
+    ///
+    /// After receiving a `Peek` command, the replica must eventually produce a single
+    /// [`PeekResponse`]:
+    ///
+    ///    * For peeks that were not cancelled: either [`Rows`] or [`Error`].
+    ///    * For peeks that were cancelled: either [`Rows`], or [`Error`], or [`Canceled`].
+    ///
+    /// [`PeekResponse`]: super::response::PeekResponse
+    /// [`PeekResponse::Error`]: super::response::PeekResponse::Error
+    /// [`Rows`]: super::response::PeekResponse::Rows
+    /// [`Error`]: super::response::PeekResponse::Error
+    /// [`Canceled`]: super::response::PeekResponse::Canceled
     Peek(Peek<T>),
 
-    /// Cancel the peeks associated with the given `uuids`.
+    /// `CancelPeeks` instructs the replica to cancel the identified pending peeks.
+    ///
+    /// It is invalid to send a `CancelPeeks` command that references peeks that were not created
+    /// by a corresponding `Peek` command before. Doing so may cause the replica to exhibit
+    /// undefined behavior.
+    ///
+    /// If a replica cancels a peek in response to a `CancelPeeks` command, it must respond with a
+    /// [`PeekResponse::Canceled`]. The replica may also decide to fulfill the peek instead and
+    /// return a different [`PeekResponse`], or it may already have returned a response to the
+    /// specified peek. In these cases it must *not* return another [`PeekResponse`].
+    ///
+    /// [`PeekResponse`]: super::response::PeekResponse
+    /// [`PeekResponse::Canceled`]: super::response::PeekResponse::Canceled
     CancelPeeks {
         /// The identifiers of the peek requests to cancel.
+        ///
+        /// Values in this set must match [`Peek::uuid`] values transmitted in previous `Peek`
+        /// commands.
         uuids: BTreeSet<Uuid>,
     },
 }
@@ -346,8 +470,14 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
 pub enum ComputeParameter {
     /// The maximum allowed size in bytes for results of peeks and subscribes.
     ///
-    /// Peeks and subscribes that would return results larger than this maximum return error
-    /// responses instead.
+    /// Peeks and subscribes that would return results larger than this maximum return the
+    /// respective error responses instead:
+    ///   * [`PeekResponse::Rows`] is replaced by [`PeekResponse::Error`].
+    ///   * The [`SubscribeBatch::updates`] field is populated with an [`Err`] value.
+    ///
+    /// [`PeekResponse::Rows`]: super::response::PeekResponse::Rows
+    /// [`PeekResponse::Error`]: super::response::PeekResponse::Error
+    /// [`SubscribeBatch::updates`]: super::response::SubscribeBatch::updates
     MaxResultSize(u32),
 }
 
