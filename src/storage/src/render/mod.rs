@@ -7,98 +7,198 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Renders a plan into a timely/differential dataflow computation.
+//! Renders ingestions and exports into timely dataflow
 //!
-//! ## Error handling
+//! ## Ingestions
 //!
-//! Timely and differential have no idioms for computations that can error. The
-//! philosophy is, reasonably, to define the semantics of the computation such
-//! that errors are unnecessary: e.g., by using wrap-around semantics for
-//! integer overflow.
+//! ### Overall structure
 //!
-//! Unfortunately, SQL semantics are not nearly so elegant, and require errors
-//! in myriad cases. The classic example is a division by zero, but invalid
-//! input for casts, overflowing integer operations, and dozens of other
-//! functions need the ability to produce errors ar runtime.
+//! Before describing any of the timely operators involved in ingesting a source it helps to
+//! understand the high level structure of the timely scopes involved. The reason for this
+//! structure is the fact that we ingest external sources with a source-specific, and source
+//! implementation defined, timestamp type which tracks progress in a way that the source
+//! implementation understands. Each source specific timestamp must be compatible with timely's
+//! `timely::progress::Timestamp` trait and so it's suitable to represent timely streams and by
+//! extension differential collections.
 //!
-//! At the moment, only *scalar* expression evaluation can fail, so only
-//! operators that evaluate scalar expressions can fail. At the time of writing,
-//! that includes map, filter, reduce, and join operators. Constants are a bit
-//! of a special case: they can be either a constant vector of rows *or* a
-//! constant, singular error.
+//! On the other hand, Materialize expects a specific timestamp type for all its collections
+//! (currently `mz_repr::Timestamp`) so at some point the dataflow's timestamp must change. More
+//! generally, the ingestion dataflow starts with some timestamp type `FromTime` and ends with
+//! another timestamp type `IntoTime`.
 //!
-//! The approach taken is to build two parallel trees of computation: one for
-//! the rows that have been successfully evaluated (the "oks tree"), and one for
-//! the errors that have been generated (the "errs tree"). For example:
+//! Here we run into a problem though because we want to start with a timely stream of type
+//! `Stream<G1: Scope<Timestamp=FromTime>, ..>` and end up using it in a scope `G2` whose timestamp
+//! type is `IntoTime`. Timely dataflows are organized in scopes where each scope has an associated
+//! timestamp type that must refine the timestamp type of its parent scope. What "refines" means is
+//! defined by the [`timely::progress::timestamp::Refines`] trait in timely. `FromTime` however
+//! does not refine `IntoTime` nor does `IntoTime` refines `FromTime`.
+//!
+//! In order to acomplish this we split ingestion dataflows in two scopes, both of which are
+//! children of the root timely scope. The first scope is timestamped with `FromTime` and the
+//! second one with `IntoTime`. To move timely streams from the one scope to the other we must do
+//! so manually. Each stream that needs to be transferred between scopes is first captured using
+//! [`timely::dataflow::operators::capture::capture::Capture`] into a tokio unbounded mpsc channel.
+//! The data in the channel record in full detail the worker-local view of the original stream and
+//! whoever controls the receiver can read in the events, in the standard way of consuming the
+//! async channel, and work with it. How the receiver is turned back into a timely stream in the
+//! destination scope is described in the next section.
+//!
+//! For now keep in mind the general structure of the dataflow:
+//!
 //!
 //! ```text
-//!    oks1  errs1       oks2  errs2
-//!      |     |           |     |
-//!      |     |           |     |
-//!   project  |           |     |
-//!      |     |           |     |
-//!      |     |           |     |
-//!     map    |           |     |
-//!      |\    |           |     |
-//!      | \   |           |     |
-//!      |  \  |           |     |
-//!      |   \ |           |     |
-//!      |    \|           |     |
-//!   project  +           +     +
-//!      |     |          /     /
-//!      |     |         /     /
-//!    join ------------+     /
-//!      |     |             /
-//!      |     | +----------+
-//!      |     |/
-//!     oks   errs
+//! +----------------RootScope(Timestamp=())------------------+
+//! |                                                         |
+//! |  +---FromTime Scope---+         +---IntoTime Scope--+   |                                                   |
+//! |  |                    |         |                   |   |
+//! |  |                 *--+---------+-->                |   |
+//! |  |                    |         |                   |   |
+//! |  |                 <--+---------+--*                |   |
+//! |  +--------------------+    ^    +-------------------+   |
+//! |                            |                            |
+//! |                            |                            |
+//! |                  data exchanged between                 |
+//! |                 scopes with capture/reclock             |
+//! +---------------------------------------------------------+
 //! ```
 //!
-//! The project operation cannot fail, so errors from errs1 are propagated
-//! directly. Map operators are fallible and so can inject additional errors
-//! into the stream. Join operators combine the errors from each of their
-//! inputs.
+//! ### Detailed dataflow
 //!
-//! The semantics of the error stream are minimal. From the perspective of SQL,
-//! a dataflow is considered to be in an error state if there is at least one
-//! element in the final errs collection. The error value returned to the user
-//! is selected arbitrarily; SQL only makes provisions to return one error to
-//! the user at a time. There are plans to make the err collection accessible to
-//! end users, so they can see all errors at once.
+//! We are now ready to describe the detailed structure of the ingestion dataflow. The dataflow
+//! begins with the `source reader` operator which is rendered in a `FromTime` timely scope. This
+//! scope's timestamp is controlled by the [`crate::source::types::SourceReader::Time`] associated
+//! type and can be anything the source implementation desires.
 //!
-//! To make errors transient, simply ensure that the operator can retract any
-//! produced errors when corrected data arrives. To make errors permanent, write
-//! the operator such that it never retracts the errors it produced. Future work
-//! will likely want to introduce some sort of sort order for errors, so that
-//! permanent errors are returned to the user ahead of transient errors—probably
-//! by introducing a new error type a la:
+//! As usual with timely operators, on construction an initial capability for the minimum timestamp
+//! is constructed for each of the operator's outputs. These capabilities are passed to the source
+//! implementation via the [`crate::source::types::SourceConnectionBuilder::into_reader`] method,
+//! which stores them in order to be able to produce messages in the future.
 //!
-//! ```no_run
-//! # struct EvalError;
-//! # struct SourceError;
-//! enum DataflowError {
-//!     Transient(EvalError),
-//!     Permanent(SourceError),
-//! }
+//! Each source has three outputs. First, a health output, which is how the source communicates
+//! status updates about its heath. Second, a data output, which is the main output of a source and
+//! contains the data that will eventually be recorded in the persist shards. Finally, an upper
+//! frontier output, which is tracking the overall upstream upper frontier. The frontier presented
+//! at the upper output is independent of the upper frontier of the data output and is the one that
+//! drives reclocking. For example, it's possible that a source implementation queries the upstream
+//! system to learn what are the latest offsets for and set the upper output based on that, even
+//! before having started the actual ingestion, which would be presented as data and progress
+//! trickling in via the data output.
+//!
+//! Note: At the time of writing the data output is multiplexed with the health output via the
+//! [`crate::source::types::SourceMessageType`] enum but may be demultiplexed in the future.
+//!
+//! ```text
+//!                                                   resume upper
+//!                                              ,--------------------.
+//!                                             /                     |
+//!                            health     ,----+---.                  |
+//!                            output     | source |                  |
+//!                           ,-----------| reader |                  |
+//!                          /            +--,---.-+                  |
+//!                         /               /     \                   |
+//!                  +-----/----+   data   /       \  upper           |
+//!                  |  health  |   output/         \ output          |
+//!                  | operator |         |          \                |
+//!                  +----------+         |           |               |
+//!  FromTime                             |           |               |
+//!     scope                             |           |               |
+//!  -------------------------------------|-----------|---------------|---
+//!  IntoTime                             |           |               |
+//!     scope                             |      ,----+-----.         |
+//!                                       |     |  remap   |          |
+//!                                       |     | operator |          |
+//!                                       |     +---,------+          |
+//!                                       |        /                  |
+//!                                       |       / bindings          |
+//!                                       |      /                    |
+//!                                     ,-+-----+--.                  |
+//!                                     | reclock  |                  |
+//!                                     | operator |                  |
+//!                                     +-,--,---.-+                  |
+//!                           ,----------´.-´     \                   |
+//!                       _.-´         .-´         \                  |
+//!                   _.-´          .-´             \                 |
+//!                .-´            ,´                 \                |
+//!               /              /                    \               |
+//!        ,----------.   ,----------.           ,----------.         |
+//!        |  decode  |   |  decode  |   ....    |  decode  |         |
+//!        | output 0 |   | output 1 |           | output N |         |
+//!        +-----+----+   +-----+----+           +-----+----+         |
+//!              |              |                      |              |
+//!              |              |                      |              |
+//!        ,-----+----.   ,-----+----.           ,-----+----.         |
+//!        | envelope |   | envelope |   ....    | envelope |         |
+//!        | output 0 |   | output 1 |           | output N |         |
+//!        +----------+   +-----+----+           +-----+----+         |
+//!              |              |                      |              |
+//!              |              |                      |              |
+//!        ,-----+----.   ,-----+----.           ,-----+----.         |
+//!        |  persist |   |  persist |   ....    |  persist |         |
+//!        |  sink 0  |   |  sink 1  |           |  sink N  |         |
+//!        +-----+----+   +-----+----+           +-----+----+         |
+//!               \              \                    /               |
+//!                `-.            `,                 /                |
+//!                   `-._          `-.             /                 |
+//!                       `-._         `-.         /                  |
+//!                           `---------. `-.     /                   |
+//!                                     +`---`---+---,                |
+//!                                     |   resume   |                |
+//!                                     | calculator |                |
+//!                                     +------+-----+                |
+//!                                             \                     |
+//!                                              `-------------------´
 //! ```
 //!
-//! If the error stream is empty, the oks stream must be correct. If the error
-//! stream is non-empty, then there are no semantics for the oks stream. This is
-//! sufficient to support SQL in its current form, but is likely to be
-//! unsatisfactory long term. We suspect that we can continue to imbue the oks
-//! stream with semantics if we are very careful in describing what data should
-//! and should not be produced upon encountering an error. Roughly speaking, the
-//! oks stream could represent the correct result of the computation where all
-//! rows that caused an error have been pruned from the stream. There are
-//! strange and confusing questions here around foreign keys, though: what if
-//! the optimizer proves that a particular key must exist in a collection, but
-//! the key gets pruned away because its row participated in a scalar expression
-//! evaluation that errored?
+//! #### Reclocking
 //!
-//! In the meantime, it is probably wise for operators to keep the oks stream
-//! roughly "as correct as possible" even when errors are present in the errs
-//! stream. This reduces the amount of recomputation that must be performed
-//! if/when the errors are retracted.
+//! Whenever a dataflow edge crosses the scope boundaries it must first be converted into a
+//! captured stream via the `[mz_timely_util::capture::UnboundedTokioCapture`] utility. This
+//! disassociated the stream and its progress information from the original timely scope and allows
+//! it to be read from a different place. The downside of this mechanism is that it's invisible to
+//! timely's progress tracking, but that seems like a necessary evil if we want to do reclocking.
+//!
+//! The two main ways these tokio-fied streams are turned back into normal timely streams in the
+//! destination scope are by the `remap operator` and the `reclock operator` which process the
+//! `data output` and `upper output` of the source reader respectively.
+//!
+//! The `remap operator` reads the `upper output`, which is composed only of frontiers, mints new
+//! bindings, and writes them into the remap shard. The final durable timestamp bindings are
+//! emitted as its output for consumption by the `reclock operator`.
+//!
+//! The `reclock operator` reads the `data output`, which contains both data and progress
+//! statements, and uses the bindings it receives from the `remap operator` to reclock each piece
+//! of data and each frontier statement into the target scope's timestamp and emit the reclocked
+//! stream in its output.
+//!
+//! #### Partitioning
+//!
+//! At this point we have a timely stream with correctly timestamped data in the mz time domain
+//! (`mz_repr::Timestamp`) which contains multiplexed messages for each of the potential subsources
+//! of this source. Each message selects the output it belongs to by setting output field in
+//! [`crate::source::types::SourceMessage`]. By convention, the main source output is always output
+//! zero and subsources get the outputs from one onwards.
+//!
+//! However, regardless of whether the output is the main source or a subsource it is treated
+//! identically by the pipeline. Each output is demultiplexed into its own timely stream using
+//! [`timely::dataflow::operators::partition::Partition`] and the rest of the ingestion pipeline is
+//! rendered independently.
+//!
+//! #### Resumption frontier
+//!
+//! At the end each per-output dataflow fragment is an instance of `persist_sink`, which is
+//! responsible for writing the final `Row` data into the corresponding output shard. The durable
+//! upper of each of the output shards is then recombined in a way that calculates the minimum
+//! upper frontier between them. This is what we refer to as the "resumption frontier" or "resume
+//! upper" and at this stage it is expressed in terms of `IntoTime` timestamps. As a final step,
+//! this resumption frontier is converted back into a `FromTime` timestamped frontier using
+//! `ReclockFollower::source_upper_at_frontier` and connected back to the source reader operator.
+//! This frontier is what drives the `OffsetCommiter` which informs the upstream system to release
+//! resources until the specified offsets.
+//!
+//! ## Exports
+//!
+//! Not yet documented
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -135,18 +235,19 @@ pub fn build_ingestion_dataflow<A: Allocate>(
     let worker_logging = timely_worker.log_register().get("timely");
     let debug_name = id.to_string();
     let name = format!("Source dataflow: {debug_name}");
-    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
+    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
+        // Here we need to create two scopes. One timestamped with `()`, which is the root scope,
+        // and one timestamped with `mz_repr::Timestamp` which is the final scope of the dataflow.
+        // Refer to the module documentation for an explanation of this structure.
         // The scope.clone() occurs to allow import in the region.
-        // We build a region here to establish a pattern of a scope inside the dataflow,
-        // so that other similar uses (e.g. with iterative scopes) do not require weird
-        // alternate type signatures.
-        scope.clone().region_named(&name, |region| {
+        root_scope.clone().scoped(&name, |into_time_scope| {
             let debug_name = format!("{debug_name}-sources");
 
             let mut tokens = vec![];
 
             let (outputs, token) = crate::render::sources::render_source(
-                region,
+                root_scope,
+                into_time_scope,
                 &debug_name,
                 id,
                 description.clone(),
@@ -167,7 +268,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 );
 
                 let token = crate::render::persist_sink::render(
-                    region,
+                    into_time_scope,
                     target,
                     export.output_index,
                     export.storage_metadata,
