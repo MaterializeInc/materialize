@@ -65,9 +65,10 @@ pub async fn handle_sql_ws(
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct WebSocketAuth {
-    pub user: String,
-    pub password: String,
+#[serde(untagged)]
+pub enum WebSocketAuth {
+    Basic { user: String, password: String },
+    Bearer { token: String },
 }
 
 async fn run_ws(state: &WsState, mut ws: WebSocket) {
