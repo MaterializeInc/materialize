@@ -196,7 +196,7 @@ where
     blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
 
-    buffer: BatchBuffer<T, D>,
+    buffer: BatchBuffer<D>,
 
     max_kvt_in_run: Option<(Vec<u8>, Vec<u8>, Vec<u8>)>,
     runs: Vec<usize>,
@@ -345,7 +345,7 @@ where
 
         self.max_ts.join_assign(ts);
 
-        match self.buffer.push(key, val, ts.clone(), diff.clone()) {
+        match self.buffer.push(key, val, ts, diff.clone()) {
             Some(part_to_flush) => {
                 self.flush_part(part_to_flush).await;
                 Ok(Added::RecordAndParts)
@@ -409,7 +409,7 @@ where
 }
 
 #[derive(Debug)]
-struct BatchBuffer<T, D> {
+struct BatchBuffer<D> {
     metrics: Arc<Metrics>,
     batch_write_metrics: BatchWriteMetrics,
     blob_target_size: usize,
@@ -417,15 +417,14 @@ struct BatchBuffer<T, D> {
     key_buf: Vec<u8>,
     val_buf: Vec<u8>,
 
-    current_part: Vec<((Range<usize>, Range<usize>), T, D)>,
+    current_part: Vec<((Range<usize>, Range<usize>), [u8; 8], D)>,
     current_part_total_bytes: usize,
     current_part_key_bytes: usize,
     current_part_value_bytes: usize,
 }
 
-impl<T, D> BatchBuffer<T, D>
+impl<D> BatchBuffer<D>
 where
-    T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64,
 {
     fn new(
@@ -446,11 +445,11 @@ where
         }
     }
 
-    fn push<K: Codec, V: Codec>(
+    fn push<K: Codec, V: Codec, T: Codec64>(
         &mut self,
         key: &K,
         val: &V,
-        ts: T,
+        ts: &T,
         diff: D,
     ) -> Option<ColumnarRecords> {
         let initial_key_buf_len = self.key_buf.len();
@@ -471,6 +470,8 @@ where
             let v = &self.val_buf[v_range.clone()];
             ColumnarRecordsBuilder::columnar_record_size(k, v)
         };
+
+        let ts = T::encode(ts);
 
         self.current_part_total_bytes += size;
         self.current_part_key_bytes += k_range.len();
@@ -514,7 +515,11 @@ where
             // if this fails, the individual record is too big to fit in a ColumnarRecords by itself.
             // The limits are big, so this is a pretty extreme case that we intentionally don't handle
             // right now.
-            assert!(builder.push(((k, v), T::encode(&t), D::encode(&d))));
+            assert!(builder.push((
+                (k, v),
+                <[u8; 8]>::try_from(t).expect("ts must be Codec64"),
+                D::encode(&d)
+            )));
         }
         let columnar = builder.finish();
         self.batch_write_metrics
