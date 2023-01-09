@@ -294,8 +294,9 @@ where
     // we must have more than one arrangement to collate
     soft_assert_or_log!(
         arrangements.len() > 1,
-        "Building a collation of {} arrangements, but expected more than one",
-        arrangements.len()
+        "Building a collation of {} arrangements, but expected more than one in dataflow {}",
+        arrangements.len(),
+        debug_name
     );
 
     let mut to_concat = vec![];
@@ -360,7 +361,7 @@ where
                     if let Some(datum) = datum {
                         row_packer.push(datum);
                     } else {
-                        panic!("[customer-data] Missing {typ:?} value for key: {key} in dataflow id {debug_name}");
+                        panic!("[customer-data] Missing {typ:?} value for key: {key} in dataflow {debug_name}");
                     }
                 }
                 output.push((row_buf.clone(), 1));
@@ -574,7 +575,7 @@ where
         // Repeatedly apply hierarchical reduction with a progressively coarser key.
         let mut stage = input.map(move |(key, values)| ((key, values.hashed()), values));
         for b in buckets.into_iter() {
-            stage = build_bucketed_stage(stage, aggr_funcs.clone(), b);
+            stage = build_bucketed_stage(debug_name, stage, aggr_funcs.clone(), b);
         }
 
         // Discard the hash from the key and return to the format of the input data.
@@ -619,6 +620,7 @@ where
 /// output collection maintains the `((key, bucket), (passing value)` for this
 /// stage.
 fn build_bucketed_stage<G>(
+    debug_name: &str,
     input: Collection<G, ((Row, u64), Vec<Row>), Diff>,
     aggrs: Vec<AggregateFunc>,
     buckets: u64,
@@ -629,6 +631,7 @@ where
 {
     let input = input.map(move |((key, hash), values)| ((key, hash % buckets), values));
 
+    let debug_name = debug_name.to_string();
     let negated_output = input
         // TODO(#16549): Use explicit arrangement
         .reduce_named("MinsMaxesHierarchical", {
@@ -639,8 +642,8 @@ where
                         // XXX: This reports user data, which we perhaps should not do!
                         soft_assert_or_log!(
                             *cnt > 0,
-                            "[customer-data] Non-positive accumulation in MinsMaxesHierarchical: key: {:?}\tvalue: {:?}\tcount: {:?}",
-                            key, val, cnt,
+                            "[customer-data] Non-positive accumulation in MinsMaxesHierarchical: key: {:?}\tvalue: {:?}\tcount: {:?} in dataflow {}",
+                            key, val, cnt, debug_name
                         );
                     }
                 } else {
@@ -708,7 +711,7 @@ where
             let mut output = Vec::new();
             for (row, func) in values.into_iter().zip(aggr_funcs.iter()) {
                 output.push(monoids::get_monoid(row, func).expect(
-                    "hierarchical aggregations are expected to have monoid implementations in dataflow id {dataflow_id}",
+                    "hierarchical aggregations are expected to have monoid implementations",
                 ));
             }
 
@@ -1008,7 +1011,7 @@ where
     // we must have called this function with something to reduce
     soft_assert_or_log!(
         full_aggrs.len() > 0 && (simple_aggrs.len() + distinct_aggrs.len() == full_aggrs.len()),
-        "Building arrangement for accumulable plan requires aggregates ({} found) and that their counts match ({} + {}) in dataflow id {}",
+        "Building arrangement for accumulable plan requires aggregates ({} found) and that their counts match ({} + {}) in dataflow {}",
         full_aggrs.len(), simple_aggrs.len(), distinct_aggrs.len(), debug_name
     );
 
