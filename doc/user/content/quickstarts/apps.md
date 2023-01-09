@@ -62,63 +62,26 @@ Materialize provides public Kafka topics and a Confluent Schema Registry for its
     ```
 
 1. Create the sources, one per Kafka topic:
-    <!-- ```sql
-    CREATE TABLE IF NOT EXISTS shop.users (
-        id INT,
-        email TEXT,
-        is_vip BOOLEAN,
-        created_at TIMESTAMP,
-        updated_at TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS shop.items (
-        id INT,
-        name TEXT,
-        category TEXT,
-        price INT,
-        inventory INT,
-        inventory_updated_at TIMESTAMP,
-        created_at TIMESTAMP,
-        updated_at TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS shop.purchases (
-        id INT,
-        user_id BIGINT,
-        item_id BIGINT,
-        status INT,
-        quantity INT,
-        purchase_price INT,
-        created_at TIMESTAMP,
-        updated_at TIMESTAMP
-    );
-
-    INSERT INTO shop.users VALUES (1, 'random@email.com', true, current_timestamp(), current_timestamp());
-    INSERT INTO shop.items VALUES (1, 'Random Random', 'Category', 230, 3, current_timestamp(), current_timestamp(), current_timestamp());
-    INSERT INTO shop.purchases VALUES (1, 1, 1, 1, 3, 10, current_timestamp(), current_timestamp());
-    ``` -->
 
     ```sql
     CREATE SOURCE purchases
     FROM KAFKA CONNECTION shop.kafka_connection (TOPIC 'purchases')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION shop.csr_basic_http
+    ENVELOPE DEBEZIUM
     WITH (SIZE = '3xsmall');
 
     CREATE SOURCE items
     FROM KAFKA CONNECTION shop.kafka_connection (TOPIC 'items')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION shop.csr_basic_http
+    ENVELOPE DEBEZIUM
     WITH (SIZE = '3xsmall');
 
     CREATE SOURCE users
     FROM KAFKA CONNECTION shop.kafka_connection (TOPIC 'users')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION shop.csr_basic_http
+    ENVELOPE DEBEZIUM
     WITH (SIZE = '3xsmall');
     ```
-
-    <!-- Each topic contains different data:
-    * Items: items by category and stock
-    * Users: registration and vip access
-    * Purchases: item purchases from users -->
 
 ### Build the analytics
 
