@@ -42,12 +42,8 @@ SERVICES = [
     Materialized(propagate_crashes=False),
     Redpanda(),
     Testdrive(
-        volumes=[
-            "mzdata:/mzdata",
-            "tmp:/share/tmp",
-            ".:/workdir/smoke",
-            "../testdrive:/workdir/testdrive",
-        ],
+        volume_workdir="../testdrive:/workdir/testdrive",
+        volumes_extra=[".:/workdir/smoke"],
         materialize_params={"cluster": "cluster1"},
     ),
     Clusterd(name="storage"),

@@ -29,7 +29,7 @@ SERVICES = [
     SchemaRegistry(),
     Localstack(),
     Materialized(),
-    Testdrive(volumes=["mzdata:/mzdata"]),
+    Testdrive(),
 ]
 
 

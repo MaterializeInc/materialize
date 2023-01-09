@@ -79,7 +79,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         forward_buildkite_shard=True,
         kafka_default_partitions=args.kafka_default_partitions,
         aws_region=args.aws_region,
-        validate_postgres_stash=True,
+        validate_postgres_stash="materialized",
     )
 
     materialized = Materialized(default_size=args.default_size)
