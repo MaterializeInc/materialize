@@ -45,7 +45,7 @@ else
     done
 fi
 
-rm -f src/{compute,environmentd,storage,persist-client}/Cargo.toml.bak LICENSE.bak
+rm -f src/{clusterd,environmentd,persist-client}/Cargo.toml.bak LICENSE.bak
 
 cargo check
 
