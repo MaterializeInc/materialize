@@ -22,6 +22,7 @@ steps:
           - { value: zippy-pg-cdc-large }
           - { value: zippy-cluster-replicas-large }
           - { value: zippy-user-tables-large }
+          - { value: feature-benchmark-scale-plus-one }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -99,6 +100,17 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=UserTablesLarge, --actions=200000]
+
+
+  - id: feature-benchmark-scale-plus-one
+    label: "Feature benchmark against 'latest' with --scale=+1"
+    timeout_in_minutes: 2880
+    agents:
+      queue: linux-x86_64-large
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: feature-benchmark
+          args: [--other-tag=latest, --scale=+1]
 
   - wait: ~
     continue_on_failure: true
