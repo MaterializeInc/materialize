@@ -1360,7 +1360,7 @@ mod reader {
                 .expect("invalid as_of");
 
             'outer: loop {
-                let next = listen.next().await;
+                let next = listen.fetch_next().await;
 
                 for event in next {
                     match event {

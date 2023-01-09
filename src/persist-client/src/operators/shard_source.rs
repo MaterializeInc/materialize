@@ -224,7 +224,7 @@ where
                     .return_leased_part(subscription.leased_part_from_exchangeable(leased_part));
             }
 
-            for event in subscription.next_parts().await {
+            for event in subscription.next().await {
                 if let ListenEvent::Progress(ref progress) = event {
                     // If `until.less_equal(progress)`, it means that all subsequent batches will
                     // contain only times greater or equal to `until`, which means they can be

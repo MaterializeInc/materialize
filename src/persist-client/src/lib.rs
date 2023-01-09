@@ -1893,7 +1893,7 @@ mod tests {
 
         // Grab a listener as_of (aka gt) 1, which is not yet closed out.
         let mut listen = read.clone("").await.expect_listen(1).await;
-        let mut listen_next = Box::pin(listen.next());
+        let mut listen_next = Box::pin(listen.fetch_next());
         // Intentionally don't await the listen_next, but instead manually poke
         // it for a while and assert that it doesn't resolve yet. See below for
         // discussion of some alternative ways of writing this unit test.

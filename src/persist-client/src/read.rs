@@ -124,14 +124,14 @@ where
     /// The returned `Antichain` represents the subscription progress as it will
     /// be _after_ the returned parts are fetched.
     #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
-    pub async fn next_parts(&mut self) -> Vec<ListenEvent<T, LeasedBatchPart<T>>> {
+    pub async fn next(&mut self) -> Vec<ListenEvent<T, LeasedBatchPart<T>>> {
         // This is odd, but we move our handle into a `Listen`.
         self.listen.handle.maybe_heartbeat_reader().await;
 
         match self.snapshot.take() {
             Some(parts) => vec![ListenEvent::Updates(parts)],
             None => {
-                let (parts, upper) = self.listen.next_parts().await;
+                let (parts, upper) = self.listen.next().await;
                 vec![ListenEvent::Updates(parts), ListenEvent::Progress(upper)]
             }
         }
@@ -140,10 +140,10 @@ where
     /// Equivalent to `next`, but rather than returning a [`LeasedBatchPart`],
     /// fetches and returns the data from within it.
     #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
-    pub async fn next(
+    pub async fn fetch_next(
         &mut self,
     ) -> Vec<ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
-        let events = self.next_parts().await;
+        let events = self.next().await;
         let new_len = events
             .iter()
             .map(|event| match event {
@@ -255,7 +255,7 @@ where
     ) -> impl Stream<Item = ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
         async_stream::stream!({
             loop {
-                for msg in self.next().await {
+                for msg in self.fetch_next().await {
                     yield msg;
                 }
             }
@@ -274,7 +274,7 @@ where
     ///
     /// The returned `Antichain` represents the subscription progress as it will
     /// be _after_ the returned parts are fetched.
-    pub async fn next_parts(&mut self) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
+    pub async fn next(&mut self) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
         let batch = self.handle.next_listen_batch(&self.frontier).await;
 
         // A lot of things across mz have to line up to hold the following
@@ -357,10 +357,10 @@ where
     /// If you have a use for consolidated listen output, given that snapshots can't be
     /// consolidated, come talk to us!
     #[instrument(level = "debug", name = "listen::next", skip_all, fields(shard = %self.handle.machine.shard_id()))]
-    pub async fn next(
+    pub async fn fetch_next(
         &mut self,
     ) -> Vec<ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
-        let (parts, progress) = self.next_parts().await;
+        let (parts, progress) = self.next().await;
         let mut ret = Vec::with_capacity(parts.len() + 1);
         for part in parts {
             let fetched_part = self.fetch_batch_part(part).await;
@@ -417,7 +417,7 @@ where
         let mut updates = Vec::new();
         let mut frontier = Antichain::from_elem(T::minimum());
         while self.frontier.less_than(ts) {
-            for event in self.next().await {
+            for event in self.fetch_next().await {
                 match event {
                     ListenEvent::Updates(mut x) => updates.append(&mut x),
                     ListenEvent::Progress(x) => frontier = x,
@@ -1040,7 +1040,7 @@ mod tests {
         width = 4;
         // Collect parts while continuing to write values
         for i in offset..offset + width {
-            for event in subscribe.next_parts().await {
+            for event in subscribe.next().await {
                 if let ListenEvent::Updates(mut new_parts) = event {
                     parts.append(&mut new_parts);
                     // Here and elsewhere we "cheat" and immediately downgrade the since
@@ -1096,7 +1096,7 @@ mod tests {
             subscribe.return_leased_part(part);
 
             // Simulates an exchange
-            for event in subscribe.next_parts().await {
+            for event in subscribe.next().await {
                 if let ListenEvent::Updates(parts) = event {
                     for part in parts {
                         subsequent_parts.push(part.into_exchangeable_part());
@@ -1223,7 +1223,7 @@ mod tests {
         // state by fetching the first events from next. This is awkward but
         // only necessary because we're about to do some weird things with
         // unreliable.
-        let listen_actual = listen.next().await;
+        let listen_actual = listen.fetch_next().await;
         let expected_events = vec![ListenEvent::Progress(Antichain::from_elem(1))];
         assert_eq!(listen_actual, expected_events);
 
