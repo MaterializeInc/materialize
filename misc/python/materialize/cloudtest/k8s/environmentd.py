@@ -83,6 +83,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 name="MZ_AWS_EXTERNAL_ID_PREFIX",
                 value="eb5cb59b-e2fe-41f3-87ca-d2176a495345",
             ),
+            V1EnvVar(
+                name="MZ_AWS_PRIVATELINK_AVAILABILITY_ZONES", value="use1-az1,use1-az2"
+            ),
         ]
 
         for (k, v) in self.env.items():
@@ -124,7 +127,6 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             args += [
                 "--clusterd-image",
                 self.image("clusterd", tag=self.tag, release_mode=self.release_mode),
-                "--aws-privatelink-availability-zones=use1-az1,use1-az2",
             ]
         else:
             args += [
