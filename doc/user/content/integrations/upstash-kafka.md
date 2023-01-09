@@ -1,6 +1,6 @@
 ---
 title: "Upstash Kafka"
-description: "How to securely connect Materialize to an Upstash Kafka broker source and sink."
+description: "How to securely connect an Upstash Kafka cluster to Materialize as a source or sink."
 menu:
   main:
     parent: "integration-guides"
