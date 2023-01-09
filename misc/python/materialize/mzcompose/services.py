@@ -617,12 +617,11 @@ class Testdrive(Service):
         default_timeout: str = "120s",
         seed: Optional[int] = None,
         consistent_seed: bool = False,
-        validate_postgres_stash: bool = False,
+        validate_postgres_stash: Optional[str] = None,
         entrypoint: Optional[List[str]] = None,
         entrypoint_extra: List[str] = [],
         environment: Optional[List[str]] = None,
-        volumes: Optional[List[str]] = None,
-        volumes_extra: Optional[List[str]] = None,
+        volumes_extra: List[str] = [],
         volume_workdir: str = ".:/workdir",
         propagate_uid_gid: bool = True,
         forward_buildkite_shard: bool = False,
@@ -645,11 +644,12 @@ class Testdrive(Service):
                 "AWS_SESSION_TOKEN",
             ]
 
-        if volumes is None:
-            volumes = [*DEFAULT_MZ_VOLUMES]
+        volumes = [
+            volume_workdir,
+            *(v for v in DEFAULT_MZ_VOLUMES if v.startswith("tmp:")),
+        ]
         if volumes_extra:
             volumes.extend(volumes_extra)
-        volumes.append(volume_workdir)
 
         if entrypoint is None:
             entrypoint = [
@@ -668,7 +668,7 @@ class Testdrive(Service):
 
         if validate_postgres_stash:
             entrypoint.append(
-                "--validate-postgres-stash=postgres://root@materialized:26257?options=--search_path=adapter"
+                f"--validate-postgres-stash=postgres://root@{validate_postgres_stash}:26257?options=--search_path=adapter"
             )
 
         if no_reset:

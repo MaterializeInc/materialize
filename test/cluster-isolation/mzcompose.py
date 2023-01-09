@@ -26,7 +26,7 @@ SERVICES = [
     SchemaRegistry(),
     # We use mz_panic() in some test scenarios, so environmentd must stay up.
     Materialized(propagate_crashes=False),
-    Testdrive(volumes=["mzdata:/mzdata"]),
+    Testdrive(),
 ]
 
 
