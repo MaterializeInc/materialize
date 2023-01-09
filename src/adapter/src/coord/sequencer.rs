@@ -887,7 +887,7 @@ impl<S: Append + 'static> Coordinator<S> {
             );
 
             let config = ComputeReplicaConfig {
-                location: self.catalog.concretize_replica_location(location)?,
+                location: self.catalog.concretize_replica_location(location, None)?,
                 logging,
                 idle_arrangement_merge_effort,
             };
@@ -1052,7 +1052,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect();
 
         let config = ComputeReplicaConfig {
-            location: self.catalog.concretize_replica_location(location)?,
+            location: self.catalog.concretize_replica_location(location, None)?,
             logging,
             idle_arrangement_merge_effort,
         };
@@ -3793,7 +3793,7 @@ impl<S: Append + 'static> Coordinator<S> {
             linked_object_id: Some(linked_object_id),
             arranged_introspection_sources,
         }];
-        ops.extend(self.create_linked_cluster_op(name, config)?);
+        ops.extend(self.create_linked_cluster_op(linked_object_id, name, config)?);
         Ok(ops)
     }
 
@@ -3801,6 +3801,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// cluster for the given storage host configuration.
     fn create_linked_cluster_op(
         &mut self,
+        linked_object_id: GlobalId,
         on_cluster_name: String,
         config: &StorageHostConfig,
     ) -> Result<Option<catalog::Op>, AdapterError> {
@@ -3823,6 +3824,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 availability_zone: Self::choose_az(&n_replicas_per_az),
                 az_user_specified: false,
             },
+            Some(linked_object_id),
         )?;
         let logging = {
             ComputeReplicaLogging {
@@ -3861,7 +3863,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .drop_compute_instance_replica_ops(&[(cluster_name.clone(), name.into())]);
                 ops.extend(drop_ops);
             }
-            ops.extend(self.create_linked_cluster_op(cluster_name, config)?)
+            ops.extend(self.create_linked_cluster_op(linked_object_id, cluster_name, config)?)
         }
         Ok(ops)
     }

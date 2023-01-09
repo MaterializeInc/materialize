@@ -2464,6 +2464,7 @@ impl<S: Append> Catalog<S> {
         }
 
         let compute_instances = catalog.storage().await.load_compute_instances().await?;
+        let mut linked_object_ids = HashMap::new();
         for (id, name, linked_object_id) in compute_instances {
             let introspection_source_index_gids = catalog
                 .storage()
@@ -2499,6 +2500,7 @@ impl<S: Append> Catalog<S> {
             catalog
                 .state
                 .insert_compute_instance(id, name, linked_object_id, all_indexes);
+            linked_object_ids.insert(id, linked_object_id);
         }
 
         let replicas = catalog.storage().await.load_compute_replicas().await?;
@@ -2519,7 +2521,12 @@ impl<S: Append> Catalog<S> {
                 views: log_views,
             };
             let config = ComputeReplicaConfig {
-                location: catalog.concretize_replica_location(serialized_config.location)?,
+                location: catalog.concretize_replica_location(
+                    serialized_config.location,
+                    *linked_object_ids
+                        .get(&instance_id)
+                        .expect("instance for each replica"),
+                )?,
                 logging,
                 idle_arrangement_merge_effort: serialized_config.idle_arrangement_merge_effort,
             };
@@ -3916,6 +3923,7 @@ impl<S: Append> Catalog<S> {
     pub fn concretize_replica_location(
         &self,
         location: SerializedComputeReplicaLocation,
+        linked_object_id: Option<GlobalId>,
     ) -> Result<ComputeReplicaLocation, AdapterError> {
         let location = match location {
             SerializedComputeReplicaLocation::Remote {
@@ -3932,13 +3940,43 @@ impl<S: Append> Catalog<S> {
                 availability_zone,
                 az_user_specified,
             } => {
-                let cluster_replica_sizes = &self.state.cluster_replica_sizes;
-                let allowed_sizes = self.state.system_config().allowed_cluster_replica_sizes();
+                let (replica_sizes, allowed_sizes) = if linked_object_id.is_none() {
+                    (
+                        self.state.cluster_replica_sizes.0.clone(),
+                        self.state
+                            .system_config()
+                            .allowed_cluster_replica_sizes()
+                            .clone(),
+                    )
+                } else {
+                    let storage_sizes: HashMap<String, ComputeReplicaAllocation> = self
+                        .state
+                        .storage_host_sizes
+                        .0
+                        .iter()
+                        .map(|(name, host_size)| {
+                            (
+                                name.clone(),
+                                ComputeReplicaAllocation {
+                                    memory_limit: host_size.memory_limit,
+                                    cpu_limit: host_size.cpu_limit,
+                                    scale: NonZeroUsize::new(1).unwrap(),
+                                    workers: host_size.workers,
+                                },
+                            )
+                        })
+                        .collect();
 
-                if !cluster_replica_sizes.0.contains_key(&size)
+                    (
+                        storage_sizes.clone(),
+                        storage_sizes.keys().cloned().collect(),
+                    )
+                };
+
+                if !replica_sizes.contains_key(&size)
                     || (!allowed_sizes.is_empty() && !allowed_sizes.contains(&size))
                 {
-                    let mut entries = cluster_replica_sizes.0.iter().collect::<Vec<_>>();
+                    let mut entries = replica_sizes.iter().collect::<Vec<_>>();
 
                     if !allowed_sizes.is_empty() {
                         let allowed_sizes = HashSet::<&String>::from_iter(allowed_sizes.iter());
@@ -3961,7 +3999,7 @@ impl<S: Append> Catalog<S> {
                 }
 
                 ComputeReplicaLocation::Managed {
-                    allocation: cluster_replica_sizes.0.get(&size).unwrap().clone(),
+                    allocation: replica_sizes.get(&size).unwrap().clone(),
                     availability_zone,
                     size,
                     az_user_specified,
