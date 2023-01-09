@@ -98,7 +98,7 @@ The process to connect Materialize to Upstash Kafka consists of the following st
 
 5. #### Create a sink in Materialize
 
-    A [sink](/sql/create-sink) is a way to write data from Materialize to an external data source like a Kafka cluster.
+    A [sink](/sql/create-sink) is a way to write data from Materialize to an external system like a Kafka cluster.
 
     To create a sink, from the _psql_ terminal, run the following command:
 
