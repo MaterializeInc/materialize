@@ -90,7 +90,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use tokio::sync::{mpsc, oneshot};
 use tower_http::cors::AllowOrigin;
 
@@ -234,19 +234,6 @@ pub enum TlsMode {
     /// Require that all clients connect with TLS, but do not require that they
     /// present a client certificate.
     Require,
-    /// Require that clients connect with TLS and present a certificate that
-    /// is signed by the specified CA.
-    VerifyCa {
-        /// The path to a TLS certificate authority.
-        ca: PathBuf,
-    },
-    /// Like [`TlsMode::VerifyCa`], but the `cn` (Common Name) field of the
-    /// certificate must additionally match the user named in the connection
-    /// request.
-    VerifyFull {
-        /// The path to a TLS certificate authority.
-        ca: PathBuf,
-    },
 }
 
 /// Start an `environmentd` server.
@@ -273,10 +260,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 // ciphers. We once tried to use the modern preset, but it was
                 // incompatible with Fivetran, and presumably other JDBC-based tools.
                 let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
-                if let TlsMode::VerifyCa { ca } | TlsMode::VerifyFull { ca } = &tls_config.mode {
-                    builder.set_ca_file(ca)?;
-                    builder.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
-                }
                 builder.set_certificate_chain_file(&tls_config.cert)?;
                 builder.set_private_key_file(&tls_config.key, SslFiletype::PEM)?;
                 builder.build().into_context()
@@ -284,15 +267,13 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             let pgwire_tls = mz_pgwire::TlsConfig {
                 context: context.clone(),
                 mode: match tls_config.mode {
-                    TlsMode::Require | TlsMode::VerifyCa { .. } => mz_pgwire::TlsMode::Require,
-                    TlsMode::VerifyFull { .. } => mz_pgwire::TlsMode::VerifyUser,
+                    TlsMode::Require => mz_pgwire::TlsMode::Enable,
                 },
             };
             let http_tls = http::TlsConfig {
                 context,
                 mode: match tls_config.mode {
-                    TlsMode::Require | TlsMode::VerifyCa { .. } => http::TlsMode::Require,
-                    TlsMode::VerifyFull { .. } => http::TlsMode::AssumeUser,
+                    TlsMode::Require => http::TlsMode::Enable,
                 },
             };
             (Some(pgwire_tls), Some(http_tls))
