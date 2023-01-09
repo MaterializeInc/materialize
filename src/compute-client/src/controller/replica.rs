@@ -22,6 +22,7 @@ use mz_build_info::BuildInfo;
 use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_service::client::GenericClient;
+use mz_service::codec::NoopStatsCollector;
 
 use crate::logging::LoggingConfig;
 use crate::protocol::command::{ComputeCommand, ComputeStartupEpoch, TimelyConfig};
@@ -198,11 +199,15 @@ where
     let mut client = Retry::default()
         .clamp_backoff(Duration::from_secs(32))
         .retry_async(|state| {
-            let addrs = addrs.clone();
+            let dests = addrs
+                .clone()
+                .into_iter()
+                .map(|addr| (addr, NoopStatsCollector {}))
+                .collect();
             let version = build_info.semver_version();
 
             async move {
-                match ComputeGrpcClient::connect_partitioned(addrs, version).await {
+                match ComputeGrpcClient::connect_partitioned(dests, version).await {
                     Ok(client) => Ok(client),
                     Err(e) => {
                         if state.i >= mz_service::retry::INFO_MIN_RETRIES {

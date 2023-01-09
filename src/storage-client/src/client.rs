@@ -25,17 +25,16 @@ use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::PartialOrder;
-use tokio_stream::wrappers::UnboundedReceiverStream;
-use tonic::{Request, Response, Status, Streaming};
+use tonic::{Request, Status, Streaming};
 
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
-use mz_service::grpc::{BidiProtoClient, ClientTransport, GrpcClient, GrpcServer, ResponseStream};
+use mz_service::codec::NoopStatsCollector;
+use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 use mz_timely_util::progress::any_antichain;
 
-use crate::client::proto_storage_client::ProtoStorageClient;
 use crate::client::proto_storage_server::ProtoStorage;
 use crate::controller::CollectionMetadata;
 use crate::types::parameters::StorageParameters;
@@ -63,24 +62,17 @@ impl<T: Send> GenericClient<StorageCommand<T>, StorageResponse<T>> for Box<dyn S
     }
 }
 
-pub type StorageGrpcClient = GrpcClient<ProtoStorageClient<ClientTransport>>;
+#[derive(Debug, Clone)]
+pub enum StorageProtoServiceTypes {}
 
-#[async_trait]
-impl BidiProtoClient for ProtoStorageClient<ClientTransport> {
+impl ProtoServiceTypes for StorageProtoServiceTypes {
     type PC = ProtoStorageCommand;
     type PR = ProtoStorageResponse;
-
-    fn new(inner: ClientTransport) -> Self {
-        ProtoStorageClient::new(inner)
-    }
-
-    async fn establish_bidi_stream(
-        &mut self,
-        rx: UnboundedReceiverStream<Self::PC>,
-    ) -> Result<Response<Streaming<Self::PR>>, Status> {
-        self.command_response_stream(rx).await
-    }
+    type STATS = NoopStatsCollector;
+    const URL: &'static str = "/mz_storage_client.client.ProtoStorage/CommandResponseStream";
 }
+
+pub type StorageGrpcClient = GrpcClient<StorageProtoServiceTypes>;
 
 #[async_trait]
 impl<F, G> ProtoStorage for GrpcServer<F>

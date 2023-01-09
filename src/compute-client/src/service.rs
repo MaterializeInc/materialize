@@ -21,19 +21,18 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::PartialOrder;
-use tokio_stream::wrappers::UnboundedReceiverStream;
-use tonic::{Request, Response, Status, Streaming};
+use tonic::{Request, Status, Streaming};
 use uuid::Uuid;
 
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
-use mz_service::grpc::{BidiProtoClient, ClientTransport, GrpcClient, GrpcServer, ResponseStream};
+use mz_service::codec::NoopStatsCollector;
+use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand, TimelyConfig};
 use crate::protocol::response::{
     ComputeResponse, PeekResponse, ProtoComputeResponse, SubscribeBatch, SubscribeResponse,
 };
-use crate::service::proto_compute_client::ProtoComputeClient;
 use crate::service::proto_compute_server::ProtoCompute;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.service.rs"));
@@ -56,24 +55,17 @@ impl<T: Send> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for Box<dyn C
     }
 }
 
-pub type ComputeGrpcClient = GrpcClient<ProtoComputeClient<ClientTransport>>;
+#[derive(Debug, Clone)]
+pub enum ComputeProtoServiceTypes {}
 
-#[async_trait]
-impl BidiProtoClient for ProtoComputeClient<ClientTransport> {
+impl ProtoServiceTypes for ComputeProtoServiceTypes {
     type PC = ProtoComputeCommand;
     type PR = ProtoComputeResponse;
-
-    fn new(inner: ClientTransport) -> Self {
-        ProtoComputeClient::new(inner)
-    }
-
-    async fn establish_bidi_stream(
-        &mut self,
-        rx: UnboundedReceiverStream<Self::PC>,
-    ) -> Result<Response<Streaming<Self::PR>>, Status> {
-        self.command_response_stream(rx).await
-    }
+    type STATS = NoopStatsCollector;
+    const URL: &'static str = "/mz_compute_client.service.ProtoCompute/CommandResponseStream";
 }
+
+pub type ComputeGrpcClient = GrpcClient<ComputeProtoServiceTypes>;
 
 #[async_trait]
 impl<F, G> ProtoCompute for GrpcServer<F>

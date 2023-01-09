@@ -40,6 +40,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId};
 use mz_service::client::GenericClient;
+use mz_service::codec::NoopStatsCollector;
 
 use crate::client::{
     CreateSinkCommand, CreateSourceCommand, StorageClient, StorageCommand, StorageGrpcClient,
@@ -222,7 +223,13 @@ where
                 }
             }
 
-            match StorageGrpcClient::connect(addr.clone(), self.build_info.semver_version()).await {
+            match StorageGrpcClient::connect(
+                addr.clone(),
+                self.build_info.semver_version(),
+                NoopStatsCollector {},
+            )
+            .await
+            {
                 Ok(client) => break client,
                 Err(e) => {
                     if state.i >= mz_service::retry::INFO_MIN_RETRIES {
