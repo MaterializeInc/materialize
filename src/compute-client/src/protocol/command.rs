@@ -29,7 +29,10 @@ use mz_storage_client::controller::CollectionMetadata;
 use crate::logging::LoggingConfig;
 use crate::types::dataflows::DataflowDescription;
 
-include!(concat!(env!("OUT_DIR"), "/mz_compute_client.command.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/mz_compute_client.protocol.command.rs"
+));
 
 /// Commands related to the computation and maintenance of views.
 ///

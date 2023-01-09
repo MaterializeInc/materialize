@@ -17,7 +17,7 @@ use tokio::sync::{oneshot, watch};
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use mz_compute_client::response::PeekResponse;
+use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::ScalarType;

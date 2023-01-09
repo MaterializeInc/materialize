@@ -46,7 +46,7 @@ use timely::communication::allocator::zero_copy::initialize::initialize_networki
 use timely::communication::allocator::GenericBuilder;
 use tracing::{debug, info, warn};
 
-use mz_compute_client::command::ComputeStartupEpoch;
+use mz_compute_client::protocol::command::ComputeStartupEpoch;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
 

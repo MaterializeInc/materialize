@@ -20,7 +20,7 @@ import "storage-client/src/client.proto";
 
 import "google/protobuf/empty.proto";
 
-package mz_compute_client.command;
+package mz_compute_client.protocol.command;
 
 message ProtoComputeStartupEpoch {
   int64 envd = 1;

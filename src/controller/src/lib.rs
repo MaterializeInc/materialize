@@ -105,7 +105,7 @@ use mz_build_info::BuildInfo;
 use mz_compute_client::controller::{
     ActiveComputeController, ComputeController, ComputeControllerResponse, ReplicaId,
 };
-use mz_compute_client::response::{PeekResponse, SubscribeResponse};
+use mz_compute_client::protocol::response::{PeekResponse, SubscribeResponse};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::{Orchestrator, ServiceProcessMetrics};
 use mz_ore::now::{EpochMillis, NowFn};

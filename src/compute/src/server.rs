@@ -32,10 +32,11 @@ use timely::WorkerConfig;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
-use mz_compute_client::command::{ComputeCommand, ComputeCommandHistory};
-use mz_compute_client::command::{ComputeStartupEpoch, TimelyConfig};
 use mz_compute_client::metrics::ComputeMetrics;
-use mz_compute_client::response::ComputeResponse;
+use mz_compute_client::protocol::command::{
+    ComputeCommand, ComputeCommandHistory, ComputeStartupEpoch, TimelyConfig,
+};
+use mz_compute_client::protocol::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;

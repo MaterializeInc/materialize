@@ -104,14 +104,14 @@ fn main() {
         .extern_path(".mz_storage_client", "::mz_storage_client")
         .compile(
             &[
-                "compute-client/src/command.proto",
                 "compute-client/src/logging.proto",
                 "compute-client/src/plan.proto",
                 "compute-client/src/plan/join.proto",
                 "compute-client/src/plan/reduce.proto",
                 "compute-client/src/plan/threshold.proto",
                 "compute-client/src/plan/top_k.proto",
-                "compute-client/src/response.proto",
+                "compute-client/src/protocol/command.proto",
+                "compute-client/src/protocol/response.proto",
                 "compute-client/src/service.proto",
                 "compute-client/src/types/dataflows.proto",
                 "compute-client/src/types/sinks.proto",
