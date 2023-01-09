@@ -184,8 +184,8 @@ interface BasicAuth {
 }
 
 type Auth =
-    | { type: "Basic"; payload: BasicAuth }
-    | { type: "Token"; payload: string }
+    | { user: string, password: string }
+    | { token: string }
     ;
 
 interface Simple {
