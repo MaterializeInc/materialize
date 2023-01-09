@@ -228,3 +228,78 @@ mz_system
 default                 r1      ${arg.default-replica-size}
 mz_introspection        r1      1
 mz_system               r1      1
+
+# Test that two objects with the same name create distinct clusters
+# as the schema name is included in the cluster name
+
+> CREATE SCHEMA schema1;
+> CREATE SCHEMA schema2;
+
+> CREATE SOURCE schema1.s1 FROM LOAD GENERATOR COUNTER
+> CREATE SINK schema2.s1 FROM v
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
+  FORMAT JSON ENVELOPE DEBEZIUM
+
+> SHOW CLUSTERS
+default
+mz_introspection
+mz_system
+materialize_schema1_s1
+materialize_schema2_s1
+
+> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
+default                 r1      ${arg.default-replica-size}
+mz_introspection        r1      1
+mz_system               r1      1
+materialize_schema1_s1  linked  ${arg.default-storage-size}
+materialize_schema2_s1  linked  ${arg.default-storage-size}
+
+> DROP SCHEMA schema1 CASCADE;
+> DROP SCHEMA schema2 CASCADE;
+
+# Test capitalizarion behavior
+
+> CREATE SOURCE "s1" FROM LOAD GENERATOR COUNTER
+> CREATE SINK "S1" FROM v
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
+  FORMAT JSON ENVELOPE DEBEZIUM
+
+> SHOW CLUSTERS
+default
+mz_introspection
+mz_system
+materialize_public_s1
+materialize_public_S1
+
+> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
+default                 r1      ${arg.default-replica-size}
+mz_introspection        r1      1
+mz_system               r1      1
+materialize_public_s1  linked  ${arg.default-storage-size}
+materialize_public_S1  linked  ${arg.default-storage-size}
+
+> DROP SOURCE "s1";
+> DROP SINK "S1";
+
+# Test that an already-existing cluster is taken into account when
+# selecting a name for the linked cluster
+
+> CREATE CLUSTER materialize_public_s1 REPLICAS (r1 (SIZE '1'));
+> CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER
+
+> SHOW CLUSTERS
+default
+mz_introspection
+mz_system
+materialize_public_s1
+materialize_public_s11
+
+> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
+default                 r1      ${arg.default-replica-size}
+mz_introspection        r1      1
+mz_system               r1      1
+materialize_public_s1  r1  1
+materialize_public_s11 linked ${arg.default-storage-size}
+
+> DROP CLUSTER materialize_public_s1;
+> DROP SOURCE s1;
