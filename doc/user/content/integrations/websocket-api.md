@@ -178,11 +178,6 @@ The payload is an array of JSON values corresponding to the columns from the `Ro
 You can model these with the following TypeScript definitions:
 
 ```typescript
-interface BasicAuth {
-    user: string;
-    password: string;
-}
-
 type Auth =
     | { user: string; password: string }
     | { token: string }
