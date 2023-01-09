@@ -16,7 +16,7 @@ axum = { version = "0.6.1", features = ["headers", "ws"] }
 base64 = "0.13.1"
 bytes = "1.3.0"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
-clap = { version = "3.2.20", features = ["wrap_help", "env", "derive"] }
+clap = { version = "4.0.32", features = ["wrap_help", "env", "derive"] }
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
 headers = "0.3.8"

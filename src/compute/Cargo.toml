@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.66"
 async-trait = "0.1.59"
 bytesize = "1.1.0"
-clap = { version = "3.2.20", features = ["derive", "env"] }
+clap = { version = "4.0.32", features = ["derive", "env"] }
 crossbeam-channel = "0.5.6"
 dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
