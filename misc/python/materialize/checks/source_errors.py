@@ -22,12 +22,12 @@ class SourceErrors(Check):
                 > CREATE SECRET source_errors_secret AS 'postgres';
 
                 > CREATE CONNECTION source_errors_connection FOR POSTGRES
-                  HOST 'postgres-source',
+                  HOST 'postgres',
                   DATABASE postgres,
                   USER source_errors_user1,
                   PASSWORD SECRET source_errors_secret
 
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 # In order to avoid conflicts, user must be unique
                 CREATE USER source_errors_user1 WITH SUPERUSER PASSWORD 'postgres';
                 ALTER USER source_errors_user1 WITH replication;
@@ -54,7 +54,7 @@ class SourceErrors(Check):
                   (PUBLICATION 'source_errors_publicationb') /* all lowercase */
                   FOR TABLES (source_errors_table AS source_errors_tableB)
 
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO source_errors_table VALUES (2);
 
                 > SELECT COUNT(*) FROM source_errors_tableA;
@@ -72,12 +72,12 @@ class SourceErrors(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 DROP PUBLICATION source_errors_publicationA;
                 INSERT INTO source_errors_table VALUES (3);
                 """,
                 """
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 DROP PUBLICATION source_errors_publicationB;
                 INSERT INTO source_errors_table VALUES (4);
                 """,

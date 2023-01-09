@@ -18,6 +18,7 @@ from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Clusterd,
+    Cockroach,
     Debezium,
     Materialized,
     Postgres,
@@ -26,14 +27,14 @@ from materialize.mzcompose.services import (
 from materialize.mzcompose.services import Testdrive as TestdriveService
 
 SERVICES = [
-    Postgres(name="postgres-backend"),
-    Postgres(name="postgres-source"),
+    Cockroach(setup_materialize=True),
+    Postgres(),
     Redpanda(auto_create_topics=True),
     Debezium(),
     Clusterd(
         name="clusterd_compute_1"
     ),  # Started by some Scenarios, defined here only for the teardown
-    Materialized(),
+    Materialized(external_cockroach=True),
     TestdriveService(default_timeout="300s", no_reset=True, seed=1),
 ]
 
@@ -49,23 +50,10 @@ class ExecutionMode(Enum):
 
 def setup(c: Composition) -> None:
     c.up("testdrive", persistent=True)
+    c.up("cockroach")
 
-    c.start_and_wait_for_tcp(
-        services=["redpanda", "postgres-backend", "postgres-source", "debezium"]
-    )
-    for postgres in ["postgres-backend", "postgres-source"]:
-        c.wait_for_postgres(service=postgres)
-
-    c.sql(
-        sql=f"""
-       CREATE SCHEMA IF NOT EXISTS consensus;
-       CREATE SCHEMA IF NOT EXISTS storage;
-       CREATE SCHEMA IF NOT EXISTS adapter;
-    """,
-        service="postgres-backend",
-        user="postgres",
-        password="postgres",
-    )
+    c.start_and_wait_for_tcp(services=["redpanda", "postgres", "debezium"])
+    c.wait_for_postgres()
 
 
 def teardown(c: Composition) -> None:

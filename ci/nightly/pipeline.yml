@@ -378,7 +378,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartPostgresBackend, --execution-mode=oneatatime]
+          args: [--scenario=RestartCockroach, --execution-mode=oneatatime]
 
   - id: checks-oneatatime-restart-redpanda-debezium
     label: "Checks oneatatime + restart Redpanda & Debezium"
@@ -448,7 +448,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartPostgresBackend, --execution-mode=parallel]
+          args: [--scenario=RestartCockroach, --execution-mode=parallel]
 
   - id: checks-parallel-restart-redpanda
     label: "Checks parallel + restart Redpanda & Debezium"

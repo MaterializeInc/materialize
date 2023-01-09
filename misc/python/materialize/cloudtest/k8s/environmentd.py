@@ -109,7 +109,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             "--orchestrator=kubernetes",
             "--orchestrator-kubernetes-image-pull-policy=if-not-present",
             "--persist-consensus-url=postgres://root@cockroach.default:26257?options=--search_path=consensus",
-            "--adapter-stash-url=postgres://root@cockroach.default:26257?options=--search_path=catalog",
+            "--adapter-stash-url=postgres://root@cockroach.default:26257?options=--search_path=adapter",
             "--storage-stash-url=postgres://root@cockroach.default:26257?options=--search_path=storage",
             "--internal-sql-listen-addr=0.0.0.0:6877",
             "--unsafe-mode",

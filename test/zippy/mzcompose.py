@@ -18,7 +18,6 @@ from materialize.mzcompose.services import (
     Kafka,
     Materialized,
     Minio,
-    MinioMc,
     Postgres,
     SchemaRegistry,
     Testdrive,
@@ -33,9 +32,8 @@ SERVICES = [
     SchemaRegistry(),
     Debezium(),
     Postgres(),
-    Cockroach(),
-    Minio(),
-    MinioMc(),
+    Cockroach(setup_materialize=True),
+    Minio(setup_materialize=True),
     # Those two are overriden below
     Materialized(),
     Clusterd(name="storaged", storage_workers=4),
@@ -95,14 +93,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     random.seed(args.seed)
 
-    environment_extra = ["MZ_LOG_FILTER=info"]
-    mz_options = [
-        "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
-        "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
-        "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
-    ]
-    persist_blob_url = "s3://minioadmin:minioadmin@persist/persist?endpoint=http://minio:9000/&region=minio"
-
     with c.override(
         Testdrive(
             no_reset=True,
@@ -114,16 +104,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             },
         ),
         Materialized(
-            environment_extra=environment_extra,
-            options=mz_options,
-            persist_blob_url=persist_blob_url,
-        )
-        if args.size is None
-        else Materialized(
-            default_size=args.size,
-            environment_extra=environment_extra,
-            options=mz_options,
-            persist_blob_url=persist_blob_url,
+            default_size=args.size or Materialized.Size.DEFAULT_SIZE,
+            options=["--log-filter=warn"],
+            external_minio=True,
+            external_cockroach=True,
         ),
     ):
         c.up("testdrive", persistent=True)

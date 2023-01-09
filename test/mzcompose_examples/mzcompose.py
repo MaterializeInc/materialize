@@ -12,7 +12,6 @@ from materialize.mzcompose.services import (
     Kafka,
     Materialized,
     Minio,
-    MinioMc,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
@@ -32,8 +31,7 @@ mz_with_options = [
 ]
 
 SERVICES = [
-    Minio(),
-    MinioMc(),
+    Minio(setup_materialize=True),
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
@@ -80,24 +78,8 @@ def workflow_mz_with_options(c: Composition) -> None:
 
 
 def workflow_minio(c: Composition) -> None:
-    mz = Materialized(
-        persist_blob_url="s3://minioadmin:minioadmin@persist/persist?endpoint=http://minio:9000/&region=minio"
-    )
+    mz = Materialized(external_minio=True)
 
     with c.override(mz):
-        c.start_and_wait_for_tcp(services=["minio"])
-        c.up("minio_mc", persistent=True)
-        c.exec(
-            "minio_mc",
-            "mc",
-            "config",
-            "host",
-            "add",
-            "myminio",
-            "http://minio:9000",
-            "minioadmin",
-            "minioadmin",
-        )
-        c.exec("minio_mc", "mc", "mb", "myminio/persist"),
-        c.start_and_wait_for_tcp(services=["materialized"])
+        c.up("materialized")
         c.wait_for_materialized()
