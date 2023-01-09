@@ -59,7 +59,7 @@ To authenticate using a username and password, send an initial text or binary me
 
 ```
 {
-			"user": "<Your email to access Materialize>"
+    "user": "<Your email to access Materialize>"
 	"password": "<Your app password>",
 }
 ```
