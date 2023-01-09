@@ -32,7 +32,7 @@ The process to connect Materialize to Upstash Kafka consists of the following st
 
 2. #### Create new credentials
 
-    By default, Upstash provides a default credential that you can use to connect to your cluster. However, the default account has full access to all topics in your cluster, instead, you can create a new credential with limited access to specific topics. You can skip this step if you want to use the default credential.
+    By default, Upstash provides a default credential that you can use to connect to your cluster. It's important to note that this default has full access to all topics in your cluster. For a more restricted setup, you can create a new credential with limited access to specific topics. If you want to use the default credential, skip this step.
 
     a. Navigate to the [Upstash console](https://console.upstash.com/login)
 
