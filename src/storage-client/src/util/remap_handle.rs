@@ -51,9 +51,5 @@ pub trait RemapHandle: RemapHandleReader {
         new_upper: Antichain<Self::IntoTime>,
     ) -> Result<(), UpperMismatch<Self::IntoTime>>;
 
-    async fn compact(&mut self, since: Antichain<Self::IntoTime>);
-
     fn upper(&self) -> &Antichain<Self::IntoTime>;
-
-    fn since(&self) -> &Antichain<Self::IntoTime>;
 }

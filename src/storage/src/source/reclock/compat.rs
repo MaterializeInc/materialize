@@ -20,7 +20,6 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
 
-use mz_ore::halt;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
@@ -37,8 +36,6 @@ use mz_storage_client::util::remap_handle::{RemapHandle, RemapHandleReader};
 
 /// A handle to a persist shard that stores remap bindings
 pub struct PersistHandle<FromTime: SourceTimestamp, IntoTime: Timestamp + Lattice + Codec64> {
-    id: GlobalId,
-    since_handle: SinceHandle<SourceData, (), IntoTime, Diff, PersistEpoch>,
     events: LocalBoxStream<
         'static,
         ListenEvent<
@@ -85,14 +82,15 @@ where
             .await
             .context("error creating persist client")?;
 
-        let since_handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
-            .open_critical_since(
-                remap_shard,
-                PersistClient::CONTROLLER_CRITICAL_SINCE,
-                &format!("reclock {}", id),
-            )
-            .await
-            .expect("invalid persist usage");
+        let since_handle: SinceHandle<SourceData, (), IntoTime, Diff, PersistEpoch> =
+            persist_client
+                .open_critical_since(
+                    remap_shard,
+                    PersistClient::CONTROLLER_CRITICAL_SINCE,
+                    &format!("reclock {}", id),
+                )
+                .await
+                .expect("invalid persist usage");
 
         let since = since_handle.since();
 
@@ -153,8 +151,6 @@ where
         .boxed_local();
 
         Ok(Self {
-            id,
-            since_handle,
             events,
             write_handle,
             pending_batch: vec![],
@@ -227,54 +223,7 @@ where
         }
     }
 
-    async fn compact(&mut self, new_since: Antichain<Self::IntoTime>) {
-        if !PartialOrder::less_equal(self.since_handle.since(), &new_since) {
-            panic!(
-                "ReclockFollower: `new_since` ({:?}) is not beyond \
-                `self.since` ({:?}).",
-                new_since,
-                self.since_handle.since(),
-            );
-        }
-        let epoch = self.since_handle.opaque().clone();
-        let result = self
-            .since_handle
-            .maybe_compare_and_downgrade_since(&epoch, (&epoch, &new_since))
-            .await;
-
-        if let Some(result) = result {
-            match result {
-                Ok(_) => {
-                    // All's well!
-                }
-                Err(current_epoch) => {
-                    // TODO(aljoscha): In the future, we might want to be
-                    // smarter about being fenced off. Or maybe not? For now,
-                    // halting seems to be the only option, but we want to get
-                    // rid of halting in sources/sinks. On the other hand, when
-                    // we have been fenced off, it seems fine to halt the whole
-                    // process?
-                    //
-                    // SUBTLE: It's fine if multiple/concurrent remap
-                    // operators/source advance the since of the remap shard.
-                    // They would only do that once both the data shard and
-                    // remap shard are sufficiently advanced, meaning we will
-                    // always be in a state from which we can safely restart.
-                    halt!(
-                        "We have been fenced off! source_id: {}, current epoch: {:?}",
-                        self.id,
-                        current_epoch
-                    );
-                }
-            }
-        }
-    }
-
     fn upper(&self) -> &Antichain<Self::IntoTime> {
         self.write_handle.upper()
-    }
-
-    fn since(&self) -> &Antichain<Self::IntoTime> {
-        self.since_handle.since()
     }
 }
