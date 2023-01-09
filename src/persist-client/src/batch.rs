@@ -12,6 +12,7 @@
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::mem::size_of;
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::Instant;
@@ -464,13 +465,7 @@ where
             .encode(|| V::encode(val, &mut self.val_buf));
         let k_range = initial_key_buf_len..self.key_buf.len();
         let v_range = initial_val_buf_len..self.val_buf.len();
-
-        let size = {
-            let k = &self.key_buf[k_range.clone()];
-            let v = &self.val_buf[v_range.clone()];
-            ColumnarRecordsBuilder::columnar_record_size(k, v)
-        };
-
+        let size = k_range.len() + v_range.len() + 8 + 2 * size_of::<u64>();
         let ts = T::encode(ts);
 
         self.current_part_total_bytes += size;
