@@ -707,6 +707,10 @@ impl<S: Append + 'static> Coordinator<S> {
                         .linked_object_id
                         .is_some()
                     {
+                        assert!(
+                            logs.contains(&idx.on),
+                            "non introspection source indexes in linked clusters are impossible"
+                        );
                         continue;
                     }
 
@@ -993,13 +997,12 @@ impl<S: Append + 'static> Coordinator<S> {
             // Only sources with ingestions need linked clusters.
             let host_config = match entry.item() {
                 CatalogItem::Source(source) => match &source.data_source {
-                    DataSourceDesc::Ingestion(ingestion) => Some(&ingestion.host_config),
-                    _ => None,
+                    DataSourceDesc::Ingestion(ingestion) => &ingestion.host_config,
+                    _ => continue,
                 },
-                CatalogItem::Sink(sink) => Some(&sink.host_config),
-                _ => None,
+                CatalogItem::Sink(sink) => &sink.host_config,
+                _ => continue,
             };
-            let Some(host_config) = host_config else { continue };
 
             // Don't create linked clusters if one already exists.
             if self.catalog.get_linked_cluster(entry.id()).is_some() {
