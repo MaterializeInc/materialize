@@ -33,9 +33,8 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
 use mz_compute_client::metrics::ComputeMetrics;
-use mz_compute_client::protocol::command::{
-    ComputeCommand, ComputeCommandHistory, ComputeStartupEpoch, TimelyConfig,
-};
+use mz_compute_client::protocol::command::{ComputeCommand, ComputeStartupEpoch, TimelyConfig};
+use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription};

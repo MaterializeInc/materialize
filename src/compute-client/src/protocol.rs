@@ -11,4 +11,5 @@
 //! indiviual compute replicas.
 
 pub mod command;
+pub mod history;
 pub mod response;

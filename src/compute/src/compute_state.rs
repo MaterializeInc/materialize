@@ -30,9 +30,8 @@ use uuid::Uuid;
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::metrics::ComputeMetrics;
 use mz_compute_client::plan::Plan;
-use mz_compute_client::protocol::command::{
-    ComputeCommand, ComputeCommandHistory, ComputeParameter, Peek,
-};
+use mz_compute_client::protocol::command::{ComputeCommand, ComputeParameter, Peek};
+use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_ore::cast::CastFrom;

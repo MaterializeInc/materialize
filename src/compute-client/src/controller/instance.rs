@@ -27,9 +27,8 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::logging::LogVariant;
-use crate::protocol::command::{
-    ComputeCommand, ComputeCommandHistory, ComputeParameter, ComputeStartupEpoch, Peek,
-};
+use crate::protocol::command::{ComputeCommand, ComputeParameter, ComputeStartupEpoch, Peek};
+use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::types::dataflows::DataflowDescription;
