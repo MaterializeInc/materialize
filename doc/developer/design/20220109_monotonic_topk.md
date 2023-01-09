@@ -99,9 +99,9 @@ It is known from [literature](https://dl.acm.org/doi/pdf/10.1145/253262.253302) 
 - A B-tree data structure containing all of the rows seen by the operator so far. Let's call it the row B-tree.
 - A B-tree data structure with the partial top-k elements. Let's call it the top-k B-tree.
 
-For every incoming row, if we are *adding* the row, we first record it in the row B-tree data structure. Then, we check if the row would make it into the top-k by querying the top-k B-tree for its maximum. If not, the row is discarded; otherwise, we dislodge the maximum element and insert the row into the top-k B-tree. 
+For every incoming row, if we are *adding* the row, we first record it in the row B-tree data structure. Then, we check if the row would make it into the top-k by querying the top-k B-tree for its maximum. If not, the row is discarded; otherwise, we dislodge the maximum element and insert the row into the top-k B-tree.
 
-If, on the other hand, we are *retracting* the row, we first delete the row from the row B-tree. Then, we check if the row is in the top-k elements by looking it up in the top-k B-tree. If not, then nothing else needs to be done. Otherwise, we remove the row from the top-k B-tree. Then, we query the top-k B-tree to find the new maximum element $e$. Now, we can query the row B-tree to find the next element that is greater than* $e$. This element is then inserted into the top-k B-tree. 
+If, on the other hand, we are *retracting* the row, we first delete the row from the row B-tree. Then, we check if the row is in the top-k elements by looking it up in the top-k B-tree. If not, then nothing else needs to be done. Otherwise, we remove the row from the top-k B-tree. Then, we query the top-k B-tree to find the new maximum element $e$. Now, we can query the row B-tree to find the next element that is greater than* $e$. This element is then inserted into the top-k B-tree.
 
 * Note that when we consider multiplicities, this may be in fact greater than or equal!
 
