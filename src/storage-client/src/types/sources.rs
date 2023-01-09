@@ -303,6 +303,7 @@ where
 
 pub trait SourceTimestamp: timely::progress::Timestamp + Refines<()> + std::fmt::Display {
     fn from_compat_ts(pid: PartitionId, offset: MzOffset) -> Self;
+    fn try_into_compat_ts(&self) -> Option<(PartitionId, MzOffset)>;
     fn from_compat_frontier(frontier: OffsetAntichain) -> Antichain<Self>;
     fn into_compat_frontier(frontier: AntichainRef<'_, Self>) -> OffsetAntichain;
     fn encode_row(&self) -> Row;
@@ -317,6 +318,10 @@ impl SourceTimestamp for MzOffset {
             "invalid non-partitioned partition {pid}"
         );
         offset
+    }
+
+    fn try_into_compat_ts(&self) -> Option<(PartitionId, MzOffset)> {
+        Some((PartitionId::None, *self))
     }
 
     fn from_compat_frontier(frontier: OffsetAntichain) -> Antichain<Self> {
@@ -357,6 +362,11 @@ impl SourceTimestamp for Partitioned<i32, MzOffset> {
             PartitionId::Kafka(pid) => Partitioned::with_partition(pid, offset),
             PartitionId::None => panic!("invalid partitioned partition {pid}"),
         }
+    }
+
+    fn try_into_compat_ts(&self) -> Option<(PartitionId, MzOffset)> {
+        let pid = self.partition()?;
+        Some((PartitionId::Kafka(*pid), *self.timestamp()))
     }
 
     fn from_compat_frontier(frontier: OffsetAntichain) -> Antichain<Self> {

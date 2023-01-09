@@ -7,23 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::any::Any;
-use std::future::Future;
 use std::rc::Rc;
 
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::pushers::{Tee, TeeCore};
+use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::generic::{OperatorInfo, OutputHandle, OutputWrapper};
+use timely::dataflow::operators::generic::{OperatorInfo, OutputHandle};
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::{Scope, Stream};
-use timely::progress::frontier::{Antichain, AntichainRef};
+use timely::progress::frontier::AntichainRef;
 use timely::scheduling::ActivateOnDrop;
 use timely::Data;
 
 use mz_ore::collections::CollectionExt;
 use mz_repr::Timestamp;
-use mz_timely_util::builder_async::{AsyncInputHandle, OperatorBuilder as AsyncOperatorBuilder};
 
 use crate::types::sources::SourceToken;
 
@@ -125,60 +122,4 @@ where
     // `build()` promises to call the provided closure before returning,
     // so we are guaranteed that `token` is non-None.
     (data_stream, token.unwrap())
-}
-
-/// Effectively the same as `source`, but the core logic expects a
-/// never-ending future, not a tick closure. Additionally, this
-/// operator also contains an input, primarily to inspect the
-/// frontier of an upstream operator. This input
-/// does not participate in progress tracking.
-///
-/// Note that this means the input and capabilities are communicated
-/// to the future by value, not by &mut reference.
-///
-/// Returns a token, which, upon drop, will cause the shutdown of the operator.
-pub fn async_source<G, D, B, L>(
-    scope: &G,
-    name: String,
-    input: &Stream<G, ()>,
-    construct: B,
-) -> (Stream<G, D>, Rc<dyn Any>)
-where
-    G: Scope<Timestamp = Timestamp>,
-    D: Data,
-    B: FnOnce(
-        OperatorInfo,
-        CapabilitySet<Timestamp>,
-        AsyncInputHandle<
-            Timestamp,
-            Vec<()>,
-            <Pipeline as timely::dataflow::channels::pact::ParallelizationContractCore<
-                G::Timestamp,
-                Vec<()>,
-            >>::Puller,
-        >,
-        OutputWrapper<G::Timestamp, Vec<D>, TeeCore<G::Timestamp, Vec<D>>>,
-    ) -> L,
-    L: Future + 'static,
-{
-    let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
-    let operator_info = builder.operator_info();
-
-    let (data_output, data_stream) = builder.new_output();
-
-    let remap_input = builder.new_input_connection(
-        input,
-        Pipeline,
-        // As documented, the input does not
-        // participate in progress tracking.
-        vec![Antichain::new()],
-    );
-
-    let button = builder.build(|capabilities| {
-        let cap_set = CapabilitySet::from_elem(capabilities.into_element());
-
-        construct(operator_info, cap_set, remap_input, data_output)
-    });
-
-    (data_stream, Rc::new(button.press_on_drop()))
 }

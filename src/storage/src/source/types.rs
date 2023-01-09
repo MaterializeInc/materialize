@@ -14,22 +14,24 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::marker::{Send, Sync};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use differential_dataflow::difference::Semigroup;
 use differential_dataflow::Hashable;
 use futures::stream::LocalBoxStream;
 use once_cell::sync::Lazy;
 use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
+use timely::dataflow::operators::Capability;
+use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::activate::SyncActivator;
 use timely::Data;
 
 use mz_expr::PartitionId;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
-use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
@@ -42,7 +44,10 @@ use crate::source::source_reader_pipeline::HealthStatus;
 /// connetion into a reader and offset committer
 pub trait SourceConnectionBuilder {
     type Reader: SourceReader + 'static;
-    type OffsetCommitter: OffsetCommitter + Send + Sync + 'static;
+    type OffsetCommitter: OffsetCommitter<<Self::Reader as SourceReader>::Time>
+        + Send
+        + Sync
+        + 'static;
 
     const REMAP_RELATION_DESC: Lazy<RelationDesc>;
 
@@ -56,7 +61,9 @@ pub trait SourceConnectionBuilder {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        data_capability: Capability<<Self::Reader as SourceReader>::Time>,
+        upper_capability: Capability<<Self::Reader as SourceReader>::Time>,
+        resume_upper: Antichain<<Self::Reader as SourceReader>::Time>,
         encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
@@ -76,32 +83,18 @@ pub trait SourceConnectionBuilder {
 /// The framework will spawn a [`SourceReader`] on each timely worker. It is the
 /// responsibility of the reader to figure out which of the partitions (if any)
 /// it is responsible for reading using [`crate::source::responsible_for`].
-///
-/// The reader implicitly is given a capability for emitting updates for each
-/// new partition (identified by a [`PartitionId`]) that it discovers. It must
-/// downgrade those capabilities by either emitting updates for those partitions
-/// that it is responsible for or by emitting a
-/// [`SourceMessageType::DropPartitionCapabilities`] for those partitions which
-/// it is not responsible for.
-//
-// TODO: this trait is still a little too Kafka-centric, specifically the concept of
-// a "partition" is baked into this trait and introduces some cognitive overhead as
-// we are forced to treat things like file sources as "single-partition"
 #[async_trait(?Send)]
 pub trait SourceReader {
     type Key: timely::Data + MaybeLength;
     type Value: timely::Data + MaybeLength;
     type Time: SourceTimestamp;
-    type Diff: timely::Data;
+    type Diff: timely::Data + Semigroup;
 
     /// Returns the next message available from the source.
-    ///
-    /// Note that implementers are required to present messages in strictly ascending offset order
-    /// within each partition.
     async fn next(
         &mut self,
         timestamp_granularity: Duration,
-    ) -> Option<SourceMessageType<Self::Key, Self::Value, Self::Diff>> {
+    ) -> Option<SourceMessageType<Self::Key, Self::Value, Self::Time, Self::Diff>> {
         // Compatiblity implementation that delegates to the deprecated [Self::get_next_method]
         // call. Once all source implementations have been transitioned to implement
         // [SourceReader::next] directly this provided implementation should be removed and the
@@ -120,13 +113,10 @@ pub trait SourceReader {
 
     /// Returns the next message available from the source.
     ///
-    /// Note that implementers are required to present messages in strictly ascending offset order
-    /// within each partition.
-    ///
     /// # Deprecated
     ///
     /// Source implementation should implement the async [SourceReader::next] method instead.
-    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {
+    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Time, Self::Diff> {
         NextMessage::Pending
     }
 
@@ -136,7 +126,7 @@ pub trait SourceReader {
     fn into_stream<'a>(
         mut self,
         timestamp_granularity: Duration,
-    ) -> LocalBoxStream<'a, SourceMessageType<Self::Key, Self::Value, Self::Diff>>
+    ) -> LocalBoxStream<'a, SourceMessageType<Self::Key, Self::Value, Self::Time, Self::Diff>>
     where
         Self: Sized + 'a,
     {
@@ -148,23 +138,18 @@ pub trait SourceReader {
     }
 }
 
-/// A sibling trait to `SourceReader` that represents a source's
-/// ability to _commit offsets_ that have been guaranteed
-/// to be written into persist
+/// A sibling trait to `SourceReader` that represents a source's ability to commit the frontier
+/// that all updates that materialize might need in the future will be beyond of.
 #[async_trait]
-pub trait OffsetCommitter {
-    /// Commit the given partition-offset pairs upstream.
-    /// A specific `SourceReader`-`OffsetCommiter` pair
-    /// is guaranteed to only receive offsets for partitions
-    /// they are owners for.
-    async fn commit_offsets(
-        &self,
-        offsets: BTreeMap<PartitionId, MzOffset>,
-    ) -> Result<(), anyhow::Error>;
+pub trait OffsetCommitter<Time: SourceTimestamp> {
+    /// Commit the given frontier upstream. When this method is called permission is given to the
+    /// source to delete all updates that are not beyond this frontier and the system promises to
+    /// never request them again.
+    async fn commit_offsets(&self, offsets: Antichain<Time>) -> Result<(), anyhow::Error>;
 }
 
-pub enum NextMessage<Key, Value, Diff> {
-    Ready(SourceMessageType<Key, Value, Diff>),
+pub enum NextMessage<Key, Value, Time: Timestamp, Diff> {
+    Ready(SourceMessageType<Key, Value, Time, Diff>),
     Pending,
     TransientDelay,
     Finished,
@@ -179,33 +164,18 @@ pub struct HealthStatusUpdate {
 /// A wrapper around [`SourceMessage`] that allows [`SourceReader`]'s to
 /// communicate additional "maintenance" messages.
 #[derive(Debug)]
-pub enum SourceMessageType<Key, Value, Diff> {
-    /// Communicate that this [`SourceMessage`] is the final
-    /// message its its offset.
-    Finalized(
+pub enum SourceMessageType<Key, Value, Time: Timestamp, Diff> {
+    /// A source message
+    Message(
         Result<SourceMessage<Key, Value>, SourceReaderError>,
-        (PartitionId, MzOffset),
-        Diff,
-    ),
-    /// Communicate that more [`SourceMessage`]'s
-    /// will come later at the same offset as this one.
-    InProgress(
-        Result<SourceMessage<Key, Value>, SourceReaderError>,
-        (PartitionId, MzOffset),
+        Capability<Time>,
         Diff,
     ),
     /// Information about the source status
     SourceStatus(HealthStatusUpdate),
-    /// Signals that this [`SourceReader`] instance will never emit
-    /// messages/updates for a given partition anymore. This is similar enough
-    /// to a timely operator dropping a capability, hence the naming.
-    ///
-    /// We need these to compute a "global" source upper, when determining
-    /// completeness of a timestamp.
-    DropPartitionCapabilities(Vec<PartitionId>),
 }
 
-impl<Key, Value, Diff> SourceMessageType<Key, Value, Diff> {
+impl<Key, Value, Time: Timestamp, Diff> SourceMessageType<Key, Value, Time, Diff> {
     pub fn status(update: HealthStatus) -> Self {
         SourceMessageType::SourceStatus(HealthStatusUpdate {
             update,
@@ -300,7 +270,7 @@ where
     /// skewed as keys, whereas positions are generally known to be unique or
     /// close to unique in a source. For example, Kafka offsets are unique per-partition.
     /// Most decode logic should use this instead of `key_contract`.
-    pub fn position_value_contract() -> impl ParallelizationContract<Timestamp, Self>
+    pub fn position_value_contract() -> impl ParallelizationContract<mz_repr::Timestamp, Self>
     where
         V: Hashable<Output = u64>,
     {
@@ -460,7 +430,7 @@ impl SourceMetrics {
     /// Log updates to which offsets / timestamps read up to.
     pub fn record_partition_offsets(
         &mut self,
-        offsets: BTreeMap<PartitionId, (MzOffset, Timestamp, i64)>,
+        offsets: BTreeMap<PartitionId, (MzOffset, mz_repr::Timestamp, i64)>,
     ) {
         for (partition, (offset, timestamp, count)) in offsets {
             let metric = self
@@ -606,7 +576,8 @@ impl SourceReaderPartitionMetrics {
 /// Metrics about committing offsets
 pub struct OffsetCommitMetrics {
     /// The offset-domain resume_upper for a source.
-    pub(crate) offset_commit_failures: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    //TODO: produce these metrics
+    pub(crate) _offset_commit_failures: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 impl OffsetCommitMetrics {
@@ -614,7 +585,7 @@ impl OffsetCommitMetrics {
     pub fn new(base_metrics: &SourceBaseMetrics, source_id: GlobalId) -> OffsetCommitMetrics {
         let base = &base_metrics.source_specific;
         OffsetCommitMetrics {
-            offset_commit_failures: base
+            _offset_commit_failures: base
                 .offset_commit_failures
                 .get_delete_on_drop_counter(vec![source_id.to_string()]),
         }
