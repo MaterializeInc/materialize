@@ -58,6 +58,7 @@ use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
+use mz_ore::collections::CollectionExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_storage_client::client::SourceStatisticsUpdate;

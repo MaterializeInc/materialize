@@ -10,13 +10,14 @@
 //! A wrapper that turns a regular [`SourceReader`] into a delimited source
 //! reader.
 
+use timely::dataflow::operators::Capability;
+use timely::progress::Antichain;
 use timely::scheduling::activate::SyncActivator;
 
-use mz_expr::PartitionId;
 use mz_repr::{GlobalId, RelationDesc};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::{MzOffset, SourceConnection};
+use mz_storage_client::types::sources::SourceConnection;
 use once_cell::sync::Lazy;
 
 use crate::source::types::{
@@ -54,7 +55,9 @@ where
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        data_capability: Capability<<Self::Reader as SourceReader>::Time>,
+        upper_capability: Capability<<Self::Reader as SourceReader>::Time>,
+        resume_upper: Antichain<<Self::Reader as SourceReader>::Time>,
         encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
@@ -66,7 +69,9 @@ where
                 worker_id,
                 worker_count,
                 consumer_activator,
-                restored_offsets,
+                data_capability,
+                upper_capability,
+                resume_upper,
                 encoding,
                 metrics,
                 connection_context,
@@ -84,9 +89,9 @@ where
     type Time = S::Time;
     type Diff = S::Diff;
 
-    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {
+    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Time, Self::Diff> {
         match self.0.get_next_message() {
-            NextMessage::Ready(SourceMessageType::Finalized(
+            NextMessage::Ready(SourceMessageType::Message(
                 Ok(SourceMessage {
                     output,
                     key: _,
@@ -94,9 +99,9 @@ where
                     upstream_time_millis,
                     headers,
                 }),
-                ts,
+                cap,
                 diff,
-            )) => NextMessage::Ready(SourceMessageType::Finalized(
+            )) => NextMessage::Ready(SourceMessageType::Message(
                 Ok(SourceMessage {
                     output,
                     key: None,
@@ -104,38 +109,11 @@ where
                     upstream_time_millis,
                     headers,
                 }),
-                ts,
+                cap,
                 diff,
             )),
-            NextMessage::Ready(SourceMessageType::InProgress(
-                Ok(SourceMessage {
-                    output,
-                    key: _,
-                    value,
-                    upstream_time_millis,
-                    headers,
-                }),
-                ts,
-                diff,
-            )) => NextMessage::Ready(SourceMessageType::InProgress(
-                Ok(SourceMessage {
-                    output,
-                    key: None,
-                    value,
-                    upstream_time_millis,
-                    headers,
-                }),
-                ts,
-                diff,
-            )),
-            NextMessage::Ready(SourceMessageType::Finalized(Err(err), ts, diff)) => {
-                NextMessage::Ready(SourceMessageType::Finalized(Err(err), ts, diff))
-            }
-            NextMessage::Ready(SourceMessageType::InProgress(Err(err), ts, diff)) => {
-                NextMessage::Ready(SourceMessageType::InProgress(Err(err), ts, diff))
-            }
-            NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(pids)) => {
-                NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(pids))
+            NextMessage::Ready(SourceMessageType::Message(Err(err), cap, diff)) => {
+                NextMessage::Ready(SourceMessageType::Message(Err(err), cap, diff))
             }
             NextMessage::Ready(SourceMessageType::SourceStatus(update)) => {
                 NextMessage::Ready(SourceMessageType::SourceStatus(update))
