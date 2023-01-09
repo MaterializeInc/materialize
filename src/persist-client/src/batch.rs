@@ -498,6 +498,8 @@ where
             .inc_by(start.elapsed().as_secs_f64());
 
         if updates.is_empty() {
+            self.key_buf.clear();
+            self.val_buf.clear();
             return ColumnarRecordsBuilder::default().finish();
         }
 
@@ -519,6 +521,8 @@ where
             .step_columnar_encoding
             .inc_by(start.elapsed().as_secs_f64());
 
+        self.key_buf.clear();
+        self.val_buf.clear();
         self.current_part_total_bytes = 0;
         self.current_part_key_bytes = 0;
         self.current_part_value_bytes = 0;
