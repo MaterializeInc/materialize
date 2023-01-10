@@ -187,7 +187,6 @@ pub struct CatalogState {
     oid_counter: u32,
     cluster_replica_sizes: ClusterReplicaSizeMap,
     storage_host_sizes: StorageHostSizeMap,
-    most_recent_storage_usage_collection: EpochMillis,
     default_storage_host_size: Option<String>,
     availability_zones: Vec<String>,
     system_configuration: SystemVars,
@@ -2202,7 +2201,7 @@ impl<S: Append> Catalog<S> {
             Catalog<S>,
             BuiltinMigrationMetadata,
             Vec<BuiltinTableUpdate>,
-            String,
+            Option<String>,
         ),
         AdapterError,
     > {
@@ -2233,7 +2232,6 @@ impl<S: Append> Catalog<S> {
                 oid_counter: FIRST_USER_OID,
                 cluster_replica_sizes: config.cluster_replica_sizes,
                 storage_host_sizes: config.storage_host_sizes,
-                most_recent_storage_usage_collection: EpochMillis::MIN,
                 default_storage_host_size: config.default_storage_host_size,
                 availability_zones: config.availability_zones,
                 system_configuration: SystemVars::default(),
@@ -2597,14 +2595,14 @@ impl<S: Append> Catalog<S> {
             .storage()
             .await
             .get_catalog_content_version()
-            .await?
-            // `new` means that it hasn't been initialized
-            .unwrap_or_else(|| "new".to_string());
+            .await?;
 
         if !config.skip_migrations {
             migrate::migrate(&mut catalog).await.map_err(|e| {
                 Error::new(ErrorKind::FailedMigration {
-                    last_seen_version: last_seen_version.clone(),
+                    last_seen_version: last_seen_version
+                        .clone()
+                        .unwrap_or_else(|| "new".to_string()),
                     this_version: catalog.config().build_info.version,
                     cause: e.to_string(),
                 })
@@ -2722,10 +2720,6 @@ impl<S: Append> Catalog<S> {
         let storage_usage_events = catalog.storage().await.storage_usage().await?;
         for event in storage_usage_events {
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
-            let ts = event.timestamp();
-            if ts > catalog.state.most_recent_storage_usage_collection {
-                catalog.state.most_recent_storage_usage_collection = ts;
-            }
         }
 
         for ip in &catalog.state.egress_ips {
@@ -5742,14 +5736,6 @@ impl<S: Append> Catalog<S> {
 
     pub fn system_config(&self) -> &SystemVars {
         self.state.system_config()
-    }
-
-    pub fn most_recent_storage_usage_collection(&self) -> EpochMillis {
-        self.state.most_recent_storage_usage_collection
-    }
-
-    pub fn set_most_recent_storage_usage_collection(&mut self, ts: EpochMillis) {
-        self.state.most_recent_storage_usage_collection = ts;
     }
 
     pub fn unsafe_mode(&self) -> bool {

@@ -483,6 +483,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
+        last_catalog_version: Option<String>,
     ) -> Result<(), AdapterError> {
         info!("coordinator init: beginning bootstrap");
 
@@ -1031,6 +1032,10 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(&Session::dummy()), linked_cluster_ops)
             .await?;
 
+        if last_catalog_version.is_none() {
+            self.storage_usage_fetch().await;
+        }
+
         info!("coordinator init: bootstrap complete");
         Ok(())
     }
@@ -1214,7 +1219,7 @@ pub async fn serve<S: Append + 'static>(
         .map(|azs_vec| HashSet::from_iter(azs_vec.iter().cloned()));
 
     info!("coordinator init: opening catalog");
-    let (mut catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
+    let (mut catalog, builtin_migration_metadata, builtin_table_updates, last_catalog_version) =
         Catalog::open(catalog::Config {
             storage,
             unsafe_mode,
@@ -1296,7 +1301,11 @@ pub async fn serve<S: Append + 'static>(
             };
             let bootstrap = handle.block_on(async {
                 coord
-                    .bootstrap(builtin_migration_metadata, builtin_table_updates)
+                    .bootstrap(
+                        builtin_migration_metadata,
+                        builtin_table_updates,
+                        last_catalog_version,
+                    )
                     .await?;
                 coord
                     .controller

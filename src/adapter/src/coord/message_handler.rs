@@ -97,7 +97,7 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_fetch(&mut self) {
+    pub async fn storage_usage_fetch(&mut self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
 
@@ -177,8 +177,6 @@ impl<S: Append + 'static> Coordinator<S> {
         if let Err(err) = self.catalog_transact(None, ops).await {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
-        self.catalog
-            .set_most_recent_storage_usage_collection(collection_timestamp);
         self.schedule_storage_usage_collection();
     }
 
@@ -187,9 +185,6 @@ impl<S: Append + 'static> Coordinator<S> {
         // usage collection and wait for that amount of time. This is so we can keep the intervals
         // consistent even across restarts. If collection takes too long, it is possible that
         // we miss an interval.
-        // XXX TODO:  Expose a metric that tracks how long the storage usage collection
-        //       takes. If it takes more than the interval, we're going to start
-        //       missing intervals, which means underbiling.
 
         // 1) Deterministically pick some offset within the collection interval to prevent
         // thundering herds across environments.
@@ -205,17 +200,19 @@ impl<S: Append + 'static> Coordinator<S> {
         let storage_usage_collection_interval_ms: EpochMillis =
             EpochMillis::try_from(self.storage_usage_collection_interval.as_millis())
                 .expect("storage usage collection interval must fit into u64");
-        let fuzz =
+        let offset =
             rngs::SmallRng::from_seed(seed).gen_range(0..storage_usage_collection_interval_ms);
         let now_ts: EpochMillis = self.peek_local_write_ts().into();
 
         // 2) Determine the amount of ms between now and the next collection time.
-        let previous_boundary = (now_ts - (now_ts % storage_usage_collection_interval_ms)) + fuzz;
-        let next_collection_interval = Duration::from_millis(if previous_boundary > now_ts {
-            previous_boundary
+        let previous_collection_ts =
+            (now_ts - (now_ts % storage_usage_collection_interval_ms)) + offset;
+        let next_collection_ts = if previous_collection_ts > now_ts {
+            previous_collection_ts
         } else {
-            previous_boundary + storage_usage_collection_interval_ms
-        });
+            previous_collection_ts + storage_usage_collection_interval_ms
+        };
+        let next_collection_interval = Duration::from_millis(next_collection_ts - now_ts);
 
         // 3) Sleep for that amount of time, then initiate another storage usage collection.
         let internal_cmd_tx = self.internal_cmd_tx.clone();

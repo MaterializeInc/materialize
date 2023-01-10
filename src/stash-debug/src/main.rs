@@ -415,7 +415,7 @@ impl Usage {
 
         Ok(format!(
             "catalog upgrade from {} to {} would succeed",
-            last_catalog_version,
+            last_catalog_version.unwrap_or_else(|| "new".to_string()),
             BUILD_INFO.human_version(),
         ))
     }

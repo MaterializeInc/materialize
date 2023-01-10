@@ -451,7 +451,7 @@ fn test_cancel_dataflow_removal() {
 #[test]
 fn test_storage_usage_collection_interval() {
     /// Waits for the next storage collection to occur, then returns the
-    /// timestamp at which the collection occured. The timestamp of the last
+    /// timestamp at which the collection occurred. The timestamp of the last
     /// collection must be provided
     fn wait_for_next_collection(
         client: &mut postgres::Client,
@@ -511,7 +511,7 @@ fn test_storage_usage_collection_interval() {
         row.get::<_, UInt8>("size").0
     }
 
-    mz_ore::test::init_logging();
+    // mz_ore::test::init_logging();
 
     let config =
         util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(1));
