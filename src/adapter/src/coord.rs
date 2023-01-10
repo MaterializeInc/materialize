@@ -486,6 +486,9 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<(), AdapterError> {
         info!("coordinator init: beginning bootstrap");
 
+        let compute_config = self.catalog.compute_config();
+        self.controller.compute.update_configuration(compute_config);
+
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
         //
         // TODO[btv] -- This is of type `Timestamp` because that's what `initialize_read_policies`
@@ -509,11 +512,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 continue;
             }
 
-            self.controller.compute.create_instance(
-                instance.id,
-                instance.log_indexes.clone(),
-                self.catalog.system_config().max_result_size(),
-            )?;
+            self.controller
+                .compute
+                .create_instance(instance.id, instance.log_indexes.clone())?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 let introspection_collections = replica
                     .config

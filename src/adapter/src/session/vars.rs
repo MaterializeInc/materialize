@@ -2194,3 +2194,9 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
         }
     }
 }
+
+/// Returns whether the named variable is a compute configuration parameter.
+pub(crate) fn is_compute_config_var(name: &str) -> bool {
+    name == MAX_RESULT_SIZE.name()
+    // TODO: add persist configuration parameters
+}

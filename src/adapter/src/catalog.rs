@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use anyhow::bail;
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
+use mz_compute_client::protocol::command::ComputeParameter;
 use mz_storage_client::controller::IntrospectionType;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -5747,6 +5748,18 @@ impl<S: Append> Catalog<S> {
         } else {
             Ok(())
         }
+    }
+
+    /// Return the current compute configuration, derived from the system configuration.
+    pub fn compute_config(&self) -> BTreeSet<ComputeParameter> {
+        use ComputeParameter::*;
+
+        let config = self.system_config();
+        [
+            MaxResultSize(config.max_result_size()),
+            // TODO: add persist configuration parameters
+        ]
+        .into()
     }
 }
 
