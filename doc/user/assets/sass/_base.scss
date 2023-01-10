@@ -154,7 +154,7 @@ input[type="submit"] {
 
 a {
     color: var(--sub);
-   
+
     &:not(.link-with-code) {
         text-decoration: none;
     }
@@ -162,6 +162,7 @@ a {
     &:hover,
     &:focus {
         text-decoration: underline;
+
         &,
         code {
             color: var(--important);
