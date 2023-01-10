@@ -5757,7 +5757,8 @@ impl<S: Append> Catalog<S> {
         let config = self.system_config();
         [
             MaxResultSize(config.max_result_size()),
-            // TODO: add persist configuration parameters
+            PersistBlobTargetSize(config.persist_blob_target_size()),
+            PersistCompactionMinimumTimeout(config.persist_compaction_minimum_timeout()),
         ]
         .into()
     }

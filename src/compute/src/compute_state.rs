@@ -162,6 +162,10 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 ComputeParameter::MaxResultSize(size) => {
                     self.compute_state.max_result_size = size;
                 }
+
+                // TODO(#16753): apply config to `self.compute_state.persist_clients`
+                ComputeParameter::PersistBlobTargetSize(_) => {}
+                ComputeParameter::PersistCompactionMinimumTimeout(_) => {}
             }
         }
     }

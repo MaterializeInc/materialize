@@ -12,6 +12,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::num::NonZeroI64;
+use std::time::Duration;
 
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
@@ -21,6 +22,7 @@ use timely::progress::frontier::Antichain;
 use uuid::Uuid;
 
 use mz_expr::RowSetFinishing;
+use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
@@ -480,12 +482,19 @@ pub enum ComputeParameter {
     /// [`PeekResponse::Error`]: super::response::PeekResponse::Error
     /// [`SubscribeBatch::updates`]: super::response::SubscribeBatch::updates
     MaxResultSize(u32),
+
+    /// Configures `PersistConfig::blob_target_size`.
+    PersistBlobTargetSize(usize),
+    /// Configures `PersistConfig::compaction_minimum_timeout`.
+    PersistCompactionMinimumTimeout(Duration),
 }
 
 impl ComputeParameter {
     pub fn key(&self) -> &'static str {
         match self {
             Self::MaxResultSize(_) => "max_result_size",
+            Self::PersistBlobTargetSize(_) => "persist_blob_target_size",
+            Self::PersistCompactionMinimumTimeout(_) => "persist_compaction_minimum_timeout",
         }
     }
 }
@@ -494,6 +503,8 @@ impl fmt::Display for ComputeParameter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
             Self::MaxResultSize(v) => v.to_string(),
+            Self::PersistBlobTargetSize(v) => v.to_string(),
+            Self::PersistCompactionMinimumTimeout(v) => format!("{v:?}"),
         };
         write!(f, "{}={}", self.key(), value)
     }
@@ -505,7 +516,13 @@ impl RustType<ProtoComputeParameter> for ComputeParameter {
 
         ProtoComputeParameter {
             kind: Some(match self {
-                ComputeParameter::MaxResultSize(size) => Kind::MaxResultSize(*size),
+                ComputeParameter::MaxResultSize(v) => Kind::MaxResultSize(*v),
+                ComputeParameter::PersistBlobTargetSize(v) => {
+                    Kind::PersistBlobTargetSize(v.into_proto())
+                }
+                ComputeParameter::PersistCompactionMinimumTimeout(v) => {
+                    Kind::PersistCompactionMinimumTimeout(v.into_proto())
+                }
             }),
         }
     }
@@ -514,7 +531,13 @@ impl RustType<ProtoComputeParameter> for ComputeParameter {
         use proto_compute_parameter::*;
 
         match proto.kind {
-            Some(Kind::MaxResultSize(size)) => Ok(ComputeParameter::MaxResultSize(size)),
+            Some(Kind::MaxResultSize(v)) => Ok(ComputeParameter::MaxResultSize(v)),
+            Some(Kind::PersistBlobTargetSize(v)) => {
+                Ok(ComputeParameter::PersistBlobTargetSize(usize::cast_from(v)))
+            }
+            Some(Kind::PersistCompactionMinimumTimeout(v)) => Ok(
+                ComputeParameter::PersistCompactionMinimumTimeout(v.into_rust()?),
+            ),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeParameter::kind",
             )),
