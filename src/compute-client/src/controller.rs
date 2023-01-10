@@ -57,7 +57,7 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::logging::{LogVariant, LogView, LoggingConfig};
-use crate::response::{ComputeResponse, PeekResponse, SubscribeResponse};
+use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::types::dataflows::DataflowDescription;
 
@@ -145,9 +145,9 @@ pub struct ComputeInstanceEvent {
 /// Responses from the compute controller.
 #[derive(Debug)]
 pub enum ComputeControllerResponse<T> {
-    /// See [`ComputeResponse::PeekResponse`](crate::response::ComputeResponse::PeekResponse).
+    /// See [`ComputeResponse::PeekResponse`](crate::protocol::response::ComputeResponse::PeekResponse).
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
-    /// See [`ComputeResponse::SubscribeResponse`](crate::response::ComputeResponse::SubscribeResponse).
+    /// See [`ComputeResponse::SubscribeResponse`](crate::protocol::response::ComputeResponse::SubscribeResponse).
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
     /// A notification that we heard a response from the given replica at the
     /// given time.

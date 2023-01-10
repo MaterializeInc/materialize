@@ -22,7 +22,10 @@ use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError}
 use mz_repr::{Diff, GlobalId, Row};
 use mz_timely_util::progress::any_antichain;
 
-include!(concat!(env!("OUT_DIR"), "/mz_compute_client.response.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/mz_compute_client.protocol.response.rs"
+));
 
 /// Responses that the compute nature of a worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

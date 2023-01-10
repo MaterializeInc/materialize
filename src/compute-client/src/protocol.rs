@@ -7,14 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-syntax = "proto3";
+//! The compute command protocol defines the communication between the compute controller and
+//! indiviual compute replicas.
 
-import "compute-client/src/protocol/command.proto";
-import "compute-client/src/protocol/response.proto";
-
-package mz_compute_client.service;
-
-service ProtoCompute {
-    rpc CommandResponseStream (stream protocol.command.ProtoComputeCommand)
-        returns (stream protocol.response.ProtoComputeResponse);
-}
+pub mod command;
+pub mod history;
+pub mod response;

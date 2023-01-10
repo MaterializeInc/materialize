@@ -27,9 +27,9 @@ use mz_build_info::BuildInfo;
 use mz_ore::retry::Retry;
 use mz_service::client::GenericClient;
 
-use crate::command::{ComputeCommand, ComputeStartupEpoch, TimelyConfig};
 use crate::logging::LoggingConfig;
-use crate::response::ComputeResponse;
+use crate::protocol::command::{ComputeCommand, ComputeStartupEpoch, TimelyConfig};
+use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
 use super::orchestrator::ComputeOrchestrator;

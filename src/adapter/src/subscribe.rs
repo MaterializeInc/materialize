@@ -11,7 +11,7 @@
 
 use tokio::sync::mpsc;
 
-use mz_compute_client::response::{SubscribeBatch, SubscribeResponse};
+use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
 use mz_repr::adt::numeric;
 use mz_repr::{Datum, Row};
 

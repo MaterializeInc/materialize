@@ -17,7 +17,7 @@ import "storage-client/src/client.proto";
 
 import "google/protobuf/empty.proto";
 
-package mz_compute_client.response;
+package mz_compute_client.protocol.response;
 
 message ProtoComputeResponse {
     message ProtoPeekResponseKind {

@@ -29,8 +29,8 @@ use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{BidiProtoClient, ClientTransport, GrpcClient, GrpcServer, ResponseStream};
 
-use crate::command::{ComputeCommand, ProtoComputeCommand, TimelyConfig};
-use crate::response::{
+use crate::protocol::command::{ComputeCommand, ProtoComputeCommand, TimelyConfig};
+use crate::protocol::response::{
     ComputeResponse, PeekResponse, ProtoComputeResponse, SubscribeBatch, SubscribeResponse,
 };
 use crate::service::proto_compute_client::ProtoComputeClient;
