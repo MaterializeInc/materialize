@@ -131,6 +131,8 @@ pub enum DataSource {
     /// Data comes from introspection sources, which the controller itself is
     /// responsible for generating.
     Introspection(IntrospectionType),
+    /// Data comes from the source's remapping/reclock operator.
+    Progress,
     /// This source's data is does not need to be managed by the storage
     /// controller, e.g. it's a materialized view, table, or subsource.
     // TODO? Add a means to track some data sources' GlobalIds.
@@ -1323,7 +1325,7 @@ where
                         }
                     }
                 }
-                DataSource::Other => {}
+                DataSource::Progress | DataSource::Other => {}
             }
         }
 
@@ -2531,8 +2533,7 @@ impl<T: Timestamp> CollectionState<T> {
     fn cluster_id(&self) -> Option<StorageInstanceId> {
         match &self.description.data_source {
             DataSource::Ingestion(ingestion) => Some(ingestion.instance_id),
-            DataSource::Introspection(_) => None,
-            DataSource::Other => None,
+            DataSource::Introspection(_) | DataSource::Other | DataSource::Progress => None,
         }
     }
 }

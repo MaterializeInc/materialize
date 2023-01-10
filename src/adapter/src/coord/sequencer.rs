@@ -581,6 +581,7 @@ impl Coordinator {
                                 source_status_collection_id,
                             )
                         }
+                        DataSourceDesc::Progress => (DataSource::Progress, None),
                         DataSourceDesc::Source => (DataSource::Other, None),
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
@@ -3677,7 +3678,9 @@ impl Coordinator {
             .expect("known to be source");
         match source.data_source {
             DataSourceDesc::Ingestion(_) => (),
-            DataSourceDesc::Source | DataSourceDesc::Introspection(_) => {
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => {
                 coord_bail!("cannot ALTER this type of source");
             }
         }
