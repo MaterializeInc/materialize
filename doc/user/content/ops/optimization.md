@@ -100,7 +100,8 @@ If your query filters one or more of the join inputs by a literal equality (e.g.
 
 #### Further Optimize with Late Materialization
 
-Even with delta joins, Materialize can potentially maintain much more data in memory than is needed. You can further optimize your multi-way joins with late materialization using this recipe:
+Materialize can further optimize memory usage - using a pattern known as late materialization - when joining relations containing primary and foreign key constraints.
+
 1. Create indexes on the primary keys of your input collections. Example:
     ```sql
     CREATE INDEX pk_lineitem ON lineitem (l_orderkey, l_linenumber);
