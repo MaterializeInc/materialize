@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Compute layer responses.
+//! Compute protocol responses.
 
 use std::num::NonZeroUsize;
 
@@ -27,17 +27,100 @@ include!(concat!(
     "/mz_compute_client.protocol.response.rs"
 ));
 
-/// Responses that the compute nature of a worker/dataflow can provide back to the coordinator.
+/// Compute protocol responses, sent by replicas to the compute controller.
+///
+/// Replicas send `ComputeResponse`s in response to [`ComputeCommand`]s they previously received
+/// from the compute controller.
+///
+/// [`ComputeCommand`]: super::command::ComputeCommand
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeResponse<T = mz_repr::Timestamp> {
-    /// A list of identifiers of traces, with new upper frontiers.
+    /// `FrontierUppers` announces the advancement of the upper frontiers of the specified compute
+    /// collections. The response contains a mapping of collection IDs to their new upper
+    /// frontiers.
     ///
-    /// TODO(teskje): Consider also reporting the previous upper frontier and using that
-    /// information to assert the correct implementation of our protocols at various places.
+    /// Upon receiving a `FrontierUppers` response, the controller may assume that the replica has
+    /// finished computing the given collections up to at least the given frontiers. It may also
+    /// assume that the replica has finished reading from the collections’ inputs up to those
+    /// frontiers.
+    ///
+    /// Replicas must send `FrontierUppers` responses for compute collections that are indexes or
+    /// storage sinks. Replicas must not send `FrontierUppers` responses for subscribes.
+    ///
+    /// Replicas must send a `FrontierUppers` response reporting advancement to the empty frontier
+    /// for a collection in two cases:
+    ///
+    ///   * The collection has advanced to the empty frontier (e.g. because its inputs have advanced
+    ///     to the empty frontier).
+    ///   * The collection was dropped in response to an [`AllowCompaction` command] that advanced
+    ///     its read frontier to the empty frontier. ([#16275])
+    ///
+    /// Once a collection was reported to have been advanced to the empty upper frontier:
+    ///
+    ///   * It must no longer read from its inputs.
+    ///   * The replica must not send further `FrontierUppers` responses for that collection.
+    ///
+    /// The replica must not send `FrontierUppers` responses for collections that have not
+    /// been created previously by a [`CreateDataflows` command]. An exception are `FrontierUppers`
+    /// responses that report the empty frontier. ([#16247])
+    ///
+    /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
+    /// [`CreateDataflows` command]: super::command::ComputeCommand::CreateDataflows
+    /// [#16247]: https://github.com/MaterializeInc/materialize/issues/16247
+    /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
     FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
-    /// The worker's response to a specified (by connection id) peek.
+
+    /// `PeekResponse` reports the result of a previous [`Peek` command]. The peek is identified by
+    /// a `Uuid` that matches the command's [`Peek::uuid`].
+    ///
+    /// The replica must send exactly one `PeekResponse` for every [`Peek` command] it received.
+    ///
+    /// If the replica did not receive a [`CancelPeeks` command] for a peek, it must not send a
+    /// [`Canceled`] response for that peek. If the replica did receive a [`CancelPeeks` command]
+    /// for a peek, it may send any of the three [`PeekResponse`] variants.
+    ///
+    /// The replica must not send `PeekResponse`s for peek IDs that were not previously specified
+    /// in a [`Peek` command].
+    ///
+    /// [`Peek` command]: super::command::ComputeCommand::Peek
+    /// [`CancelPeeks` command]: super::command::ComputeCommand::CancelPeeks
+    /// [`Peek::uuid`]: super::command::Peek::uuid
+    /// [`Canceled`]: PeekResponse::Canceled
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
-    /// The worker's next response to a specified subscribe.
+
+    /// `SubscribeResponse` reports the results emitted by an active subscribe over some time
+    /// interval.
+    ///
+    /// For each subscribe that was installed by a previous [`CreateDataflows` command], the
+    /// replica must emit [`Batch`] responses that cover the entire time interval from the
+    /// subscribe dataflow's `as_of` until the subscribe advances to the empty frontier or is
+    /// dropped. The time intervals of consecutive [`Batch`]es must be increasing, contiguous,
+    /// non-overlapping, and non-empty. All updates transmitted in a batch must have times within
+    /// that batch’s time interval.
+    ///
+    /// The replica must send [`DroppedAt`] responses if the subscribe was dropped in response to
+    /// an [`AllowCompaction` command] that advanced its read frontier to the empty frontier. The
+    /// [`DroppedAt`] frontier must be the upper frontier of the last emitted batch.
+    ///
+    /// The replica must not send a [`DroppedAt`] response if the subscribe’s upper frontier
+    /// (reported by [`Batch`] responses) has advanced to the empty frontier (e.g. because its
+    /// inputs advanced to the empty frontier).
+    ///
+    /// Once a subscribe was reported to have advanced to the empty frontier, or has been dropped:
+    ///
+    ///   * It must no longer read from its inputs.
+    ///   * The replica must not send further `SubscribeResponse`s for that subscribe.
+    ///
+    /// The replica must not send [`Batch`] responses for subscribes that have not been
+    /// created previously by a [`CreateDataflows` command]. The replica may send [`DroppedAt`]
+    /// responses for subscribes that have not been created previously by a [`CreateDataflows`
+    /// command]. ([#16247])
+    ///
+    /// [`Batch`]: SubscribeResponse::Batch
+    /// [`DroppedAt`]: SubscribeResponse::DroppedAt
+    /// [`CreateDataflows` command]: super::command::ComputeCommand::CreateDataflows
+    /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
+    /// [#16247]: https://github.com/MaterializeInc/materialize/issues/16247
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
 }
 
@@ -116,8 +199,11 @@ impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
 /// we expect a 1:1 contract between `Peek` and `PeekResponse`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum PeekResponse {
+    /// Returned rows of a successful peek.
     Rows(Vec<(Row, NonZeroUsize)>),
+    /// Error of an unsuccessful peek.
     Error(String),
+    /// The peek was canceled.
     Canceled,
 }
 

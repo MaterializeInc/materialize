@@ -25,12 +25,11 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 /// Logging configuration.
 ///
 /// Setting `enable_logging` to `false` specifies that logging is disabled.
-///
-/// Ideally we'd want to instead signal disabled logging by leaving both `index_logs` and
-/// `sink_logs` empty. Unfortunately, we have to always provide `index_logs`, because we must
-/// install the logging dataflows even on replicas that have logging disabled. See
-/// <https://github.com/MaterializeInc/materialize/issues/15799>.
-/// TODO(teskje): Clean this up once we remove the arranged introspection sources.
+//
+// Ideally we'd want to instead signal disabled logging by leaving both `index_logs` and
+// `sink_logs` empty. Unfortunately, we have to always provide `index_logs`, because we must
+// install the logging dataflows even on replicas that have logging disabled. See #15799.
+// TODO(teskje): Clean this up once we remove the arranged introspection sources.
 #[derive(Arbitrary, Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingConfig {
     /// The logging interval
