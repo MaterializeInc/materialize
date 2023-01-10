@@ -44,19 +44,25 @@ impl SystemParameterFrontend {
         let ld_client = ld::Client::build(ld_config)?;
         let ld_ctx = if env_id.cloud_provider() != &CloudProvider::Local {
             ld::ContextBuilder::new(env_id.to_string())
-                // TODO: uncomment one once the EAP for contexts is enabled in LD
-                // .kind("environment")
-                // .set_string("cloud_provider", env_id.cloud_provider())
-                // .set_string("cloud_provider_region", env_id.cloud_provider_region())
-                // .set_string("organization_id", env_id.organization_id().to_string())
-                // .set_string("ordinal", env_id.ordinal().to_string())
+                .kind("environment")
+                .set_string("cloud_provider", env_id.cloud_provider().to_string())
+                .set_string("cloud_provider_region", env_id.cloud_provider_region())
+                .set_string("organization_id", env_id.organization_id().to_string())
+                .set_string("ordinal", env_id.ordinal().to_string())
                 .build()
                 .map_err(|e| anyhow::anyhow!(e))?
         } else {
             // If cloud_provider is 'local', use an anonymous user with a custom
-            // email.
+            // email and set the organization_id to `uuid::Uuid::nil()`, as
+            // otherwise we will create a lot of additional contexts (which are
+            // the billable entity for LaunchDarkly).
             ld::ContextBuilder::new("anonymous-dev@materialize.com")
-                .anonymous(true)
+                .anonymous(true) // exclude this user from the dashboard
+                .kind("environment")
+                .set_string("cloud_provider", env_id.cloud_provider().to_string())
+                .set_string("cloud_provider_region", env_id.cloud_provider_region())
+                .set_string("organization_id", uuid::Uuid::nil().to_string())
+                .set_string("ordinal", env_id.ordinal().to_string())
                 .build()
                 .map_err(|e| anyhow::anyhow!(e))?
         };
