@@ -510,7 +510,9 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         // we can retrieve monotonicity information from the parent source.
         match &source.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.monotonic(),
-            DataSourceDesc::Introspection(_) | DataSourceDesc::Source => false,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => false,
         }
     }
 
