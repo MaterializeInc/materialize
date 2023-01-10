@@ -465,9 +465,10 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(e) => {
                 // Drop the placeholder sink if still present.
                 if self.catalog.try_get_entry(&id).is_some() {
+                    let ops = self.catalog.drop_items_ops(&[id]);
                     self.catalog_transact(
                         session_and_tx.as_ref().map(|(ref session, _tx)| session),
-                        vec![catalog::Op::DropItem(id)],
+                        ops,
                     )
                     .await
                     .expect("deleting placeholder sink cannot fail");
