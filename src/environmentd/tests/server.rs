@@ -511,7 +511,7 @@ fn test_storage_usage_collection_interval() {
         row.get::<_, UInt8>("size").0
     }
 
-    // mz_ore::test::init_logging();
+    mz_ore::test::init_logging();
 
     let config =
         util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(1));
