@@ -568,16 +568,21 @@ where
         heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, Since<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
-        self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |seqno, _cfg, state| {
-            state.downgrade_since(
-                reader_id,
-                seqno,
-                outstanding_seqno,
-                new_since,
-                heartbeat_timestamp_ms,
-            )
-        })
-        .await
+        let mut lease_remaining = Duration::ZERO;
+        let result = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |seqno, _cfg, state| {
+                lease_remaining = state.reader_lease_remaining(reader_id, heartbeat_timestamp_ms);
+                state.downgrade_since(
+                    reader_id,
+                    seqno,
+                    outstanding_seqno,
+                    new_since,
+                    heartbeat_timestamp_ms,
+                )
+            })
+            .await;
+        metrics.lease.observe_heartbeat_remaining(lease_remaining);
+        result
     }
 
     pub async fn compare_and_downgrade_since<O: Opaque + Codec64>(
@@ -612,11 +617,14 @@ where
         heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, bool, RoutineMaintenance) {
         let metrics = Arc::clone(&self.metrics);
+        let mut lease_remaining = Duration::ZERO;
         let (seqno, existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_reader, |_, _, state| {
+                lease_remaining = state.reader_lease_remaining(reader_id, heartbeat_timestamp_ms);
                 state.heartbeat_leased_reader(reader_id, heartbeat_timestamp_ms)
             })
             .await;
+        metrics.lease.observe_heartbeat_remaining(lease_remaining);
         (seqno, existed, maintenance)
     }
 
