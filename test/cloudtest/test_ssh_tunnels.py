@@ -51,7 +51,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
             """
         > CREATE SECRET pgpass AS 'postgres'
         > CREATE CONNECTION pg TO POSTGRES (
-            HOST 'postgres-source',
+            HOST 'postgres',
             DATABASE postgres,
             USER postgres,
             PASSWORD SECRET pgpass,
@@ -59,7 +59,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
             SSH TUNNEL ssh_conn
           );
 
-        $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+        $ postgres-execute connection=postgres://postgres:postgres@postgres
         ALTER USER postgres WITH replication;
         DROP SCHEMA IF EXISTS public CASCADE;
         DROP PUBLICATION IF EXISTS mz_source;
@@ -82,7 +82,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
         > SELECT f1 FROM t1;
         1
 
-        $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+        $ postgres-execute connection=postgres://postgres:postgres@postgres
         INSERT INTO t1 VALUES (1), (2);
 
         > SELECT f1 FROM t1 ORDER BY f1 ASC;
@@ -114,7 +114,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
         1
         2
 
-        $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+        $ postgres-execute connection=postgres://postgres:postgres@postgres
         INSERT INTO t1 VALUES (3), (4);
 
         > SELECT f1 FROM t1 ORDER BY f1 ASC;

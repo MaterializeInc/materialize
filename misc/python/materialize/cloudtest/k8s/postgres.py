@@ -25,25 +25,23 @@ from kubernetes.client import (
 from materialize.cloudtest.k8s import K8sDeployment, K8sService
 
 
-class PostgresSourceService(K8sService):
+class PostgresService(K8sService):
     def __init__(self) -> None:
         service_port = V1ServicePort(name="sql", port=5432)
 
         self.service = V1Service(
             api_version="v1",
             kind="Service",
-            metadata=V1ObjectMeta(
-                name="postgres-source", labels={"app": "postgres-source"}
-            ),
+            metadata=V1ObjectMeta(name="postgres", labels={"app": "postgres"}),
             spec=V1ServiceSpec(
                 type="NodePort",
                 ports=[service_port],
-                selector={"app": "postgres-source"},
+                selector={"app": "postgres"},
             ),
         )
 
 
-class PostgresSourceDeployment(K8sDeployment):
+class PostgresDeployment(K8sDeployment):
     def __init__(self) -> None:
         env = [
             V1EnvVar(name="POSTGRESDB", value="postgres"),
@@ -51,7 +49,7 @@ class PostgresSourceDeployment(K8sDeployment):
         ]
         ports = [V1ContainerPort(container_port=5432, name="sql")]
         container = V1Container(
-            name="postgres-source",
+            name="postgres",
             image=self.image("postgres", tag=None, release_mode=True),
             args=["-c", "wal_level=logical"],
             env=env,
@@ -59,23 +57,23 @@ class PostgresSourceDeployment(K8sDeployment):
         )
 
         template = V1PodTemplateSpec(
-            metadata=V1ObjectMeta(labels={"app": "postgres-source"}),
+            metadata=V1ObjectMeta(labels={"app": "postgres"}),
             spec=V1PodSpec(containers=[container]),
         )
 
-        selector = V1LabelSelector(match_labels={"app": "postgres-source"})
+        selector = V1LabelSelector(match_labels={"app": "postgres"})
 
         spec = V1DeploymentSpec(replicas=1, template=template, selector=selector)
 
         self.deployment = V1Deployment(
             api_version="apps/v1",
             kind="Deployment",
-            metadata=V1ObjectMeta(name="postgres-source"),
+            metadata=V1ObjectMeta(name="postgres"),
             spec=spec,
         )
 
 
-POSTGRES_SOURCE_RESOURCES = [
-    PostgresSourceService(),
-    PostgresSourceDeployment(),
+POSTGRES_RESOURCES = [
+    PostgresService(),
+    PostgresDeployment(),
 ]

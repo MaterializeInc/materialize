@@ -104,7 +104,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
             dedent(
                 """\
             CREATE CONNECTION pg TO POSTGRES (
-                HOST 'postgres-source',
+                HOST 'postgres',
                 DATABASE postgres,
                 USER postgres,
                 AWS PRIVATELINK privatelinkconn,
