@@ -428,5 +428,5 @@ Scanning across the 22 TPC-H queries, the numbers of records each query needs to
 Our use of shared arrangements means gives us access to efficient join plans that conventional dataflow systems cannot support. These join plans can **substantially** reduce the per-query resource requirements for relational queries.
 
 {{< note >}}
-This article has been updated from the original to reflect improvements in the cloud service. The original post is [available at Frank McSherry's personal blog](https://github.com/frankmcsherry/blog/blob/master/posts/2020-11-18.md).
+This article has been updated from the original to reflect the latest version of Materialize. The original post is [available at Frank McSherry's personal blog](https://github.com/frankmcsherry/blog/blob/master/posts/2020-11-18.md).
 {{</ note >}}
