@@ -50,6 +50,11 @@ contains:REPLICATION FACTOR for sink topics must be a positive integer or -1 for
   ENVELOPE DEBEZIUM
 contains:Invalid value for configuration property "request.required.acks" acks foo
 
+# Ensure that a sink whose topic fails to create does not result in an
+# orphaned linked cluster. See #17061.
+> SELECT count(*) FROM mz_clusters WHERE name = 'materialize_public_invalid_acks'
+0
+
 ! CREATE SINK invalid_key FROM v1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
   KEY(f2)
