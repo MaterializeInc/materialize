@@ -191,8 +191,8 @@ impl<S: Append + 'static> Coordinator<S> {
         //       takes. If it takes more than the interval, we're going to start
         //       missing intervals, which means underbiling.
 
-        // 1) Deterministically pick some point in the collection interval to prevent thundering
-        // herds across environments.
+        // 1) Deterministically pick some offset within the collection interval to prevent
+        // thundering herds across environments.
         const SEED_LEN: usize = 32;
         let mut seed = [0; SEED_LEN];
         for (i, byte) in format!("{}", self.catalog.state().config().environment_id)
@@ -202,18 +202,20 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             seed[i] = byte;
         }
-        let mut storage_usage_collection_interval_ms: EpochMillis =
+        let storage_usage_collection_interval_ms: EpochMillis =
             EpochMillis::try_from(self.storage_usage_collection_interval.as_millis())
                 .expect("storage usage collection interval must fit into u64");
-        storage_usage_collection_interval_ms =
+        let fuzz =
             rngs::SmallRng::from_seed(seed).gen_range(0..storage_usage_collection_interval_ms);
-
-        // 2) Determine the amount of ms between now and the next highest multiple of the chosen
-        // interval.
         let now_ts: EpochMillis = self.peek_local_write_ts().into();
-        let next_collection_interval = Duration::from_millis(
-            storage_usage_collection_interval_ms - (now_ts % storage_usage_collection_interval_ms),
-        );
+
+        // 2) Determine the amount of ms between now and the next collection time.
+        let previous_boundary = (now_ts - (now_ts % storage_usage_collection_interval_ms)) + fuzz;
+        let next_collection_interval = Duration::from_millis(if previous_boundary > now_ts {
+            previous_boundary
+        } else {
+            previous_boundary + storage_usage_collection_interval_ms
+        });
 
         // 3) Sleep for that amount of time, then initiate another storage usage collection.
         let internal_cmd_tx = self.internal_cmd_tx.clone();
