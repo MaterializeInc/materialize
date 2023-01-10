@@ -163,6 +163,18 @@ Apache License, Version 2.0. */}}
         localStorage.setItem("theme", "dark");
         highlightButton("dark");
       });
+
+      const allLinks = document.querySelectorAll('a')
+      console.log(allLinks.length)
+
+      allLinks.forEach((link) => {
+        const firstChild = link.children[0];
+        if(firstChild) {
+          if (firstChild.nodeName === 'CODE') {
+            link.classList.add("link-with-code")
+          }
+        }
+      })
     </script>
   </body>
 </html>

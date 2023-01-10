@@ -154,12 +154,18 @@ input[type="submit"] {
 
 a {
     color: var(--sub);
-    text-decoration: none;
+   
+    &:not(.link-with-code) {
+        text-decoration: none;
+    }
 
     &:hover,
     &:focus {
         text-decoration: underline;
-        color: var(--important);
+        &,
+        code {
+            color: var(--important);
+        }
     }
 }
 
