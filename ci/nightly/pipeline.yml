@@ -44,14 +44,14 @@ steps:
           - { value: checks-oneatatime-restart-entire-mz }
           - { value: checks-oneatatime-restart-environmentd-clusterd-storage }
           - { value: checks-oneatatime-kill-clusterd-storage }
-          - { value: checks-oneatatime-restart-postgres-backend }
+          - { value: checks-oneatatime-restart-cockroach }
           - { value: checks-oneatatime-restart-redpanda }
           - { value: checks-parallel-drop-create-default-replica }
           - { value: checks-parallel-restart-clusterd-compute }
           - { value: checks-parallel-restart-entire-mz }
           - { value: checks-parallel-restart-environmentd-clusterd-storage }
           - { value: checks-parallel-kill-clusterd-storage }
-          - { value: checks-parallel-restart-postgres-backend }
+          - { value: checks-parallel-restart-cockroach }
           - { value: checks-parallel-restart-redpanda }
           - { value: checks-upgrade-entire-mz }
           - { value: checks-upgrade-entire-mz-previous-version }
@@ -370,8 +370,8 @@ steps:
           composition: platform-checks
           args: [--scenario=KillClusterdStorage, --execution-mode=oneatatime]
 
-  - id: checks-oneatatime-restart-postgres-backend
-    label: "Checks oneatatime + restart Postgres backend"
+  - id: checks-oneatatime-restart-cockroach
+    label: "Checks oneatatime + restart Cockroach"
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
@@ -440,8 +440,8 @@ steps:
           composition: platform-checks
           args: [--scenario=KillClusterdStorage, --execution-mode=parallel]
 
-  - id: checks-parallel-restart-postgres-backend
-    label: "Checks parallel + restart Postgres backend"
+  - id: checks-parallel-restart-cockroach
+    label: "Checks parallel + restart Cockroach"
     timeout_in_minutes: 300
     agents:
       queue: linux-x86_64
