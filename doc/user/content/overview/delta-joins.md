@@ -225,7 +225,7 @@ With these indexes in place, we can rebuild our dataflow for `query_03`. Materia
 
 ![](https://res.cloudinary.com/mzimgcdn/image/upload/v1665546890/tpch1.webp)
 
-Notice that some of the places where we had "state" before are now dotted. This indicates that they are not **_new_** state; the state is simply re-used from pre-existing arrangements.
+Notice that some places where we had "state" before are now dotted. This indicates that they are not **_new_** state; the state is simply re-used from pre-existing indexes.
 
 If we re-run our diagnostic query, the one that counts the records maintained by dataflow, we see
 
