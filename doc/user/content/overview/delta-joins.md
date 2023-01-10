@@ -38,7 +38,6 @@ FROM customer
 INNER JOIN location ON customer.zip = location.zip;
 ```
 
-Here we have two collection of data, `customer` and `location`. We want to pick out pairs from each that match on their `zip` field. Although we didn't write the word `JOIN`, that is what happens in SQL when you use multiple input collections.
 
 Most dataflow systems will plan this join using a relatively simple dataflow graph:
 
