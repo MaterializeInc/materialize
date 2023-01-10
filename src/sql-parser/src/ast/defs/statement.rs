@@ -659,6 +659,42 @@ impl<T: AstInfo> AstDisplay for ReferencedSubsources<T> {
 }
 impl_display_t!(ReferencedSubsources);
 
+/// An option in a `CREATE SUBSOURCE` statement.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CreateSubsourceOptionName {
+    Progress,
+    References,
+}
+
+impl AstDisplay for CreateSubsourceOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            CreateSubsourceOptionName::Progress => {
+                f.write_str("PROGRESS");
+            }
+            CreateSubsourceOptionName::References => {
+                f.write_str("REFERENCES");
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateSubsourceOption<T: AstInfo> {
+    pub name: CreateSubsourceOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateSubsourceOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+
 /// `CREATE SUBSOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSubsourceStatement<T: AstInfo> {
@@ -666,6 +702,7 @@ pub struct CreateSubsourceStatement<T: AstInfo> {
     pub columns: Vec<ColumnDef<T>>,
     pub constraints: Vec<TableConstraint<T>>,
     pub if_not_exists: bool,
+    pub with_options: Vec<CreateSubsourceOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSubsourceStatement<T> {
@@ -682,6 +719,12 @@ impl<T: AstInfo> AstDisplay for CreateSubsourceStatement<T> {
             f.write_node(&display::comma_separated(&self.constraints));
         }
         f.write_str(")");
+
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
     }
 }
 impl_display_t!(CreateSubsourceStatement);
