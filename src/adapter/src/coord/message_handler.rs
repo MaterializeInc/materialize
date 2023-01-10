@@ -126,9 +126,6 @@ impl<S: Append + 'static> Coordinator<S> {
             })
             .collect();
 
-        // Similar to audit events, use the oracle ts so this is guaranteed to increase.
-        let collection_timestamp: EpochMillis = self.get_local_write_ts().await.timestamp.into();
-
         // Spawn an asynchronous task to compute the storage usage, which
         // requires a slow scan of the underlying storage engine.
         task::spawn(|| "storage_usage_fetch", async move {
@@ -144,24 +141,22 @@ impl<S: Append + 'static> Coordinator<S> {
                 Some(shard_id) => live_shards.contains(shard_id),
             });
 
-            // It is not an error for shard sizes to become ready after `internal_cmd_rx`
-            // is dropped.
-            let result = internal_cmd_tx.send(Message::StorageUsageUpdate(
-                shard_sizes,
-                collection_timestamp,
-            ));
-            if let Err(e) = result {
+            // It is not an error for shard sizes to become ready after
+            // `internal_cmd_rx` is dropped.
+            if let Err(e) = internal_cmd_tx.send(Message::StorageUsageUpdate(shard_sizes)) {
                 warn!("internal_cmd_rx dropped before we could send: {:?}", e);
             }
         });
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_update(
-        &mut self,
-        shard_sizes: HashMap<Option<ShardId>, u64>,
-        collection_timestamp: EpochMillis,
-    ) {
+    async fn storage_usage_update(&mut self, shard_sizes: HashMap<Option<ShardId>, u64>) {
+        // Similar to audit events, use the oracle ts so this is guaranteed to
+        // increase. This is intentionally the timestamp of when collection
+        // finished, not when it started, so that we don't write data with a
+        // timestamp in the past.
+        let collection_timestamp: EpochMillis = self.get_local_write_ts().await.timestamp.into();
+
         let mut ops = vec![];
         for (shard_id, size_bytes) in shard_sizes {
             ops.push(catalog::Op::UpdateStorageUsage {
@@ -186,6 +181,24 @@ impl<S: Append + 'static> Coordinator<S> {
         let now: EpochMillis = self.peek_local_write_ts().into();
         let time_since_previous_collection =
             now.saturating_sub(self.catalog.most_recent_storage_usage_collection());
+        // XXX TODO: this will slowly creep forward. If it takes 5m to collect
+        // storage usage, we'll creep forward by 5m each hour. That will
+        // produce some intervals with no data.
+        //
+        // Instead, we should:
+        //     * Generate a random minute within the interval, to prevent thundering
+        //       herds. Maybe use the env ID as the seed, so we don't need to
+        //       persist any new state.
+        //     * Sleep until it's that minute. So if the assigned minute is 05,
+        //       we'd schedule the first collection at, say, 5:05. If that takes
+        //       5m, we'd write down the results at 5:10, then schedule the next
+        //       collection for 6:05. If that one takes 10m, we'll write down
+        //       the results at 6:15 and schedule the next for 7:05. If that
+        //       one takes 65m... we'll skip the 8:05 collection (oh well)
+        //       and write down the results at 8:10.
+        //     * Expose a metric that tracks how long the storage usage collection
+        //       takes. If it takes more than the interval, we're going to start
+        //       missing intervals, which means underbiling.
         let next_collection_interval = self
             .storage_usage_collection_interval
             .saturating_sub(Duration::from_millis(time_since_previous_collection));
