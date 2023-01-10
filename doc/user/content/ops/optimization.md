@@ -142,6 +142,7 @@ Even with delta joins, Materialize can potentially maintain much more data in me
     ...
     ```
 4. Replace each foreign key from "wide" collections with the foreign key from "narrow" collections. Example:
+    
     Before:
     ```sql
     ...
