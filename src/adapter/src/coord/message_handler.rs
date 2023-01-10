@@ -127,9 +127,15 @@ impl<S: Append + 'static> Coordinator<S> {
             })
             .collect();
 
+        let collection_metric = self
+            .metrics
+            .storage_usage_collection_time_seconds
+            .with_label_values(&[]);
+
         // Spawn an asynchronous task to compute the storage usage, which
         // requires a slow scan of the underlying storage engine.
         task::spawn(|| "storage_usage_fetch", async move {
+            let collection_metric_timer = collection_metric.start_timer();
             let mut shard_sizes = client.shard_sizes().await;
 
             // Don't record usage for shards that are no longer live.
@@ -141,6 +147,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 None => true,
                 Some(shard_id) => live_shards.contains(shard_id),
             });
+            collection_metric_timer.observe_duration();
 
             // It is not an error for shard sizes to become ready after
             // `internal_cmd_rx` is dropped.
