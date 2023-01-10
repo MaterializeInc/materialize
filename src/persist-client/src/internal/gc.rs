@@ -12,10 +12,12 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
+use std::sync::Arc;
 use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use futures_util::future::join_all;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
@@ -340,21 +342,20 @@ where
         // becomes an issue. Maybe make Blob::delete take a list of keys?
         //
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
-        //
-        // Another idea is to use a FuturesUnordered to at least run them
-        // concurrently, but this requires a bunch of Arc cloning, so wait to
-        // see if it's worth it.
+        let mut futures = vec![];
         for key in deleteable_batch_blobs {
-            retry_external(&machine.metrics.retries.external.batch_delete, || async {
-                machine
-                    .state_versions
-                    .blob
-                    .delete(&key.complete(&req.shard_id))
-                    .await
-            })
-            .instrument(debug_span!("batch::delete"))
-            .await;
+            let blob = Arc::clone(&machine.state_versions.blob);
+            let key = key.complete(&req.shard_id);
+            futures.push(
+                retry_external(&machine.metrics.retries.external.batch_delete, move || {
+                    let blob = Arc::clone(&blob);
+                    let key = key.clone();
+                    async move { blob.delete(&key).await }
+                })
+                .instrument(debug_span!("batch::delete")),
+            )
         }
+        join_all(futures).await;
         debug!("gc {} deleted batch blobs", req.shard_id);
 
         // Now that we've deleted the eligible blobs, "commit" this info by
