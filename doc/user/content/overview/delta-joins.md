@@ -221,7 +221,7 @@ Notice that `lineitem` doesn't have a single primary key column. Instead, we use
 
 These indexes have names, though we do not need to use them explicitly. Rather, the columns identified at the end of each line indicate which columns are used as keys for the index. In this case, they are all primary keys.
 
-We can rebuild our dataflow for `query_03` with these indexes in place. Materialize is able to plan the dataflows based on the available indexes, and may find better plans which maintain less private state. The new dataflow graph will looks like so
+With these indexes in place, we can rebuild our dataflow for `query_03`. Materialize can plan the dataflows based on the available indexes and may find better plans which maintain less private state. The new dataflow graph will look like so
 
 ![](https://res.cloudinary.com/mzimgcdn/image/upload/v1665546890/tpch1.webp)
 
