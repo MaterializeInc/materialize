@@ -17,13 +17,13 @@ use std::rc::Rc;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
+use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::Consolidate;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
 
@@ -34,6 +34,7 @@ use mz_repr::{DatumVec, Diff, Row};
 
 use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
+use crate::typedefs::RowSpine;
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
 impl<G> Context<G, Row>
@@ -302,10 +303,14 @@ where
             G: Scope,
             G::Timestamp: Lattice,
         {
+            let shared = Rc::new(RefCell::new(monoids::Top1MonoidShared {
+                order_key,
+                left: DatumVec::new(),
+                right: DatumVec::new(),
+            }));
             // We can place our rows directly into the diff field, and only keep the relevant one
             // corresponding to evaluating our aggregate, instead of having to do a hierarchical
             // reduction.
-            use timely::dataflow::operators::Map;
 
             let collection = collection.map({
                 let mut datum_vec = mz_repr::DatumVec::new();
@@ -327,33 +332,44 @@ where
             //
             // TODO: Could we use explode here? We'd lose the diff>0 assert and we'd have to impl Mul
             // for the monoid, unclear if it's worth it.
-            let partial: Collection<G, Row, monoids::Top1Monoid> = collection
-                // TODO(#16549): Use explicit arrangement
-                .consolidate()
+            let mut buffer = Default::default();
+            let partial: Collection<G, (Row, ()), monoids::Top1Monoid> = collection
                 .inner
-                .map(move |((group_key, row), time, diff)| {
-                    assert!(diff > 0);
-                    // NB: Top1 can throw out the diff since we've asserted that it's > 0. A more
-                    // general TopK monoid would have to account for diff.
-                    (
-                        group_key,
-                        time,
-                        monoids::Top1Monoid {
-                            row,
-                            order_key: order_key.clone(),
-                        },
-                    )
-                })
+                .unary(
+                    Exchange::new(move |((key, _), _, _): &((Row, _), _, _)| key.hashed()),
+                    "Top1MonotonicPrepare",
+                    move |_cap, _op| {
+                        move |input, output| {
+                            while let Some((cap, data)) = input.next() {
+                                data.swap(&mut buffer);
+                                output.session(&cap).give_iterator(buffer.drain(..).map(
+                                    |((group_key, row), time, diff)| {
+                                        assert!(diff > 0);
+                                        // NB: Top1 can throw out the diff since we've asserted that it's > 0. A more
+                                        // general TopK monoid would have to account for diff.
+                                        (
+                                            (group_key, ()),
+                                            time,
+                                            monoids::Top1Monoid {
+                                                row,
+                                                shared: Rc::clone(&shared),
+                                            },
+                                        )
+                                    },
+                                ))
+                            }
+                        }
+                    },
+                )
                 .as_collection();
-            let result = partial
-                // TODO(#16549): Use explicit arrangement
-                .arrange_by_self()
-                .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("Top1Monotonic", {
-                    move |_key, input, output| {
-                        let accum = &input[0].1;
-                        output.push((accum.row.clone(), 1));
-                    }
-                });
+            let arranged =
+                partial.arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "Top1MonotonicArrange");
+            let result = arranged.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("Top1Monotonic", {
+                move |_key, input, output| {
+                    let accum = &input[0].1;
+                    output.push((accum.row.clone(), 1));
+                }
+            });
             // TODO(#7331): Here we discard the arranged output.
             result.as_collection(|_k, v| v.clone())
         }
@@ -387,7 +403,7 @@ where
                                 .entry(time.time().clone())
                                 .or_insert_with(HashMap::new);
                             for ((grp_row, row), record_time, diff) in vector.drain(..) {
-                                let monoid = monoids::Top1MonoidLocal {
+                                let monoid = monoids::Top1Monoid {
                                     row,
                                     shared: Rc::clone(&shared),
                                 };
@@ -525,48 +541,9 @@ pub mod monoids {
     use std::rc::Rc;
 
     use differential_dataflow::difference::Semigroup;
-    use serde::{Deserialize, Serialize};
 
     use mz_expr::ColumnOrder;
     use mz_repr::{DatumVec, Row};
-
-    /// A monoid containing a row and an ordering.
-    #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
-    pub struct Top1Monoid {
-        pub row: Row,
-        pub order_key: Vec<ColumnOrder>,
-    }
-
-    impl Ord for Top1Monoid {
-        fn cmp(&self, other: &Self) -> Ordering {
-            debug_assert_eq!(self.order_key, other.order_key);
-
-            // It might be nice to cache this row decoding like the non-monotonic codepath, but we'd
-            // have to store the decoded Datums in the same struct as the Row, which gets tricky.
-            let left: Vec<_> = self.row.unpack();
-            let right: Vec<_> = other.row.unpack();
-            mz_expr::compare_columns(&self.order_key, &left, &right, || left.cmp(&right))
-        }
-    }
-    impl PartialOrd for Top1Monoid {
-        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-
-    impl Semigroup for Top1Monoid {
-        fn plus_equals(&mut self, rhs: &Self) {
-            let cmp = (*self).cmp(rhs);
-            // NB: Reminder that TopK returns the _minimum_ K items.
-            if cmp == Ordering::Greater {
-                self.clone_from(rhs);
-            }
-        }
-
-        fn is_zero(&self) -> bool {
-            false
-        }
-    }
 
     /// A shared portion of a thread-local top-1 monoid implementation.
     #[derive(Debug)]
@@ -579,32 +556,32 @@ pub mod monoids {
     /// A monoid containing a row and a shared pointer to a shared structure.
     /// Only suitable for thread-local aggregations.
     #[derive(Debug, Clone)]
-    pub struct Top1MonoidLocal {
+    pub struct Top1Monoid {
         pub row: Row,
         pub shared: Rc<RefCell<Top1MonoidShared>>,
     }
 
-    impl Top1MonoidLocal {
+    impl Top1Monoid {
         pub fn into_row(self) -> Row {
             self.row
         }
     }
 
-    impl PartialEq for Top1MonoidLocal {
+    impl PartialEq for Top1Monoid {
         fn eq(&self, other: &Self) -> bool {
             self.row.eq(&other.row)
         }
     }
 
-    impl Eq for Top1MonoidLocal {}
+    impl Eq for Top1Monoid {}
 
-    impl Hash for Top1MonoidLocal {
+    impl Hash for Top1Monoid {
         fn hash<H: Hasher>(&self, state: &mut H) {
             self.row.hash(state);
         }
     }
 
-    impl Ord for Top1MonoidLocal {
+    impl Ord for Top1Monoid {
         fn cmp(&self, other: &Self) -> Ordering {
             debug_assert!(Rc::ptr_eq(&self.shared, &other.shared));
             let Top1MonoidShared {
@@ -619,18 +596,18 @@ pub mod monoids {
         }
     }
 
-    impl PartialOrd for Top1MonoidLocal {
+    impl PartialOrd for Top1Monoid {
         fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
             Some(self.cmp(other))
         }
     }
 
-    impl Semigroup for Top1MonoidLocal {
+    impl Semigroup for Top1Monoid {
         fn plus_equals(&mut self, rhs: &Self) {
             let cmp = (*self).cmp(rhs);
             // NB: Reminder that TopK returns the _minimum_ K items.
             if cmp == Ordering::Greater {
-                self.clone_from(rhs);
+                self.row.clone_from(&rhs.row);
             }
         }
 

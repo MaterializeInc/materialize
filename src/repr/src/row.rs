@@ -136,6 +136,10 @@ impl Clone for Row {
             data: SmallVec::from_slice(self.data.as_slice()),
         }
     }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.data.clone_from(&source.data);
+    }
 }
 
 impl Row {
