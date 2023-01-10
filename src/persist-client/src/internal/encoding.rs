@@ -202,6 +202,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             applier_version,
             seqno_from,
             seqno_to,
+            walltime_ms,
             latest_rollup_key,
             rollups,
             hostname,
@@ -275,6 +276,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             applier_version: applier_version.to_string(),
             seqno_from: seqno_from.into_proto(),
             seqno_to: seqno_to.into_proto(),
+            walltime_ms: walltime_ms.into_proto(),
             latest_rollup_key: latest_rollup_key.into_proto(),
             field_diffs: Some(field_diffs),
         }
@@ -298,6 +300,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             applier_version,
             proto.seqno_from.into_rust()?,
             proto.seqno_to.into_rust()?,
+            proto.walltime_ms,
             proto.latest_rollup_key.into_rust()?,
         );
         if let Some(field_diffs) = proto.field_diffs {
@@ -502,6 +505,7 @@ where
             applier_version: self.applier_version.to_string(),
             shard_id: self.shard_id.into_proto(),
             seqno: self.seqno.into_proto(),
+            walltime_ms: self.walltime_ms.into_proto(),
             hostname: self.hostname.into_proto(),
             key_codec: K::codec_name(),
             val_codec: V::codec_name(),
@@ -611,6 +615,7 @@ where
             applier_version,
             shard_id: x.shard_id.into_rust()?,
             seqno: x.seqno.into_rust()?,
+            walltime_ms: x.walltime_ms,
             hostname: x.hostname,
             collections,
             _phantom: PhantomData,
@@ -911,7 +916,7 @@ mod tests {
         let v3 = semver::Version::new(3, 0, 0);
 
         // Code version v2 evaluates and writes out some State.
-        let state = State::<(), (), u64, i64>::new(v2.clone(), "".to_owned(), ShardId::new());
+        let state = State::<(), (), u64, i64>::new(v2.clone(), ShardId::new(), "".to_owned(), 0);
         let mut buf = Vec::new();
         state.encode(&mut buf);
 
@@ -938,6 +943,7 @@ mod tests {
             v2.clone(),
             SeqNo(0),
             SeqNo(1),
+            2,
             PartialRollupKey("rollup".into()),
         );
         let mut buf = Vec::new();

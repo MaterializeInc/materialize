@@ -842,6 +842,9 @@ pub struct State<K, V, T, D> {
     pub(crate) shard_id: ShardId,
 
     pub(crate) seqno: SeqNo,
+    /// A strictly increasing wall time of when this state was written, in
+    /// milliseconds since the unix epoch.
+    pub(crate) walltime_ms: u64,
     /// Hostname of the persist user that created this version of state. For
     /// debugging.
     pub(crate) hostname: String,
@@ -863,6 +866,7 @@ impl<K, V, T: Clone, D> State<K, V, T, D> {
             applier_version,
             shard_id: self.shard_id.clone(),
             seqno: self.seqno.clone(),
+            walltime_ms: self.walltime_ms,
             hostname,
             collections: self.collections.clone(),
             _phantom: self._phantom.clone(),
@@ -878,6 +882,7 @@ impl<K, V, T: Debug, D> Debug for State<K, V, T, D> {
             applier_version,
             shard_id,
             seqno,
+            walltime_ms,
             hostname,
             collections,
             _phantom,
@@ -886,6 +891,7 @@ impl<K, V, T: Debug, D> Debug for State<K, V, T, D> {
             .field("applier_version", applier_version)
             .field("shard_id", shard_id)
             .field("seqno", seqno)
+            .field("walltime_ms", walltime_ms)
             .field("hostname", hostname)
             .field("collections", collections)
             .field("_phantom", _phantom)
@@ -903,6 +909,7 @@ impl<K, V, T: PartialEq, D> PartialEq for State<K, V, T, D> {
             applier_version: self_applier_version,
             shard_id: self_shard_id,
             seqno: self_seqno,
+            walltime_ms: self_walltime_ms,
             hostname: self_hostname,
             collections: self_collections,
             _phantom: _,
@@ -911,6 +918,7 @@ impl<K, V, T: PartialEq, D> PartialEq for State<K, V, T, D> {
             applier_version: other_applier_version,
             shard_id: other_shard_id,
             seqno: other_seqno,
+            walltime_ms: other_walltime_ms,
             hostname: other_hostname,
             collections: other_collections,
             _phantom: _,
@@ -918,6 +926,7 @@ impl<K, V, T: PartialEq, D> PartialEq for State<K, V, T, D> {
         self_applier_version == other_applier_version
             && self_shard_id == other_shard_id
             && self_seqno == other_seqno
+            && self_walltime_ms == other_walltime_ms
             && self_hostname == other_hostname
             && self_collections == other_collections
     }
@@ -983,11 +992,17 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Codec64,
 {
-    pub fn new(applier_version: Version, hostname: String, shard_id: ShardId) -> Self {
+    pub fn new(
+        applier_version: Version,
+        shard_id: ShardId,
+        hostname: String,
+        walltime_ms: u64,
+    ) -> Self {
         State {
             applier_version,
             shard_id,
             seqno: SeqNo::minimum(),
+            walltime_ms,
             hostname,
             collections: StateCollections {
                 last_gc_req: SeqNo::minimum(),
@@ -1070,10 +1085,17 @@ where
             applier_version: cfg.build_version.clone(),
             shard_id: self.shard_id,
             seqno: self.seqno.next(),
+            walltime_ms: (cfg.now)(),
             hostname: cfg.hostname.clone(),
             collections: self.collections.clone(),
             _phantom: PhantomData,
         };
+        // Make sure walltime_ms is strictly increasing, in case clocks are
+        // offset.
+        if new_state.walltime_ms <= self.walltime_ms {
+            new_state.walltime_ms = self.walltime_ms + 1;
+        }
+
         let work_ret = work_fn(new_state.seqno, cfg, &mut new_state.collections)?;
         Continue((work_ret, new_state))
     }
@@ -1218,8 +1240,9 @@ mod tests {
     fn downgrade_since() {
         let mut state = State::<(), (), u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
-            "".to_owned(),
             ShardId::new(),
+            "".to_owned(),
+            0,
         );
         let reader = LeasedReaderId::new();
         let seqno = SeqNo::minimum();
@@ -1368,8 +1391,9 @@ mod tests {
         mz_ore::test::init_logging();
         let mut state = State::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
-            "".to_owned(),
             ShardId::new(),
+            "".to_owned(),
+            0,
         )
         .collections;
 
@@ -1455,8 +1479,9 @@ mod tests {
 
         let mut state = State::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
-            "".to_owned(),
             ShardId::new(),
+            "".to_owned(),
+            0,
         );
         // Cannot take a snapshot with as_of == shard upper.
         assert_eq!(
@@ -1602,8 +1627,9 @@ mod tests {
 
         let mut state = State::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
-            "".to_owned(),
             ShardId::new(),
+            "".to_owned(),
+            0,
         );
 
         // Empty collection never has any batches to listen for, regardless of the
@@ -1667,8 +1693,9 @@ mod tests {
 
         let mut state = State::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
-            "".to_owned(),
             ShardId::new(),
+            "".to_owned(),
+            0,
         );
         let now = SYSTEM_TIME.clone();
 
@@ -1744,8 +1771,9 @@ mod tests {
         mz_ore::test::init_logging();
         let mut state = State::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
-            "".to_owned(),
             ShardId::new(),
+            "".to_owned(),
+            0,
         );
 
         // Empty state doesn't need gc, regardless of is_write.

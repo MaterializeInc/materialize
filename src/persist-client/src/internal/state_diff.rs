@@ -66,6 +66,7 @@ pub struct StateDiff<T> {
     pub(crate) applier_version: semver::Version,
     pub(crate) seqno_from: SeqNo,
     pub(crate) seqno_to: SeqNo,
+    pub(crate) walltime_ms: u64,
     pub(crate) latest_rollup_key: PartialRollupKey,
     pub(crate) rollups: Vec<StateFieldDiff<SeqNo, PartialRollupKey>>,
     pub(crate) hostname: Vec<StateFieldDiff<(), String>>,
@@ -82,12 +83,14 @@ impl<T: Timestamp + Codec64> StateDiff<T> {
         applier_version: semver::Version,
         seqno_from: SeqNo,
         seqno_to: SeqNo,
+        walltime_ms: u64,
         latest_rollup_key: PartialRollupKey,
     ) -> Self {
         StateDiff {
             applier_version,
             seqno_from,
             seqno_to,
+            walltime_ms,
             latest_rollup_key,
             rollups: Vec::default(),
             hostname: Vec::default(),
@@ -110,6 +113,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
             shard_id: from_shard_id,
             seqno: from_seqno,
             hostname: from_hostname,
+            walltime_ms: _, // Intentionally unused
             collections:
                 StateCollections {
                     last_gc_req: from_last_gc_req,
@@ -125,6 +129,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
             applier_version: to_applier_version,
             shard_id: to_shard_id,
             seqno: to_seqno,
+            walltime_ms: to_walltime_ms,
             hostname: to_hostname,
             collections:
                 StateCollections {
@@ -144,6 +149,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
             to_applier_version.clone(),
             *from_seqno,
             *to_seqno,
+            *to_walltime_ms,
             latest_rollup_key.clone(),
         );
         diff_field_single(from_hostname, to_hostname, &mut diffs.hostname);
@@ -184,6 +190,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
 
         let mut roundtrip_state =
             from_state.clone(to_state.applier_version.clone(), to_state.hostname.clone());
+        roundtrip_state.walltime_ms = to_state.walltime_ms;
         roundtrip_state.apply_diff(metrics, diff.clone())?;
 
         if &roundtrip_state != to_state {
@@ -1044,8 +1051,9 @@ mod tests {
         let cfg = PersistConfig::new_for_tests();
         let state = State::<(), (), u64, i64>::new(
             cfg.build_version.clone(),
-            cfg.hostname.clone(),
             ShardId([0u8; 16]),
+            cfg.hostname.clone(),
+            (cfg.now)(),
         );
         let state = state.clone_apply(&cfg, &mut |_seqno, _cfg, state| {
             for b in batches_before.iter() {
