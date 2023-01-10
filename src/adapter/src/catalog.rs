@@ -1491,6 +1491,8 @@ pub enum DataSourceDesc {
     Source,
     /// Receives introspection data from an internal system
     Introspection(IntrospectionType),
+    /// Receives data from the source's reclocking/remapping operations.
+    Progress,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1511,7 +1513,9 @@ impl Source {
     pub fn is_external(&self) -> bool {
         match self.data_source {
             DataSourceDesc::Ingestion(_) => true,
-            DataSourceDesc::Source | DataSourceDesc::Introspection(_) => false,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => false,
         }
     }
 
@@ -1519,7 +1523,7 @@ impl Source {
     pub fn source_type(&self) -> &str {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.name(),
-            DataSourceDesc::Source => "subsource",
+            DataSourceDesc::Progress | DataSourceDesc::Source => "subsource",
             DataSourceDesc::Introspection(_) => "source",
         }
     }
@@ -1557,8 +1561,9 @@ impl Source {
                     Some("materialize")
                 }
             },
-            DataSourceDesc::Source => None,
-            DataSourceDesc::Introspection(_) => None,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => None,
         }
     }
 
@@ -1566,7 +1571,9 @@ impl Source {
     pub fn connection_id(&self) -> Option<GlobalId> {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.connection_id(),
-            DataSourceDesc::Source | DataSourceDesc::Introspection(_) => None,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => None,
         }
     }
 }
@@ -1754,7 +1761,9 @@ impl CatalogItem {
         match &self {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Ok(Some(&ingestion.desc)),
-                DataSourceDesc::Source | DataSourceDesc::Introspection(_) => Ok(None),
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Source => Ok(None),
             },
             _ => Err(SqlCatalogError::UnexpectedType {
                 name: entry.name().item.to_string(),
@@ -1901,8 +1910,9 @@ impl CatalogItem {
             CatalogItem::Index(index) => Some(index.cluster_id),
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Some(ingestion.cluster_id),
-                DataSourceDesc::Source => None,
-                DataSourceDesc::Introspection(_) => None,
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Source => None,
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
             CatalogItem::Table(_)
@@ -6597,7 +6607,9 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
                 DataSourceDesc::Ingestion(ingestion) => {
                     ingestion.subsource_exports.keys().copied().collect()
                 }
-                DataSourceDesc::Source | DataSourceDesc::Introspection(_) => vec![],
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Source => vec![],
             },
             CatalogItem::Table(_)
             | CatalogItem::Log(_)
