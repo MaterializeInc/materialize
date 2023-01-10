@@ -115,8 +115,8 @@ Even with delta joins, Materialize can potentially maintain much more data in me
     CREATE INDEX lineitem_fk_orderkey_1 ON lineitem_fk_orderkey (l_orderkey);
     -- Create a view containing foreign key `o_custkey` and `orders`'s primary key `o_orderkey`.
     CREATE VIEW orders_fk_custkey AS SELECT o_orderkey, o_custkey FROM orders;
-    CREATE INDEX orders_fk_custkey_0 on orders_key_custkey (o_orderkey);
-    CREATE INDEX orders_fk_custkey_1 on orders_key_custkey (o_custkey);
+    CREATE INDEX orders_fk_custkey_0 on orders_fk_custkey (o_orderkey);
+    CREATE INDEX orders_fk_custkey_1 on orders_fk_custkey (o_custkey);
     ```
 3. Update your query's `FROM` statement to include the narrow views. Example:
     
