@@ -15,10 +15,19 @@ Like in any standard relational database, you can use [indexes](/overview/key-co
 
 Building an efficient index depends on the clauses used in your queries, as well as your expected access patterns. Use the following as a guide:
 
+* [DEFAULT](#default)
 * [WHERE](#where)
 * [JOIN](#join)
 
 `GROUP BY`, `ORDER BY` and `LIMIT` clauses currently do not benefit from an index.
+
+### Default
+
+Create a default index when there is no particular `WHERE` or `JOIN` clause that would fit the above cases. This can still speed up your query by reading the input from memory.
+
+Clause                                               | Index                               |
+-----------------------------------------------------|-------------------------------------|
+`SELECT x, y FROM obj_name`                          | `CREATE DEFAULT INDEX ON obj_name;` |
 
 ### `WHERE`
 Speed up a query involving a `WHERE` clause with equality comparisons to literals (e.g., `42`, or `'foo'`):
@@ -61,9 +70,11 @@ Clause                                      | Index                             
 --------------------------------------------|-----------------------------------------------------------------------------|
 `FROM view V JOIN table T ON (V.id = T.id)` | `CREATE INDEX ON view (id);` <br /> `CREATE INDEX ON table (id);`           |
 
+#### Optimize Multi-Way Joins with Delta Joins
+
 For joins between more than two inputs, you should strive for a *delta join* (a special join implementation of Materialize for making multi-way streaming joins memory-efficient), which is typically possible when you index all the join keys:
 ```
-materialize=> EXPLAIN SELECT * FROM t1, t2, t3 WHERE t1.y = t2.x AND t2.y = t3.x;
+materialize=> EXPLAIN SELECT * FROM t1, t2, t3 WHERE t1.y = t2.x AND t2.w = t3.z;
                   Optimized Plan
 --------------------------------------------------
  Explained Query:                                +
@@ -79,18 +90,85 @@ materialize=> EXPLAIN SELECT * FROM t1, t2, t3 WHERE t1.y = t2.x AND t2.y = t3.x
                                                  +
  Used Indexes:                                   +
    - materialize.public.t1_y                     +
-   - materialize.public.t3_x                     +
    - materialize.public.t2_x                     +
-   - materialize.public.t2_y                     +
+   - materialize.public.t2_w                     +
+   - materialize.public.t3_z                     +
 ```
-Delta joins have the advantage of using negligible additional memory outside the explicitly created indexes on the inputs. For more details, see [Maintaining Joins using Few Resources](https://materialize.com/blog/maintaining-joins-using-few-resources).
+Delta joins have the advantage of using negligible additional memory outside the explicitly created indexes on the inputs. For more details, see [Delta Joins and Late Materialization](../overview/delta-joins.md).
 
 If your query filters one or more of the join inputs by a literal equality (e.g., `t1.y = 42`), place one of those inputs first in the `FROM` clause. In particular, this can speed up [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) by accessing inputs using index lookups, rather than full scans.
 
-### Default
+#### Further Optimize with Late Materialization
 
-Create a default index when there is no particular `WHERE` or `JOIN` clause that would fit the above cases. This can still speed up your query by reading the input from memory.
+Even with delta joins, Materialize can potentially maintain much more data in memory than is needed. You can further optimize your multi-way joins with late materialization using this recipe:
+1. Create indexes on the primary keys of your input collections. Example:
+    ```sql
+    CREATE INDEX pk_lineitem ON lineitem (l_orderkey, l_linenumber);
+    CREATE INDEX pk_customer ON customer (c_custkey);
+    CREATE INDEX pk_orders ON orders (o_orderkey);
+    ```
+2. For each foreign key in the join, create a "narrow" view with just two columns: foreign key and primary key. Then create two indexes: one for the foreign key and one for the primary key. Example from [Delta Joins and Late Materialization](../overview/delta-joins.md):
+    ```sql
+    -- Create a view containing foreign key `l_orderkey` and `lineitem`'s composite primary key (l_orderkey, l_linenumber).
+    CREATE VIEW lineitem_fk_orderkey AS SELECT l_orderkey, l_linenumber FROM lineitem;
+    CREATE INDEX lineitem_fk_orderkey_0 ON lineitem_fk_orderkey (l_orderkey, l_linenumber);
+    CREATE INDEX lineitem_fk_orderkey_1 ON lineitem_fk_orderkey (l_orderkey);
+    -- Create a view containing foreign key `o_custkey` and `orders`'s primary key `o_orderkey`.
+    CREATE VIEW orders_fk_custkey AS SELECT o_orderkey, o_custkey FROM orders;
+    CREATE INDEX orders_fk_custkey_0 on orders_key_custkey (o_orderkey);
+    CREATE INDEX orders_fk_custkey_1 on orders_key_custkey (o_custkey);
+    ```
+3. Update your query's `FROM` statement to include the narrow views. Example:
+    
+    Before:
+    ```sql
+    ...
+    FROM
+        customer,
+        orders,
+        lineitem
+    ...
+    ```
+    After:
+    ```sql
+    ...
+    FROM
+        customer c,
+        orders o,
+        lineitem l,
+        -- NEW: "narrow" collections containing just primary and foreign keys.
+        lineitem_fk_orderkey l_ok,
+        orders_fk_custkey o_ck
+    ...
+    ```
+4. Replace each foreign key from "wide" collections with the foreign key from "narrow" collections. Example:
+    Before:
+    ```sql
+    ...
+    WHERE
+    ...
+        AND l_orderkey = o_orderkey
+        AND o_custkey  = c_custkey
+    ...
+    ```
+    After:
+    ```sql
+    ...
+    WHERE
+        -- core equijoin constraints using "narrow" collections.
+        l_ok.l_orderkey = o.o_orderkey
+        AND o_ck.o_custkey = c.c_custkey
+    ...
+    ```
+5. Finally, add join conditions to equate each foreign key from "narrow" collections to a primary key from "wide" collections. Example:
+    ```sql
+    ...
+    WHERE
+    ...
+        -- connect narrow and wide collections.
+        AND o_ck.o_orderkey = o.o_orderkey
+        AND l_ok.l_orderkey = l.l_orderkey
+        AND l_ok.l_linenumber = l.l_linenumber
+    ...
+    ```
 
-Clause                                               | Index                               |
------------------------------------------------------|-------------------------------------|
-`SELECT x, y FROM obj_name`                          | `CREATE DEFAULT INDEX ON obj_name;` |
