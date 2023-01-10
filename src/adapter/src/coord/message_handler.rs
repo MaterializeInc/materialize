@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use chrono::DurationRound;
+use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Level};
 
 use mz_compute_client::controller::ComputeInstanceEvent;
@@ -79,8 +80,8 @@ impl<S: Append + 'static> Coordinator<S> {
             Message::StorageUsageFetch => {
                 self.storage_usage_fetch().await;
             }
-            Message::StorageUsageUpdate(sizes, collection_timestamp) => {
-                self.storage_usage_update(sizes, collection_timestamp).await;
+            Message::StorageUsageUpdate(sizes) => {
+                self.storage_usage_update(sizes).await;
             }
             Message::Consolidate(collections) => {
                 self.consolidate(&collections).await;
@@ -175,33 +176,39 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     pub fn schedule_storage_usage_collection(&self) {
-        // Instead of using an `tokio::timer::Interval`, we calculate the time since the last
-        // collection and wait for however much time is left. This is so we can keep the intervals
-        // consistent even across restarts.
-        let now: EpochMillis = self.peek_local_write_ts().into();
-        let time_since_previous_collection =
-            now.saturating_sub(self.catalog.most_recent_storage_usage_collection());
-        // XXX TODO: this will slowly creep forward. If it takes 5m to collect
-        // storage usage, we'll creep forward by 5m each hour. That will
-        // produce some intervals with no data.
-        //
-        // Instead, we should:
-        //     * Generate a random minute within the interval, to prevent thundering
-        //       herds. Maybe use the env ID as the seed, so we don't need to
-        //       persist any new state.
-        //     * Sleep until it's that minute. So if the assigned minute is 05,
-        //       we'd schedule the first collection at, say, 5:05. If that takes
-        //       5m, we'd write down the results at 5:10, then schedule the next
-        //       collection for 6:05. If that one takes 10m, we'll write down
-        //       the results at 6:15 and schedule the next for 7:05. If that
-        //       one takes 65m... we'll skip the 8:05 collection (oh well)
-        //       and write down the results at 8:10.
-        //     * Expose a metric that tracks how long the storage usage collection
+        // Instead of using an `tokio::timer::Interval`, we calculate the time until the next
+        // usage collection and wait for that amount of time. This is so we can keep the intervals
+        // consistent even across restarts. If collection takes too long, it is possible that
+        // we miss an interval.
+        // XXX TODO:  Expose a metric that tracks how long the storage usage collection
         //       takes. If it takes more than the interval, we're going to start
         //       missing intervals, which means underbiling.
-        let next_collection_interval = self
-            .storage_usage_collection_interval
-            .saturating_sub(Duration::from_millis(time_since_previous_collection));
+
+        // 1) Deterministically pick some point in the collection interval to prevent thundering
+        // herds across environments.
+        const SEED_LEN: usize = 32;
+        let mut seed = [0; SEED_LEN];
+        for (i, byte) in format!("{}", self.catalog.state().config().environment_id)
+            .bytes()
+            .take(SEED_LEN)
+            .enumerate()
+        {
+            seed[i] = byte;
+        }
+        let mut storage_usage_collection_interval_ms: EpochMillis =
+            EpochMillis::try_from(self.storage_usage_collection_interval.as_millis())
+                .expect("storage usage collection interval must fit into u64");
+        storage_usage_collection_interval_ms =
+            rngs::SmallRng::from_seed(seed).gen_range(0..storage_usage_collection_interval_ms);
+
+        // 2) Determine the amount of ms between now and the next highest multiple of the chosen
+        // interval.
+        let now_ts: EpochMillis = self.peek_local_write_ts().into();
+        let next_collection_interval = Duration::from_millis(
+            storage_usage_collection_interval_ms - (now_ts % storage_usage_collection_interval_ms),
+        );
+
+        // 3) Sleep for that amount of time, then initiate another storage usage collection.
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         task::spawn(|| "storage_usage_collection", async move {
             tokio::time::sleep(next_collection_interval).await;
