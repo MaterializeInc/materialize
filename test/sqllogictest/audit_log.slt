@@ -129,3 +129,9 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 44  create  cluster-replica  {"cluster_id":"u4","cluster_name":"materialize_public_multiplex","logical_size":"1","replica_id":"7","replica_name":"linked"}  materialize
 45  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","replica_id":"4","replica_name":"r"}  materialize
 46  drop  cluster  {"id":"u2","name":"foo"}  materialize
+
+# Check the details field only to ignore the changing occurred_at timestamp.
+query IT
+SELECT id, encode(raw, 'escape')::jsonb->'V1'->'details' FROM mz_audit_events ORDER BY id LIMIT 1;
+----
+1  {"IdNameV1":{"id":"1","name":"materialize"}}

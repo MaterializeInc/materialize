@@ -844,6 +844,7 @@ impl CatalogState {
                     None => Datum::Null,
                 },
                 Datum::TimestampTz(DateTime::from_utc(dt, Utc).try_into().expect("must fit")),
+                Datum::Bytes(&event.serialize()),
             ]),
             diff: 1,
         })
