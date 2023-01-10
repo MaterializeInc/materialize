@@ -28,7 +28,7 @@ use mz_persist::metrics::PostgresConsensusMetrics;
 use mz_persist::retry::RetryStream;
 use mz_persist_types::Codec64;
 use prometheus::core::{AtomicI64, AtomicU64};
-use prometheus::{CounterVec, IntCounterVec};
+use prometheus::{CounterVec, Histogram, HistogramOpts, IntCounterVec};
 use timely::progress::Antichain;
 
 use crate::{PersistConfig, ShardId};
@@ -792,6 +792,7 @@ impl GcMetrics {
 pub struct LeaseMetrics {
     pub(crate) timeout_read: IntCounter,
     pub(crate) dropped_part: IntCounter,
+    pub(crate) heartbeat_remaining: Histogram,
 }
 
 impl LeaseMetrics {
@@ -805,7 +806,28 @@ impl LeaseMetrics {
                 name: "mz_persist_lease_dropped_part",
                 help: "count of LeasedBatchParts that were dropped without being politely returned",
             )),
+            heartbeat_remaining: {
+                let histogram = Histogram::with_opts(
+                    HistogramOpts::new(
+                        "mz_persist_lease_heartbeat_remaining",
+                        "time until lease expiry at metric renew time",
+                    )
+                    .buckets(
+                        // We tend to renew leases 11.25 minutes before expiry, so 8+ is "good enough"
+                        [1., 2., 4., 8.].into_iter().map(|m| m * 60.0).collect(),
+                    ),
+                )
+                .expect("creating histogram with known-good config");
+                registry.register_collector(histogram.clone());
+                histogram
+            },
         }
+    }
+}
+
+impl LeaseMetrics {
+    pub fn observe_heartbeat_remaining(&self, duration: Duration) {
+        self.heartbeat_remaining.observe(duration.as_secs_f64())
     }
 }
 
