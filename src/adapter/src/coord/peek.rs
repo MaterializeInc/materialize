@@ -33,7 +33,6 @@ use mz_ore::str::StrExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
-use mz_stash::Append;
 
 use crate::client::ConnectionId;
 use crate::coord::timestamp_selection::TimestampContext;
@@ -241,7 +240,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
     Ok(None)
 }
 
-impl<S: Append + 'static> crate::coord::Coordinator<S> {
+impl crate::coord::Coordinator {
     /// Creates a [`PeekPlan`] for the given `dataflow`.
     ///
     /// The result will be a [`PeekPlan::FastPath`] plan iff the [`create_fast_path_plan`]

@@ -77,31 +77,20 @@
 //! Durable metadata storage.
 
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
-use std::iter;
 use std::marker::PhantomData;
-use std::num::NonZeroI64;
 
-use async_trait::async_trait;
 use mz_ore::soft_assert;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use timely::progress::frontier::AntichainRef;
 use timely::progress::Antichain;
-use timely::PartialOrder;
 
-use mz_ore::collections::CollectionExt;
-
-mod cache;
-mod memory;
 mod postgres;
 
-pub use crate::cache::Cache;
-pub use crate::memory::Memory;
-pub use crate::postgres::{Postgres, PostgresFactory};
+pub use crate::postgres::{Stash, StashFactory};
 
 pub type Diff = i64;
 pub type Timestamp = i64;
@@ -112,364 +101,6 @@ pub type Id = i64;
 pub trait Data: Serialize + for<'de> Deserialize<'de> + Ord + Send + Sync {}
 
 impl<T: Serialize + for<'de> Deserialize<'de> + Ord + Send + Sync> Data for T {}
-
-/// A durable metadata store.
-///
-/// A stash manages any number of named [`StashCollection`]s.
-///
-/// A stash is designed to store only a small quantity of data. Think megabytes,
-/// not gigabytes.
-///
-/// The API of a stash intentionally mimics the API of a [STORAGE] collection.
-/// You can think of stash as a stable but very low performance STORAGE
-/// collection. When the STORAGE layer is stable enough to serve as a source of
-/// truth, the intent is to swap all stashes for STORAGE collections.
-///
-/// [STORAGE]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/platform/architecture-db.md#STORAGE
-#[async_trait]
-pub trait Stash: std::fmt::Debug + Send {
-    /// Loads or creates the named collection.
-    ///
-    /// If the collection with the specified name does not yet exist, it is
-    /// created with no entries, a zero since frontier, and a zero upper
-    /// frontier. Otherwise the existing durable state is loaded.
-    ///
-    /// It is the callers responsibility to keep `K` and `V` fixed for a given
-    /// collection in a given stash for the lifetime of the stash.
-    ///
-    /// It is valid to construct multiple handles to the same named collection
-    /// and use them simultaneously.
-    async fn collection<K, V>(&mut self, name: &str) -> Result<StashCollection<K, V>, StashError>
-    where
-        K: Data,
-        V: Data;
-
-    /// Returns the names of the collections in the stash.
-    async fn collections(&mut self) -> Result<BTreeSet<String>, StashError>;
-
-    /// Iterates over all entries in the stash.
-    ///
-    /// Entries are iterated in `(key, value, time)` order and are guaranteed
-    /// to be consolidated.
-    ///
-    /// Each entry's time is guaranteed to be greater than or equal to the since
-    /// frontier. The time may also be greater than the upper frontier,
-    /// indicating data that has not yet been made definite.
-    async fn iter<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<Vec<((K, V), Timestamp, Diff)>, StashError>
-    where
-        K: Data,
-        V: Data;
-
-    /// Iterates over entries in the stash for the given key.
-    ///
-    /// Entries are iterated in `(value, timestamp)` order and are guaranteed
-    /// to be consolidated.
-    ///
-    /// Each entry's time is guaranteed to be greater than or equal to the since
-    /// frontier. The time may also be greater than the upper frontier,
-    /// indicating data that has not yet been made definite.
-    async fn iter_key<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-        key: &K,
-    ) -> Result<Vec<(V, Timestamp, Diff)>, StashError>
-    where
-        K: Data,
-        V: Data;
-
-    /// Returns the most recent timestamp at which sealed entries can be read.
-    async fn peek_timestamp<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<Timestamp, StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        let since = self.since(collection).await?;
-        let upper = self.upper(collection).await?;
-        if PartialOrder::less_equal(&upper, &since) {
-            return Err(StashError {
-                inner: InternalStashError::PeekSinceUpper(format!(
-                    "collection {} since {} is not less than upper {}",
-                    collection.id,
-                    AntichainFormatter(&since),
-                    AntichainFormatter(&upper)
-                )),
-            });
-        }
-        match upper.as_option() {
-            Some(ts) => match ts.checked_sub(1) {
-                Some(ts) => Ok(ts),
-                None => Err("could not determine peek timestamp".into()),
-            },
-            None => Ok(Timestamp::MAX),
-        }
-    }
-
-    /// Returns the current value of sealed entries.
-    ///
-    /// Entries are iterated in `(key, value)` order and are guaranteed to be
-    /// consolidated.
-    ///
-    /// Sealed entries are those with timestamps less than the collection's upper
-    /// frontier.
-    async fn peek<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<Vec<(K, V, Diff)>, StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        let timestamp = self.peek_timestamp(collection).await?;
-        let mut rows: Vec<_> = self
-            .iter(collection)
-            .await?
-            .into_iter()
-            .filter_map(|((k, v), data_ts, diff)| {
-                if data_ts.less_equal(&timestamp) {
-                    Some((k, v, diff))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        differential_dataflow::consolidation::consolidate_updates(&mut rows);
-        Ok(rows)
-    }
-
-    /// Returns the current k,v pairs of sealed entries, erroring if there is more
-    /// than one entry for a given key or the multiplicity is not 1 for each key.
-    ///
-    /// Sealed entries are those with timestamps less than the collection's upper
-    /// frontier.
-    async fn peek_one<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<BTreeMap<K, V>, StashError>
-    where
-        K: Data + std::hash::Hash,
-        V: Data,
-    {
-        let rows = self.peek(collection).await?;
-        let mut res = BTreeMap::new();
-        for (k, v, diff) in rows {
-            if diff != 1 {
-                return Err("unexpected peek multiplicity".into());
-            }
-            if res.insert(k, v).is_some() {
-                return Err(format!("duplicate peek keys for collection {}", collection.id).into());
-            }
-        }
-        Ok(res)
-    }
-
-    /// Returns the current sealed value for the given key, erroring if there is
-    /// more than one entry for the key or its multiplicity is not 1.
-    ///
-    /// Sealed entries are those with timestamps less than the collection's upper
-    /// frontier.
-    #[tracing::instrument(level = "trace", skip_all)]
-    async fn peek_key_one<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-        key: &K,
-    ) -> Result<Option<V>, StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        let timestamp = self.peek_timestamp(collection).await?;
-        let mut rows: Vec<_> = self
-            .iter_key(collection, key)
-            .await?
-            .into_iter()
-            .filter_map(|(v, data_ts, diff)| {
-                if data_ts.less_equal(&timestamp) {
-                    Some((v, diff))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        differential_dataflow::consolidation::consolidate(&mut rows);
-        let v = match rows.len() {
-            1 => {
-                let (v, diff) = rows.into_element();
-                match diff {
-                    1 => Some(v),
-                    0 => None,
-                    _ => return Err("multiple values unexpected".into()),
-                }
-            }
-            0 => None,
-            _ => return Err("multiple values unexpected".into()),
-        };
-        Ok(v)
-    }
-
-    /// Atomically adds a single entry to the arrangement.
-    ///
-    /// The entry's time must be greater than or equal to the upper frontier.
-    ///
-    /// If this method returns `Ok`, the entry has been made durable.
-    async fn update<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-        data: (K, V),
-        time: Timestamp,
-        diff: Diff,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        self.update_many(collection, iter::once((data, time, diff)))
-            .await
-    }
-
-    /// Atomically adds multiple entries to the arrangement.
-    ///
-    /// Each entry's time must be greater than or equal to the upper frontier.
-    ///
-    /// If this method returns `Ok`, the entries have been made durable.
-    async fn update_many<K, V, I>(
-        &mut self,
-        collection: StashCollection<K, V>,
-        entries: I,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-        I: IntoIterator<Item = ((K, V), Timestamp, Diff)> + Send,
-        I::IntoIter: Send;
-
-    /// Atomically advances the upper frontier to the specified value.
-    ///
-    /// The provided `upper` must be greater than or equal to the current upper
-    /// frontier.
-    ///
-    /// Intuitively, this method declares that all times less than `upper` are
-    /// definite.
-    async fn seal<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-        upper: AntichainRef<'_, Timestamp>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data;
-
-    /// Performs multiple seals at once, potentially in a more performant way than
-    /// performing the individual seals one by one.
-    ///
-    /// See [Stash::seal]
-    async fn seal_batch<K, V>(
-        &mut self,
-        seals: &[(StashCollection<K, V>, Antichain<Timestamp>)],
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        for (id, upper) in seals {
-            self.seal(*id, upper.borrow()).await?;
-        }
-        Ok(())
-    }
-
-    /// Atomically advances the since frontier to the specified value.
-    ///
-    /// The provided `since` must be greater than or equal to the current since
-    /// frontier but less than or equal to the current upper frontier.
-    ///
-    /// Intuitively, this method performs logical compaction. Existing entries
-    /// whose time is less than `since` are fast-forwarded to `since`.
-    async fn compact<'a, K, V>(
-        &'a mut self,
-        collection: StashCollection<K, V>,
-        since: AntichainRef<'a, Timestamp>,
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data;
-
-    /// Performs multiple compactions at once, potentially in a more performant way than
-    /// performing the individual compactions one by one.
-    ///
-    /// Each application of compacting a single collection must be atomic.
-    /// However, there is no guarantee that Stash impls apply all compactions atomically,
-    /// so it is possible that only some compactions are applied if a crash or error occurs.
-    ///
-    /// See [Stash::compact]
-    async fn compact_batch<K, V>(
-        &mut self,
-        compactions: &[(StashCollection<K, V>, Antichain<Timestamp>)],
-    ) -> Result<(), StashError>
-    where
-        K: Data,
-        V: Data,
-    {
-        for (id, since) in compactions {
-            self.compact(*id, since.borrow()).await?;
-        }
-        Ok(())
-    }
-
-    /// Atomically consolidates entries less than the since frontier.
-    ///
-    /// Intuitively, this method performs physical compaction. Existing
-    /// key–value pairs whose time is less than the since frontier are
-    /// consolidated together when possible.
-    async fn consolidate(&mut self, collection: Id) -> Result<(), StashError>;
-
-    /// Performs multiple consolidations at once, potentially in a more performant way than
-    /// performing the individual consolidations one by one.
-    ///
-    /// See [Stash::consolidate]
-    async fn consolidate_batch(&mut self, collections: &[Id]) -> Result<(), StashError> {
-        for collection in collections {
-            self.consolidate(*collection).await?;
-        }
-        Ok(())
-    }
-
-    /// Reports the current since frontier.
-    async fn since<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<Antichain<Timestamp>, StashError>
-    where
-        K: Data,
-        V: Data;
-
-    /// Reports the current upper frontier.
-    async fn upper<K, V>(
-        &mut self,
-        collection: StashCollection<K, V>,
-    ) -> Result<Antichain<Timestamp>, StashError>
-    where
-        K: Data,
-        V: Data;
-
-    /// Returns `Ok` if this stash instance was the leader at some
-    /// point from the invocation of this method to the return of this
-    /// method. Otherwise, returns `Err`.
-    async fn confirm_leadership(&mut self) -> Result<(), StashError>;
-
-    /// Returns the stash's epoch number. If `Some`, it is a positive number that
-    /// increases with each start of a stash.
-    fn epoch(&self) -> Option<NonZeroI64>;
-
-    /// Reports whether the stash is in readonly mode.
-    ///
-    /// In readonly mode, any attempt to mutate the stash will fail.
-    fn is_readonly(&self) -> bool;
-}
 
 /// `StashCollection` is like a differential dataflow [`Collection`], but the
 /// state of the collection is durable.
@@ -605,6 +236,7 @@ impl From<&str> for StashError {
     }
 }
 
+/*
 /// A multi-collection extension of Stash.
 ///
 /// Additional methods for Stash implementations that are able to provide atomic operations over multiple collections.
@@ -632,6 +264,7 @@ pub trait Append: Stash {
         Ok(())
     }
 }
+*/
 
 #[derive(Clone, Debug)]
 pub struct AppendBatch {
@@ -649,7 +282,7 @@ where
     V: Data,
 {
     /// Create a new AppendBatch for this collection from its current upper.
-    pub async fn make_batch<S: Stash>(&self, stash: &mut S) -> Result<AppendBatch, StashError> {
+    pub async fn make_batch(&self, stash: &mut Stash) -> Result<AppendBatch, StashError> {
         let lower = stash.upper(*self).await?;
         let timestamp: Timestamp = match lower.elements() {
             [ts] => *ts,
@@ -711,26 +344,25 @@ where
     K: Data,
     V: Data,
 {
-    pub async fn get(&self, stash: &mut impl Stash) -> Result<StashCollection<K, V>, StashError> {
+    pub async fn get(&self, stash: &mut Stash) -> Result<StashCollection<K, V>, StashError> {
         stash.collection(self.name).await
     }
 
-    pub async fn upper(&self, stash: &mut impl Stash) -> Result<Antichain<Timestamp>, StashError> {
+    pub async fn upper(&self, stash: &mut Stash) -> Result<Antichain<Timestamp>, StashError> {
         let collection = self.get(stash).await?;
         stash.upper(collection).await
     }
 
     pub async fn iter(
         &self,
-        stash: &mut impl Stash,
+        stash: &mut Stash,
     ) -> Result<Vec<((K, V), Timestamp, Diff)>, StashError> {
         let collection = self.get(stash).await?;
         stash.iter(collection).await
     }
 
-    pub async fn peek_one<S>(&self, stash: &mut S) -> Result<BTreeMap<K, V>, StashError>
+    pub async fn peek_one(&self, stash: &mut Stash) -> Result<BTreeMap<K, V>, StashError>
     where
-        S: Stash,
         K: Hash,
     {
         let collection = self.get(stash).await?;
@@ -738,11 +370,7 @@ where
     }
 
     #[tracing::instrument(level = "trace", skip_all)]
-    pub async fn peek_key_one(
-        &self,
-        stash: &mut impl Stash,
-        key: &K,
-    ) -> Result<Option<V>, StashError> {
+    pub async fn peek_key_one(&self, stash: &mut Stash, key: &K) -> Result<Option<V>, StashError> {
         let collection = self.get(stash).await?;
         stash.peek_key_one(collection, key).await
     }
@@ -751,15 +379,12 @@ where
     ///
     /// Returns the new value stored in stash after this operations.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn insert_key_without_overwrite<S>(
+    pub async fn insert_key_without_overwrite(
         &self,
-        stash: &mut S,
+        stash: &mut Stash,
         key: &K,
         value: V,
-    ) -> Result<V, StashError>
-    where
-        S: Append,
-    {
+    ) -> Result<V, StashError> {
         let collection = self.get(stash).await?;
         let mut batch = collection.make_batch(stash).await?;
         let prev = match stash.peek_key_one(collection, key).await {
@@ -787,13 +412,12 @@ where
 
     /// Sets the given key value pairs, if not already set.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn insert_without_overwrite<S, I>(
+    pub async fn insert_without_overwrite<I>(
         &self,
-        stash: &mut S,
+        stash: &mut Stash,
         entries: I,
     ) -> Result<(), StashError>
     where
-        S: Append,
         I: IntoIterator<Item = (K, V)>,
         K: Hash,
     {
@@ -826,14 +450,13 @@ where
     /// Returns the previous value if one existed and the value returned from
     /// `f`.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn upsert_key<S, F, R>(
+    pub async fn upsert_key<F, R>(
         &self,
-        stash: &mut S,
+        stash: &mut Stash,
         key: &K,
         f: F,
     ) -> Result<Result<(Option<V>, V), R>, StashError>
     where
-        S: Append,
         F: FnOnce(Option<&V>) -> Result<V, R>,
     {
         let (prev, next, ids) = match self.upsert_key_no_consolidate(stash, key, f).await? {
@@ -847,14 +470,13 @@ where
     /// Same as `upsert_key`, but doesn't consolidate. Additionally returns ids
     /// needing consolidation.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn upsert_key_no_consolidate<S, F, R>(
+    pub async fn upsert_key_no_consolidate<F, R>(
         &self,
-        stash: &mut S,
+        stash: &mut Stash,
         key: &K,
         f: F,
     ) -> Result<Result<(Option<V>, V, Vec<Id>), R>, StashError>
     where
-        S: Append,
         F: FnOnce(Option<&V>) -> Result<V, R>,
     {
         let collection = self.get(stash).await?;
@@ -890,9 +512,8 @@ where
 
     /// Sets the given key value pairs, removing existing entries match any key.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn upsert<S, I>(&self, stash: &mut S, entries: I) -> Result<(), StashError>
+    pub async fn upsert<I>(&self, stash: &mut Stash, entries: I) -> Result<(), StashError>
     where
-        S: Append,
         I: IntoIterator<Item = (K, V)>,
         K: Hash,
     {

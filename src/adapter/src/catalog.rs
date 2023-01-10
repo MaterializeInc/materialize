@@ -68,7 +68,7 @@ use mz_sql::plan::{
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_stash::{Append, Memory, Postgres, PostgresFactory};
+use mz_stash::{Stash, StashFactory};
 use mz_storage_client::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
@@ -155,15 +155,15 @@ pub const DEFAULT_CLUSTER_REPLICA_NAME: &str = "r1";
 /// implicitly present in all databases, that house various system views.
 /// The big examples of ambient schemas are `pg_catalog` and `mz_catalog`.
 #[derive(Debug)]
-pub struct Catalog<S> {
+pub struct Catalog {
     state: CatalogState,
-    storage: Arc<Mutex<storage::Connection<S>>>,
+    storage: Arc<Mutex<storage::Connection>>,
     transient_revision: u64,
 }
 
 // Implement our own Clone because derive can't unless S is Clone, which it's
 // not (hence the Arc).
-impl<S> Clone for Catalog<S> {
+impl Clone for Catalog {
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
@@ -1260,11 +1260,11 @@ impl CatalogState {
 
     // TODO(mjibson): Is there a way to make this a closure to avoid explicitly
     // passing tx, session, and builtin_table_updates?
-    fn add_to_audit_log<S: Append>(
+    fn add_to_audit_log(
         &self,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&Session>,
-        tx: &mut storage::Transaction<S>,
+        tx: &mut storage::Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         event_type: EventType,
@@ -1281,9 +1281,9 @@ impl CatalogState {
         Ok(())
     }
 
-    fn add_to_storage_usage<S: Append>(
+    fn add_to_storage_usage(
         &self,
-        tx: &mut storage::Transaction<S>,
+        tx: &mut storage::Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         shard_id: Option<String>,
         size_bytes: u64,
@@ -2115,7 +2115,7 @@ impl CatalogItemRebuilder {
         }
     }
 
-    fn build<S: Append>(self, catalog: &Catalog<S>) -> CatalogItem {
+    fn build(self, catalog: &Catalog) -> CatalogItem {
         match self {
             Self::SystemSource(item) => item,
             Self::Object(create_sql) => catalog
@@ -2160,35 +2160,7 @@ impl BuiltinMigrationMetadata {
     }
 }
 
-impl Catalog<Memory> {
-    /// Opens a debug in-memory catalog.
-    ///
-    /// See [`Catalog::open_debug`].
-    pub async fn open_debug_memory(now: NowFn) -> Result<Catalog<Memory>, anyhow::Error> {
-        let stash = mz_stash::Memory::new();
-        Catalog::open_debug(stash, now).await
-    }
-}
-
-impl Catalog<Postgres> {
-    /// Opens a debug postgres catalog at `url`.
-    ///
-    /// If specified, `schema` will set the connection's `search_path` to `schema`.
-    ///
-    /// See [`Catalog::open_debug`].
-    pub async fn open_debug_postgres(
-        url: String,
-        schema: Option<String>,
-        now: NowFn,
-    ) -> Result<Catalog<Postgres>, anyhow::Error> {
-        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
-        let factory = PostgresFactory::new(&MetricsRegistry::new());
-        let stash = factory.open(url, schema, tls).await?;
-        Catalog::open_debug(stash, now).await
-    }
-}
-
-impl<S: Append> Catalog<S> {
+impl Catalog {
     /// Opens or creates a catalog that stores data at `path`.
     ///
     /// Returns the catalog, metadata about builtin objects that have changed
@@ -2197,10 +2169,10 @@ impl<S: Append> Catalog<S> {
     /// catalog before any migrations were performed.
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn open(
-        config: Config<'_, S>,
+        config: Config<'_>,
     ) -> Result<
         (
-            Catalog<S>,
+            Catalog,
             BuiltinMigrationMetadata,
             Vec<BuiltinTableUpdate>,
             String,
@@ -3257,9 +3229,9 @@ impl<S: Append> Catalog<S> {
     ///
     /// TODO(justin): it might be nice if these were two different types.
     pub fn load_catalog_items<'a>(
-        tx: &mut storage::Transaction<'a, S>,
-        c: &Catalog<S>,
-    ) -> Result<Catalog<S>, Error> {
+        tx: &mut storage::Transaction<'a>,
+        c: &Catalog,
+    ) -> Result<Catalog, Error> {
         let mut c = c.clone();
         let items = tx.loaded_items();
         for (id, name, def) in items {
@@ -3299,7 +3271,29 @@ impl<S: Append> Catalog<S> {
     /// This function should not be called in production contexts. Use
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
-    pub async fn open_debug(stash: S, now: NowFn) -> Result<Catalog<S>, anyhow::Error> {
+    pub async fn open_debug(now: NowFn) -> Result<Catalog, anyhow::Error> {
+        let url = std::env::var("COCKROACH_URL")
+            .map_err(|_| anyhow::anyhow!("COCKROACH_URL environment variable is not set"))?;
+        Self::open_debug_postgres(url, None, now).await
+    }
+
+    /// Opens a debug postgres catalog at `url`.
+    ///
+    /// If specified, `schema` will set the connection's `search_path` to `schema`.
+    ///
+    /// See [`Catalog::open_debug`].
+    pub async fn open_debug_postgres(
+        url: String,
+        schema: Option<String>,
+        now: NowFn,
+    ) -> Result<Catalog, anyhow::Error> {
+        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
+        let factory = StashFactory::new(&MetricsRegistry::new());
+        let stash = factory.open(url, schema, tls).await?;
+        Self::open_debug_stash(stash, now).await
+    }
+
+    pub async fn open_debug_stash(stash: Stash, now: NowFn) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
         let (consolidations_tx, consolidations_rx) = mpsc::unbounded_channel();
         // Leak the receiver so it's not dropped and send will work.
@@ -3386,7 +3380,7 @@ impl<S: Append> Catalog<S> {
         self.for_sessionless_user(SYSTEM_USER.clone())
     }
 
-    async fn storage<'a>(&'a self) -> MutexGuard<'a, storage::Connection<S>> {
+    async fn storage<'a>(&'a self) -> MutexGuard<'a, storage::Connection> {
         self.storage.lock().await
     }
 
@@ -4055,7 +4049,7 @@ impl<S: Append> Catalog<S> {
         temporary_ids: Vec<GlobalId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
-        tx: &mut Transaction<'_, S>,
+        tx: &mut Transaction<'_>,
         state: &mut CatalogState,
     ) -> Result<(), AdapterError> {
         #[derive(Debug, Clone)]
@@ -6446,11 +6440,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
-    use mz_compute_client::controller::ComputeInstanceId;
-    use mz_stash::Memory;
     use std::collections::{HashMap, HashSet};
     use std::error::Error;
 
+    use mz_compute_client::controller::ComputeInstanceId;
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_ore::now::NOW_ZERO;
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
@@ -6481,7 +6474,7 @@ mod tests {
             normal_output: PartialObjectName,
         }
 
-        let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug(NOW_ZERO.clone()).await?;
 
         let test_cases = vec![
             TestCase {
@@ -6547,7 +6540,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_catalog_revision() -> Result<(), anyhow::Error> {
-        let mut catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
+        let mut catalog = Catalog::open_debug(NOW_ZERO.clone()).await?;
         assert_eq!(catalog.transient_revision(), 1);
         catalog
             .transact(
@@ -6565,7 +6558,7 @@ mod tests {
         assert_eq!(catalog.transient_revision(), 2);
         drop(catalog);
 
-        let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug(NOW_ZERO.clone()).await?;
         assert_eq!(catalog.transient_revision(), 1);
 
         Ok(())
@@ -6573,7 +6566,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_effective_search_path() -> Result<(), anyhow::Error> {
-        let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug(NOW_ZERO.clone()).await?;
         let mz_catalog_schema = (
             ResolvedDatabaseSpecifier::Ambient,
             SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id().clone()),
@@ -6782,7 +6775,7 @@ mod tests {
         }
 
         async fn add_item(
-            catalog: &mut Catalog<Memory>,
+            catalog: &mut Catalog,
             name: String,
             item: CatalogItem,
             item_namespace: ItemNamespace,
@@ -7235,7 +7228,7 @@ mod tests {
         ];
 
         for test_case in test_cases {
-            let mut catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
+            let mut catalog = Catalog::open_debug(NOW_ZERO.clone()).await?;
 
             let mut id_mapping = HashMap::new();
             let mut name_mapping = HashMap::new();

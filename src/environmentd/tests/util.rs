@@ -108,7 +108,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
-use mz_stash::PostgresFactory;
+use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
 
 pub static KAFKA_ADDRS: Lazy<String> =
@@ -273,7 +273,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     persist_cfg.consensus_connection_pool_max_size = 1;
     let persist_clients = PersistClientCache::new(persist_cfg, &metrics_registry);
     let persist_clients = Arc::new(Mutex::new(persist_clients));
-    let postgres_factory = PostgresFactory::new(&metrics_registry);
+    let postgres_factory = StashFactory::new(&metrics_registry);
     let secrets_controller = Arc::clone(&orchestrator);
     let connection_context = ConnectionContext::for_tests(orchestrator.reader());
     let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {

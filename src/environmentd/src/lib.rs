@@ -109,7 +109,6 @@ use mz_ore::tracing::TracingHandle;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
-use mz_stash::Stash;
 use mz_storage_client::types::connections::ConnectionContext;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
@@ -246,7 +245,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         .postgres_factory
         .open(config.adapter_stash_url.clone(), None, tls)
         .await?;
-    let stash = mz_stash::Cache::new(stash);
 
     // Validate TLS configuration, if present.
     let (pgwire_tls, http_tls) = match &config.tls {

@@ -113,7 +113,7 @@ async fn datadriven() {
         // Context. This is just a test, so the performance hit of this doesn't matter
         // (and in practice there will be no contention).
         let catalog = Arc::new(Mutex::new(
-            Catalog::open_debug_memory(NOW_ZERO.clone()).await.unwrap(),
+            Catalog::open_debug(NOW_ZERO.clone()).await.unwrap(),
         ));
         f.run_async(|test_case| {
             let catalog = Arc::clone(&catalog);

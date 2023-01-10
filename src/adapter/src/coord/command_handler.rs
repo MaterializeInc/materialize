@@ -24,7 +24,6 @@ use mz_repr::ScalarType;
 use mz_sql::ast::{InsertSource, Query, Raw, SetExpr, Statement};
 use mz_sql::catalog::SessionCatalog as _;
 use mz_sql::plan::{CreateRolePlan, Params};
-use mz_stash::Append;
 
 use crate::client::ConnectionId;
 use crate::command::{
@@ -39,7 +38,7 @@ use crate::notice::AdapterNotice;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     pub(crate) async fn handle_command(&mut self, cmd: Command) {
         match cmd {
             Command::Startup {

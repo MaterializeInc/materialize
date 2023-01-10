@@ -37,7 +37,6 @@ use mz_ore::cast::ReinterpretCast;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
-use mz_stash::Append;
 
 use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View};
 use crate::coord::ddl::CatalogTxn;
@@ -72,7 +71,7 @@ pub enum ExprPrepStyle<'a> {
     AsOfUpTo,
 }
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
     pub fn dataflow_builder(
         &self,
@@ -717,7 +716,7 @@ fn eval_unmaterializable_func(
 }
 
 #[cfg(test)]
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     #[allow(dead_code)]
     async fn verify_ship_dataflow_no_error(&mut self) {
         // ship_dataflow, ship_dataflows, and finalize_dataflow are not allowed

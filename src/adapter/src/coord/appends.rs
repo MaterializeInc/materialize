@@ -21,7 +21,6 @@ use mz_ore::task;
 use mz_ore::vec::VecExt;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Plan;
-use mz_stash::Append;
 use mz_storage_client::client::Update;
 
 use crate::catalog::BuiltinTableUpdate;
@@ -131,7 +130,7 @@ macro_rules! guard_write_critical_section {
     };
 }
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     /// Attempts to commit all pending write transactions in a group commit. If the timestamp
     /// chosen for the writes is not ahead of `now()`, then we can execute and commit the writes
     /// immediately. Otherwise we must wait for `now()` to advance past the timestamp chosen for the

@@ -55,7 +55,6 @@ use mz_sql::plan::{
     StorageHostConfig, SubscribeFrom, SubscribePlan, View,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_stash::Append;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
@@ -98,7 +97,7 @@ use super::ReplicaMetadata;
 
 use super::peek::PlannedPeek;
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_plan(
         &mut self,
@@ -2403,7 +2402,7 @@ impl<S: Append + 'static> Coordinator<S> {
             session.add_transaction_ops(TransactionOps::Subscribe)?;
         }
 
-        let make_sink_desc = |coord: &mut Coordinator<S>,
+        let make_sink_desc = |coord: &mut Coordinator,
                               session: &mut Session,
                               from,
                               from_desc,
@@ -3089,10 +3088,7 @@ impl<S: Append + 'static> Coordinator<S> {
         //
         // This limitation is meant to ensure no writes occur between this read
         // and the subsequent write.
-        fn validate_read_dependencies<S>(catalog: &Catalog<S>, id: &GlobalId) -> bool
-        where
-            S: mz_stash::Append,
-        {
+        fn validate_read_dependencies(catalog: &Catalog, id: &GlobalId) -> bool {
             use CatalogItemType::*;
             match catalog.try_get_entry(id) {
                 Some(entry) => match entry.item().typ() {
@@ -3879,14 +3875,13 @@ enum LogReadStyle<'a> {
     Subscribe,
 }
 
-fn check_no_invalid_log_reads<'a, S>(
-    catalog: &Catalog<S>,
+fn check_no_invalid_log_reads<'a>(
+    catalog: &Catalog,
     compute_instance: &ComputeInstance,
     source_ids: &BTreeSet<GlobalId>,
     log_read_style: LogReadStyle<'a>,
 ) -> Result<(), AdapterError>
 where
-    S: Append,
 {
     let log_names = source_ids
         .iter()

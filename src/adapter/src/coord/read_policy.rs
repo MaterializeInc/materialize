@@ -24,7 +24,6 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use mz_compute_client::controller::ComputeInstanceId;
 
 use mz_repr::{GlobalId, Timestamp};
-use mz_stash::Append;
 use mz_storage_client::controller::ReadPolicy;
 
 use crate::coord::id_bundle::CollectionIdBundle;
@@ -176,7 +175,7 @@ impl<T: Eq + Hash + Ord> ReadHolds<T> {
     }
 }
 
-impl<S: Append + 'static> crate::coord::Coordinator<S> {
+impl crate::coord::Coordinator {
     /// Initialize the storage read policies.
     ///
     /// This should be called only after a storage collection is created, and
