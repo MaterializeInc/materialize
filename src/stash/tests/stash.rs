@@ -120,10 +120,10 @@ async fn test_stash_postgres() {
             .contains("stash error: postgres: error connecting to server"));
     }
 
-    let connstr = match std::env::var("POSTGRES_URL") {
+    let connstr = match std::env::var("COCKROACH_URL") {
         Ok(s) => s,
         Err(_) => {
-            println!("skipping test_stash_postgres because POSTGRES_URL is not set");
+            println!("skipping test_stash_postgres because COCKROACH_URL is not set");
             return;
         }
     };
