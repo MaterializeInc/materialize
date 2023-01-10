@@ -663,7 +663,7 @@ fn test_storage_usage_doesnt_update_between_restarts() {
 #[test]
 fn test_storage_usage_collection_interval_timestamps() {
     let config =
-        util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(30));
+        util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(5));
     let server = util::start_server(config).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
