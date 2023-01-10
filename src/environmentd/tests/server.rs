@@ -451,7 +451,7 @@ fn test_cancel_dataflow_removal() {
 #[test]
 fn test_storage_usage_collection_interval() {
     /// Waits for the next storage collection to occur, then returns the
-    /// timestamp at which the collection occured. The timestamp of the last
+    /// timestamp at which the collection occurred. The timestamp of the last
     /// collection must be provided
     fn wait_for_next_collection(
         client: &mut postgres::Client,
@@ -663,7 +663,7 @@ fn test_storage_usage_doesnt_update_between_restarts() {
 #[test]
 fn test_storage_usage_collection_interval_timestamps() {
     let config =
-        util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(30));
+        util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(5));
     let server = util::start_server(config).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 

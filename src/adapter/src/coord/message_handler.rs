@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use chrono::DurationRound;
+use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Level};
 
 use mz_compute_client::controller::ComputeInstanceEvent;
@@ -79,8 +80,8 @@ impl<S: Append + 'static> Coordinator<S> {
             Message::StorageUsageFetch => {
                 self.storage_usage_fetch().await;
             }
-            Message::StorageUsageUpdate(sizes, collection_timestamp) => {
-                self.storage_usage_update(sizes, collection_timestamp).await;
+            Message::StorageUsageUpdate(sizes) => {
+                self.storage_usage_update(sizes).await;
             }
             Message::Consolidate(collections) => {
                 self.consolidate(&collections).await;
@@ -96,7 +97,7 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_fetch(&mut self) {
+    pub async fn storage_usage_fetch(&mut self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
 
@@ -126,12 +127,15 @@ impl<S: Append + 'static> Coordinator<S> {
             })
             .collect();
 
-        // Similar to audit events, use the oracle ts so this is guaranteed to increase.
-        let collection_timestamp: EpochMillis = self.get_local_write_ts().await.timestamp.into();
+        let collection_metric = self
+            .metrics
+            .storage_usage_collection_time_seconds
+            .with_label_values(&[]);
 
         // Spawn an asynchronous task to compute the storage usage, which
         // requires a slow scan of the underlying storage engine.
         task::spawn(|| "storage_usage_fetch", async move {
+            let collection_metric_timer = collection_metric.start_timer();
             let mut shard_sizes = client.shard_sizes().await;
 
             // Don't record usage for shards that are no longer live.
@@ -143,25 +147,24 @@ impl<S: Append + 'static> Coordinator<S> {
                 None => true,
                 Some(shard_id) => live_shards.contains(shard_id),
             });
+            collection_metric_timer.observe_duration();
 
-            // It is not an error for shard sizes to become ready after `internal_cmd_rx`
-            // is dropped.
-            let result = internal_cmd_tx.send(Message::StorageUsageUpdate(
-                shard_sizes,
-                collection_timestamp,
-            ));
-            if let Err(e) = result {
+            // It is not an error for shard sizes to become ready after
+            // `internal_cmd_rx` is dropped.
+            if let Err(e) = internal_cmd_tx.send(Message::StorageUsageUpdate(shard_sizes)) {
                 warn!("internal_cmd_rx dropped before we could send: {:?}", e);
             }
         });
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_update(
-        &mut self,
-        shard_sizes: HashMap<Option<ShardId>, u64>,
-        collection_timestamp: EpochMillis,
-    ) {
+    async fn storage_usage_update(&mut self, shard_sizes: HashMap<Option<ShardId>, u64>) {
+        // Similar to audit events, use the oracle ts so this is guaranteed to
+        // increase. This is intentionally the timestamp of when collection
+        // finished, not when it started, so that we don't write data with a
+        // timestamp in the past.
+        let collection_timestamp: EpochMillis = self.get_local_write_ts().await.timestamp.into();
+
         let mut ops = vec![];
         for (shard_id, size_bytes) in shard_sizes {
             ops.push(catalog::Op::UpdateStorageUsage {
@@ -174,21 +177,50 @@ impl<S: Append + 'static> Coordinator<S> {
         if let Err(err) = self.catalog_transact(None, ops).await {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
-        self.catalog
-            .set_most_recent_storage_usage_collection(collection_timestamp);
         self.schedule_storage_usage_collection();
     }
 
     pub fn schedule_storage_usage_collection(&self) {
-        // Instead of using an `tokio::timer::Interval`, we calculate the time since the last
-        // collection and wait for however much time is left. This is so we can keep the intervals
-        // consistent even across restarts.
-        let now: EpochMillis = self.peek_local_write_ts().into();
-        let time_since_previous_collection =
-            now.saturating_sub(self.catalog.most_recent_storage_usage_collection());
-        let next_collection_interval = self
-            .storage_usage_collection_interval
-            .saturating_sub(Duration::from_millis(time_since_previous_collection));
+        // Instead of using an `tokio::timer::Interval`, we calculate the time until the next
+        // usage collection and wait for that amount of time. This is so we can keep the intervals
+        // consistent even across restarts. If collection takes too long, it is possible that
+        // we miss an interval.
+
+        // 1) Deterministically pick some offset within the collection interval to prevent
+        // thundering herds across environments.
+        const SEED_LEN: usize = 32;
+        let mut seed = [0; SEED_LEN];
+        for (i, byte) in self
+            .catalog
+            .state()
+            .config()
+            .environment_id
+            .organization_id()
+            .as_bytes()
+            .into_iter()
+            .take(SEED_LEN)
+            .enumerate()
+        {
+            seed[i] = *byte;
+        }
+        let storage_usage_collection_interval_ms: EpochMillis =
+            EpochMillis::try_from(self.storage_usage_collection_interval.as_millis())
+                .expect("storage usage collection interval must fit into u64");
+        let offset =
+            rngs::SmallRng::from_seed(seed).gen_range(0..storage_usage_collection_interval_ms);
+        let now_ts: EpochMillis = self.peek_local_write_ts().into();
+
+        // 2) Determine the amount of ms between now and the next collection time.
+        let previous_collection_ts =
+            (now_ts - (now_ts % storage_usage_collection_interval_ms)) + offset;
+        let next_collection_ts = if previous_collection_ts > now_ts {
+            previous_collection_ts
+        } else {
+            previous_collection_ts + storage_usage_collection_interval_ms
+        };
+        let next_collection_interval = Duration::from_millis(next_collection_ts - now_ts);
+
+        // 3) Sleep for that amount of time, then initiate another storage usage collection.
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         task::spawn(|| "storage_usage_collection", async move {
             tokio::time::sleep(next_collection_interval).await;
