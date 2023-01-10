@@ -111,7 +111,7 @@ ORDER BY
 
 The absence of `LIMIT 10` from the query is just how TPC-H defines things. In the interest of clarity we are going to work on the core of the query, without the `ORDER BY` or elided `LIMIT`. The query is a three-way join between `customer`, `orders`, and `lineitem`, followed by a reduction. The reduction keys seem to be three random fields, but notice that `l_orderkey = o_orderkey`, where `o_orderkey` is a primary key for `orders`; we are producing an aggregate for each order.
 
-Materialize provides a [TPC-H load generator source](https://materialize.com/docs/sql/create-source/load-generator/#creating-a-tpch-load-generator), so you can follow along and recreate this example as we go. To follow along, you will need access to Materialize as well as a Postgres client like `psql` to submit queries. By default, all of this computation will happen in the `default` cluster on a replica called `r1`. We'll be using the scale-factor 1 static dataset, but you can try different configurations, and the same conclusions will hold.
+Materialize provides a [TPC-H load generator source](/sql/create-source/load-generator/#creating-a-tpch-load-generator), so you can follow along and recreate this example as we go. To follow along, you will need access to Materialize as well as a Postgres client like `psql` to submit queries. By default, all of this computation will happen in the `default` cluster on a replica called `r1`. We'll be using the scale-factor 1 static dataset, but you can try different configurations, and the same conclusions will hold.
 
 ```sql
 CREATE SOURCE tpch
@@ -428,5 +428,5 @@ Scanning across the 22 TPC-H queries, the numbers of records each query needs to
 Our use of shared arrangements means gives us access to efficient join plans that conventional dataflow systems cannot support. These join plans can **substantially** reduce the per-query resource requirements for relational queries.
 
 {{< note >}}
-This article has been updated from the original to reflect improvements in the cloud service. The original post is [available at my personal blog](https://github.com/frankmcsherry/blog/blob/master/posts/2020-11-18.md).
+This article has been updated from the original to reflect improvements in the cloud service. The original post is [available at Frank McSherry's personal blog](https://github.com/frankmcsherry/blog/blob/master/posts/2020-11-18.md).
 {{</ note >}}
