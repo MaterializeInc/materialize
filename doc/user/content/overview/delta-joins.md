@@ -126,7 +126,7 @@ Here, only a static amount of data is loaded. We are doing this so it will be ea
 
 ### A First Implementation
 
-Let's store Query 03 as a [view](./key-concepts.md#non-materialized-views).
+Let's store Query 03 as a [view](/overview/key-concepts#non-materialized-views).
 
 ```sql
 CREATE VIEW query_03 AS

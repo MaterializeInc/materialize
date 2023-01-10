@@ -94,7 +94,7 @@ materialize=> EXPLAIN SELECT * FROM t1, t2, t3 WHERE t1.y = t2.x AND t2.w = t3.z
    - materialize.public.t2_w                     +
    - materialize.public.t3_z                     +
 ```
-Delta joins have the advantage of using negligible additional memory outside the explicitly created indexes on the inputs. For more details, see [Delta Joins and Late Materialization](../overview/delta-joins.md).
+Delta joins have the advantage of using negligible additional memory outside the explicitly created indexes on the inputs. For more details, see [Delta Joins and Late Materialization](/overview/delta-joins).
 
 If your query filters one or more of the join inputs by a literal equality (e.g., `t1.y = 42`), place one of those inputs first in the `FROM` clause. In particular, this can speed up [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) by accessing inputs using index lookups, rather than full scans.
 
@@ -107,7 +107,7 @@ Even with delta joins, Materialize can potentially maintain much more data in me
     CREATE INDEX pk_customer ON customer (c_custkey);
     CREATE INDEX pk_orders ON orders (o_orderkey);
     ```
-2. For each foreign key in the join, create a "narrow" view with just two columns: foreign key and primary key. Then create two indexes: one for the foreign key and one for the primary key. Example from [Delta Joins and Late Materialization](../overview/delta-joins.md):
+2. For each foreign key in the join, create a "narrow" view with just two columns: foreign key and primary key. Then create two indexes: one for the foreign key and one for the primary key. Example from [Delta Joins and Late Materialization](/overview/delta-joins):
     ```sql
     -- Create a view containing foreign key `l_orderkey` and `lineitem`'s composite primary key (l_orderkey, l_linenumber).
     CREATE VIEW lineitem_fk_orderkey AS SELECT l_orderkey, l_linenumber FROM lineitem;
