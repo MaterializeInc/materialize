@@ -148,7 +148,7 @@ GROUP BY
 In Materialize, a view is just an alias for a query definition. To trigger computation, we must create an index on the view.
 
 ```sql
-CREATE DEFAULT INDEX query_03_idx ON query_03;
+CREATE INDEX query_03_idx ON query_03 (l_orderkey, o_orderdate, o_shippriority);
 ```
 
 {{< note >}}
