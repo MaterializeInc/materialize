@@ -29,6 +29,8 @@ junit_*.xml
 perf.data*
 **/*.rej
 **/*.orig
+**/*.profraw
+**/*.profdata
 
 # This is un-orthodox, but adding it to the repo would "tie" it to each users
 # local version of nixpkgs. This way, we can all use the flake and have a
