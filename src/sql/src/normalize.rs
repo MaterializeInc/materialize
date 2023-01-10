@@ -318,6 +318,7 @@ pub fn create_statement(
             columns,
             constraints: _,
             if_not_exists,
+            with_options: _,
         }) => {
             *name = allocate_name(name)?;
             let mut normalizer = QueryNormalizer::new(scx);

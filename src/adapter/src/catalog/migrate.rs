@@ -11,10 +11,10 @@ use semver::Version;
 use std::collections::BTreeMap;
 
 use mz_ore::collections::CollectionExt;
-use mz_sql::ast::Raw;
 use mz_sql::ast::{
-    display::AstDisplay, CreateSourceStatement, CreateSourceSubsource, DeferredObjectName,
-    RawObjectName, ReferencedSubsources, Statement, UnresolvedObjectName,
+    display::AstDisplay, CreateSourceStatement, CreateSourceSubsource, CreateSubsourceOptionName,
+    CreateSubsourceStatement, DeferredObjectName, Raw, RawObjectName, ReferencedSubsources,
+    Statement, UnresolvedObjectName,
 };
 
 use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem, SYSTEM_CONN_ID};
@@ -51,7 +51,10 @@ pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> 
     };
     let mut tx = storage.transaction().await?;
     // First, do basic AST -> AST transformations.
-    rewrite_items(&mut tx, |_stmt| Ok(()))?;
+    rewrite_items(&mut tx, |stmt| {
+        subsource_type_option_rewrite(stmt);
+        Ok(())
+    })?;
 
     // Then, load up a temporary catalog with the rewritten items, and perform
     // some transformations that require introspecting the catalog. These
@@ -88,6 +91,27 @@ pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> 
 // ****************************************************************************
 // AST migrations -- Basic AST -> AST transformations
 // ****************************************************************************
+
+// Mark all current subsources as "references" subsources in anticipation of
+// adding "progress" subsources.
+// TODO: delete in version v0.45 (released in v0.43 + 1 additional release)
+fn subsource_type_option_rewrite(stmt: &mut mz_sql::ast::Statement<Raw>) {
+    if let Statement::CreateSubsource(CreateSubsourceStatement { with_options, .. }) = stmt {
+        if !with_options.iter().any(|option| {
+            matches!(
+                option.name,
+                CreateSubsourceOptionName::Progress | CreateSubsourceOptionName::References
+            )
+        }) {
+            with_options.push(mz_sql::ast::CreateSubsourceOption {
+                name: CreateSubsourceOptionName::References,
+                value: Some(mz_sql::ast::WithOptionValue::Value(
+                    mz_sql::ast::Value::Boolean(true),
+                )),
+            });
+        }
+    }
+}
 
 // ****************************************************************************
 // Semantic migrations -- Weird migrations that require access to the catalog

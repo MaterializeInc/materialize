@@ -25,3 +25,7 @@ users         subsource      <null>
   KEY (id)
   FORMAT JSON
   ENVELOPE UPSERT;
+
+# Show that AST of subsource contains REFERENCES option
+> SHOW CREATE SOURCE accounts
+materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accounts\" (\"id\" \"pg_catalog\".\"int8\" NOT NULL, \"org_id\" \"pg_catalog\".\"int8\" NOT NULL, \"balance\" \"pg_catalog\".\"int8\" NOT NULL, UNIQUE (\"id\")) WITH (REFERENCES = true)"

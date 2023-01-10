@@ -71,16 +71,16 @@ use crate::ast::{
     CreateIndexStatement, CreateMaterializedViewStatement, CreateRoleOption, CreateRoleStatement,
     CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
     CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceFormat,
-    CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement, CsrConfigOption,
-    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionOption,
-    CsrConnectionOptionName, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode,
-    DropClusterReplicasStatement, DropClustersStatement, DropDatabaseStatement,
-    DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
-    IfExistsBehavior, IndexOption, IndexOptionName, KafkaBroker, KafkaBrokerAwsPrivatelinkOption,
-    KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel, KafkaConfigOptionName,
-    KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
+    CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeStatement, CreateViewStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
+    CsrConnectionAvro, CsrConnectionOption, CsrConnectionOptionName, CsrConnectionProtobuf,
+    CsrSeedProtobuf, CsvColumns, DbzMode, DropClusterReplicasStatement, DropClustersStatement,
+    DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
+    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaBroker,
+    KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel,
+    KafkaConfigOptionName, KafkaConnectionOption, KafkaConnectionOptionName, KeyConstraint,
+    LoadGeneratorOption, LoadGeneratorOptionName, ObjectType, PgConfigOption, PgConfigOptionName,
     PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
     ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName,
     SourceIncludeMetadata, SourceIncludeMetadataType, SshConnectionOptionName, Statement,
@@ -1088,6 +1088,12 @@ pub fn plan_create_source(
     }))
 }
 
+generate_extracted_config!(
+    CreateSubsourceOption,
+    (Progress, bool, Default(false)),
+    (References, bool, Default(false))
+);
+
 pub fn plan_create_subsource(
     scx: &StatementContext,
     stmt: CreateSubsourceStatement<Aug>,
@@ -1097,7 +1103,23 @@ pub fn plan_create_subsource(
         columns,
         constraints,
         if_not_exists,
+        with_options,
     } = &stmt;
+
+    let CreateSubsourceOptionExtracted {
+        progress,
+        references,
+        ..
+    } = with_options.clone().try_into()?;
+
+    // This invariant is enforced during purification; we are responsible for
+    // creating the AST for subsources as a response to CREATE SOURCE
+    // statements, so this would fire in integration testing if we failed to
+    // uphold it.
+    assert!(
+        progress ^ references,
+        "CREATE SUBSOURCE statement must specify either PROGRESS or REFERENCES option"
+    );
 
     let names: Vec<_> = columns
         .iter()
@@ -1180,7 +1202,13 @@ pub fn plan_create_subsource(
 
     let source = Source {
         create_sql,
-        data_source: DataSourceDesc::Source,
+        data_source: if progress {
+            DataSourceDesc::Progress
+        } else if references {
+            DataSourceDesc::Source
+        } else {
+            unreachable!("state prohibited above")
+        },
         desc,
     };
 

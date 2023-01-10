@@ -2392,12 +2392,42 @@ impl<'a> Parser<'a> {
 
         let (columns, constraints) = self.parse_columns(Mandatory)?;
 
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_create_subsource_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+
         Ok(Statement::CreateSubsource(CreateSubsourceStatement {
             name,
             if_not_exists,
             columns,
             constraints,
+            with_options,
         }))
+    }
+
+    /// Parse the name of a CREATE SINK optional parameter
+    fn parse_create_subsource_option_name(
+        &mut self,
+    ) -> Result<CreateSubsourceOptionName, ParserError> {
+        let name = match self.expect_one_of_keywords(&[PROGRESS, REFERENCES])? {
+            PROGRESS => CreateSubsourceOptionName::Progress,
+            REFERENCES => CreateSubsourceOptionName::References,
+            _ => unreachable!(),
+        };
+        Ok(name)
+    }
+
+    /// Parse a NAME = VALUE parameter for CREATE SINK
+    fn parse_create_subsource_option(&mut self) -> Result<CreateSubsourceOption<Raw>, ParserError> {
+        Ok(CreateSubsourceOption {
+            name: self.parse_create_subsource_option_name()?,
+            value: self.parse_optional_option_value()?,
+        })
     }
 
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {
