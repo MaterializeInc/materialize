@@ -60,7 +60,7 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     ///   * It must no longer read from its inputs.
     ///   * The replica must not send further `FrontierUppers` responses for that collection.
     ///
-    /// The replica must not send send `FrontierUppers` responses for collections that have not
+    /// The replica must not send `FrontierUppers` responses for collections that have not
     /// been created previously by a [`CreateDataflows` command]. An exception are `FrontierUppers`
     /// responses that report the empty frontier. ([#16247])
     ///
@@ -111,7 +111,7 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     ///   * It must no longer read from its inputs.
     ///   * The replica must not send further `SubscribeResponse`s for that subscribe.
     ///
-    /// The replica must not send send [`Batch`] responses for subscribes that have not been
+    /// The replica must not send [`Batch`] responses for subscribes that have not been
     /// created previously by a [`CreateDataflows` command]. The replica may send [`DroppedAt`]
     /// responses for subscribes that have not been created previously by a [`CreateDataflows`
     /// command]. ([#16247])

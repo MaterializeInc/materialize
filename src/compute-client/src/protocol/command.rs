@@ -52,7 +52,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// distribution requires the timely dataflow runtime to be initialized, which is why the
     /// `CreateTimely` command exists.
     ///
-    /// The `epoch` value that imposes an ordering on iterations of the compute protocol. When the
+    /// The `epoch` value imposes an ordering on iterations of the compute protocol. When the
     /// compute controller connects to a replica, it must send an `epoch` that is greater than all
     /// epochs it sent to the same replica on previous connections. Multi-process replicas should
     /// use the `epoch` to ensure that their individual processes agree on which protocol iteration
@@ -89,7 +89,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Parameter updates transmitted through this command must be applied by the replica as soon
     /// as it receives the command, and they must be apply globally to all replica state, even
     /// dataflows and pending peeks that were created before the parameter update. This property
-    /// allows the replica to hoist `UpdateConiguration` commands during reconciliation.
+    /// allows the replica to hoist `UpdateConfiguration` commands during reconciliation.
     ///
     /// Configuration parameters that should not be applied globally, but only to specific
     /// dataflows or peeks, should be added to the [`DataflowDescription`] or [`Peek`] types,
