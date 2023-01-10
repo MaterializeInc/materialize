@@ -30,7 +30,7 @@
 //! and thus currently exists outside of both the physical and logical
 //! optimizers.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use mz_expr::visit::Visit;
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
@@ -404,7 +404,7 @@ where
     let reverse_col_map = permutation
         .enumerate()
         .map(|(idx, c)| (*c, idx))
-        .collect::<HashMap<_, _>>();
+        .collect::<BTreeMap<_, _>>();
     for expr in exprs {
         expr.permute_map(&reverse_col_map);
     }

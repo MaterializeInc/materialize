@@ -11,13 +11,13 @@
 
 #![warn(missing_debug_implementations)]
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter};
 use mz_expr::{
@@ -40,20 +40,6 @@ pub mod threshold;
 pub mod top_k;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.plan.rs"));
-
-// This function exists purely to convert the HashMap into a BTreeMap,
-// so that the value will be stable, for the benefit of tests
-// that print out the physical plan.
-fn serialize_arranged<S: Serializer>(
-    arranged: &Vec<(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)>,
-    s: S,
-) -> Result<S::Ok, S::Error> {
-    let to_serialize = arranged.iter().map(|(key, permutation, thinning)| {
-        let permutation = permutation.iter().collect::<BTreeMap<_, _>>();
-        (key, permutation, thinning)
-    });
-    s.collect_seq(to_serialize)
-}
 
 /// The forms in which an operator's output is available;
 /// it can be considered the plan-time equivalent of
@@ -98,18 +84,17 @@ pub struct AvailableCollections {
     pub raw: bool,
     /// The set of arrangements of the collection, along with a
     /// column permutation mapping
-    #[serde(serialize_with = "serialize_arranged")]
     #[proptest(strategy = "prop::collection::vec(any_arranged_thin(), 0..3)")]
-    pub arranged: Vec<(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)>,
+    pub arranged: Vec<(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)>,
 }
 
 /// A strategy that produces arrangements that are thinner than the default. That is
 /// the number of direct children is limited to a maximum of 3.
 pub(crate) fn any_arranged_thin(
-) -> impl Strategy<Value = (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)> {
+) -> impl Strategy<Value = (Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)> {
     (
         prop::collection::vec(MirScalarExpr::arbitrary(), 0..3),
-        HashMap::<usize, usize>::arbitrary(),
+        BTreeMap::<usize, usize>::arbitrary(),
         Vec::<usize>::arbitrary(),
     )
 }
@@ -144,7 +129,7 @@ impl AvailableCollections {
     /// Represent a collection that is arranged in the
     /// specified ways.
     pub fn new_arranged(
-        arranged: Vec<(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)>,
+        arranged: Vec<(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)>,
     ) -> Self {
         assert!(
             !arranged.is_empty(),
@@ -159,7 +144,7 @@ impl AvailableCollections {
     /// Get some arrangement, if one exists.
     pub fn arbitrary_arrangement(
         &self,
-    ) -> Option<&(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)> {
+    ) -> Option<&(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)> {
         assert!(
             self.raw || !self.arranged.is_empty(),
             "Invariant violated: at least one collection must exist"
@@ -1207,7 +1192,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                             (0..key.len())
                                 .into_iter()
                                 .map(|i| (i, i))
-                                .collect::<HashMap<_, _>>(),
+                                .collect::<BTreeMap<_, _>>(),
                             Vec::<usize>::new(),
                         );
                         let (ljp, missing) = LinearJoinPlan::create_from(

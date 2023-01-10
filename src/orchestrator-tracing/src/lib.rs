@@ -76,7 +76,7 @@
 
 //! Service orchestration for tracing-aware services.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::str::FromStr;
@@ -399,7 +399,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
         id: &str,
         mut service_config: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
-        let args_fn = |listen_addrs: &HashMap<String, String>| {
+        let args_fn = |listen_addrs: &BTreeMap<String, String>| {
             #[cfg(feature = "tokio-console")]
             let tokio_console_listen_addr = listen_addrs.get("tokio-console");
             let mut args = (service_config.args)(listen_addrs);

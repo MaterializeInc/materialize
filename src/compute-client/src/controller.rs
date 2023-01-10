@@ -29,7 +29,7 @@
 //! from compacting beyond the allowed compaction of each of its outputs, ensuring that we can
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::str::FromStr;
@@ -41,7 +41,6 @@ use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
 use futures::{future, FutureExt};
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
@@ -155,7 +154,7 @@ pub enum ComputeControllerResponse<T> {
     /// A notification that new resource usage metrics are available for a given replica.
     ReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
     /// A notification that the write frontiers of the replicas have changed.
-    ReplicaWriteFrontiers(HashMap<ReplicaId, Vec<(GlobalId, T)>>),
+    ReplicaWriteFrontiers(BTreeMap<ReplicaId, Vec<(GlobalId, T)>>),
 }
 
 /// Replica configuration
@@ -768,8 +767,9 @@ where
         // Process pending stats updates
         if self.compute.stats_update_pending {
             self.compute.stats_update_pending = false;
-            let r = self
-                .compute
+
+            let mut replica_frontiers = BTreeMap::new();
+            self.compute
                 .instances
                 .values()
                 .flat_map(|inst| inst.collections_iter())
@@ -783,9 +783,15 @@ where
                                 .map(|x| (*replica_id, (*coll_id, x.clone())))
                         })
                 })
-                // iterator over (replica_id, (collection_id, write_frontier)) tuples
-                .into_group_map();
-            Some(ComputeControllerResponse::ReplicaWriteFrontiers(r))
+                .for_each(|(replica_id, frontier)| {
+                    replica_frontiers
+                        .entry(replica_id)
+                        .or_insert_with(Vec::new)
+                        .push(frontier)
+                });
+            Some(ComputeControllerResponse::ReplicaWriteFrontiers(
+                replica_frontiers,
+            ))
         } else {
             None
         }

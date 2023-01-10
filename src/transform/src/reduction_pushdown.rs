@@ -47,7 +47,7 @@
 //! work around condition 1 by pushing down an inner reduce through the join
 //! while retaining the original outer reduce.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::iter::FromIterator;
 
 use crate::TransformArgs;
@@ -394,7 +394,7 @@ struct ReduceBuilder {
     group_key: Vec<MirScalarExpr>,
     aggregates: Vec<AggregateExpr>,
     /// Maps (global column relative to old join) -> (local column relative to `input`)
-    localize_map: HashMap<usize, usize>,
+    localize_map: BTreeMap<usize, usize>,
 }
 
 impl ReduceBuilder {
@@ -409,7 +409,7 @@ impl ReduceBuilder {
             .flat_map(|i| old_join_mapper.global_columns(*i))
             .enumerate()
             .map(|(local, global)| (global, local))
-            .collect::<HashMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
         // Convert the subjoin from the `Component` representation to a
         // `MirRelationExpr` representation.
         let mut inputs = component

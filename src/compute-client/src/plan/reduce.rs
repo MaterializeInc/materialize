@@ -60,18 +60,19 @@
 //! type, we can specialize and render the dataflow to compute those aggregations in the correct order, and
 //! return the output arrangement directly and avoid the extra collation arrangement.
 
+use std::collections::BTreeMap;
+
+use proptest::prelude::{any, Arbitrary, BoxedStrategy};
+use proptest::strategy::Strategy;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+
 use mz_expr::permutation_for_arrangement;
 use mz_expr::AggregateExpr;
 use mz_expr::AggregateFunc;
 use mz_expr::MirScalarExpr;
 use mz_ore::soft_assert_or_log;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use proptest::prelude::{any, Arbitrary, BoxedStrategy};
-use proptest::strategy::Strategy;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::collections::HashMap;
 
 use super::AvailableCollections;
 
@@ -762,7 +763,7 @@ impl KeyValPlan {
         input_arity: usize,
         group_key: &[MirScalarExpr],
         aggregates: &[AggregateExpr],
-        input_permutation_and_new_arity: Option<(HashMap<usize, usize>, usize)>,
+        input_permutation_and_new_arity: Option<(BTreeMap<usize, usize>, usize)>,
     ) -> Self {
         // Form an operator for evaluating key expressions.
         let mut key_mfp = mz_expr::MapFilterProject::new(input_arity)

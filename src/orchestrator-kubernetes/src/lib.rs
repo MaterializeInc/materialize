@@ -74,7 +74,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
@@ -123,9 +123,9 @@ pub struct KubernetesOrchestratorConfig {
     /// is loaded from the local kubeconfig.
     pub context: String,
     /// Labels to install on every service created by the orchestrator.
-    pub service_labels: HashMap<String, String>,
+    pub service_labels: BTreeMap<String, String>,
     /// Node selector to install on every service created by the orchestrator.
-    pub service_node_selector: HashMap<String, String>,
+    pub service_node_selector: BTreeMap<String, String>,
     /// The service account that each service should run as, if any.
     pub service_account: Option<String>,
     /// The image pull policy to set for services created by the orchestrator.
@@ -163,7 +163,7 @@ pub struct KubernetesOrchestrator {
     config: KubernetesOrchestratorConfig,
     secret_api: Api<Secret>,
     vpc_endpoint_api: Api<VpcEndpoint>,
-    namespaces: Mutex<HashMap<String, Arc<dyn NamespacedOrchestrator>>>,
+    namespaces: Mutex<BTreeMap<String, Arc<dyn NamespacedOrchestrator>>>,
 }
 
 impl fmt::Debug for KubernetesOrchestrator {
@@ -184,7 +184,7 @@ impl KubernetesOrchestrator {
             config,
             secret_api: Api::default_namespaced(client.clone()),
             vpc_endpoint_api: Api::default_namespaced(client),
-            namespaces: Mutex::new(HashMap::new()),
+            namespaces: Mutex::new(BTreeMap::new()),
         })
     }
 }
@@ -201,7 +201,7 @@ impl Orchestrator for KubernetesOrchestrator {
                 kubernetes_namespace: self.kubernetes_namespace.clone(),
                 namespace: namespace.into(),
                 config: self.config.clone(),
-                service_scales: std::sync::Mutex::new(HashMap::new()),
+                service_scales: std::sync::Mutex::new(BTreeMap::new()),
             })
         }))
     }
@@ -215,7 +215,7 @@ struct NamespacedKubernetesOrchestrator {
     kubernetes_namespace: String,
     namespace: String,
     config: KubernetesOrchestratorConfig,
-    service_scales: std::sync::Mutex<HashMap<String, NonZeroUsize>>,
+    service_scales: std::sync::Mutex<BTreeMap<String, NonZeroUsize>>,
 }
 
 impl fmt::Debug for NamespacedKubernetesOrchestrator {
@@ -573,11 +573,11 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let ports = ports_in
             .iter()
             .map(|p| (p.name.clone(), p.port_hint))
-            .collect::<HashMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
         let listen_addrs = ports_in
             .iter()
             .map(|p| (p.name.clone(), format!("0.0.0.0:{}", p.port_hint)))
-            .collect::<HashMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
         let mut args = args(&listen_addrs);
         args.push("--secrets-reader=kubernetes".into());
         args.push(format!(
@@ -900,7 +900,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 #[derive(Debug, Clone)]
 struct KubernetesService {
     hosts: Vec<String>,
-    ports: HashMap<String, u16>,
+    ports: BTreeMap<String, u16>,
 }
 
 impl Service for KubernetesService {

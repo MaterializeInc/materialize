@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -140,7 +140,7 @@ impl ComputeOrchestrator {
                     cpu_limit: allocation.cpu_limit,
                     memory_limit: allocation.memory_limit,
                     scale: allocation.scale,
-                    labels: HashMap::from([
+                    labels: BTreeMap::from([
                         ("replica-id".into(), replica_id.to_string()),
                         ("cluster-id".into(), instance_id.to_string()),
                         ("type".into(), "cluster".into()),

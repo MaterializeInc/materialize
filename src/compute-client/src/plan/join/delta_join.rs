@@ -17,8 +17,6 @@
 //! This implementation strategy allows us to re-use existing arrangements, and
 //! not create any new stateful operators.
 
-use std::collections::HashMap;
-
 use crate::plan::join::JoinBuildState;
 use crate::plan::join::JoinClosure;
 use crate::plan::AvailableCollections;
@@ -294,7 +292,7 @@ impl DeltaJoinPlan {
                         }
                     })
                     .unwrap_or_else(|| {
-                        let (permutation, thinning) = permutation_for_arrangement::<HashMap<_, _>>(
+                        let (permutation, thinning) = permutation_for_arrangement(
                             lookup_key,
                             input_mapper.input_arity(*lookup_relation),
                         );
@@ -327,11 +325,8 @@ impl DeltaJoinPlan {
                         bound_expr
                     })
                     .collect::<Vec<_>>();
-                let (stream_permutation, stream_thinning) = permutation_for_arrangement::<
-                    HashMap<_, _>,
-                >(
-                    &stream_key, unthinned_stream_arity
-                );
+                let (stream_permutation, stream_thinning) =
+                    permutation_for_arrangement(&stream_key, unthinned_stream_arity);
                 let key_arity = stream_key.len();
                 let permutation = join_permutations(
                     key_arity,

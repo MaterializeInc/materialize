@@ -74,7 +74,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::env;
 use std::fmt::Debug;
 use std::fs::Permissions;
@@ -183,7 +183,7 @@ pub struct ProcessOrchestratorTcpProxyConfig {
 pub struct ProcessOrchestrator {
     image_dir: PathBuf,
     suppress_output: bool,
-    namespaces: Mutex<HashMap<String, Arc<dyn NamespacedOrchestrator>>>,
+    namespaces: Mutex<BTreeMap<String, Arc<dyn NamespacedOrchestrator>>>,
     metadata_dir: PathBuf,
     secrets_dir: PathBuf,
     command_wrapper: Vec<String>,
@@ -226,7 +226,7 @@ impl ProcessOrchestrator {
         Ok(ProcessOrchestrator {
             image_dir: fs::canonicalize(image_dir).await?,
             suppress_output,
-            namespaces: Mutex::new(HashMap::new()),
+            namespaces: Mutex::new(BTreeMap::new()),
             metadata_dir: fs::canonicalize(metadata_dir).await?,
             secrets_dir: fs::canonicalize(secrets_dir).await?,
             command_wrapper,
@@ -623,7 +623,7 @@ struct ServiceProcessConfig<'a> {
     run_dir: PathBuf,
     i: usize,
     image: String,
-    args: &'a (dyn Fn(&HashMap<String, String>) -> Vec<String> + Send + Sync),
+    args: &'a (dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync),
     ports: Vec<ServiceProcessPort>,
 }
 
@@ -678,7 +678,7 @@ async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_fil
 fn interpolate_command(
     command_part: &str,
     full_id: &str,
-    ports: &HashMap<String, String>,
+    ports: &BTreeMap<String, String>,
 ) -> String {
     let mut command_part = command_part.replace("%N", full_id);
     for (endpoint, port) in ports {

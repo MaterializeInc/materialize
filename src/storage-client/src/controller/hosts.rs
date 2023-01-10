@@ -20,7 +20,7 @@
 //! host. This policy is subject to change in the future.
 
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -286,7 +286,7 @@ where
                     cpu_limit: allocation.cpu_limit,
                     memory_limit: allocation.memory_limit,
                     scale: NonZeroUsize::new(1).unwrap(),
-                    labels: HashMap::from_iter([(
+                    labels: BTreeMap::from_iter([(
                         "size".to_string(),
                         allocation.workers.to_string(),
                     )]),
