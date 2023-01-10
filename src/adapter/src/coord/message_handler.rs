@@ -190,12 +190,18 @@ impl<S: Append + 'static> Coordinator<S> {
         // thundering herds across environments.
         const SEED_LEN: usize = 32;
         let mut seed = [0; SEED_LEN];
-        for (i, byte) in format!("{}", self.catalog.state().config().environment_id)
-            .bytes()
+        for (i, byte) in self
+            .catalog
+            .state()
+            .config()
+            .environment_id
+            .organization_id()
+            .as_bytes()
+            .into_iter()
             .take(SEED_LEN)
             .enumerate()
         {
-            seed[i] = byte;
+            seed[i] = *byte;
         }
         let storage_usage_collection_interval_ms: EpochMillis =
             EpochMillis::try_from(self.storage_usage_collection_interval.as_millis())

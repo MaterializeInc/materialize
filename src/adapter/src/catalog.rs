@@ -2201,7 +2201,7 @@ impl<S: Append> Catalog<S> {
             Catalog<S>,
             BuiltinMigrationMetadata,
             Vec<BuiltinTableUpdate>,
-            Option<String>,
+            String,
         ),
         AdapterError,
     > {
@@ -2595,14 +2595,13 @@ impl<S: Append> Catalog<S> {
             .storage()
             .await
             .get_catalog_content_version()
-            .await?;
+            .await?
+            .unwrap_or_else(|| "new".to_string());
 
         if !config.skip_migrations {
             migrate::migrate(&mut catalog).await.map_err(|e| {
                 Error::new(ErrorKind::FailedMigration {
-                    last_seen_version: last_seen_version
-                        .clone()
-                        .unwrap_or_else(|| "new".to_string()),
+                    last_seen_version: last_seen_version.clone(),
                     this_version: catalog.config().build_info.version,
                     cause: e.to_string(),
                 })
