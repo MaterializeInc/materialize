@@ -385,7 +385,7 @@ Trigger computation by creating an index on the `query_03_optimized` view.
 CREATE DEFAULT INDEX query_03_optimized_idx ON query_03_optimized;
 ```
 
-What happens now in join planning is that "delta query" planning still kicks in. We have all of the necessary arrangements at hand to avoid maintaining intermediate state. The difference is that we only ever use one arrangement for each of the "wide" relations. The relations that must be arranged multiple times are narrow relations whose rows can be substantially smaller. You can confirm you are using a delta join by running `EXPLAIN VIEW query_03_optimized;` and noting that the output contains `type=delta`.
+What happens now in join planning is that "delta query" planning still kicks in. We have all the necessary indexes to avoid maintaining intermediate state. The difference is that we only ever use one index for each "wide" relation. The relations Materialize must index multiple times are narrow relations whose rows can be substantially smaller. You can confirm you are using a delta join by running `EXPLAIN VIEW query_03_optimized;` and noting that the output contains `type=delta`.
 
 We've still got some work to do on this pattern, in particular automating it so that you needn't rewrite your query. However, I hope it has hinted at the ways in which Materialize can adapt efficient idioms from traditional databases to the data-parallel streaming setting.
 
