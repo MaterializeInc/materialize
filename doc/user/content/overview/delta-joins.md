@@ -61,7 +61,7 @@ We have broken the traditional `join` operator into three parts. Each of the inp
 
 Why break apart the `join` operator into `arrange` and `join_core`?
 
-As you may know from relational databases, a small number of indexes can service a large volume of queries. The same is true in Materialize: we can re-use the indexed representations of collections across many independent joins. By separating the operator into 1. data organization and 2. computation, we can more easily slot in shared, re-used arrangements of data. This can result in a substantial reduction in the amount of memory required, as compared to traditional dataflow systems.
+As you may know from relational databases, a small number of indexes can service a large volume of queries. The same is true in Materialize: **we can re-use the indexed representations of collections across many independent joins.** By separating the operator into 1. data organization and 2. computation, we can more easily slot in shared, re-used arrangements of data. This can result in a substantial reduction in the amount of memory required, as compared to traditional dataflow systems.
 
 Let's take the example above, using `customer` and `location`. The standard dataflow system will build **_private_** indexes of `customer` and `location`, each indexed by their `zip` field. The `zip` field in `location` may be a primary key, meaning each record has a different value of the field. Joins using primary keys are effectively "look-ups" and are quite common. Each such look-up would be a join using `location.zip` and would require the same index. We can build the index once, and re-use it across all of the query dataflows that need it.
 
@@ -106,18 +106,15 @@ ORDER BY
 
 The absence of `LIMIT 10` from the query is just how TPC-H defines things. In the interest of clarity we are going to work on the core of the query, without the `ORDER BY` or elided `LIMIT`. The query is a three-way join between `customer`, `orders`, and `lineitem`, followed by a reduction. The reduction keys seem to be three random fields, but notice that `l_orderkey = o_orderkey`, where `o_orderkey` is a primary key for `orders`; we are producing an aggregate for each order.
 
-Materialize provides a [TPC-H load generator source](/sql/create-source/load-generator/#creating-a-tpch-load-generator), so you can follow along and recreate this example as we go. To follow along, you will need access to Materialize as well as a Postgres client like `psql` to submit queries. By default, all of this computation will happen in the `default` cluster on a `2xsmall` sized replica called `r1`. We'll be using the scale-factor 1 static dataset, but you can try different configurations, and the same conclusions will hold.
+Materialize provides a [TPC-H load generator source](/sql/create-source/load-generator/#creating-a-tpch-load-generator), so you can follow along and recreate this example as we go. To follow along, you will need access to Materialize as well as a Postgres client like `psql` to submit queries. By default, all of this computation will happen in the `default` cluster on a `2xsmall` sized replica called `r1`. We'll be using the scale-factor 1 that streams updates once per second.
 
 ```sql
 CREATE SOURCE tpch
-  FROM LOAD GENERATOR TPCH (SCALE FACTOR 1)
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR 1, TICK INTERVAL '1s')
   FOR ALL TABLES
   WITH (SIZE = '3xsmall');
 ```
-
-{{< note >}}
-Here, only a static amount of data is loaded. We are doing this so it will be easier to compare the effectiveness of different optimizations, but you can set `TICK INTERVAL` in addition to `SCALE FACTOR` to simulate changes happening in real-time. Just make sure to put the `SCALE FACTOR` way down when you do so (like `(SCALE FACTOR 0.001, TICK INTERVAL '1s')`).
-{{</ note >}}
+The initial dataset is loaded, and then once per second, an update, insert, or delete is added to the stream.
 
 ### A First Implementation
 
@@ -152,20 +149,17 @@ CREATE INDEX query_03_idx ON query_03 (l_orderkey, o_orderdate, o_shippriority);
 ```
 
 
-Let's count the results.
+Let's count the results (press `Ctrl+C` to kill the subscription).
 
 ```sql
-SELECT count(*) FROM query_03;
+COPY (SUBSCRIBE(SELECT count(*) FROM query_03)) TO STDOUT;
 ```
 
 ```text
- count
--------
- 11620
-(1 row)
-
-Time: 12.927 ms
+1673461007702   1       11620
 ```
+
+So we have the occasional insert, update, or delete, but there should be roughly 11-12 thousand records in the result. Your exact numbers will vary slightly from what you see here.
 
 Maintaining this query comes with a cost. The dataflow that maintains `query_03` maintains several indexes over input and intermediate data. Here is a sketch of what the dataflow graph looks like for `query_03` deployed against the raw data.
 
@@ -181,12 +175,12 @@ GROUP BY id, name
 ORDER BY sum(records) desc;
 ```
 
-When we do, we see (truncated):
+When we do, we see:
 
 ```text
-      id  |                         name                          |   sum
-    ------+-------------------------------------------------------+---------
--->   490 | Dataflow: materialize.public.query_03                 | 4173794
+      id  |            name            |   sum
+    ------+----------------------------+---------
+-->   490 | Dataflow: 1.3.query_03_idx | 4173794
       ...
 ```
 
@@ -222,15 +216,26 @@ With these indexes in place, we can rebuild our dataflow for `query_03`. Materia
 
 Notice that some places where we had "state" before are now dotted. This indicates that they are not **_new_** state; the state is simply re-used from pre-existing indexes.
 
-If we re-run our diagnostic query, the one that counts the records maintained by dataflow, we see
+In order for `query_03` to take advantage of these new indexes, we have to recreate `query_03_idx`. Let's rebuild the computation for `query_03` and re-run our diagnostic query.
+
+```sql
+-- rebuild query_03_idx
+DROP INDEX query_03_idx;
+CREATE INDEX query_03_idx ON query_03 (l_orderkey, o_orderdate, o_shippriority);
+-- dataflow and number of records it is sitting on.
+SELECT id, name, sum(records)
+FROM mz_internal.mz_records_per_dataflow
+GROUP BY id, name
+ORDER BY sum(records) desc;
+```
 
 ```text
-      id  |                         name                          |   sum
-    ------+-------------------------------------------------------+---------
-     1284 | Dataflow: materialize.public.pk_lineitem              | 6001215
--->  1323 | Dataflow: materialize.public.query_03                 | 3416347
-      568 | Dataflow: materialize.public.pk_orders                | 1500000
-      490 | Dataflow: materialize.public.pk_customer              |  150000
+      id  |                name                    |   sum
+    ------+----------------------------------------+---------
+     1284 | Dataflow: 1.3.pk_lineitem              | 6001215
+-->  1323 | Dataflow: 1.3.query_03_idx             | 3416347
+      568 | Dataflow: 1.3.pk_orders                | 1500000
+      490 | Dataflow: 1.3.pk_customer              |  150000
       ...
 ```
 
@@ -252,16 +257,27 @@ Rebuilding the query results in a dataflow that looks like so
 
 ![](https://res.cloudinary.com/mzimgcdn/image/upload/v1665546890/tpch2.webp)
 
-If we re-pull the statistics on records maintained, we see
+If we recreate the computation of the query and re-pull the statistics on records maintained, we see
+
+```sql
+-- rebuild query_03_idx
+DROP INDEX query_03_idx;
+CREATE INDEX query_03_idx ON query_03 (l_orderkey, o_orderdate, o_shippriority);
+-- dataflow and number of records it is sitting on.
+SELECT id, name, sum(records)
+FROM mz_internal.mz_records_per_dataflow
+GROUP BY id, name
+ORDER BY sum(records) desc;
+```
 
 ```text
-     id  |                         name                          |   sum
-    -----+-------------------------------------------------------+---------
-     490 | Dataflow: materialize.public.pk_lineitem              | 6001215
-     802 | Dataflow: materialize.public.fk_lineitem_orderkey     | 6001215
-     607 | Dataflow: materialize.public.pk_orders                | 1500000
--->  829 | Dataflow: materialize.public.query_03                 |  174571
-     529 | Dataflow: materialize.public.pk_customer              |  150000
+     id  |              name                      |   sum
+    -----+----------------------------------------+---------
+     490 | Dataflow: 1.3.pk_lineitem              | 6001215
+     802 | Dataflow: 1.3.fk_lineitem_orderkey     | 6001215
+     607 | Dataflow: 1.3.pk_orders                | 1500000
+-->  829 | Dataflow: 1.3.query_03_idx             |  174571
+     529 | Dataflow: 1.3.pk_customer              |  150000
      ...
 ```
 
@@ -282,17 +298,28 @@ CREATE INDEX fk_lineitem_orderkey ON lineitem (l_orderkey);
 CREATE INDEX fk_orders_custkey ON orders (o_custkey);
 ```
 
-Let's see what happens when we re-build `query_03`, and re-pull its record counts.
+Let's see what happens when we rebuild `query_03`, and re-pull its record counts.
+
+```sql
+-- rebuild query_03_idx
+DROP INDEX query_03_idx;
+CREATE INDEX query_03_idx ON query_03 (l_orderkey, o_orderdate, o_shippriority);
+-- dataflow and number of records it is sitting on.
+SELECT id, name, sum(records)
+FROM mz_internal.mz_records_per_dataflow
+GROUP BY id, name
+ORDER BY sum(records) desc;
+```
 
 ```text
-      id  |                         name                          |   sum
-    ------+-------------------------------------------------------+---------
-     1284 | Dataflow: materialize.public.pk_lineitem              | 6001215
-     2273 | Dataflow: materialize.public.fk_lineitem_orderkey     | 6001215
-      568 | Dataflow: materialize.public.pk_orders                | 1500000
-     2435 | Dataflow: materialize.public.fk_orders_custkey        | 1500000
-      490 | Dataflow: materialize.public.pk_customer              |  150000
--->  2543 | Dataflow: materialize.public.query_03                 |   23240
+      id  |                 name                   |   sum
+    ------+----------------------------------------+---------
+     1284 | Dataflow: 1.3.pk_lineitem              | 6001215
+     2273 | Dataflow: 1.3.fk_lineitem_orderkey     | 6001215
+      568 | Dataflow: 1.3.pk_orders                | 1500000
+     2435 | Dataflow: 1.3.fk_orders_custkey        | 1500000
+      490 | Dataflow: 1.3.pk_customer              |  150000
+-->  2543 | Dataflow: 1.3.query_03_idx             |   23240
       ...
 ```
 
@@ -316,7 +343,13 @@ Each of these arrangements replicates the full contents of `lineitem`. That is c
 
 Indexes in a relational database don't often replicate the entire collection of data. Rather, they often maintain just a mapping from the indexed columns back to a primary key. These few columns can take substantially less space than the whole collection, and may also change less as various unrelated attributes are updated. This is called **late materialization**.
 
-Can we do this in Materialize? Yes!
+Can we do this in Materialize? Yes! First, let's destroy everything we've done so far except for the primary indexes (we still need those):
+
+```sql
+DROP VIEW query_03;
+DROP INDEX fk_lineitem_orderkey;
+DROP INDEX fk_orders_custkey;
+```
 
 If we are brave enough to rewrite our query just a little bit, we can write the same join in a way that does not require multiple arrangements of `lineitem`. As a reminder, here are the relevant join conditions for `query_03`:
 
@@ -380,9 +413,20 @@ Trigger computation by creating an index on the `query_03_optimized` view.
 CREATE INDEX query_03_optimized_idx ON query_03_optimized (o_orderkey, o_orderdate, o_shippriority);
 ```
 
-What happens now in join planning is that "delta query" planning still kicks in. We have all the necessary indexes to avoid maintaining intermediate state. The difference is that we only ever use one index for each "wide" relation. The relations Materialize must index multiple times are narrow relations whose rows can be substantially smaller. You can confirm you are using a delta join by running `EXPLAIN VIEW query_03_optimized;` and noting that the output contains `type=delta`.
+What happens now in join planning is that "delta query" planning still kicks in. We have all the necessary indexes to avoid maintaining intermediate state. The difference is that we only ever use one index for each "wide" relation. The relations Materialize must index multiple times are narrow relations whose rows can be substantially smaller. You can confirm you are using a delta join by running `EXPLAIN VIEW query_03_optimized;` and noting that the output contains `type=delta` and uses the primary and secondary indexes we created.
+
+### Clean up
+
+At this point we can clean up resources:
+
+```sql
+DROP SOURCE tpch CASCADE;
+```
+
+You can also drop the replica you are using to save resources if no one else is using it.
 
 ## Conclusions
+
 
 Scanning across the 22 TPC-H queries, the numbers of records each query needs to maintain drops dramatically as we introduce indexes:
 
