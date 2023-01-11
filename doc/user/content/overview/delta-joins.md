@@ -106,7 +106,7 @@ ORDER BY
 
 The absence of `LIMIT 10` from the query is just how TPC-H defines things. In the interest of clarity we are going to work on the core of the query, without the `ORDER BY` or elided `LIMIT`. The query is a three-way join between `customer`, `orders`, and `lineitem`, followed by a reduction. The reduction keys seem to be three random fields, but notice that `l_orderkey = o_orderkey`, where `o_orderkey` is a primary key for `orders`; we are producing an aggregate for each order.
 
-Materialize provides a [TPC-H load generator source](/sql/create-source/load-generator/#creating-a-tpch-load-generator), so you can follow along and recreate this example as we go. To follow along, you will need access to Materialize as well as a Postgres client like `psql` to submit queries. By default, all of this computation will happen in the `default` cluster on a replica called `r1`. We'll be using the scale-factor 1 static dataset, but you can try different configurations, and the same conclusions will hold.
+Materialize provides a [TPC-H load generator source](/sql/create-source/load-generator/#creating-a-tpch-load-generator), so you can follow along and recreate this example as we go. To follow along, you will need access to Materialize as well as a Postgres client like `psql` to submit queries. By default, all of this computation will happen in the `default` cluster on a `2xsmall` sized replica called `r1`. We'll be using the scale-factor 1 static dataset, but you can try different configurations, and the same conclusions will hold.
 
 ```sql
 CREATE SOURCE tpch
@@ -150,11 +150,6 @@ In Materialize, a view is just an alias for a query definition. To trigger compu
 ```sql
 CREATE INDEX query_03_idx ON query_03 (l_orderkey, o_orderdate, o_shippriority);
 ```
-
-{{< note >}}
-When creating an index, the keyword `DEFAULT` is just a handy shortcut so you don't have to specify the columns that make up the primary key. Materialize can infer a set of columns to use for the index.
-{{</ note >}}
-
 
 
 Let's count the results.
@@ -341,8 +336,8 @@ CREATE INDEX lineitem_fk_orderkey_0 ON lineitem_fk_orderkey (l_orderkey, l_linen
 CREATE INDEX lineitem_fk_orderkey_1 ON lineitem_fk_orderkey (l_orderkey);
 -- Create a "narrow" view containing foreign key `o_custkey` and `orders`'s primary key `o_orderkey` and indexes on those keys.
 CREATE VIEW orders_fk_custkey AS SELECT o_orderkey, o_custkey FROM orders;
-CREATE INDEX orders_fk_custkey_0 on orders_key_custkey (o_orderkey);
-CREATE INDEX orders_fk_custkey_1 on orders_key_custkey (o_custkey);
+CREATE INDEX orders_fk_custkey_0 on orders_fk_custkey (o_orderkey);
+CREATE INDEX orders_fk_custkey_1 on orders_fk_custkey (o_custkey);
 ```
 
 With these new "narrow" views and their indexes, we can rewrite `query_03` to perform the core equijoin logic. We then join their primary keys back to the `orders` and `lineitem` collections, which are indexed only by their primary keys.
@@ -382,7 +377,7 @@ GROUP BY
 Trigger computation by creating an index on the `query_03_optimized` view.
 
 ```sql
-CREATE DEFAULT INDEX query_03_optimized_idx ON query_03_optimized;
+CREATE INDEX query_03_optimized_idx ON query_03_optimized (l_orderkey, o_orderdate, o_shippriority);
 ```
 
 What happens now in join planning is that "delta query" planning still kicks in. We have all the necessary indexes to avoid maintaining intermediate state. The difference is that we only ever use one index for each "wide" relation. The relations Materialize must index multiple times are narrow relations whose rows can be substantially smaller. You can confirm you are using a delta join by running `EXPLAIN VIEW query_03_optimized;` and noting that the output contains `type=delta`.
