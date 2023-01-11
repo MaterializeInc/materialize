@@ -537,9 +537,9 @@ explain with(arity, join_impls)
 select a, b, max(2), count(*) from t where b = 1 group by a, b;
 ----
 Explained Query:
-  Project (#0, #2, #3, #1) // { arity: 4 }
-    Map (1, 2) // { arity: 4 }
-      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+  Project (#0, #3, #1, #2) // { arity: 4 }
+    Map (1) // { arity: 4 }
+      Reduce group_by=[#0] aggregates=[max(2), count(*)] // { arity: 3 }
         Project (#0) // { arity: 1 }
           Filter (#1 = 1) // { arity: 2 }
             Get materialize.public.t // { arity: 2 }
@@ -554,9 +554,9 @@ explain with(arity, join_impls)
 select a, b, count(*), max(2) from t where b = 1 group by a, b;
 ----
 Explained Query:
-  Project (#0, #2, #1, #3) // { arity: 4 }
-    Map (1, 2) // { arity: 4 }
-      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+  Project (#0, #3, #1, #2) // { arity: 4 }
+    Map (1) // { arity: 4 }
+      Reduce group_by=[#0] aggregates=[count(*), max(2)] // { arity: 3 }
         Project (#0) // { arity: 1 }
           Filter (#1 = 1) // { arity: 2 }
             Get materialize.public.t // { arity: 2 }
@@ -571,11 +571,12 @@ explain with(arity, join_impls)
 select a, b, min(2), max(3) from t where b = 1 group by a, b;
 ----
 Explained Query:
-  Map (1, 2, 3) // { arity: 4 }
-    Distinct group_by=[#0] // { arity: 1 }
-      Project (#0) // { arity: 1 }
-        Filter (#1 = 1) // { arity: 2 }
-          Get materialize.public.t // { arity: 2 }
+  Project (#0, #3, #1, #2) // { arity: 4 }
+    Map (1) // { arity: 4 }
+      Reduce group_by=[#0] aggregates=[min(2), max(3)] // { arity: 3 }
+        Project (#0) // { arity: 1 }
+          Filter (#1 = 1) // { arity: 2 }
+            Get materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
   filter=((#1 = 1))
@@ -589,17 +590,17 @@ explain with(arity, join_impls) select min(1/x) from (select a as y, 0 as x from
 Explained Query:
   Return // { arity: 1 }
     Union // { arity: 1 }
-      Map (error("division by zero")) // { arity: 1 }
-        Get l0 // { arity: 0 }
+      Get l0 // { arity: 1 }
       Map (null) // { arity: 1 }
         Union // { arity: 0 }
           Negate // { arity: 0 }
-            Get l0 // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l0 // { arity: 1 }
           Constant // { arity: 0 }
             - ()
   With
     cte l0 =
-      Distinct // { arity: 0 }
+      Reduce aggregates=[min(error("division by zero"))] // { arity: 1 }
         Project () // { arity: 0 }
           Get materialize.public.t // { arity: 2 }
 
