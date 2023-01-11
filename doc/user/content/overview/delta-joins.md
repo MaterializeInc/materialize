@@ -24,7 +24,7 @@ As we move through techniques, the number of private intermediate records mainta
 
 Each technique comes on-line in response to indexes that you ask Materialize to prepare. **For multiple queries, indexes are a fixed upfront cost with per-dataflow savings for each new query.**
 
-At the end, we'll have a forward-looking discussion of **late-materialization** which can further reduce the memory requirements, in a way that currently requires user assistance (we're working on it!).
+At the end, we'll have a forward-looking discussion of **late materialization** which can further reduce the memory requirements, in a way that currently requires user assistance.
 
 ## Introducing Joins
 
@@ -71,7 +71,7 @@ We would still need a private copy of `customer` indexed by `zip`, but as we wil
 
 ## Optimizing A Query from the TPC-H Benchmark
 
-Let's work through a query from the TPC-H data warehousing benchmark.
+Let's optimize a query from the TPC-H data warehousing benchmark that joins multiple collections.
 
 **Query 03** is designed to match the following description:
 
@@ -335,11 +335,11 @@ If we are brave enough to rewrite our query just a little bit, we can write the 
 So we have a foreign key `l_orderkey` in `lineitem` and another foreign key `o_custkey` in `orders`. The trick will be to define "narrow" views of `lineitem` and `orders` that contain only the primary key and foreign key, and build indexes for each.
 
 ```sql
--- Create a "narrow" view containing foreign key `l_orderkey` and `lineitem`'s composite primary key (l_orderkey, l_linenumber).
+-- Create a "narrow" view containing foreign key `l_orderkey` and `lineitem`'s composite primary key (l_orderkey, l_linenumber) and indexes on those keys.
 CREATE VIEW lineitem_fk_orderkey AS SELECT l_orderkey, l_linenumber FROM lineitem;
 CREATE INDEX lineitem_fk_orderkey_0 ON lineitem_fk_orderkey (l_orderkey, l_linenumber);
 CREATE INDEX lineitem_fk_orderkey_1 ON lineitem_fk_orderkey (l_orderkey);
--- Create a "narrow" view containing foreign key `o_custkey` and `orders`'s primary key `o_orderkey`.
+-- Create a "narrow" view containing foreign key `o_custkey` and `orders`'s primary key `o_orderkey` and indexes on those keys.
 CREATE VIEW orders_fk_custkey AS SELECT o_orderkey, o_custkey FROM orders;
 CREATE INDEX orders_fk_custkey_0 on orders_key_custkey (o_orderkey);
 CREATE INDEX orders_fk_custkey_1 on orders_key_custkey (o_custkey);
