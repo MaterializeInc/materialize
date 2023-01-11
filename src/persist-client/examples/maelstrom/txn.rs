@@ -596,7 +596,19 @@ impl Service for TransactorService {
 
         // Construct requested Blob.
         let blob = match &args.blob_uri {
-            Some(blob_uri) => BlobConfig::try_from(blob_uri).await?.open().await?,
+            Some(blob_uri) => {
+                let cfg = BlobConfig::try_from(blob_uri)
+                    .await
+                    .expect("blob_uri should be valid");
+                loop {
+                    match cfg.clone().open().await {
+                        Ok(x) => break x,
+                        Err(err) => {
+                            info!("failed to open blob, trying again: {}", err);
+                        }
+                    }
+                }
+            }
             None => MaelstromBlob::new(handle.clone()),
         };
         let blob: Arc<dyn Blob + Send + Sync> =
@@ -620,13 +632,20 @@ impl Service for TransactorService {
         let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
         let consensus = match &args.consensus_uri {
             Some(consensus_uri) => {
-                ConsensusConfig::try_from(
+                let cfg = ConsensusConfig::try_from(
                     consensus_uri,
                     Box::new(config.clone()),
                     metrics.postgres_consensus.clone(),
-                )?
-                .open()
-                .await?
+                )
+                .expect("consensus_uri should be valid");
+                loop {
+                    match cfg.clone().open().await {
+                        Ok(x) => break x,
+                        Err(err) => {
+                            info!("failed to open consensus, trying again: {}", err);
+                        }
+                    }
+                }
             }
             None => MaelstromConsensus::new(handle.clone()),
         };
