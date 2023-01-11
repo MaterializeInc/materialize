@@ -2264,15 +2264,12 @@ fn test_isolation_level_notice() {
     Retry::default()
         .max_duration(Duration::from_secs(10))
         .retry(|_| match rx.try_next() {
-            Ok(Some(msg)) => {
-                return notice_re
-                    .captures(msg.message())
-                    .ok_or("wrong message")
-                    .map(|_| ());
-            }
-
+            Ok(Some(msg)) => notice_re
+                .captures(msg.message())
+                .ok_or("wrong message")
+                .map(|_| ()),
             Ok(None) => panic!("unexpected channel close"),
-            Err(_) => return Err("no messages available"),
+            Err(_) => Err("no messages available"),
         })
         .unwrap();
 }
