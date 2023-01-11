@@ -531,7 +531,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persist
-          args: [--node-count=4, --consensus=postgres, --blob=maelstrom, --time-limit=300, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
+          args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
 
   - id: persistence-failpoints
     label: Persistence failpoints
