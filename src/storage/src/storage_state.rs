@@ -28,7 +28,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::{PersistLocation, ShardId};
 use mz_repr::{Diff, GlobalId, Timestamp};
-use mz_storage_client::client::{StorageCommand, StorageResponse};
+use mz_storage_client::client::{StorageCommand, StorageParameter, StorageResponse};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
@@ -277,6 +277,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
             StorageCommand::InitializationComplete => (),
+            StorageCommand::UpdateConfiguration(params) => {
+                for param in params {
+                    tracing::info!("Applying configuration update: {param}");
+
+                    match param {
+                        // TODO(#16753): apply config to `self.storage_state.persist_clients`
+                        StorageParameter::PersistBlobTargetSize(_) => {}
+                        StorageParameter::PersistCompactionMinimumTimeout(_) => {}
+                    }
+                }
+            }
             StorageCommand::CreateSources(ingestions) => {
                 for ingestion in ingestions {
                     // Remember the ingestion description to facilitate possible
@@ -530,7 +541,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         }
                     })
                 }
-                StorageCommand::AllowCompaction(_) | StorageCommand::InitializationComplete => (),
+                StorageCommand::InitializationComplete
+                | StorageCommand::UpdateConfiguration(_)
+                | StorageCommand::AllowCompaction(_) => (),
             }
         }
 

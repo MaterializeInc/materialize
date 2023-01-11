@@ -51,6 +51,17 @@ message ProtoCreateSinks {
     repeated ProtoCreateSinkCommand sinks = 1;
 }
 
+message ProtoStorageParameter {
+    oneof kind {
+        uint64 persist_blob_target_size = 1;
+        mz_proto.ProtoDuration persist_compaction_minimum_timeout = 2;
+    }
+}
+
+message ProtoUpdateConfiguration {
+    repeated ProtoStorageParameter params = 1;
+}
+
 message ProtoFrontierUppersKind {
     repeated ProtoTrace traces = 1;
 }
@@ -66,6 +77,7 @@ message ProtoStorageCommand {
         ProtoAllowCompaction allow_compaction = 2;
         google.protobuf.Empty initialization_complete = 3;
         ProtoCreateSinks create_sinks = 4;
+        ProtoUpdateConfiguration update_configuration = 5;
     }
 }
 

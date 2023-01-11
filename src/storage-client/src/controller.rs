@@ -55,7 +55,7 @@ use mz_stash::{self, PostgresFactory, StashError, TypedCollection};
 
 use crate::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
-    SourceStatisticsUpdate, StorageCommand, StorageResponse, Update,
+    SourceStatisticsUpdate, StorageCommand, StorageParameter, StorageResponse, Update,
 };
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
 use crate::healthcheck;
@@ -181,6 +181,9 @@ pub trait StorageController: Debug + Send {
     /// and so it is important for a user to invoke this method as soon as it is comfortable.
     /// This method can be invoked immediately, at the potential expense of performance.
     fn initialization_complete(&mut self);
+
+    /// Update storage configuration.
+    fn update_configuration(&mut self, config_params: BTreeSet<StorageParameter>);
 
     /// Acquire an immutable reference to the collection state, should it exist.
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError>;
@@ -783,6 +786,12 @@ where
 
     fn initialization_complete(&mut self) {
         self.hosts.initialization_complete();
+    }
+
+    fn update_configuration(&mut self, config_params: BTreeSet<StorageParameter>) {
+        // TODO(#16753): apply config to `self.persist`
+
+        self.hosts.update_configuration(config_params);
     }
 
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError> {

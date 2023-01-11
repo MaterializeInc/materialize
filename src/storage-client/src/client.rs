@@ -14,9 +14,10 @@
 
 //! The public API of the storage layer.
 
-use std::collections::HashMap;
-use std::fmt::Debug;
+use std::collections::{BTreeSet, HashMap};
+use std::fmt::{self, Debug};
 use std::iter;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
@@ -103,6 +104,8 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Indicates that the controller has sent all commands reflecting its
     /// initial state.
     InitializationComplete,
+    /// Update storage instance configuration.
+    UpdateConfiguration(BTreeSet<StorageParameter>),
     /// Create the enumerated sources, each associated with its identifier.
     CreateSources(Vec<CreateSourceCommand<T>>),
     /// Enable compaction in storage-managed collections.
@@ -111,6 +114,66 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// accumulations must be correct.
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
     CreateSinks(Vec<CreateSinkCommand<T>>),
+}
+
+/// Storage instance configuration parameters.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StorageParameter {
+    /// Configures [`mz_persist_client::PersistConfig::blob_target_size`].
+    PersistBlobTargetSize(usize),
+    /// Configures [`mz_persist_client::PersistConfig::compaction_minimum_timeout`].
+    PersistCompactionMinimumTimeout(Duration),
+}
+
+impl StorageParameter {
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::PersistBlobTargetSize(_) => "persist_blob_target_size",
+            Self::PersistCompactionMinimumTimeout(_) => "persist_compaction_minimum_timeout",
+        }
+    }
+}
+
+impl fmt::Display for StorageParameter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PersistBlobTargetSize(v) => write!(f, "persist_blob_target_size={v}"),
+            Self::PersistCompactionMinimumTimeout(v) => {
+                write!(f, "persist_compaction_minimum_timeout={v:?}")
+            }
+        }
+    }
+}
+
+impl RustType<ProtoStorageParameter> for StorageParameter {
+    fn into_proto(&self) -> ProtoStorageParameter {
+        use proto_storage_parameter::Kind::*;
+
+        ProtoStorageParameter {
+            kind: Some(match self {
+                StorageParameter::PersistBlobTargetSize(v) => PersistBlobTargetSize(v.into_proto()),
+                StorageParameter::PersistCompactionMinimumTimeout(v) => {
+                    PersistCompactionMinimumTimeout(v.into_proto())
+                }
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoStorageParameter) -> Result<Self, TryFromProtoError> {
+        use proto_storage_parameter::Kind::*;
+
+        match proto.kind {
+            Some(PersistBlobTargetSize(v)) => {
+                Ok(StorageParameter::PersistBlobTargetSize(usize::cast_from(v)))
+            }
+            Some(PersistCompactionMinimumTimeout(v)) => Ok(
+                StorageParameter::PersistCompactionMinimumTimeout(v.into_rust()?),
+            ),
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoComputeParameter::kind",
+            )),
+        }
+    }
 }
 
 /// A command that starts ingesting the given ingestion description
@@ -211,6 +274,11 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
         ProtoStorageCommand {
             kind: Some(match self {
                 StorageCommand::InitializationComplete => InitializationComplete(()),
+                StorageCommand::UpdateConfiguration(params) => {
+                    UpdateConfiguration(ProtoUpdateConfiguration {
+                        params: params.into_proto(),
+                    })
+                }
                 StorageCommand::CreateSources(sources) => CreateSources(ProtoCreateSources {
                     sources: sources.into_proto(),
                 }),
@@ -229,13 +297,16 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
     fn from_proto(proto: ProtoStorageCommand) -> Result<Self, TryFromProtoError> {
         use proto_storage_command::Kind::*;
         match proto.kind {
+            Some(InitializationComplete(())) => Ok(StorageCommand::InitializationComplete),
+            Some(UpdateConfiguration(ProtoUpdateConfiguration { params })) => {
+                Ok(StorageCommand::UpdateConfiguration(params.into_rust()?))
+            }
             Some(CreateSources(ProtoCreateSources { sources })) => {
                 Ok(StorageCommand::CreateSources(sources.into_rust()?))
             }
             Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
                 Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
             }
-            Some(InitializationComplete(())) => Ok(StorageCommand::InitializationComplete),
             Some(CreateSinks(ProtoCreateSinks { sinks })) => {
                 Ok(StorageCommand::CreateSinks(sinks.into_rust()?))
             }
@@ -448,7 +519,9 @@ where
                     assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export.id, command);
                 }
             }
-            StorageCommand::AllowCompaction(_) | StorageCommand::InitializationComplete => {
+            StorageCommand::InitializationComplete
+            | StorageCommand::UpdateConfiguration(_)
+            | StorageCommand::AllowCompaction(_) => {
                 // Other commands have no known impact on frontier tracking.
             }
         }
