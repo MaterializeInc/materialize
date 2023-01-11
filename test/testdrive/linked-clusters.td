@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# The expected number of rows in system tables depends on the number of replicas
+$ skip-if
+SELECT ${arg.replicas} > 1;
+
 $ set-sql-timeout duration=1s
 
 # Create a basic view for use throughout the test.
