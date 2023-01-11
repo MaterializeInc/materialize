@@ -83,6 +83,7 @@ pub mod render;
 pub mod server;
 pub mod sink;
 pub mod source;
+pub mod statistics;
 pub mod storage_state;
 
 mod healthcheck;

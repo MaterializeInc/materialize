@@ -18,18 +18,17 @@ use itertools::Itertools;
 use timely::progress::ChangeBatch;
 use tokio::sync::oneshot;
 
-use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, GlobalId, Row};
+use mz_repr::{GlobalId, Row};
 
-use crate::client::SourceStatisticsUpdate;
+use crate::client::PackableStats;
 use crate::controller::collection_mgmt::CollectionManager;
 
 /// Spawns a task that continually (at an interval) writes statistics from storaged's
 /// that are consolidated in shared memory in the controller.
-pub(super) fn spawn_statistics_scraper(
+pub(super) fn spawn_statistics_scraper<Stats: PackableStats + Send + 'static>(
     statistics_collection_id: GlobalId,
     collection_mgmt: CollectionManager,
-    shared_stats: Arc<Mutex<HashMap<GlobalId, HashMap<usize, SourceStatisticsUpdate>>>>,
+    shared_stats: Arc<Mutex<HashMap<GlobalId, HashMap<usize, Stats>>>>,
 ) -> Box<dyn Any + Send + Sync> {
     // TODO(guswynn): Should this be configurable? Maybe via LaunchDarkly?
     const STATISTICS_INTERVAL: Duration = Duration::from_secs(30);
@@ -69,18 +68,9 @@ pub(super) fn spawn_statistics_scraper(
                     {
                         let shared_stats = shared_stats.lock().expect("poisoned");
 
-                        for (src_id, sources) in shared_stats.iter() {
-                            for (worker_id, stats) in sources.iter() {
-                                let mut packer = row_buf.packer();
-
-                                packer.push(Datum::from(src_id.to_string().as_str()));
-                                packer.push(Datum::from(u64::cast_from(*worker_id)));
-                                packer.push(Datum::from(stats.snapshot_committed));
-                                packer.push(Datum::from(stats.messages_received));
-                                packer.push(Datum::from(stats.updates_staged));
-                                packer.push(Datum::from(stats.updates_committed));
-                                packer.push(Datum::from(stats.bytes_received));
-
+                        for (_, items) in shared_stats.iter() {
+                            for (_, stats) in items.iter() {
+                                stats.pack(row_buf.packer());
                                 correction.push((row_buf.clone(), 1));
                             }
                         }

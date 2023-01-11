@@ -81,8 +81,17 @@ message ProtoStorageResponse {
         uint64 updates_committed = 6;
         uint64 bytes_received = 7;
     }
+    message ProtoSinkStatisticsUpdate {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        uint64 worker_id = 2;
+        uint64 messages_staged = 3;
+        uint64 messages_committed = 5;
+        uint64 bytes_staged = 4;
+        uint64 bytes_committed = 6;
+    }
     message ProtoStatisticsUpdates {
         repeated ProtoSourceStatisticsUpdate source_updates = 1;
+        repeated ProtoSinkStatisticsUpdate sink_updates = 2;
     }
 
     message ProtoDroppedIds {

@@ -24,7 +24,7 @@ pub struct KafkaBaseMetrics {
 }
 
 impl KafkaBaseMetrics {
-    pub fn register_with(registry: &MetricsRegistry) -> Self {
+    fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             messages_sent_counter: registry.register(metric!(
                 name: "mz_kafka_messages_sent_total",
@@ -54,6 +54,9 @@ impl KafkaBaseMetrics {
 #[derive(Clone)]
 pub struct SinkBaseMetrics {
     pub(crate) kafka: KafkaBaseMetrics,
+
+    /// Metrics that are also exposed to users.
+    pub(crate) sink_statistics: crate::statistics::SinkStatisticsMetricsDefinitions,
 }
 
 impl SinkBaseMetrics {
@@ -61,6 +64,9 @@ impl SinkBaseMetrics {
     pub fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             kafka: KafkaBaseMetrics::register_with(registry),
+            sink_statistics: crate::statistics::SinkStatisticsMetricsDefinitions::register_with(
+                registry,
+            ),
         }
     }
 }
