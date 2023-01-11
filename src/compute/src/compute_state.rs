@@ -29,7 +29,6 @@ use tracing::{error, span, Level};
 use uuid::Uuid;
 
 use mz_compute_client::logging::LoggingConfig;
-use mz_compute_client::metrics::ComputeMetrics;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::protocol::command::{ComputeCommand, ComputeParameter, Peek};
 use mz_compute_client::protocol::history::ComputeCommandHistory;
@@ -48,6 +47,7 @@ use mz_timely_util::probe;
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::ComputeEvent;
+use crate::metrics::ComputeMetrics;
 
 /// Worker-local state that is maintained across dataflows.
 ///
