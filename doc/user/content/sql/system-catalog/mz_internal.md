@@ -75,6 +75,22 @@ them for any kind of capacity planning.
 | `cpu_nano_cores` | [`uint8`] | The CPU allocation per process, in billionths of a vCPU core. |
 | `memory_bytes`   | [`uint8`] | The RAM allocation per process, in billionths of a vCPU core. |
 
+
+### `mz_cluster_links`
+
+The `mz_cluster_links` table exposes the mappings between sources/sinks and their linked cluster.
+
+{{< note >}}
+The concept of a linked cluster is not user-facing, and is intentionally undocumented. Linked clusters are meant to preserve the soon-to-be legacy interface for sizing sources and sinks.
+{{< /note >}}
+
+| Field            | Type      | Meaning                                                       |
+|------------------|-----------|---------------------------------------------------------------|
+| `cluster_id`     | [`text`]  | The ID of the cluster. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).  |
+| `object_id`      | [`text`]  | The ID of the source or sink. Corresponds to [`mz_objects.id`](/sql/system-catalog/mz_catalog/#mz_clusters).  |
+
+
+
 ### `mz_cluster_replica_statuses`
 
 The `mz_cluster_replica_statuses` table contains a row describing the status
