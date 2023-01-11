@@ -266,6 +266,8 @@ pub struct PersistConfig {
     /// In Compactor::compact_and_apply_background, the maximum number of pending
     /// compaction requests to queue.
     pub compaction_queue_size: usize,
+    /// The maximum number of concurrent blob deletes during garbage collection.
+    pub gc_batch_part_delete_concurrency_limit: usize,
     /// In Compactor::compact_and_apply_background, the minimum amount of time to
     /// allow a compaction request to run before timing it out. A request may be
     /// given a timeout greater than this value depending on the inputs' size
@@ -366,6 +368,7 @@ impl PersistConfig {
             compaction_heuristic_min_updates: 1024,
             compaction_concurrency_limit: 5,
             compaction_queue_size: 20,
+            gc_batch_part_delete_concurrency_limit: 32,
             compaction_minimum_timeout: Duration::from_secs(90),
             consensus_connection_pool_max_size: 50,
             consensus_connection_pool_ttl: Duration::from_secs(300),

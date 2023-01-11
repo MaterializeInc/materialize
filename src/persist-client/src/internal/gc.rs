@@ -376,7 +376,7 @@ where
                 .into_iter()
                 .map(|k| k.complete(&req.shard_id)),
             &machine.metrics,
-            &Semaphore::new(32),
+            &Semaphore::new(machine.cfg.gc_batch_part_delete_concurrency_limit),
         )
         .await;
 
