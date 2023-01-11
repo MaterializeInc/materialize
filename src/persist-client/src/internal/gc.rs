@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -16,17 +17,20 @@ use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use futures_util::stream::FuturesUnordered;
+use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
-use mz_persist::location::SeqNo;
+use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Semaphore};
 use tracing::{debug, debug_span, warn, Instrument, Span};
 
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::maintenance::RoutineMaintenance;
-use crate::internal::paths::{PartialRollupKey, RollupId};
+use crate::internal::paths::{BlobKey, PartialRollupKey, RollupId};
+use crate::metrics::Metrics;
 use crate::ShardId;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -340,21 +344,42 @@ where
         // becomes an issue. Maybe make Blob::delete take a list of keys?
         //
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
-        //
-        // Another idea is to use a FuturesUnordered to at least run them
-        // concurrently, but this requires a bunch of Arc cloning, so wait to
-        // see if it's worth it.
-        for key in deleteable_batch_blobs {
-            retry_external(&machine.metrics.retries.external.batch_delete, || async {
-                machine
-                    .state_versions
-                    .blob
-                    .delete(&key.complete(&req.shard_id))
-                    .await
-            })
-            .instrument(debug_span!("batch::delete"))
-            .await;
+        async fn delete_all(
+            blob: &(dyn Blob + Send + Sync),
+            keys: impl Iterator<Item = BlobKey>,
+            metrics: &Metrics,
+            semaphore: &Semaphore,
+        ) {
+            let futures = FuturesUnordered::new();
+            for key in keys {
+                futures.push(
+                    retry_external(&metrics.retries.external.batch_delete, move || {
+                        let key = key.clone();
+                        async move {
+                            let _permit = semaphore
+                                .acquire()
+                                .await
+                                .expect("acquiring permit from open semaphore");
+                            blob.delete(&key).await.map(|_| ())
+                        }
+                    })
+                    .instrument(debug_span!("batch::delete")),
+                )
+            }
+
+            futures.collect().await
         }
+
+        delete_all(
+            machine.state_versions.blob.borrow(),
+            deleteable_batch_blobs
+                .into_iter()
+                .map(|k| k.complete(&req.shard_id)),
+            &machine.metrics,
+            &Semaphore::new(machine.cfg.gc_batch_part_delete_concurrency_limit),
+        )
+        .await;
+
         debug!("gc {} deleted batch blobs", req.shard_id);
 
         // Now that we've deleted the eligible blobs, "commit" this info by
