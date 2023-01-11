@@ -2201,3 +2201,8 @@ pub(crate) fn is_compute_config_var(name: &str) -> bool {
         || name == PERSIST_BLOB_TARGET_SIZE.name()
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
 }
+
+/// Returns whether the named variable is a storage configuration parameter.
+pub(crate) fn is_storage_config_var(name: &str) -> bool {
+    name == PERSIST_BLOB_TARGET_SIZE.name() || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
+}

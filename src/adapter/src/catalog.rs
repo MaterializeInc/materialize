@@ -20,6 +20,7 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_compute_client::protocol::command::ComputeParameter;
+use mz_storage_client::client::StorageParameter;
 use mz_storage_client::controller::IntrospectionType;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -5757,6 +5758,18 @@ impl<S: Append> Catalog<S> {
         let config = self.system_config();
         [
             MaxResultSize(config.max_result_size()),
+            PersistBlobTargetSize(config.persist_blob_target_size()),
+            PersistCompactionMinimumTimeout(config.persist_compaction_minimum_timeout()),
+        ]
+        .into()
+    }
+
+    /// Return the current storage configuration, derived from the system configuration.
+    pub fn storage_config(&self) -> BTreeSet<StorageParameter> {
+        use StorageParameter::*;
+
+        let config = self.system_config();
+        [
             PersistBlobTargetSize(config.persist_blob_target_size()),
             PersistCompactionMinimumTimeout(config.persist_compaction_minimum_timeout()),
         ]

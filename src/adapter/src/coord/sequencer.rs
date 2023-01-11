@@ -3531,6 +3531,7 @@ impl<S: Append + 'static> Coordinator<S> {
         self.is_user_allowed_to_alter_system(session)?;
         use mz_sql::ast::{SetVariableValue, Value};
         let update_compute_config = session::vars::is_compute_config_var(&name);
+        let update_storage_config = session::vars::is_storage_config_var(&name);
         let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = match value {
             SetVariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
@@ -3550,6 +3551,9 @@ impl<S: Append + 'static> Coordinator<S> {
         if update_compute_config {
             self.update_compute_config();
         }
+        if update_storage_config {
+            self.update_storage_config();
+        }
         if update_metrics_retention {
             self.update_metrics_retention();
         }
@@ -3563,11 +3567,15 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
         let update_compute_config = session::vars::is_compute_config_var(&name);
+        let update_storage_config = session::vars::is_storage_config_var(&name);
         let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = catalog::Op::ResetSystemConfiguration { name };
         self.catalog_transact(Some(session), vec![op]).await?;
         if update_compute_config {
             self.update_compute_config();
+        }
+        if update_storage_config {
+            self.update_storage_config();
         }
         if update_metrics_retention {
             self.update_metrics_retention();
@@ -3584,6 +3592,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let op = catalog::Op::ResetAllSystemConfiguration {};
         self.catalog_transact(Some(session), vec![op]).await?;
         self.update_compute_config();
+        self.update_storage_config();
         self.update_metrics_retention();
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
@@ -3602,6 +3611,11 @@ impl<S: Append + 'static> Coordinator<S> {
     fn update_compute_config(&mut self) {
         let config_params = self.catalog.compute_config();
         self.controller.compute.update_configuration(config_params);
+    }
+
+    fn update_storage_config(&mut self) {
+        let config_params = self.catalog.storage_config();
+        self.controller.storage.update_configuration(config_params);
     }
 
     fn update_metrics_retention(&mut self) {

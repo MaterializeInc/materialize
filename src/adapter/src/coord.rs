@@ -486,8 +486,11 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<(), AdapterError> {
         info!("coordinator init: beginning bootstrap");
 
+        // Inform the controllers about their initial configuration.
         let compute_config = self.catalog.compute_config();
         self.controller.compute.update_configuration(compute_config);
+        let storage_config = self.catalog.storage_config();
+        self.controller.storage.update_configuration(storage_config);
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
         //
