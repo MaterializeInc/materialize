@@ -89,8 +89,10 @@
 //! about each of these interfaces.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::mem;
 use std::num::NonZeroI64;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -288,9 +290,12 @@ where
     /// `source_ids` at the time of the function call.
     #[allow(unused)]
     #[allow(clippy::unused_async)]
-    pub async fn recent_timestamp(&self, source_ids: impl Iterator<Item = GlobalId>) -> T {
+    pub fn recent_timestamp(
+        &self,
+        source_ids: impl Iterator<Item = GlobalId>,
+    ) -> Pin<Box<dyn Future<Output = T> + Send>> {
         // Dummy implementation
-        T::minimum()
+        Box::pin(async { T::minimum() })
     }
 }
 

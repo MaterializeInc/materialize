@@ -27,15 +27,16 @@ use mz_sql::plan::{Plan, SendDiffsPlan};
 use mz_stash::Append;
 use mz_storage_client::controller::CollectionMetadata;
 
+use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
 use crate::util::ResultExt;
-use crate::{catalog, AdapterNotice};
+use crate::{catalog, AdapterError, AdapterNotice};
 
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
-    Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, SendDiffs,
-    SinkConnectionReady,
+    Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, RealTimeRecencyContext,
+    SendDiffs, SinkConnectionReady,
 };
 
 impl<S: Append + 'static> Coordinator<S> {
@@ -85,6 +86,13 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             Message::Consolidate(collections) => {
                 self.consolidate(&collections).await;
+            }
+            Message::RealTimeRecencyTimestamp {
+                conn_id,
+                real_time_recency_ts,
+            } => {
+                self.message_real_time_recency_timestamp(conn_id, real_time_recency_ts)
+                    .await;
             }
         }
     }
@@ -674,6 +682,103 @@ impl<S: Append + 'static> Coordinator<S> {
                     warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                 }
             });
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    /// Finishes sequencing a command that was waiting on a real time recency timestamp.
+    async fn message_real_time_recency_timestamp(
+        &mut self,
+        conn_id: ConnectionId,
+        real_time_recency_ts: mz_repr::Timestamp,
+    ) {
+        if let Some(real_time_recency_context) =
+            self.pending_real_time_recency_timestamp.remove(&conn_id)
+        {
+            match real_time_recency_context {
+                RealTimeRecencyContext::ExplainTimestamp {
+                    tx,
+                    session,
+                    format,
+                    source_ids,
+                    optimized_plan,
+                } => tx.send(
+                    self.sequence_explain_timestamp_finish(
+                        &session,
+                        format,
+                        source_ids,
+                        optimized_plan,
+                        Some(real_time_recency_ts),
+                    ),
+                    session,
+                ),
+                RealTimeRecencyContext::Peek {
+                    transient_revision,
+                    compute_instance: (compute_instance_id, compute_instance_name),
+                    mut object_names,
+                    tx,
+                    finishing,
+                    copy_to,
+                    source,
+                    mut session,
+                    when,
+                    target_replica,
+                    view_id,
+                    index_id,
+                    timeline_context,
+                    source_ids,
+                    id_bundle,
+                    in_immediate_multi_stmt_txn,
+                } => {
+                    // Re-validate that the involved objects still exist.
+                    if transient_revision != self.catalog.transient_revision() {
+                        if let Some(id) = id_bundle
+                            .iter()
+                            .find(|id| self.catalog.try_get_entry(id).is_none())
+                        {
+                            return tx.send(
+                                Err(AdapterError::UnknownRelation {
+                                    object_name: object_names
+                                        .remove(&id)
+                                        .expect("object names is populated by id_bundle"),
+                                }),
+                                session,
+                            );
+                        } else if self
+                            .catalog
+                            .try_get_compute_instance(compute_instance_id)
+                            .is_none()
+                        {
+                            return tx.send(
+                                Err(AdapterError::UnknownCluster {
+                                    cluster_name: compute_instance_name,
+                                }),
+                                session,
+                            );
+                        }
+                    }
+
+                    tx.send(
+                        self.sequence_peek_finish(
+                            finishing,
+                            copy_to,
+                            source,
+                            &mut session,
+                            when,
+                            target_replica,
+                            view_id,
+                            index_id,
+                            timeline_context,
+                            source_ids,
+                            id_bundle,
+                            in_immediate_multi_stmt_txn,
+                            Some(real_time_recency_ts),
+                        )
+                        .await,
+                        session,
+                    );
+                }
+            }
         }
     }
 }

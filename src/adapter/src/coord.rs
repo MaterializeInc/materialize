@@ -88,6 +88,7 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId, ReplicaId};
+use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
@@ -99,12 +100,13 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{stack, task};
 use mz_persist_client::usage::StorageUsageClient;
 use mz_persist_client::ShardId;
+use mz_repr::explain_new::ExplainFormat;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::Aug;
-use mz_sql::plan::{self, MutationKind, Params};
+use mz_sql::plan::{self, CopyFormat, MutationKind, Params, QueryWhen};
 use mz_stash::Append;
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, StorageError,
@@ -128,7 +130,7 @@ use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn}
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
-use crate::coord::timeline::{TimelineState, WriteTimestamp};
+use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
@@ -200,6 +202,10 @@ pub enum Message<T = mz_repr::Timestamp> {
     StorageUsageFetch,
     StorageUsageUpdate(HashMap<Option<ShardId>, u64>),
     Consolidate(Vec<mz_stash::Id>),
+    RealTimeRecencyTimestamp {
+        conn_id: ConnectionId,
+        real_time_recency_ts: Timestamp,
+    },
 }
 
 #[derive(Derivative)]
@@ -242,6 +248,44 @@ pub struct SinkConnectionReady {
     pub oid: u32,
     pub create_export_token: CreateExportToken,
     pub result: Result<StorageSinkConnection, AdapterError>,
+}
+
+#[derive(Debug)]
+pub enum RealTimeRecencyContext {
+    ExplainTimestamp {
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
+        format: ExplainFormat,
+        source_ids: BTreeSet<GlobalId>,
+        optimized_plan: OptimizedMirRelationExpr,
+    },
+    Peek {
+        transient_revision: u64,
+        compute_instance: (ComputeInstanceId, String),
+        object_names: HashMap<GlobalId, String>,
+        tx: ClientTransmitter<ExecuteResponse>,
+        finishing: RowSetFinishing,
+        copy_to: Option<CopyFormat>,
+        source: MirRelationExpr,
+        session: Session,
+        when: QueryWhen,
+        target_replica: Option<ReplicaId>,
+        view_id: GlobalId,
+        index_id: GlobalId,
+        timeline_context: TimelineContext,
+        source_ids: BTreeSet<GlobalId>,
+        id_bundle: CollectionIdBundle,
+        in_immediate_multi_stmt_txn: bool,
+    },
+}
+
+impl RealTimeRecencyContext {
+    pub(crate) fn take_tx_and_session(self) -> (ClientTransmitter<ExecuteResponse>, Session) {
+        match self {
+            RealTimeRecencyContext::ExplainTimestamp { tx, session, .. }
+            | RealTimeRecencyContext::Peek { tx, session, .. } => (tx, session),
+        }
+    }
 }
 
 /// Configures a coordinator.
@@ -431,8 +475,11 @@ pub struct Coordinator<S> {
     /// A map from pending peek ids to the queue into which responses are sent, and
     /// the connection id of the client that initiated the peek.
     pending_peeks: HashMap<Uuid, PendingPeek>,
-    /// A map from client connection ids to a set of all pending peeks for that client
+    /// A map from client connection ids to a set of all pending peeks for that client.
     client_pending_peeks: HashMap<ConnectionId, BTreeMap<Uuid, ComputeInstanceId>>,
+
+    /// A map from client connection ids to a pending real time recency timestamps.
+    pending_real_time_recency_timestamp: HashMap<ConnectionId, RealTimeRecencyContext>,
 
     /// A map from pending subscribes to the subscribe description.
     pending_subscribes: HashMap<GlobalId, PendingSubscribe>,
@@ -441,7 +488,7 @@ pub struct Coordinator<S> {
     write_lock: Arc<tokio::sync::Mutex<()>>,
     /// Holds plans deferred due to write lock.
     write_lock_wait_group: VecDeque<Deferred>,
-    /// Pending writes waiting for a group commit
+    /// Pending writes waiting for a group commit.
     pending_writes: Vec<PendingWriteTxn>,
 
     /// Handle to secret manager that can create and delete secrets from
@@ -1281,6 +1328,7 @@ pub async fn serve<S: Append + 'static>(
                 txn_reads: Default::default(),
                 pending_peeks: HashMap::new(),
                 client_pending_peeks: HashMap::new(),
+                pending_real_time_recency_timestamp: HashMap::new(),
                 pending_subscribes: HashMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
