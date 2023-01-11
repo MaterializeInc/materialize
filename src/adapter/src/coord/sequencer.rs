@@ -83,6 +83,7 @@ use crate::metrics;
 use crate::notice::AdapterNotice;
 use crate::session::vars::{
     IsolationLevel, CLUSTER_VAR_NAME, DATABASE_VAR_NAME, REAL_TIME_RECENCY_VAR_NAME,
+    TRANSACTION_ISOLATION_VAR_NAME,
 };
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
@@ -1918,6 +1919,16 @@ impl<S: Append + 'static> Coordinator<S> {
                     session.add_notice(AdapterNotice::ClusterDoesNotExist {
                         name: v.to_string(),
                     });
+                } else if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME {
+                    let v = v.to_lowercase();
+                    if v == IsolationLevel::ReadUncommitted.as_str()
+                        || v == IsolationLevel::ReadCommitted.as_str()
+                        || v == IsolationLevel::RepeatableRead.as_str()
+                    {
+                        session.add_notice(AdapterNotice::UnimplementedIsolationLevel {
+                            isolation_level: v,
+                        });
+                    }
                 }
             }
             None => vars.reset(&name, local)?,
