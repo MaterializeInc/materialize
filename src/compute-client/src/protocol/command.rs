@@ -10,6 +10,7 @@
 //! Compute protocol commands.
 
 use std::collections::BTreeSet;
+use std::fmt;
 use std::num::NonZeroI64;
 
 use proptest::prelude::{any, Arbitrary};
@@ -479,6 +480,23 @@ pub enum ComputeParameter {
     /// [`PeekResponse::Error`]: super::response::PeekResponse::Error
     /// [`SubscribeBatch::updates`]: super::response::SubscribeBatch::updates
     MaxResultSize(u32),
+}
+
+impl ComputeParameter {
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::MaxResultSize(_) => "max_result_size",
+        }
+    }
+}
+
+impl fmt::Display for ComputeParameter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::MaxResultSize(v) => v.to_string(),
+        };
+        write!(f, "{}={}", self.key(), value)
+    }
 }
 
 impl RustType<ProtoComputeParameter> for ComputeParameter {

@@ -25,7 +25,7 @@ use timely::progress::frontier::Antichain;
 use timely::progress::reachability::logging::TrackerEvent;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
-use tracing::{error, span, Level};
+use tracing::{error, info, span, Level};
 use uuid::Uuid;
 
 use mz_compute_client::logging::LoggingConfig;
@@ -156,6 +156,8 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
     fn handle_update_configuration(&mut self, params: BTreeSet<ComputeParameter>) {
         for param in params {
+            info!("Applying configuration update: {param}");
+
             match param {
                 ComputeParameter::MaxResultSize(size) => {
                     self.compute_state.max_result_size = size;
