@@ -53,6 +53,7 @@ use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, Gau
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::{halt, task};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_client::client::SinkStatisticsUpdate;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sinks::{
@@ -63,6 +64,7 @@ use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuild
 
 use crate::render::sinks::{HealthcheckerArgs, SinkRender};
 use crate::sink::{Healthchecker, KafkaBaseMetrics, SinkStatus};
+use crate::statistics::{SinkStatisticsMetrics, StorageStatistics};
 use crate::storage_state::StorageState;
 
 // 30s is a good maximum backoff for network operations. Long enough to reduce
@@ -128,6 +130,11 @@ where
             sink.as_of.clone(),
             Rc::clone(&shared_frontier),
             &storage_state.sink_metrics.kafka,
+            storage_state
+                .sink_statistics
+                .get(&sink_id)
+                .expect("statistics initialized")
+                .clone(),
             &storage_state.connection_context,
             healthchecker_args,
         );
@@ -922,6 +929,7 @@ fn kafka<G>(
     as_of: SinkAsOf,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
+    sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: &ConnectionContext,
     healthchecker_args: HealthcheckerArgs,
 ) -> Rc<dyn Any>
@@ -989,6 +997,7 @@ where
         shared_gate_ts,
         write_frontier,
         metrics,
+        sink_statistics,
         connection_context,
         healthchecker_args,
     )
@@ -1014,6 +1023,7 @@ pub fn produce_to_kafka<G>(
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
+    sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: &ConnectionContext,
     healthchecker_args: HealthcheckerArgs,
 ) -> Rc<dyn Any>
@@ -1159,6 +1169,9 @@ where
                         .await;
 
                         let mut repeat_counter = 0;
+
+                        let count_for_stats = u64::cast_from(rows.len());
+                        let mut total_size_for_stats = 0;
                         for encoded_row in rows {
                             let record = BaseRecord::to(&s.topic);
                             let record = match encoded_row.value.as_ref() {
@@ -1176,7 +1189,14 @@ where
                                 value: Some(&ts_bytes),
                             }));
 
+                            let size_for_stats =
+                                u64::cast_from(record.payload.as_ref().map_or(0, |p| p.len()))
+                                    + u64::cast_from(record.key.as_ref().map_or(0, |k| k.len()));
+                            total_size_for_stats += size_for_stats;
+
                             s.send(record).await;
+                            sink_statistics.inc_messages_staged_by(1);
+                            sink_statistics.inc_bytes_staged_by(size_for_stats);
 
                             // advance to the next repetition of this row, or the next row if all
                             // repetitions are exhausted
@@ -1191,6 +1211,8 @@ where
                         // sending progress records and commit transactions.
                         s.flush().await;
 
+                        // We don't count this record as part of the message count in user-facing
+                        // statistics.
                         s.send_progress_record(*ts).await;
 
                         info!("Committing transaction for {:?}", ts,);
@@ -1200,6 +1222,8 @@ where
                                 .await,
                         )
                         .await;
+                        sink_statistics.inc_messages_committed_by(count_for_stats);
+                        sink_statistics.inc_bytes_committed_by(total_size_for_stats);
 
                         s.flush().await;
 

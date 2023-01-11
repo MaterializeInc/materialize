@@ -57,6 +57,7 @@ use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_storage_client::client::SourceStatisticsUpdate;
 use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use mz_storage_client::source::util::async_source;
 use mz_storage_client::types::connections::ConnectionContext;
@@ -75,6 +76,7 @@ use crate::source::types::{
     HealthStatusUpdate, MaybeLength, SourceConnectionBuilder, SourceMessage, SourceMessageType,
     SourceMetrics, SourceOutput, SourceReader, SourceReaderError, SourceReaderMetrics,
 };
+use crate::statistics::{SourceStatisticsMetrics, StorageStatistics};
 
 // Interval after which the source operator will yield control.
 const YIELD_INTERVAL: Duration = Duration::from_millis(10);
@@ -109,7 +111,7 @@ pub struct RawSourceCreationConfig {
     /// A handle to the persist client cache
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
     /// Place to share statistics updates with storage state.
-    pub source_statistics: crate::source::statistics::SourceStatistics,
+    pub source_statistics: StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>,
 }
 
 /// A batch of messages from a source reader, along with the batch upper, the

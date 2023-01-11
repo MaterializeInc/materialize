@@ -287,11 +287,13 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
     }
 }
 
-/// This structure represents a full set up updates for the `mz_source_statistics`
-/// table, for a specific source-worker pair. It is structured like this for simplicity
-/// and efficiency: Each storage worker can individually collect and consolidate metrics,
-/// then control how much `StorageResponse` traffic is produced when sending updates
-/// back to the controller to be written.
+// These structure represents a full set up updates for the `mz_source_statistics`
+// and `mz_sink_statistics` tables for a specific source-worker/sink-worker pair.
+// They are structured like this for simplicity
+// and efficiency: Each storage worker can individually collect and consolidate metrics,
+// then control how much `StorageResponse` traffic is produced when sending updates
+// back to the controller to be written.
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SourceStatisticsUpdate {
     pub id: GlobalId,
@@ -301,6 +303,46 @@ pub struct SourceStatisticsUpdate {
     pub updates_staged: u64,
     pub updates_committed: u64,
     pub bytes_received: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SinkStatisticsUpdate {
+    pub id: GlobalId,
+    pub worker_id: usize,
+    pub messages_staged: u64,
+    pub messages_committed: u64,
+    pub bytes_staged: u64,
+    pub bytes_committed: u64,
+}
+
+/// A trait that abstracts over user-facing statistics objects, used
+/// by `spawn_statistics_scraper`.
+pub trait PackableStats {
+    /// Pack `self` into the `Row`.
+    fn pack(&self, packer: mz_repr::RowPacker<'_>);
+}
+impl PackableStats for SourceStatisticsUpdate {
+    fn pack(&self, mut packer: mz_repr::RowPacker<'_>) {
+        use mz_repr::Datum;
+        packer.push(Datum::from(self.id.to_string().as_str()));
+        packer.push(Datum::from(u64::cast_from(self.worker_id)));
+        packer.push(Datum::from(self.snapshot_committed));
+        packer.push(Datum::from(self.messages_received));
+        packer.push(Datum::from(self.updates_staged));
+        packer.push(Datum::from(self.updates_committed));
+        packer.push(Datum::from(self.bytes_received));
+    }
+}
+impl PackableStats for SinkStatisticsUpdate {
+    fn pack(&self, mut packer: mz_repr::RowPacker<'_>) {
+        use mz_repr::Datum;
+        packer.push(Datum::from(self.id.to_string().as_str()));
+        packer.push(Datum::from(u64::cast_from(self.worker_id)));
+        packer.push(Datum::from(self.messages_staged));
+        packer.push(Datum::from(self.messages_committed));
+        packer.push(Datum::from(self.bytes_staged));
+        packer.push(Datum::from(self.bytes_committed));
+    }
 }
 
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
@@ -315,13 +357,14 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     DroppedIds(Vec<GlobalId>),
 
     /// A list of statistics updates, currently only for sources.
-    StatisticsUpdates(Vec<SourceStatisticsUpdate>),
+    StatisticsUpdates(Vec<SourceStatisticsUpdate>, Vec<SinkStatisticsUpdate>),
 }
 
 impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageResponse {
         use proto_storage_response::{
-            Kind::*, ProtoDroppedIds, ProtoSourceStatisticsUpdate, ProtoStatisticsUpdates,
+            Kind::*, ProtoDroppedIds, ProtoSinkStatisticsUpdate, ProtoSourceStatisticsUpdate,
+            ProtoStatisticsUpdates,
         };
         ProtoStorageResponse {
             kind: Some(match self {
@@ -329,20 +372,33 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                 StorageResponse::DroppedIds(ids) => DroppedIds(ProtoDroppedIds {
                     ids: ids.into_proto(),
                 }),
-                StorageResponse::StatisticsUpdates(stats) => Stats(ProtoStatisticsUpdates {
-                    source_updates: stats
-                        .iter()
-                        .map(|update| ProtoSourceStatisticsUpdate {
-                            id: Some(update.id.into_proto()),
-                            worker_id: u64::cast_from(update.worker_id),
-                            snapshot_committed: update.snapshot_committed,
-                            messages_received: update.messages_received,
-                            updates_staged: update.updates_staged,
-                            updates_committed: update.updates_committed,
-                            bytes_received: update.bytes_received,
-                        })
-                        .collect(),
-                }),
+                StorageResponse::StatisticsUpdates(source_stats, sink_stats) => {
+                    Stats(ProtoStatisticsUpdates {
+                        source_updates: source_stats
+                            .iter()
+                            .map(|update| ProtoSourceStatisticsUpdate {
+                                id: Some(update.id.into_proto()),
+                                worker_id: u64::cast_from(update.worker_id),
+                                snapshot_committed: update.snapshot_committed,
+                                messages_received: update.messages_received,
+                                updates_staged: update.updates_staged,
+                                updates_committed: update.updates_committed,
+                                bytes_received: update.bytes_received,
+                            })
+                            .collect(),
+                        sink_updates: sink_stats
+                            .iter()
+                            .map(|update| ProtoSinkStatisticsUpdate {
+                                id: Some(update.id.into_proto()),
+                                worker_id: u64::cast_from(update.worker_id),
+                                messages_staged: update.messages_staged,
+                                messages_committed: update.messages_committed,
+                                bytes_staged: update.bytes_staged,
+                                bytes_committed: update.bytes_committed,
+                            })
+                            .collect(),
+                    })
+                }
             }),
         }
     }
@@ -371,6 +427,22 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                             updates_staged: update.updates_staged,
                             updates_committed: update.updates_committed,
                             bytes_received: update.bytes_received,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, TryFromProtoError>>()?,
+                stats
+                    .sink_updates
+                    .into_iter()
+                    .map(|update| {
+                        Ok(SinkStatisticsUpdate {
+                            id: update.id.into_rust_if_some(
+                                "ProtoStorageResponse::stats::sink_updates::id",
+                            )?,
+                            worker_id: usize::cast_from(update.worker_id),
+                            messages_staged: update.messages_staged,
+                            messages_committed: update.messages_committed,
+                            bytes_staged: update.bytes_staged,
+                            bytes_committed: update.bytes_committed,
                         })
                     })
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
@@ -538,11 +610,14 @@ where
                     Some(Ok(StorageResponse::DroppedIds(new_drops)))
                 }
             }
-            StorageResponse::StatisticsUpdates(stats) => {
+            StorageResponse::StatisticsUpdates(source_stats, sink_stats) => {
                 // Just forward it along; the `worker_id` should have been set in `storage_state`.
                 // We _could_ consolidate across worker_id's, here, but each worker only produces
                 // responses periodically, so we avoid that complexity.
-                Some(Ok(StorageResponse::StatisticsUpdates(stats)))
+                Some(Ok(StorageResponse::StatisticsUpdates(
+                    source_stats,
+                    sink_stats,
+                )))
             }
         }
     }

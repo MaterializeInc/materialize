@@ -19,9 +19,10 @@ use mz_ore::metric;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::metrics::{IntCounterVec, MetricsRegistry, UIntGaugeVec};
 use mz_repr::GlobalId;
-use mz_storage_client::client::SourceStatisticsUpdate;
+use mz_storage_client::client::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 use prometheus::core::AtomicU64;
 
+use crate::sink::metrics::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 
 #[derive(Clone, Debug)]
@@ -37,27 +38,27 @@ impl SourceStatisticsMetricsDefinitions {
     pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             snapshot_committed: registry.register(metric!(
-                name: "mz_snapshot_committed",
+                name: "mz_source_snapshot_committed",
                 help: "Whether or not the worker has committed the initial snapshot for a source.",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
             )),
             messages_received: registry.register(metric!(
-                name: "mz_messages_received",
+                name: "mz_source_messages_received",
                 help: "The number of raw messages the worker has received from upstream.",
                 var_labels: ["source_id", "worker_id", "parent_source_id"],
             )),
             updates_staged: registry.register(metric!(
-                name: "mz_updates_staged",
+                name: "mz_source_updates_staged",
                 help: "The number of updates (inserts + deletes) the worker has written but not yet committed to the storage layer.",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
             )),
             updates_committed: registry.register(metric!(
-                name: "mz_updates_committed",
+                name: "mz_source_updates_committed",
                 help: "The number of updates (inserts + deletes) the worker has committed into the storage layer.",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
             )),
             bytes_received: registry.register(metric!(
-                name: "mz_bytes_received",
+                name: "mz_source_bytes_received",
                 help: "The number of bytes worth of messages the worker has received from upstream. The way the bytes are counted is source-specific.",
                 var_labels: ["source_id", "worker_id", "parent_source_id"],
             )),
@@ -66,6 +67,7 @@ impl SourceStatisticsMetricsDefinitions {
 }
 
 /// Prometheus metrics for user-facing source metrics.
+#[derive(Debug)]
 pub struct SourceStatisticsMetrics {
     pub(crate) snapshot_committed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) messages_received: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
@@ -75,7 +77,7 @@ pub struct SourceStatisticsMetrics {
 }
 
 impl SourceStatisticsMetrics {
-    pub fn new(
+    pub(crate) fn new(
         id: GlobalId,
         worker_id: usize,
         metrics: &SourceBaseMetrics,
@@ -132,6 +134,77 @@ impl SourceStatisticsMetrics {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct SinkStatisticsMetricsDefinitions {
+    pub(crate) messages_staged: IntCounterVec,
+    pub(crate) messages_committed: IntCounterVec,
+    pub(crate) bytes_staged: IntCounterVec,
+    pub(crate) bytes_committed: IntCounterVec,
+}
+
+impl SinkStatisticsMetricsDefinitions {
+    pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
+        Self {
+            messages_staged: registry.register(metric!(
+                name: "mz_sink_messages_staged",
+                help: "The number of messages staged but possibly not committed to the sink.",
+                var_labels: ["sink_id", "worker_id"],
+            )),
+            messages_committed: registry.register(metric!(
+                name: "mz_sink_messages_committed",
+                help: "The number of messages committed to the sink.",
+                var_labels: ["sink_id", "worker_id"],
+            )),
+            bytes_staged: registry.register(metric!(
+                name: "mz_sink_bytes_staged",
+                help: "The number of bytes staged but possibly not committed to the sink.",
+                var_labels: ["sink_id", "worker_id"],
+            )),
+            bytes_committed: registry.register(metric!(
+                name: "mz_sink_bytes_committed",
+                help: "The number of bytes committed to the sink.",
+                var_labels: ["sink_id", "worker_id"],
+            )),
+        }
+    }
+}
+
+/// Prometheus metrics for user-facing sink metrics.
+#[derive(Debug)]
+pub struct SinkStatisticsMetrics {
+    pub(crate) messages_staged: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) messages_committed: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) bytes_staged: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) bytes_committed: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+}
+
+impl SinkStatisticsMetrics {
+    pub(crate) fn new(
+        id: GlobalId,
+        worker_id: usize,
+        metrics: &SinkBaseMetrics,
+    ) -> SinkStatisticsMetrics {
+        SinkStatisticsMetrics {
+            messages_staged: metrics
+                .sink_statistics
+                .messages_staged
+                .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
+            messages_committed: metrics
+                .sink_statistics
+                .messages_committed
+                .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
+            bytes_staged: metrics
+                .sink_statistics
+                .bytes_staged
+                .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
+            bytes_committed: metrics
+                .sink_statistics
+                .bytes_committed
+                .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
+        }
+    }
+}
+
 /// A helper struct designed to make it easy for operators to update user-facing metrics.
 /// This struct also ensures that each stack is also incremented in prometheus.
 ///
@@ -143,11 +216,9 @@ impl SourceStatisticsMetrics {
 /// they are written at different times.
 ///     - This may be fixed in the future when we write the metrics from storaged directly.
 ///     - The value also eventually converge to the same value.
-/// - In sql, we ensure that we _never_ reset `snapshot_committed` to `false`, but gauges and
-/// counters are ordinarily reset to 0 in Prometheus, so on restarts this value may be inconsistent.
-#[derive(Clone)]
-pub struct SourceStatistics {
-    // We just use `SourceStatisticsUpdate` for convenience here!
+#[derive(Debug)]
+pub struct StorageStatistics<Stats, Metrics> {
+    // We just use `*StatisticsUpdate` for convenience here!
     // The boolean its an initialization flag, to ensure we
     // don't report a false `snapshot_committed` value before
     // the `persist_sink` reports the current shard upper.
@@ -157,11 +228,28 @@ pub struct SourceStatistics {
     // Note also that the `DeleteOnDropCounter`'s in the `SourceStatisticsMetrics`
     // already are in an `Arc`, so this is a bit of extra wrapping, but the cost
     // shouldn't cost too much.
-    stats: Rc<RefCell<(bool, SourceStatisticsUpdate, SourceStatisticsMetrics)>>,
+    stats: Rc<RefCell<(bool, Stats, Metrics)>>,
 }
 
-impl SourceStatistics {
-    pub fn new(
+impl<Stats, Metrics> Clone for StorageStatistics<Stats, Metrics> {
+    /// Return a snapshot of the stats data, if its been initialized.
+    fn clone(&self) -> Self {
+        Self {
+            stats: Rc::clone(&self.stats),
+        }
+    }
+}
+
+impl<Stats: Clone, Metrics> StorageStatistics<Stats, Metrics> {
+    /// Return a snapshot of the stats data, if its been initialized.
+    pub fn snapshot(&self) -> Option<Stats> {
+        let inner = self.stats.borrow();
+        inner.0.then(|| inner.1.clone())
+    }
+}
+
+impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
+    pub(crate) fn new(
         id: GlobalId,
         worker_id: usize,
         metrics: &SourceBaseMetrics,
@@ -185,14 +273,11 @@ impl SourceStatistics {
         }
     }
 
-    /// Return a snapshot of the stats data, if its been initialized.
-    pub fn snapshot(&self) -> Option<SourceStatisticsUpdate> {
-        let inner = self.stats.borrow();
-        inner.0.then(|| inner.1.clone())
-    }
-
     /// Set the `snapshot_committed` stat based on the reported upper, and
     /// mark the stats as initialized.
+    ///
+    /// - In sql, we ensure that we _never_ reset `snapshot_committed` to `false`, but gauges and
+    /// counters are ordinarily reset to 0 in Prometheus, so on restarts this value may be inconsistent.
     // TODO(guswynn): Actually test that this initialization logic works.
     pub fn initialize_snapshot_committed<T: Timestamp>(&self, upper: &Antichain<T>) {
         self.update_snapshot_committed(upper);
@@ -233,5 +318,53 @@ impl SourceStatistics {
         let mut cur = self.stats.borrow_mut();
         cur.1.bytes_received = cur.1.bytes_received + value;
         cur.2.bytes_received.inc_by(value);
+    }
+}
+
+impl StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics> {
+    pub(crate) fn new(id: GlobalId, worker_id: usize, metrics: &SinkBaseMetrics) -> Self {
+        Self {
+            stats: Rc::new(RefCell::new((
+                // We have no snapshot metrics for sinks as of now.
+                true,
+                SinkStatisticsUpdate {
+                    id,
+                    worker_id,
+                    messages_staged: 0,
+                    messages_committed: 0,
+                    bytes_staged: 0,
+                    bytes_committed: 0,
+                },
+                SinkStatisticsMetrics::new(id, worker_id, metrics),
+            ))),
+        }
+    }
+
+    /// Increment the `messages_received` stat.
+    pub fn inc_messages_staged_by(&self, value: u64) {
+        let mut cur = self.stats.borrow_mut();
+        cur.1.messages_staged = cur.1.messages_staged + value;
+        cur.2.messages_staged.inc_by(value);
+    }
+
+    /// Increment the `messages_received` stat.
+    pub fn inc_bytes_staged_by(&self, value: u64) {
+        let mut cur = self.stats.borrow_mut();
+        cur.1.bytes_staged = cur.1.bytes_staged + value;
+        cur.2.bytes_staged.inc_by(value);
+    }
+
+    /// Increment the `messages_received` stat.
+    pub fn inc_messages_committed_by(&self, value: u64) {
+        let mut cur = self.stats.borrow_mut();
+        cur.1.messages_committed = cur.1.messages_committed + value;
+        cur.2.messages_committed.inc_by(value);
+    }
+
+    /// Increment the `messages_received` stat.
+    pub fn inc_bytes_committed_by(&self, value: u64) {
+        let mut cur = self.stats.borrow_mut();
+        cur.1.bytes_committed = cur.1.bytes_committed + value;
+        cur.2.bytes_committed.inc_by(value);
     }
 }

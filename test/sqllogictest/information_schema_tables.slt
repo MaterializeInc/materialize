@@ -344,6 +344,10 @@ mz_show_materialized_views
 VIEW
 materialize
 mz_internal
+mz_sink_statistics
+SOURCE
+materialize
+mz_internal
 mz_sink_status_history
 SOURCE
 materialize

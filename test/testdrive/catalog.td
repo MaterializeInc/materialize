@@ -521,6 +521,7 @@ mz_sink_status_history                          source <null>
 mz_source_status_history                        source <null>
 mz_storage_host_metrics                         source <null>
 mz_source_statistics                            source <null>
+mz_sink_statistics                              source <null>
 mz_storage_shards                               source <null>
 mz_worker_compute_frontiers                     log   <null>
 mz_worker_compute_import_frontiers              log   <null>

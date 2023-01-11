@@ -237,6 +237,7 @@ where
                 sink_handles: HashMap::new(),
                 dropped_ids: Vec::new(),
                 source_statistics: HashMap::new(),
+                sink_statistics: HashMap::new(),
                 internal_cmd_tx: HaltingInternalCommandSender::new(),
             };
 

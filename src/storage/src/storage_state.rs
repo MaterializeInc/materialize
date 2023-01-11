@@ -91,6 +91,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::{PersistLocation, ShardId};
 use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_storage_client::client::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 use mz_storage_client::client::{StorageCommand, StorageResponse};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::connections::ConnectionContext;
@@ -101,7 +102,7 @@ use crate::decode::metrics::DecodeMetrics;
 use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
-use crate::source::statistics::SourceStatistics;
+use crate::statistics::{SinkStatisticsMetrics, SourceStatisticsMetrics, StorageStatistics};
 use crate::storage_state::async_storage_worker::{AsyncStorageWorker, AsyncStorageWorkerResponse};
 
 pub mod async_storage_worker;
@@ -167,9 +168,14 @@ pub struct StorageState {
     pub sink_handles: HashMap<GlobalId, SinkHandle>,
     /// Collection ids that have been dropped but not yet reported as dropped
     pub dropped_ids: Vec<GlobalId>,
+
     /// Stats objects shared with operators to allow them to update the metrics
     /// we report in `StatisticsUpdates` responses.
-    pub source_statistics: HashMap<GlobalId, SourceStatistics>,
+    pub source_statistics:
+        HashMap<GlobalId, StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>>,
+    /// The same as `source_statistics`, but for sinks.
+    pub sink_statistics:
+        HashMap<GlobalId, StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>>,
 
     /// Sender for cluster-internal storage commands. These can be sent from
     /// within workers/operators and will be distributed to all workers. For
@@ -352,7 +358,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             if last_stats_time.is_none()
                 || last_stats_time.as_ref().unwrap().elapsed() >= Duration::from_secs(10)
             {
-                self.report_source_statistics(&response_tx);
+                self.report_storage_statistics(&response_tx);
                 last_stats_time = Some(Instant::now());
             }
 
@@ -490,18 +496,18 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 );
 
                 for (export_id, export) in ingestion_description.source_exports.iter() {
+                    // This is a separate line cause rustfmt :(
+                    let stats =
+                        StorageStatistics::<SourceStatisticsUpdate, SourceStatisticsMetrics>::new(
+                            *export_id,
+                            self.storage_state.timely_worker_index,
+                            &self.storage_state.source_metrics,
+                            ingestion_id,
+                            &export.storage_metadata.data_shard,
+                        );
                     self.storage_state
                         .source_statistics
-                        .entry(*export_id)
-                        .or_insert_with(|| {
-                            SourceStatistics::new(
-                                *export_id,
-                                self.storage_state.timely_worker_index,
-                                &self.storage_state.source_metrics,
-                                ingestion_id,
-                                &export.storage_metadata.data_shard,
-                            )
-                        });
+                        .insert(*export_id, stats);
 
                     // If there is already a shared upper, we re-use it, to make
                     // sure that parties that are already using the shared upper
@@ -546,6 +552,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     sink_write_frontier.clear();
                     sink_write_frontier.insert(mz_repr::Timestamp::minimum());
                 }
+                // This is a separate line cause rustfmt :(
+                let stats = StorageStatistics::<SinkStatisticsUpdate, SinkStatisticsMetrics>::new(
+                    sink_id,
+                    self.storage_state.timely_worker_index,
+                    &self.storage_state.sink_metrics,
+                );
+                self.storage_state.sink_statistics.insert(sink_id, stats);
 
                 crate::render::build_export_dataflow(
                     self.timely_worker,
@@ -621,17 +634,26 @@ impl<'w, A: Allocate> Worker<'w, A> {
     }
 
     /// Report source statistics back to the controller.
-    pub fn report_source_statistics(&mut self, response_tx: &ResponseSender) {
+    pub fn report_storage_statistics(&mut self, response_tx: &ResponseSender) {
         // Check if any observed frontier should advance the reported frontiers.
-        let mut to_send = vec![];
+        let mut source_stats = vec![];
+        let mut sink_stats = vec![];
         for (_, stats) in self.storage_state.source_statistics.iter() {
             if let Some(snapshot) = stats.snapshot() {
-                to_send.push(snapshot);
+                source_stats.push(snapshot);
+            }
+        }
+        for (_, stats) in self.storage_state.sink_statistics.iter() {
+            if let Some(snapshot) = stats.snapshot() {
+                sink_stats.push(snapshot);
             }
         }
 
-        if !to_send.is_empty() {
-            self.send_storage_response(response_tx, StorageResponse::StatisticsUpdates(to_send));
+        if !source_stats.is_empty() || !sink_stats.is_empty() {
+            self.send_storage_response(
+                response_tx,
+                StorageResponse::StatisticsUpdates(source_stats, sink_stats),
+            );
         }
     }
 
