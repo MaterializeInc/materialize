@@ -128,6 +128,7 @@ def run_one_scenario(
                 "-c",
                 "environmentd --version | grep environmentd",
                 entrypoint="bash",
+                rm=True,
             )
 
             c.start_and_wait_for_tcp(services=["materialized"])
