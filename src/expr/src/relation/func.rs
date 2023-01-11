@@ -1178,11 +1178,6 @@ pub enum AggregateFunc {
         order_by: Vec<ColumnOrder>,
         window_frame: WindowFrame,
     },
-    /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
-    ///
-    /// Useful for removing an expensive aggregation while maintaining the shape
-    /// of a reduce operator.
-    Dummy,
 }
 
 /// An explicit [`Arbitrary`] implementation needed here because of a known
@@ -1287,7 +1282,6 @@ impl Arbitrary for AggregateFunc {
                     window_frame,
                 })
                 .boxed(),
-            Just(AggregateFunc::Dummy).boxed(),
         ])
     }
 }
@@ -1387,7 +1381,6 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                     order_by: Some(order_by.into_proto()),
                     window_frame: Some(window_frame.into_proto()),
                 }),
-                AggregateFunc::Dummy => Kind::Dummy(()),
             }),
         }
     }
@@ -1493,7 +1486,6 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                     .window_frame
                     .into_rust_if_some("ProtoWindowFrame::window_frame")?,
             },
-            Kind::Dummy(()) => AggregateFunc::Dummy,
         })
     }
 }
@@ -1567,7 +1559,6 @@ impl AggregateFunc {
                 order_by,
                 window_frame,
             } => last_value(datums, temp_storage, order_by, window_frame),
-            AggregateFunc::Dummy => Datum::Dummy,
         }
     }
 
@@ -1578,7 +1569,6 @@ impl AggregateFunc {
             AggregateFunc::Count => Datum::Int64(0),
             AggregateFunc::Any => Datum::False,
             AggregateFunc::All => Datum::True,
-            AggregateFunc::Dummy => Datum::Dummy,
             _ => Datum::Null,
         }
     }
@@ -1589,7 +1579,6 @@ impl AggregateFunc {
         match self {
             AggregateFunc::Any => Datum::False,
             AggregateFunc::All => Datum::True,
-            AggregateFunc::Dummy => Datum::Dummy,
             AggregateFunc::ArrayConcat { .. } => Datum::empty_array(),
             AggregateFunc::ListConcat { .. } => Datum::empty_list(),
             AggregateFunc::RowNumber { .. } => Datum::empty_list(),
@@ -2064,7 +2053,6 @@ impl fmt::Display for AggregateFunc {
             } => f.write_str("lead"),
             AggregateFunc::FirstValue { .. } => f.write_str("first_value"),
             AggregateFunc::LastValue { .. } => f.write_str("last_value"),
-            AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }
 }

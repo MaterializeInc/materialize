@@ -503,12 +503,10 @@ impl MirRelationExpr {
                 let mut unique_values_per_col = vec![Some(HashSet::<Datum>::default()); n_cols];
                 for (row, diff) in rows {
                     for (i, datum) in row.iter().enumerate() {
-                        if datum != Datum::Dummy {
-                            if let Some(unique_vals) = &mut unique_values_per_col[i] {
-                                let is_dupe = *diff != 1 || !unique_vals.insert(datum);
-                                if is_dupe {
-                                    unique_values_per_col[i] = None;
-                                }
+                        if let Some(unique_vals) = &mut unique_values_per_col[i] {
+                            let is_dupe = *diff != 1 || !unique_vals.insert(datum);
+                            if is_dupe {
+                                unique_values_per_col[i] = None;
                             }
                         }
                     }
@@ -2058,8 +2056,7 @@ impl AggregateExpr {
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::Any
             | AggregateFunc::All
-            | AggregateFunc::Dummy => self.expr.is_literal(),
-            AggregateFunc::Count => self.expr.is_literal_null(),
+            | AggregateFunc::Count => self.expr.is_literal_null(),
             _ => self.expr.is_literal_err(),
         }
     }
@@ -2424,8 +2421,7 @@ impl AggregateExpr {
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric
             | AggregateFunc::Any
-            | AggregateFunc::All
-            | AggregateFunc::Dummy => self.expr.clone(),
+            | AggregateFunc::All => self.expr.clone(),
         }
     }
 

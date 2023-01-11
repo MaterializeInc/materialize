@@ -394,7 +394,6 @@ enum Tag {
     List,
     Dict,
     JsonNull,
-    Dummy,
     Numeric,
     UInt16,
     UInt64,
@@ -588,7 +587,6 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             Datum::Map(DatumMap { data: bytes })
         }
         Tag::JsonNull => Datum::JsonNull,
-        Tag::Dummy => Datum::Dummy,
         Tag::Numeric => {
             let digits = read_byte(data, offset).into();
             let exponent = i8::reinterpret_cast(read_byte(data, offset));
@@ -834,7 +832,6 @@ where
             data.push(Tag::MzTimestamp.into());
             data.extend_from_slice(&t.encode());
         }
-        Datum::Dummy => data.push(Tag::Dummy.into()),
         Datum::Numeric(mut n) => {
             // Pseudo-canonical representation of decimal values with
             // insignificant zeroes trimmed. This compresses the number further
@@ -981,7 +978,6 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Map(dict) => 1 + size_of::<u64>() + dict.data.len(),
         Datum::JsonNull => 1,
         Datum::MzTimestamp(_) => 1 + size_of::<Timestamp>(),
-        Datum::Dummy => 1,
         Datum::Numeric(d) => {
             let mut d = d.0.clone();
             // Values must be reduced to determine appropriate number of

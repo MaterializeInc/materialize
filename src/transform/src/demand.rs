@@ -11,12 +11,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use mz_expr::{
-    AggregateExpr, AggregateFunc, Id, JoinInputMapper, MirRelationExpr, MirScalarExpr,
-    RECURSION_LIMIT,
-};
+use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
-use mz_repr::{Datum, Row};
 
 use crate::TransformArgs;
 
@@ -82,14 +78,6 @@ impl Demand {
         gets: &mut HashMap<Id, HashSet<usize>>,
     ) -> Result<(), crate::TransformError> {
         self.checked_recur(|_| {
-            // A valid relation type is only needed for Maps, but we can't borrow
-            // the relation in the corresponding branch of the match statement, since
-            // it is already borrowed mutably.
-            let relation_type = if matches!(relation, MirRelationExpr::Map { .. }) {
-                Some(relation.typ())
-            } else {
-                None
-            };
             match relation {
                 MirRelationExpr::Constant { .. } => {
                     // Nothing clever to do with constants, that I can think of.
@@ -119,7 +107,6 @@ impl Demand {
                     gets,
                 ),
                 MirRelationExpr::Map { input, scalars } => {
-                    let relation_type = relation_type.as_ref().unwrap();
                     let arity = input.arity();
                     // contains columns whose supports have yet to be explored
                     let mut new_columns = columns.clone();
@@ -134,20 +121,6 @@ impl Demand {
                         // add those columns to the seen list
                         columns.extend(new_columns.clone());
                         new_columns.retain(|c| *c >= arity);
-                    }
-
-                    // Replace un-read expressions with literals to prevent evaluation.
-                    for (index, scalar) in scalars.iter_mut().enumerate() {
-                        if !columns.contains(&(arity + index)) {
-                            // Leave literals as they are, to benefit explain.
-                            if !scalar.is_literal() {
-                                let typ = relation_type.column_types[arity + index].clone();
-                                *scalar = MirScalarExpr::Literal(
-                                    Ok(Row::pack_slice(&[Datum::Dummy])),
-                                    typ,
-                                );
-                            }
-                        }
                     }
 
                     columns.retain(|c| *c < arity);
@@ -243,19 +216,6 @@ impl Demand {
                         if *column >= group_key.len() {
                             new_columns
                                 .extend(aggregates[*column - group_key.len()].expr.support());
-                        }
-                    }
-
-                    // Replace un-demanded aggregations with dummies.
-                    let input_type = input.typ();
-                    for index in (0..aggregates.len()).rev() {
-                        if !columns.contains(&(group_key.len() + index)) {
-                            let typ = aggregates[index].typ(&input_type.column_types);
-                            aggregates[index] = AggregateExpr {
-                                func: AggregateFunc::Dummy,
-                                expr: MirScalarExpr::literal_ok(Datum::Dummy, typ.scalar_type),
-                                distinct: false,
-                            };
                         }
                     }
 

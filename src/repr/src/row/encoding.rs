@@ -131,7 +131,6 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             Datum::JsonNull => DatumType::Other(ProtoDatumOther::JsonNull.into()),
             Datum::Uuid(x) => DatumType::Uuid(x.as_bytes().to_vec()),
             Datum::MzTimestamp(x) => DatumType::MzTimestamp(x.into()),
-            Datum::Dummy => DatumType::Other(ProtoDatumOther::Dummy.into()),
             Datum::Null => DatumType::Other(ProtoDatumOther::Null.into()),
             Datum::Range(super::Range { inner }) => DatumType::Range(Box::new(ProtoRange {
                 inner: inner.map(|RangeInner { lower, upper }| {
@@ -159,7 +158,6 @@ impl RowPacker<'_> {
                 Some(ProtoDatumOther::False) => self.push(Datum::False),
                 Some(ProtoDatumOther::True) => self.push(Datum::True),
                 Some(ProtoDatumOther::JsonNull) => self.push(Datum::JsonNull),
-                Some(ProtoDatumOther::Dummy) => self.push(Datum::Dummy),
                 Some(ProtoDatumOther::NumericPosInf) => self.push(Datum::from(Numeric::infinity())),
                 Some(ProtoDatumOther::NumericNegInf) => {
                     self.push(Datum::from(-Numeric::infinity()))
@@ -388,7 +386,6 @@ mod tests {
             Datum::from(Numeric::nan()),
             Datum::JsonNull,
             Datum::Uuid(Uuid::from_u128(30)),
-            Datum::Dummy,
             Datum::Null,
         ]);
         packer

@@ -846,8 +846,7 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::SumNumeric
         | AggregateFunc::Count
         | AggregateFunc::Any
-        | AggregateFunc::All
-        | AggregateFunc::Dummy => ReductionType::Accumulable,
+        | AggregateFunc::All => ReductionType::Accumulable,
         AggregateFunc::MaxNumeric
         | AggregateFunc::MaxInt16
         | AggregateFunc::MaxInt32
