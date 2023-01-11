@@ -15,19 +15,12 @@ Like in any standard relational database, you can use [indexes](/overview/key-co
 
 Building an efficient index depends on the clauses used in your queries, as well as your expected access patterns. Use the following as a guide:
 
-* [DEFAULT](#default)
 * [WHERE](#where)
 * [JOIN](#join)
+* [DEFAULT](#default)
 
 `GROUP BY`, `ORDER BY` and `LIMIT` clauses currently do not benefit from an index.
 
-### Default
-
-Create a default index when there is no particular `WHERE` or `JOIN` clause that would fit the above cases. This can still speed up your query by reading the input from memory.
-
-Clause                                               | Index                               |
------------------------------------------------------|-------------------------------------|
-`SELECT x, y FROM obj_name`                          | `CREATE DEFAULT INDEX ON obj_name;` |
 
 ### `WHERE`
 Speed up a query involving a `WHERE` clause with equality comparisons to literals (e.g., `42`, or `'foo'`):
@@ -110,11 +103,11 @@ Materialize can further optimize memory usage - using a pattern known as late ma
     ```
 2. For each foreign key in the join, create a "narrow" view with just two columns: foreign key and primary key. Then create two indexes: one for the foreign key and one for the primary key. Example from [Delta Joins and Late Materialization](/overview/delta-joins):
     ```sql
-    -- Create a view containing foreign key `l_orderkey` and `lineitem`'s composite primary key (l_orderkey, l_linenumber).
+    -- Create a "narrow" view containing foreign key `l_orderkey` and `lineitem`'s composite primary key (l_orderkey, l_linenumber) and their respective indexes.
     CREATE VIEW lineitem_fk_orderkey AS SELECT l_orderkey, l_linenumber FROM lineitem;
     CREATE INDEX lineitem_fk_orderkey_0 ON lineitem_fk_orderkey (l_orderkey, l_linenumber);
     CREATE INDEX lineitem_fk_orderkey_1 ON lineitem_fk_orderkey (l_orderkey);
-    -- Create a view containing foreign key `o_custkey` and `orders`'s primary key `o_orderkey`.
+    -- Create a "narrow" view containing foreign key `o_custkey` and `orders`'s primary key `o_orderkey` and their respective indexes.
     CREATE VIEW orders_fk_custkey AS SELECT o_orderkey, o_custkey FROM orders;
     CREATE INDEX orders_fk_custkey_0 on orders_fk_custkey (o_orderkey);
     CREATE INDEX orders_fk_custkey_1 on orders_fk_custkey (o_custkey);
@@ -174,3 +167,10 @@ Materialize can further optimize memory usage - using a pattern known as late ma
     ...
     ```
 
+### Default
+
+Create a default index when there is no particular `WHERE` or `JOIN` clause that would fit the above cases. This can still speed up your query by reading the input from memory.
+
+Clause                                               | Index                               |
+-----------------------------------------------------|-------------------------------------|
+`SELECT x, y FROM obj_name`                          | `CREATE DEFAULT INDEX ON obj_name;` |
