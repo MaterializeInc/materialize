@@ -375,19 +375,11 @@ impl<S: Append + 'static> Coordinator<S> {
         self.get_timestamp_oracle(&Timeline::EpochMilliseconds)
     }
 
-    /// Returns a mutable reference to the timestamp oracle used for reads and writes
-    /// from/to a local input.
-    pub(crate) fn get_local_timestamp_oracle_mut(
-        &mut self,
-    ) -> &mut DurableTimestampOracle<Timestamp> {
-        self.get_timestamp_oracle_mut(&Timeline::EpochMilliseconds)
-    }
-
     /// Assign a timestamp for a read from a local input. Reads following writes
     /// must be at a time >= the write's timestamp; we choose "equal to" for
     /// simplicity's sake and to open as few new timestamps as possible.
-    pub(crate) fn get_local_read_ts(&mut self) -> Timestamp {
-        self.get_local_timestamp_oracle_mut().read_ts()
+    pub(crate) fn get_local_read_ts(&self) -> Timestamp {
+        self.get_local_timestamp_oracle().read_ts()
     }
 
     /// Assign a timestamp for a write to a local input and increase the local ts.
