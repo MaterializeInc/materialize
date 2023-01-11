@@ -7,19 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
-use std::sync::Arc;
 use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures_util::future::join_all;
 use mz_ore::cast::CastFrom;
-use mz_persist::location::SeqNo;
+use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
@@ -343,12 +343,11 @@ where
         //
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
         let mut futures = vec![];
+        let blob: &(dyn Blob + Send + Sync) = machine.state_versions.blob.borrow();
         for key in deleteable_batch_blobs {
-            let blob = Arc::clone(&machine.state_versions.blob);
             let key = key.complete(&req.shard_id);
             futures.push(
                 retry_external(&machine.metrics.retries.external.batch_delete, move || {
-                    let blob = Arc::clone(&blob);
                     let key = key.clone();
                     async move { blob.delete(&key).await }
                 })
