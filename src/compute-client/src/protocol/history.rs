@@ -81,7 +81,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         // Note that this is only correct as long as all config parameters apply globally. If we
         // ever introduce parameters that only affect subsequent commands, we will have to
         // reconsider this approach.
-        let mut final_configuration = BTreeSet::new();
+        let mut final_configuration = BTreeMap::new();
 
         let mut initialization_complete = false;
 
@@ -100,7 +100,9 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                     initialization_complete = true;
                 }
                 ComputeCommand::UpdateConfiguration(params) => {
-                    final_configuration.extend(params);
+                    for param in params {
+                        final_configuration.insert(param.key(), param);
+                    }
                 }
                 ComputeCommand::CreateDataflows(dataflows) => {
                     live_dataflows.extend(dataflows);
@@ -179,8 +181,9 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
             self.commands.push(create_inst_command);
         }
         if !final_configuration.is_empty() {
+            let params = final_configuration.into_values().collect();
             self.commands
-                .push(ComputeCommand::UpdateConfiguration(final_configuration));
+                .push(ComputeCommand::UpdateConfiguration(params));
         }
         self.dataflow_count = live_dataflows.len();
         if !live_dataflows.is_empty() {
