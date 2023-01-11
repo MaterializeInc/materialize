@@ -377,7 +377,7 @@ GROUP BY
 Trigger computation by creating an index on the `query_03_optimized` view.
 
 ```sql
-CREATE INDEX query_03_optimized_idx ON query_03_optimized (l_orderkey, o_orderdate, o_shippriority);
+CREATE INDEX query_03_optimized_idx ON query_03_optimized (o_orderkey, o_orderdate, o_shippriority);
 ```
 
 What happens now in join planning is that "delta query" planning still kicks in. We have all the necessary indexes to avoid maintaining intermediate state. The difference is that we only ever use one index for each "wide" relation. The relations Materialize must index multiple times are narrow relations whose rows can be substantially smaller. You can confirm you are using a delta join by running `EXPLAIN VIEW query_03_optimized;` and noting that the output contains `type=delta`.
