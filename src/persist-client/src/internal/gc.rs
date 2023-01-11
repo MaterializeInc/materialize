@@ -13,12 +13,12 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
-use std::sync::Arc;
 use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures_util::future::join_all;
+use futures_util::stream::FuturesUnordered;
+use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
@@ -350,7 +350,7 @@ where
             metrics: &Metrics,
             semaphore: &Semaphore,
         ) {
-            let mut futures = vec![];
+            let futures = FuturesUnordered::new();
             for key in keys {
                 futures.push(
                     retry_external(&metrics.retries.external.batch_delete, move || {
@@ -360,13 +360,14 @@ where
                                 .acquire()
                                 .await
                                 .expect("acquiring permit from open semaphore");
-                            blob.delete(&key).await
+                            blob.delete(&key).await.map(|_| ())
                         }
                     })
                     .instrument(debug_span!("batch::delete")),
                 )
             }
-            join_all(futures).await;
+
+            futures.collect().await
         }
 
         delete_all(
