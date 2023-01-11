@@ -473,34 +473,22 @@ Field              | Type       | Meaning
 
 ### `mz_source_statistics`
 
-The `mz_source_statistics` table contains statistics for each process of each source in the system.
+The `mz_source_statistics` table contains statistics for each worker thread of
+each source in the system.
 
-Materialize does not make any guarantees about the exactness or freshness of these numbers. As internal
-components of the system are restarted, some of these metrics will be reset to 0.
+Materialize does not make any guarantees about the exactness or freshness of
+these statistics. They are occasionally reset to zero as internal components of
+the system are restarted.
 
 Field                 | Type         | Meaning
 ----------------------|--------------|--------
-`id`                  | [`text`]     | The ID of the source. Corresponds to [mz_catalog.mz_sources.id](https://materialize.com/docs/sql/system-catalog/mz_catalog#mz_sources).
+`id`                  | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).
 `worker_id`           | [`bigint`]   | The ID of the worker thread.
-`snapshot_committed`  | [`boolean`]  | Whether or not the worker has committed the initial snapshot for a source.
-`messages_received`   | [`bigint`]   | The number of raw messages the worker has received from upstream.
-`updates_staged`      | [`bigint`]   | The number of updates (inserts + deletes) the worker has written but not yet committed to the storage layer.
-`updates_committed`   | [`bigint`]   | The number of updates (inserts + deletes) the worker has committed into the storage layer.
-`bytes_received`      | [`bigint`]   | The number of bytes worth of messages the worker has received from upstream. The way the bytes are counted is source-specific.
-
-These values all require some amount of interpretation:
-
-- `messages_received` does not distinguish between inserts and deletes. Some upstream sources, like PostgreSQL,
-  produce deletion messages that are counted the same as insertions.
-- The `updates_*` metrics can be permanently lower or higher than `messages_received`, because:
-  - The storage layer can choose to consolidate messages within a certain time interval.
-  - Some envelopes (like `UPSERT`) can produce 2 messages (an insert and a delete) from a single upstream message.
-- The `messages_*` and `bytes_received` metrics can optionally be interpreted as rates that can loosely show
-  the changing speed of a source over time.
-- In general, the values should be summed across `worker_id`'s, and some metrics may only exist for some workers.
-  - Additionally, sources with multiple outputs (like PostgreSQL) will need `messages_committed`
-  and `snapshot_committed` summed/AND-ed across the top-level source and its subsources.
-
+`snapshot_committed`  | [`boolean`]  | Whether the worker has committed the initial snapshot for a source.
+`messages_received`   | [`bigint`]   | The number of messages the worker has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update.
+`updates_staged`      | [`bigint`]   | The number of updates (insertions plus deletions) the worker has written but not yet committed to the storage layer.
+`updates_committed`   | [`bigint`]   | The number of updates (insertions plus deletions) the worker has committed to the storage layer.
+`bytes_received`      | [`bigint`]   | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.
 
 ### `mz_storage_host_sizes`
 
@@ -581,6 +569,7 @@ Field         | Type                          | Meaning
 
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list
+[`boolean`]: /sql/types/boolean
 [`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric
 [`text`]: /sql/types/text
