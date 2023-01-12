@@ -3290,7 +3290,7 @@ impl Catalog {
     ///
     /// If specified, `schema` will set the connection's `search_path` to `schema`.
     ///
-    /// See [`Catalog::open_debug`].
+    /// See [`Catalog::with_debug`].
     pub async fn open_debug_postgres(
         url: String,
         schema: Option<String>,
