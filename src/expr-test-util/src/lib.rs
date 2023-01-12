@@ -292,7 +292,10 @@ impl MirScalarExprDeserializeContext {
                 literal.to_string().parse::<usize>().map_err_to_string()?,
             ));
         }
-        Err(format!("Invalid column specification {:?}", token))
+        Err(format!(
+            "Invalid column specification {:?}",
+            token.map(|token_tree| format!("`{}`", token_tree))
+        ))
     }
 
     fn build_literal_if_able<I>(
@@ -309,11 +312,11 @@ impl MirScalarExprDeserializeContext {
                 let first_arg = if let Some(first_arg) = rest_of_stream.next() {
                     first_arg
                 } else {
-                    return Err(format!("expected literal after {:?}", i));
+                    return Err(format!("expected literal after Ident: `{}`", i));
                 };
                 match self.build_literal_ok_if_able(first_arg, rest_of_stream) {
                     Ok(Some(l)) => Ok(Some(l)),
-                    _ => Err(format!("expected literal after {:?}", i)),
+                    _ => Err(format!("expected literal after Ident: `{}`", i)),
                 }
             }
             TokenTree::Ident(i) if i.to_string().to_ascii_lowercase() == "err" => {
@@ -499,7 +502,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
                     rows.push((row, 1));
                 }
             }
-            invalid => return Err(format!("invalid rows spec for constant {:?}", invalid)),
+            invalid => return Err(format!("invalid rows spec for constant `{}`", invalid)),
         };
         Ok(MirRelationExpr::Constant {
             rows: Ok(rows),
@@ -535,7 +538,10 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
                     },
                 }
             }
-            invalid_token => Err(format!("Invalid get specification {:?}", invalid_token)),
+            invalid_token => Err(format!(
+                "Invalid get specification {:?}",
+                invalid_token.map(|token_tree| format!("`{}`", token_tree))
+            )),
         }
     }
 
@@ -545,7 +551,10 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
     {
         let name = match stream_iter.next() {
             Some(TokenTree::Ident(ident)) => Ok(ident.to_string()),
-            invalid_token => Err(format!("Invalid let specification {:?}", invalid_token)),
+            invalid_token => Err(format!(
+                "Invalid let specification {:?}",
+                invalid_token.map(|token_tree| format!("`{}`", token_tree))
+            )),
         }?;
 
         let value: MirRelationExpr = deserialize(stream_iter, "MirRelationExpr", self)?;
@@ -631,7 +640,10 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                                     return Ok(Some(literal.to_string()))
                                 }
                                 invalid => {
-                                    return Err(format!("invalid column value {:?}", invalid))
+                                    return Err(format!(
+                                        "invalid column value {:?}",
+                                        invalid.map(|token_tree| format!("`{}`", token_tree))
+                                    ))
                                 }
                             }
                         }
