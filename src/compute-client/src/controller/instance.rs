@@ -27,7 +27,7 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::logging::LogVariant;
-use crate::protocol::command::{ComputeCommand, ComputeParameter, ComputeStartupEpoch, Peek};
+use crate::protocol::command::{ComputeCommand, ComputeParameters, ComputeStartupEpoch, Peek};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -164,7 +164,6 @@ where
         instance_id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
-        max_result_size: u32,
         orchestrator: ComputeOrchestrator,
         envd_epoch: NonZeroI64,
     ) -> Self {
@@ -200,10 +199,12 @@ where
         let dummy_logging_config = Default::default();
         instance.send(ComputeCommand::CreateInstance(dummy_logging_config));
 
-        let params = [ComputeParameter::MaxResultSize(max_result_size)].into();
-        instance.send(ComputeCommand::UpdateConfiguration(params));
-
         instance
+    }
+
+    /// Update instance configuration.
+    pub fn update_configuration(&mut self, config_params: ComputeParameters) {
+        self.send(ComputeCommand::UpdateConfiguration(config_params));
     }
 
     /// Marks the end of any initialization commands.
@@ -748,13 +749,6 @@ where
             self.update_read_capabilities(&mut read_capability_changes);
         }
         Ok(())
-    }
-
-    /// Update the max size in bytes of any result.
-    pub fn update_max_result_size(&mut self, max_result_size: u32) {
-        let params = [ComputeParameter::MaxResultSize(max_result_size)].into();
-        self.compute
-            .send(ComputeCommand::UpdateConfiguration(params));
     }
 
     /// Validate that a collection exists for all identifiers, and error if any do not.

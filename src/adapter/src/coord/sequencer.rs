@@ -923,11 +923,9 @@ impl<S: Append + 'static> Coordinator<S> {
             .into_iter()
             .map(|(log, id)| (log.variant.clone(), id))
             .collect();
-        self.controller.compute.create_instance(
-            instance_id,
-            arranged_logs,
-            self.catalog.system_config().max_result_size(),
-        )?;
+        self.controller
+            .compute
+            .create_instance(instance_id, arranged_logs)?;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.controller
                 .active_compute()
@@ -3543,7 +3541,8 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
         use mz_sql::ast::{SetVariableValue, Value};
-        let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
+        let update_compute_config = session::vars::is_compute_config_var(&name);
+        let update_storage_config = session::vars::is_storage_config_var(&name);
         let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = match value {
             SetVariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
@@ -3560,8 +3559,11 @@ impl<S: Append + 'static> Coordinator<S> {
             },
         };
         self.catalog_transact(Some(session), vec![op]).await?;
-        if update_max_result_size {
-            self.update_max_result_size();
+        if update_compute_config {
+            self.update_compute_config();
+        }
+        if update_storage_config {
+            self.update_storage_config();
         }
         if update_metrics_retention {
             self.update_metrics_retention();
@@ -3575,12 +3577,16 @@ impl<S: Append + 'static> Coordinator<S> {
         AlterSystemResetPlan { name }: AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
-        let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
+        let update_compute_config = session::vars::is_compute_config_var(&name);
+        let update_storage_config = session::vars::is_storage_config_var(&name);
         let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = catalog::Op::ResetSystemConfiguration { name };
         self.catalog_transact(Some(session), vec![op]).await?;
-        if update_max_result_size {
-            self.update_max_result_size();
+        if update_compute_config {
+            self.update_compute_config();
+        }
+        if update_storage_config {
+            self.update_storage_config();
         }
         if update_metrics_retention {
             self.update_metrics_retention();
@@ -3596,7 +3602,8 @@ impl<S: Append + 'static> Coordinator<S> {
         self.is_user_allowed_to_alter_system(session)?;
         let op = catalog::Op::ResetAllSystemConfiguration {};
         self.catalog_transact(Some(session), vec![op]).await?;
-        self.update_max_result_size();
+        self.update_compute_config();
+        self.update_storage_config();
         self.update_metrics_retention();
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
@@ -3612,25 +3619,14 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    fn update_max_result_size(&mut self) {
-        let mut compute = self.controller.active_compute();
-        for compute_instance in self.catalog.compute_instances() {
-            // Linked clusters are presently a fiction maintained by the
-            // catalog. They do not yet result in the creation of actual
-            // compute instances.
-            //
-            // TODO(benesch): turn linked clusters into real clusters. See
-            // MaterializeInc/cloud#4929.
-            if compute_instance.linked_object_id.is_some() {
-                continue;
-            }
-            compute
-                .update_max_result_size(
-                    compute_instance.id,
-                    self.catalog.system_config().max_result_size(),
-                )
-                .unwrap();
-        }
+    fn update_compute_config(&mut self) {
+        let config_params = self.catalog.compute_config();
+        self.controller.compute.update_configuration(config_params);
+    }
+
+    fn update_storage_config(&mut self) {
+        let config_params = self.catalog.storage_config();
+        self.controller.storage.update_configuration(config_params);
     }
 
     fn update_metrics_retention(&mut self) {

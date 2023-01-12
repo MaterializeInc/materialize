@@ -359,7 +359,7 @@ impl PersistConfig {
         Self {
             build_version: build_info.semver_version(),
             now,
-            blob_target_size: 128 * MB,
+            blob_target_size: Self::DEFAULT_BLOB_TARGET_SIZE,
             batch_builder_max_outstanding_parts: 2,
             compaction_enabled: !compaction_disabled,
             compaction_memory_bound_bytes: 1024 * MB,
@@ -369,7 +369,7 @@ impl PersistConfig {
             compaction_concurrency_limit: 5,
             compaction_queue_size: 20,
             gc_batch_part_delete_concurrency_limit: 32,
-            compaction_minimum_timeout: Duration::from_secs(90),
+            compaction_minimum_timeout: Self::DEFAULT_COMPACTION_MINIMUM_TIMEOUT,
             consensus_connection_pool_max_size: 50,
             consensus_connection_pool_ttl: Duration::from_secs(300),
             consensus_connection_pool_ttl_stagger: Duration::from_secs(6),
@@ -400,6 +400,11 @@ impl PersistConfig {
 }
 
 impl PersistConfig {
+    /// Default value for [`PersistConfig::blob_target_size`].
+    pub const DEFAULT_BLOB_TARGET_SIZE: usize = 128 * MB;
+    /// Default value for [`PersistConfig::compaction_minimum_timeout`].
+    pub const DEFAULT_COMPACTION_MINIMUM_TIMEOUT: Duration = Duration::from_secs(90);
+
     // Move this to a PersistConfig field when we actually have read leases.
     //
     // MIGRATION: Remove this once we remove the ReaderState <->

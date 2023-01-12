@@ -12,6 +12,7 @@ syntax = "proto3";
 import "proto/src/proto.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
+import "storage-client/src/types/parameters.proto";
 import "storage-client/src/types/sources.proto";
 import "storage-client/src/types/sinks.proto";
 
@@ -66,6 +67,7 @@ message ProtoStorageCommand {
         ProtoAllowCompaction allow_compaction = 2;
         google.protobuf.Empty initialization_complete = 3;
         ProtoCreateSinks create_sinks = 4;
+        mz_storage_client.types.parameters.ProtoStorageParameters update_configuration = 5;
     }
 }
 

@@ -17,6 +17,7 @@ import "proto/src/proto.proto";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
 import "storage-client/src/client.proto";
+import "storage-client/src/types/parameters.proto";
 
 import "google/protobuf/empty.proto";
 
@@ -41,10 +42,6 @@ message ProtoComputeCommand {
         ProtoComputeStartupEpoch epoch = 2;
     }
 
-    message ProtoUpdateConfiguration {
-        repeated ProtoComputeParameter params = 1;
-    }
-
     oneof kind {
         ProtoCreateTimely create_timely = 1;
         logging.ProtoLoggingConfig create_instance = 2;
@@ -53,7 +50,7 @@ message ProtoComputeCommand {
         ProtoPeek peek = 5;
         ProtoCancelPeeks cancel_peeks = 6;
         google.protobuf.Empty initialization_complete = 7;
-        ProtoUpdateConfiguration update_configuration = 8;
+        ProtoComputeParameters update_configuration = 8;
     }
 }
 
@@ -74,8 +71,7 @@ message ProtoPeek {
     map<string, string> otel_ctx = 7;
 }
 
-message ProtoComputeParameter {
-    oneof kind {
-        uint32 max_result_size = 1;
-    }
+message ProtoComputeParameters {
+    optional uint32 max_result_size = 1;
+    mz_storage_client.types.parameters.ProtoPersistParameters persist = 2;
 }

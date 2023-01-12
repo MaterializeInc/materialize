@@ -7,11 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![allow(missing_docs)]
+syntax = "proto3";
 
-pub mod connections;
-pub mod errors;
-pub mod hosts;
-pub mod parameters;
-pub mod sinks;
-pub mod sources;
+import "proto/src/proto.proto";
+
+package mz_storage_client.types.parameters;
+
+message ProtoStorageParameters {
+    ProtoPersistParameters persist = 1;
+}
+
+message ProtoPersistParameters {
+    optional uint64 blob_target_size = 1;
+    mz_proto.ProtoDuration compaction_minimum_timeout = 2;
+}
