@@ -12,7 +12,6 @@
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::mem::size_of;
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::Instant;
@@ -22,15 +21,16 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
+use tokio::task::JoinHandle;
+use tracing::{debug_span, instrument, trace_span, warn, Instrument};
+
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, Blob};
 use mz_persist_types::{Codec, Codec64};
-use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
-use tokio::task::JoinHandle;
-use tracing::{debug_span, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
@@ -232,6 +232,7 @@ where
         writer_id: WriterId,
         since: Antichain<T>,
         inline_upper: Option<Antichain<T>>,
+        consolidate: bool,
     ) -> Self {
         let parts = BatchParts::new(
             cfg.batch_builder_max_outstanding_parts,
@@ -251,6 +252,7 @@ where
                 Arc::clone(&metrics),
                 batch_write_metrics,
                 cfg.blob_target_size,
+                consolidate,
             ),
             metrics,
             max_kvt_in_run: None,
@@ -414,6 +416,7 @@ struct BatchBuffer<D> {
     metrics: Arc<Metrics>,
     batch_write_metrics: BatchWriteMetrics,
     blob_target_size: usize,
+    consolidate: bool,
 
     key_buf: Vec<u8>,
     val_buf: Vec<u8>,
@@ -432,11 +435,13 @@ where
         metrics: Arc<Metrics>,
         batch_write_metrics: BatchWriteMetrics,
         blob_target_size: usize,
+        should_consolidate: bool,
     ) -> Self {
         BatchBuffer {
             metrics,
             batch_write_metrics,
             blob_target_size,
+            consolidate: should_consolidate,
             key_buf: Default::default(),
             val_buf: Default::default(),
             current_part: Default::default(),
@@ -465,7 +470,7 @@ where
             .encode(|| V::encode(val, &mut self.val_buf));
         let k_range = initial_key_buf_len..self.key_buf.len();
         let v_range = initial_val_buf_len..self.val_buf.len();
-        let size = k_range.len() + v_range.len() + 8 + 2 * size_of::<u64>();
+        let size = ColumnarRecordsBuilder::columnar_record_size(k_range.len(), v_range.len());
         let ts = T::encode(ts);
 
         self.current_part_total_bytes += size;
@@ -487,11 +492,13 @@ where
             updates.push(((&self.key_buf[k_range], &self.val_buf[v_range]), t, d));
         }
 
-        let start = Instant::now();
-        consolidate_updates(&mut updates);
-        self.batch_write_metrics
-            .step_consolidation
-            .inc_by(start.elapsed().as_secs_f64());
+        if self.consolidate {
+            let start = Instant::now();
+            consolidate_updates(&mut updates);
+            self.batch_write_metrics
+                .step_consolidation
+                .inc_by(start.elapsed().as_secs_f64());
+        }
 
         if updates.is_empty() {
             self.key_buf.clear();
@@ -510,11 +517,7 @@ where
             // if this fails, the individual record is too big to fit in a ColumnarRecords by itself.
             // The limits are big, so this is a pretty extreme case that we intentionally don't handle
             // right now.
-            assert!(builder.push((
-                (k, v),
-                <[u8; 8]>::try_from(t).expect("ts must be Codec64"),
-                D::encode(&d)
-            )));
+            assert!(builder.push(((k, v), t, D::encode(&d))));
         }
         let columnar = builder.finish();
         self.batch_write_metrics

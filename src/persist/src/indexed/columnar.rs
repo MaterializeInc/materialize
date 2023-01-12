@@ -467,9 +467,9 @@ impl ColumnarRecordsBuilder {
     }
 
     /// Size of an update record as stored in the columnar representation
-    pub fn columnar_record_size(key: &[u8], value: &[u8]) -> usize {
-        (key.len() + BYTES_PER_KEY_VAL_OFFSET)
-            + (value.len() + BYTES_PER_KEY_VAL_OFFSET)
+    pub fn columnar_record_size(key_bytes_len: usize, value_bytes_len: usize) -> usize {
+        (key_bytes_len + BYTES_PER_KEY_VAL_OFFSET)
+            + (value_bytes_len + BYTES_PER_KEY_VAL_OFFSET)
             + (2 * size_of::<u64>()) // T and D
     }
 }
