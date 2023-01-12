@@ -14,6 +14,7 @@ harness = false
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.25"
 mz-ore = { path = "../ore", features = ["metrics", "network", "async", "test"] }
+mz-postgres-util = { path = "../postgres-util" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prometheus = { version = "0.13.3", default-features = false }
 rand = "0.8.5"

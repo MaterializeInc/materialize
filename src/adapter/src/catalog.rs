@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
+use futures::Future;
 use itertools::Itertools;
 use mz_compute_client::protocol::command::ComputeParameters;
 use mz_storage_client::controller::IntrospectionType;
@@ -3261,20 +3262,28 @@ impl Catalog {
         Ok(c)
     }
 
-    /// Opens the catalog from `stash` with parameters set appropriately for debug
-    /// contexts, like in tests.
+    /// Creates a debug catalog from a debug stash based on the current
+    /// `COCKROACH_URL` with parameters set appropriately for debug contexts,
+    /// like in tests.
     ///
     /// WARNING! This function can arbitrarily fail because it does not make any
     /// effort to adjust the catalog's contents' structure or semantics to the
     /// currently running version, i.e. it does not apply any migrations.
     ///
-    /// This function should not be called in production contexts. Use
+    /// This function must not be called in production contexts. Use
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
-    pub async fn open_debug(now: NowFn) -> Result<Catalog, anyhow::Error> {
-        let url = std::env::var("COCKROACH_URL")
-            .map_err(|_| anyhow::anyhow!("COCKROACH_URL environment variable is not set"))?;
-        Self::open_debug_postgres(url, None, now).await
+    pub async fn with_debug<F, Fut, T>(now: NowFn, f: F) -> T
+    where
+        F: FnOnce(Catalog) -> Fut,
+        Fut: Future<Output = T>,
+    {
+        Stash::with_debug_stash(move |stash| async move {
+            let catalog = Self::open_debug_stash(stash, now).await.unwrap();
+            f(catalog).await
+        })
+        .await
+        .unwrap()
     }
 
     /// Opens a debug postgres catalog at `url`.
@@ -3293,6 +3302,7 @@ impl Catalog {
         Self::open_debug_stash(stash, now).await
     }
 
+    /// Opens a debug catalog from a stash.
     pub async fn open_debug_stash(stash: Stash, now: NowFn) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
         let (consolidations_tx, consolidations_rx) = mpsc::unbounded_channel();
@@ -6441,7 +6451,6 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 mod tests {
     use itertools::Itertools;
     use std::collections::{HashMap, HashSet};
-    use std::error::Error;
 
     use mz_compute_client::controller::ComputeInstanceId;
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
@@ -6454,6 +6463,7 @@ mod tests {
     };
     use mz_sql::DEFAULT_SCHEMA;
     use mz_sql_parser::ast::Expr;
+    use mz_stash::Stash;
 
     use crate::catalog::{
         Catalog, CatalogItem, Index, MaterializedView, Op, Table, SYSTEM_CONN_ID,
@@ -6467,226 +6477,247 @@ mod tests {
     /// search paths, so do not require schema qualification on system objects such
     /// as types.
     #[tokio::test]
-    async fn test_minimal_qualification() -> Result<(), anyhow::Error> {
-        struct TestCase {
-            input: QualifiedObjectName,
-            system_output: PartialObjectName,
-            normal_output: PartialObjectName,
-        }
+    async fn test_minimal_qualification() {
+        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+            struct TestCase {
+                input: QualifiedObjectName,
+                system_output: PartialObjectName,
+                normal_output: PartialObjectName,
+            }
 
-        let catalog = Catalog::open_debug(NOW_ZERO.clone()).await?;
-
-        let test_cases = vec![
-            TestCase {
-                input: QualifiedObjectName {
-                    qualifiers: ObjectQualifiers {
-                        database_spec: ResolvedDatabaseSpecifier::Ambient,
-                        schema_spec: SchemaSpecifier::Id(
-                            catalog.get_pg_catalog_schema_id().clone(),
-                        ),
+            let test_cases = vec![
+                TestCase {
+                    input: QualifiedObjectName {
+                        qualifiers: ObjectQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Ambient,
+                            schema_spec: SchemaSpecifier::Id(
+                                catalog.get_pg_catalog_schema_id().clone(),
+                            ),
+                        },
+                        item: "numeric".to_string(),
                     },
-                    item: "numeric".to_string(),
-                },
-                system_output: PartialObjectName {
-                    database: None,
-                    schema: None,
-                    item: "numeric".to_string(),
-                },
-                normal_output: PartialObjectName {
-                    database: None,
-                    schema: None,
-                    item: "numeric".to_string(),
-                },
-            },
-            TestCase {
-                input: QualifiedObjectName {
-                    qualifiers: ObjectQualifiers {
-                        database_spec: ResolvedDatabaseSpecifier::Ambient,
-                        schema_spec: SchemaSpecifier::Id(
-                            catalog.get_mz_catalog_schema_id().clone(),
-                        ),
+                    system_output: PartialObjectName {
+                        database: None,
+                        schema: None,
+                        item: "numeric".to_string(),
                     },
-                    item: "mz_array_types".to_string(),
+                    normal_output: PartialObjectName {
+                        database: None,
+                        schema: None,
+                        item: "numeric".to_string(),
+                    },
                 },
-                system_output: PartialObjectName {
-                    database: None,
-                    schema: None,
-                    item: "mz_array_types".to_string(),
+                TestCase {
+                    input: QualifiedObjectName {
+                        qualifiers: ObjectQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Ambient,
+                            schema_spec: SchemaSpecifier::Id(
+                                catalog.get_mz_catalog_schema_id().clone(),
+                            ),
+                        },
+                        item: "mz_array_types".to_string(),
+                    },
+                    system_output: PartialObjectName {
+                        database: None,
+                        schema: None,
+                        item: "mz_array_types".to_string(),
+                    },
+                    normal_output: PartialObjectName {
+                        database: None,
+                        schema: None,
+                        item: "mz_array_types".to_string(),
+                    },
                 },
-                normal_output: PartialObjectName {
-                    database: None,
-                    schema: None,
-                    item: "mz_array_types".to_string(),
-                },
-            },
-        ];
+            ];
 
-        for tc in test_cases {
-            assert_eq!(
-                catalog
-                    .for_system_session()
-                    .minimal_qualification(&tc.input),
-                tc.system_output
+            for tc in test_cases {
+                assert_eq!(
+                    catalog
+                        .for_system_session()
+                        .minimal_qualification(&tc.input),
+                    tc.system_output
+                );
+                assert_eq!(
+                    catalog
+                        .for_session(&Session::dummy())
+                        .minimal_qualification(&tc.input),
+                    tc.normal_output
+                );
+            }
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_catalog_revision() {
+        Stash::with_debug_stash(move |stash| async move {
+            let mut catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
+                .await
+                .unwrap();
+            assert_eq!(catalog.transient_revision(), 1);
+            catalog
+                .transact(
+                    mz_repr::Timestamp::MIN,
+                    None,
+                    vec![Op::CreateDatabase {
+                        name: "test".to_string(),
+                        oid: 1,
+                        public_schema_oid: 2,
+                    }],
+                    |_catalog| Ok(()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(catalog.transient_revision(), 2);
+            drop(catalog);
+
+            // TODO: Test that re-opening the same stash resets the
+            // transient_revision to 1. The current debug stash implementation
+            // doesn't allow for stash reuse.
+
+            /*
+            let catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
+                .await
+                .unwrap();
+            assert_eq!(catalog.transient_revision(), 1);
+            */
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_effective_search_path() {
+        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+            let mz_catalog_schema = (
+                ResolvedDatabaseSpecifier::Ambient,
+                SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id().clone()),
+            );
+            let pg_catalog_schema = (
+                ResolvedDatabaseSpecifier::Ambient,
+                SchemaSpecifier::Id(catalog.state().get_pg_catalog_schema_id().clone()),
+            );
+            let mz_temp_schema = (
+                ResolvedDatabaseSpecifier::Ambient,
+                SchemaSpecifier::Temporary,
+            );
+
+            // Behavior with the default search_schema (public)
+            let session = Session::dummy();
+            let conn_catalog = catalog.for_session(&session);
+            assert_ne!(
+                conn_catalog.effective_search_path(false),
+                conn_catalog.search_path
+            );
+            assert_ne!(
+                conn_catalog.effective_search_path(true),
+                conn_catalog.search_path
             );
             assert_eq!(
-                catalog
-                    .for_session(&Session::dummy())
-                    .minimal_qualification(&tc.input),
-                tc.normal_output
+                conn_catalog.effective_search_path(false),
+                vec![
+                    mz_catalog_schema.clone(),
+                    pg_catalog_schema.clone(),
+                    conn_catalog.search_path[0].clone()
+                ]
             );
-        }
-        Ok(())
+            assert_eq!(
+                conn_catalog.effective_search_path(true),
+                vec![
+                    mz_temp_schema.clone(),
+                    mz_catalog_schema.clone(),
+                    pg_catalog_schema.clone(),
+                    conn_catalog.search_path[0].clone()
+                ]
+            );
+
+            // missing schemas are added when missing
+            let mut session = Session::dummy();
+            session
+                .vars_mut()
+                .set("search_path", "pg_catalog", false)
+                .unwrap();
+            let conn_catalog = catalog.for_session(&session);
+            assert_ne!(
+                conn_catalog.effective_search_path(false),
+                conn_catalog.search_path
+            );
+            assert_ne!(
+                conn_catalog.effective_search_path(true),
+                conn_catalog.search_path
+            );
+            assert_eq!(
+                conn_catalog.effective_search_path(false),
+                vec![mz_catalog_schema.clone(), pg_catalog_schema.clone()]
+            );
+            assert_eq!(
+                conn_catalog.effective_search_path(true),
+                vec![
+                    mz_temp_schema.clone(),
+                    mz_catalog_schema.clone(),
+                    pg_catalog_schema.clone()
+                ]
+            );
+
+            let mut session = Session::dummy();
+            session
+                .vars_mut()
+                .set("search_path", "mz_catalog", false)
+                .unwrap();
+            let conn_catalog = catalog.for_session(&session);
+            assert_ne!(
+                conn_catalog.effective_search_path(false),
+                conn_catalog.search_path
+            );
+            assert_ne!(
+                conn_catalog.effective_search_path(true),
+                conn_catalog.search_path
+            );
+            assert_eq!(
+                conn_catalog.effective_search_path(false),
+                vec![pg_catalog_schema.clone(), mz_catalog_schema.clone()]
+            );
+            assert_eq!(
+                conn_catalog.effective_search_path(true),
+                vec![
+                    mz_temp_schema.clone(),
+                    pg_catalog_schema.clone(),
+                    mz_catalog_schema.clone()
+                ]
+            );
+
+            let mut session = Session::dummy();
+            session
+                .vars_mut()
+                .set("search_path", "mz_temp", false)
+                .unwrap();
+            let conn_catalog = catalog.for_session(&session);
+            assert_ne!(
+                conn_catalog.effective_search_path(false),
+                conn_catalog.search_path
+            );
+            assert_ne!(
+                conn_catalog.effective_search_path(true),
+                conn_catalog.search_path
+            );
+            assert_eq!(
+                conn_catalog.effective_search_path(false),
+                vec![
+                    mz_catalog_schema.clone(),
+                    pg_catalog_schema.clone(),
+                    mz_temp_schema.clone()
+                ]
+            );
+            assert_eq!(
+                conn_catalog.effective_search_path(true),
+                vec![mz_catalog_schema, pg_catalog_schema, mz_temp_schema]
+            );
+        })
+        .await
     }
 
     #[tokio::test]
-    async fn test_catalog_revision() -> Result<(), anyhow::Error> {
-        let mut catalog = Catalog::open_debug(NOW_ZERO.clone()).await?;
-        assert_eq!(catalog.transient_revision(), 1);
-        catalog
-            .transact(
-                mz_repr::Timestamp::MIN,
-                None,
-                vec![Op::CreateDatabase {
-                    name: "test".to_string(),
-                    oid: 1,
-                    public_schema_oid: 2,
-                }],
-                |_catalog| Ok(()),
-            )
-            .await
-            .unwrap();
-        assert_eq!(catalog.transient_revision(), 2);
-        drop(catalog);
-
-        let catalog = Catalog::open_debug(NOW_ZERO.clone()).await?;
-        assert_eq!(catalog.transient_revision(), 1);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_effective_search_path() -> Result<(), anyhow::Error> {
-        let catalog = Catalog::open_debug(NOW_ZERO.clone()).await?;
-        let mz_catalog_schema = (
-            ResolvedDatabaseSpecifier::Ambient,
-            SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id().clone()),
-        );
-        let pg_catalog_schema = (
-            ResolvedDatabaseSpecifier::Ambient,
-            SchemaSpecifier::Id(catalog.state().get_pg_catalog_schema_id().clone()),
-        );
-        let mz_temp_schema = (
-            ResolvedDatabaseSpecifier::Ambient,
-            SchemaSpecifier::Temporary,
-        );
-
-        // Behavior with the default search_schema (public)
-        let session = Session::dummy();
-        let conn_catalog = catalog.for_session(&session);
-        assert_ne!(
-            conn_catalog.effective_search_path(false),
-            conn_catalog.search_path
-        );
-        assert_ne!(
-            conn_catalog.effective_search_path(true),
-            conn_catalog.search_path
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(false),
-            vec![
-                mz_catalog_schema.clone(),
-                pg_catalog_schema.clone(),
-                conn_catalog.search_path[0].clone()
-            ]
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(true),
-            vec![
-                mz_temp_schema.clone(),
-                mz_catalog_schema.clone(),
-                pg_catalog_schema.clone(),
-                conn_catalog.search_path[0].clone()
-            ]
-        );
-
-        // missing schemas are added when missing
-        let mut session = Session::dummy();
-        session.vars_mut().set("search_path", "pg_catalog", false)?;
-        let conn_catalog = catalog.for_session(&session);
-        assert_ne!(
-            conn_catalog.effective_search_path(false),
-            conn_catalog.search_path
-        );
-        assert_ne!(
-            conn_catalog.effective_search_path(true),
-            conn_catalog.search_path
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(false),
-            vec![mz_catalog_schema.clone(), pg_catalog_schema.clone()]
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(true),
-            vec![
-                mz_temp_schema.clone(),
-                mz_catalog_schema.clone(),
-                pg_catalog_schema.clone()
-            ]
-        );
-
-        let mut session = Session::dummy();
-        session.vars_mut().set("search_path", "mz_catalog", false)?;
-        let conn_catalog = catalog.for_session(&session);
-        assert_ne!(
-            conn_catalog.effective_search_path(false),
-            conn_catalog.search_path
-        );
-        assert_ne!(
-            conn_catalog.effective_search_path(true),
-            conn_catalog.search_path
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(false),
-            vec![pg_catalog_schema.clone(), mz_catalog_schema.clone()]
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(true),
-            vec![
-                mz_temp_schema.clone(),
-                pg_catalog_schema.clone(),
-                mz_catalog_schema.clone()
-            ]
-        );
-
-        let mut session = Session::dummy();
-        session.vars_mut().set("search_path", "mz_temp", false)?;
-        let conn_catalog = catalog.for_session(&session);
-        assert_ne!(
-            conn_catalog.effective_search_path(false),
-            conn_catalog.search_path
-        );
-        assert_ne!(
-            conn_catalog.effective_search_path(true),
-            conn_catalog.search_path
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(false),
-            vec![
-                mz_catalog_schema.clone(),
-                pg_catalog_schema.clone(),
-                mz_temp_schema.clone()
-            ]
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(true),
-            vec![mz_catalog_schema, pg_catalog_schema, mz_temp_schema]
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_builtin_migration() -> Result<(), Box<dyn Error>> {
+    async fn test_builtin_migration() {
         enum ItemNamespace {
             System,
             User,
@@ -7228,100 +7259,103 @@ mod tests {
         ];
 
         for test_case in test_cases {
-            let mut catalog = Catalog::open_debug(NOW_ZERO.clone()).await?;
+            Catalog::with_debug(NOW_ZERO.clone(), |mut catalog| async move {
+                let mut id_mapping = HashMap::new();
+                let mut name_mapping = HashMap::new();
+                for entry in test_case.initial_state {
+                    let (name, namespace, item) = entry.to_catalog_item(&id_mapping);
+                    let id = add_item(&mut catalog, name.clone(), item, namespace).await;
+                    id_mapping.insert(name.clone(), id);
+                    name_mapping.insert(id, name);
+                }
 
-            let mut id_mapping = HashMap::new();
-            let mut name_mapping = HashMap::new();
-            for entry in test_case.initial_state {
-                let (name, namespace, item) = entry.to_catalog_item(&id_mapping);
-                let id = add_item(&mut catalog, name.clone(), item, namespace).await;
-                id_mapping.insert(name.clone(), id);
-                name_mapping.insert(id, name);
-            }
+                let migrated_ids = test_case
+                    .migrated_names
+                    .into_iter()
+                    .map(|name| id_mapping[&name])
+                    .collect();
+                let id_fingerprint_map: HashMap<GlobalId, String> = id_mapping
+                    .iter()
+                    .filter(|(_name, id)| id.is_system())
+                    // We don't use the new fingerprint in this test, so we can just hard code it
+                    .map(|(_name, id)| (*id, "".to_string()))
+                    .collect();
+                let migration_metadata = catalog
+                    .generate_builtin_migration_metadata(migrated_ids, id_fingerprint_map)
+                    .await
+                    .unwrap();
 
-            let migrated_ids = test_case
-                .migrated_names
-                .into_iter()
-                .map(|name| id_mapping[&name])
-                .collect();
-            let id_fingerprint_map: HashMap<GlobalId, String> = id_mapping
-                .iter()
-                .filter(|(_name, id)| id.is_system())
-                // We don't use the new fingerprint in this test, so we can just hard code it
-                .map(|(_name, id)| (*id, "".to_string()))
-                .collect();
-            let migration_metadata = catalog
-                .generate_builtin_migration_metadata(migrated_ids, id_fingerprint_map)
-                .await?;
-
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.previous_sink_ids, &name_mapping),
-                test_case.expected_previous_sink_names,
-                "{} test failed with wrong previous sink ids",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(
-                    migration_metadata.previous_materialized_view_ids,
-                    &name_mapping
-                ),
-                test_case.expected_previous_materialized_view_names,
-                "{} test failed with wrong previous materialized view ids",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.previous_source_ids, &name_mapping),
-                test_case.expected_previous_source_names,
-                "{} test failed with wrong previous source ids",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.all_drop_ops, &name_mapping),
-                test_case.expected_all_drop_ops,
-                "{} test failed with wrong all drop ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.user_drop_ops, &name_mapping),
-                test_case.expected_user_drop_ops,
-                "{} test failed with wrong user drop ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                migration_metadata
-                    .all_create_ops
-                    .into_iter()
-                    .map(|(_, _, name, _)| name.item)
-                    .collect::<Vec<_>>(),
-                test_case.expected_all_create_ops,
-                "{} test failed with wrong all create ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                migration_metadata
-                    .user_create_ops
-                    .into_iter()
-                    .map(|(_, _, name)| name)
-                    .collect::<Vec<_>>(),
-                test_case.expected_user_create_ops,
-                "{} test failed with wrong user create ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                migration_metadata
-                    .migrated_system_object_mappings
-                    .values()
-                    .map(|mapping| mapping.object_name.clone())
-                    .collect::<HashSet<_>>(),
-                test_case
-                    .expected_migrated_system_object_mappings
-                    .into_iter()
-                    .collect::<HashSet<_>>(),
-                "{} test failed with wrong migrated system object mappings",
-                test_case.test_name
-            );
+                assert_eq!(
+                    convert_id_vec_to_name_vec(migration_metadata.previous_sink_ids, &name_mapping),
+                    test_case.expected_previous_sink_names,
+                    "{} test failed with wrong previous sink ids",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    convert_id_vec_to_name_vec(
+                        migration_metadata.previous_materialized_view_ids,
+                        &name_mapping
+                    ),
+                    test_case.expected_previous_materialized_view_names,
+                    "{} test failed with wrong previous materialized view ids",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    convert_id_vec_to_name_vec(
+                        migration_metadata.previous_source_ids,
+                        &name_mapping
+                    ),
+                    test_case.expected_previous_source_names,
+                    "{} test failed with wrong previous source ids",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    convert_id_vec_to_name_vec(migration_metadata.all_drop_ops, &name_mapping),
+                    test_case.expected_all_drop_ops,
+                    "{} test failed with wrong all drop ops",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    convert_id_vec_to_name_vec(migration_metadata.user_drop_ops, &name_mapping),
+                    test_case.expected_user_drop_ops,
+                    "{} test failed with wrong user drop ops",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    migration_metadata
+                        .all_create_ops
+                        .into_iter()
+                        .map(|(_, _, name, _)| name.item)
+                        .collect::<Vec<_>>(),
+                    test_case.expected_all_create_ops,
+                    "{} test failed with wrong all create ops",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    migration_metadata
+                        .user_create_ops
+                        .into_iter()
+                        .map(|(_, _, name)| name)
+                        .collect::<Vec<_>>(),
+                    test_case.expected_user_create_ops,
+                    "{} test failed with wrong user create ops",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    migration_metadata
+                        .migrated_system_object_mappings
+                        .values()
+                        .map(|mapping| mapping.object_name.clone())
+                        .collect::<HashSet<_>>(),
+                    test_case
+                        .expected_migrated_system_object_mappings
+                        .into_iter()
+                        .collect::<HashSet<_>>(),
+                    "{} test failed with wrong migrated system object mappings",
+                    test_case.test_name
+                );
+            })
+            .await
         }
-
-        Ok(())
     }
 }

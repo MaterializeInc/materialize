@@ -16,9 +16,10 @@ use std::{cmp, time::Duration};
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, try_join3, try_join_all, BoxFuture};
 use futures::future::{try_join, TryFutureExt};
-use futures::StreamExt;
+use futures::{Future, StreamExt};
 use postgres_openssl::MakeTlsConnector;
 use prometheus::{IntCounter, IntCounterVec};
+use rand::Rng;
 use serde_json::Value;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::Antichain;
@@ -414,6 +415,41 @@ impl Stash {
             )
             .await?;
         Ok(())
+    }
+
+    /// Creates a debug stash from the current COCKROACH_URL with a random
+    /// schema, and DROPs it after `f` has returned.
+    pub async fn with_debug_stash<F, T, Fut>(f: F) -> Result<T, StashError>
+    where
+        F: FnOnce(Stash) -> Fut,
+        Fut: Future<Output = T>,
+    {
+        let url =
+            std::env::var("COCKROACH_URL").expect("COCKROACH_URL environment variable is not set");
+        let rng: usize = rand::thread_rng().gen();
+        let schema = format!("schema_{rng}");
+        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
+
+        let (client, connection) = tokio_postgres::connect(&url, tls.clone()).await?;
+        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+            if let Err(e) = connection.await {
+                tracing::error!("postgres stash connection error: {}", e);
+            }
+        });
+        client
+            .batch_execute(&format!("CREATE SCHEMA {schema}"))
+            .await?;
+
+        let factory = StashFactory::new(&MetricsRegistry::new());
+        let stash = factory.open(url, Some(schema.clone()), tls).await?;
+        let res = f(stash).await;
+
+        // Ignore errors when dropping, better to return `res`.
+        let _ = client
+            .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
+            .await;
+
+        Ok(res)
     }
 
     /// Verifies stash invariants. Should only be called by tests.
