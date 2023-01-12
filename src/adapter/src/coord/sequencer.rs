@@ -2663,7 +2663,6 @@ impl Coordinator {
         use ExplainStage::*;
 
         let compute_instance = self.catalog.active_compute_instance(session)?.id;
-        let window_functions = self.catalog.system_config().window_functions();
 
         let ExplainPlan {
             raw_plan,
@@ -2692,10 +2691,8 @@ impl Coordinator {
                 });
 
                 // run optimization pipeline
-                let explainee_is_view = matches!(explainee, Explainee::Dataflow(_));
                 let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
                     qgm_optimizations: session.vars().qgm_optimizations(),
-                    window_functions: window_functions || explainee_is_view,
                 })?;
 
                 self.validate_timeline_context(decorrelated_plan.depends_on())?;
@@ -2904,18 +2901,11 @@ impl Coordinator {
         AdapterError,
     > {
         let ExplainPlan {
-            raw_plan,
-            explainee,
-            format,
-            ..
+            raw_plan, format, ..
         } = plan;
 
-        let window_functions = self.catalog.system_config().window_functions();
-
-        let explainee_is_view = matches!(explainee, Explainee::Dataflow(_));
         let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
             qgm_optimizations: session.vars().qgm_optimizations(),
-            window_functions: window_functions || explainee_is_view,
         })?;
         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
         let source_ids = optimized_plan.depends_on();

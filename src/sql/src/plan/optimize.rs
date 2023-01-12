@@ -7,11 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_expr::visit::{Visit, VisitChildren};
-
 ///! This module defines the API and logic for running optimization pipelines.
 use crate::plan::expr::HirRelationExpr;
-use crate::plan::HirScalarExpr;
 use crate::query_model::{Model, QGMError};
 
 use super::{PlanError, StatementContext};
@@ -20,7 +17,6 @@ use super::{PlanError, StatementContext};
 #[derive(Debug)]
 pub struct OptimizerConfig {
     pub qgm_optimizations: bool,
-    pub window_functions: bool,
 }
 
 /// Convert a reference to a [`StatementContext`] to an [`OptimizerConfig`].
@@ -32,11 +28,9 @@ impl<'a> From<&StatementContext<'a>> for OptimizerConfig {
         match scx.pcx() {
             Ok(pcx) => OptimizerConfig {
                 qgm_optimizations: pcx.qgm_optimizations,
-                window_functions: scx.catalog.window_functions(),
             },
             Err(..) => OptimizerConfig {
                 qgm_optimizations: false,
-                window_functions: scx.catalog.window_functions(),
             },
         }
     }
@@ -50,35 +44,6 @@ impl HirRelationExpr {
         self,
         config: &OptimizerConfig,
     ) -> Result<mz_expr::MirRelationExpr, PlanError> {
-        if !config.window_functions {
-            // None - there are no Get(GlobalId) nodes / Some - all Get(GlobalId) nodes are for system IDs
-            let mut all_system_global_ids = None;
-            // there are no windowing expressions
-            let mut has_windowing_exprs = false;
-
-            // look for Get(GlobalId) or HirScalarExpr::Windowig in the entire tree
-            self.try_visit_pre(&mut |expr: &HirRelationExpr| {
-                use mz_expr::Id::Global;
-                // update all_global_ids_system accumulator for each encountered Get(GlobalId) node
-                if let HirRelationExpr::Get { id: Global(id), .. } = expr {
-                    let v = all_system_global_ids.get_or_insert(true);
-                    *v &= id.is_system();
-                }
-                // update has_windowing_exprs accumulator for each encountered HirScalarExpr::Windowig node
-                expr.try_visit_children(|expr: &HirScalarExpr| {
-                    expr.visit_pre(&mut |expr: &HirScalarExpr| {
-                        if let HirScalarExpr::Windowing(_) = expr {
-                            has_windowing_exprs = true;
-                        }
-                    })
-                })
-            })?;
-
-            if has_windowing_exprs && !all_system_global_ids.unwrap_or(false) {
-                bail_unsupported!("window functions");
-            }
-        }
-
         if config.qgm_optimizations {
             // try to go through the QGM path
             self.try_qgm_path().map_err(Into::into)
