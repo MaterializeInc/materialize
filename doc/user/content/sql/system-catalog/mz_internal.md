@@ -464,7 +464,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 The `mz_sink_utilization` table gives the last known CPU and RAM utilization
 statistics for all extant sinks, as a percentage of the total allocation.
 
-At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+Materialize does not make any guarantees about the exactness or freshness of these numbers.
 
 | Field            | Type      | Meaning                                                    |
 |------------------|-----------|------------------------------------------------------------|
@@ -486,6 +486,25 @@ Field              | Type       | Meaning
 `process_id`       | [`bigint`] | An identifier of a process within a host.
 `cpu_nano_cores`   | [`bigint`] | Approximate CPU usage, in billionths of a vCPU core.
 `memory_bytes`     | [`bigint`] | Approximate RAM usage, in bytes.
+
+### `mz_source_statistics`
+
+The `mz_source_statistics` table contains statistics for each worker thread of
+each source in the system.
+
+Materialize does not make any guarantees about the exactness or freshness of
+these statistics. They are occasionally reset to zero as internal components of
+the system are restarted.
+
+Field                 | Type         | Meaning
+----------------------|--------------|--------
+`id`                  | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).
+`worker_id`           | [`bigint`]   | The ID of the worker thread.
+`snapshot_committed`  | [`boolean`]  | Whether the worker has committed the initial snapshot for a source.
+`messages_received`   | [`bigint`]   | The number of messages the worker has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update.
+`updates_staged`      | [`bigint`]   | The number of updates (insertions plus deletions) the worker has written but not yet committed to the storage layer.
+`updates_committed`   | [`bigint`]   | The number of updates (insertions plus deletions) the worker has committed to the storage layer.
+`bytes_received`      | [`bigint`]   | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.
 
 ### `mz_storage_host_sizes`
 
@@ -566,6 +585,7 @@ Field         | Type                          | Meaning
 
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list
+[`boolean`]: /sql/types/boolean
 [`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric
 [`text`]: /sql/types/text
