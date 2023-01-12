@@ -80,6 +80,8 @@
 
 //! The public API for the compute layer.
 
+mod metrics;
+
 pub mod controller;
 pub mod explain;
 pub mod logging;

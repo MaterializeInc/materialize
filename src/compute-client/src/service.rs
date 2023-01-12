@@ -26,9 +26,9 @@ use uuid::Uuid;
 
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
-use mz_service::codec::NoopStatsCollector;
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 
+use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand, TimelyConfig};
 use crate::protocol::response::{
     ComputeResponse, PeekResponse, ProtoComputeResponse, SubscribeBatch, SubscribeResponse,
@@ -61,7 +61,7 @@ pub enum ComputeProtoServiceTypes {}
 impl ProtoServiceTypes for ComputeProtoServiceTypes {
     type PC = ProtoComputeCommand;
     type PR = ProtoComputeResponse;
-    type STATS = NoopStatsCollector;
+    type STATS = ReplicaMetrics;
     const URL: &'static str = "/mz_compute_client.service.ProtoCompute/CommandResponseStream";
 }
 

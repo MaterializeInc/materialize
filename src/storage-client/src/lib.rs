@@ -76,6 +76,8 @@
 
 //! Materialize's storage layer.
 
+mod metrics;
+
 pub mod client;
 pub mod controller;
 pub mod healthcheck;

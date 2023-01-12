@@ -31,12 +31,12 @@ use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
-use mz_service::codec::NoopStatsCollector;
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 use mz_timely_util::progress::any_antichain;
 
 use crate::client::proto_storage_server::ProtoStorage;
 use crate::controller::CollectionMetadata;
+use crate::metrics::RehydratingStorageClientMetrics;
 use crate::types::parameters::StorageParameters;
 use crate::types::sinks::{MetadataFilled, StorageSinkDesc};
 use crate::types::sources::IngestionDescription;
@@ -68,7 +68,7 @@ pub enum StorageProtoServiceTypes {}
 impl ProtoServiceTypes for StorageProtoServiceTypes {
     type PC = ProtoStorageCommand;
     type PR = ProtoStorageResponse;
-    type STATS = NoopStatsCollector;
+    type STATS = RehydratingStorageClientMetrics;
     const URL: &'static str = "/mz_storage_client.client.ProtoStorage/CommandResponseStream";
 }
 

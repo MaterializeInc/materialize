@@ -45,6 +45,7 @@ use tokio_stream::StreamMap;
 use tracing::{debug, info};
 
 use mz_build_info::BuildInfo;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
@@ -60,6 +61,7 @@ use crate::client::{
 };
 use crate::controller::rehydration::RehydratingStorageClient;
 use crate::healthcheck;
+use crate::metrics::StorageControllerMetrics;
 use crate::types::errors::DataflowError;
 use crate::types::instances::StorageInstanceId;
 use crate::types::parameters::StorageParameters;
@@ -685,6 +687,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     persist_location: PersistLocation,
     /// A persist client used to write to storage collections
     persist: Arc<Mutex<PersistClientCache>>,
+    /// Metrics of the Storage controller
+    metrics: StorageControllerMetrics,
 }
 
 #[derive(Debug)]
@@ -875,7 +879,11 @@ where
     }
 
     fn create_instance(&mut self, id: StorageInstanceId) {
-        let mut client = RehydratingStorageClient::new(self.build_info, Arc::clone(&self.persist));
+        let mut client = RehydratingStorageClient::new(
+            self.build_info,
+            Arc::clone(&self.persist),
+            self.metrics.for_instance(id),
+        );
         if self.state.initialized {
             client.send(StorageCommand::InitializationComplete);
         }
@@ -1720,6 +1728,7 @@ where
         now: NowFn,
         postgres_factory: &StashFactory,
         envd_epoch: NonZeroI64,
+        metrics_registry: MetricsRegistry,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -1730,6 +1739,7 @@ where
             internal_response_queue: rx,
             persist_location,
             persist: persist_clients,
+            metrics: StorageControllerMetrics::new(metrics_registry),
         }
     }
 

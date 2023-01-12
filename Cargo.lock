@@ -4787,6 +4787,7 @@ dependencies = [
  "mz-stash",
  "mz-timely-util",
  "once_cell",
+ "prometheus",
  "proptest",
  "proptest-derive",
  "prost",

@@ -40,13 +40,13 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId};
 use mz_service::client::GenericClient;
-use mz_service::codec::NoopStatsCollector;
 
 use crate::client::{
     CreateSinkCommand, CreateSourceCommand, StorageClient, StorageCommand, StorageGrpcClient,
     StorageResponse,
 };
 use crate::controller::ResumptionFrontierCalculator;
+use crate::metrics::RehydratingStorageClientMetrics;
 use crate::types::parameters::StorageParameters;
 use crate::types::sources::SourceData;
 
@@ -70,6 +70,7 @@ where
     pub fn new(
         build_info: &'static BuildInfo,
         persist: Arc<Mutex<PersistClientCache>>,
+        metrics: RehydratingStorageClientMetrics,
     ) -> RehydratingStorageClient<T> {
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
@@ -83,6 +84,7 @@ where
             initialized: false,
             config: Default::default(),
             persist,
+            metrics,
         };
         let task = mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
         RehydratingStorageClient {
@@ -145,6 +147,8 @@ struct RehydrationTask<T> {
     config: StorageParameters,
     /// A handle to Persist
     persist: Arc<Mutex<PersistClientCache>>,
+    /// Prometheus metrics
+    metrics: RehydratingStorageClientMetrics,
 }
 
 enum RehydrationTaskState {
@@ -223,13 +227,14 @@ where
                 }
             }
 
-            match StorageGrpcClient::connect(
+            let client = StorageGrpcClient::connect(
                 addr.clone(),
                 self.build_info.semver_version(),
-                NoopStatsCollector {},
+                self.metrics.clone(),
             )
-            .await
-            {
+            .await;
+
+            match client {
                 Ok(client) => break client,
                 Err(e) => {
                     if state.i >= mz_service::retry::INFO_MIN_RETRIES {

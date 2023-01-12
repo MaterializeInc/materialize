@@ -24,14 +24,6 @@ pub trait StatsCollector<C, R>: Clone + Debug + Send + Sync {
     fn receive_event(&self, item: &R, size: usize);
 }
 
-#[derive(Debug, Clone)]
-pub struct NoopStatsCollector {}
-impl<C, R> StatsCollector<C, R> for NoopStatsCollector {
-    fn send_event(&self, _item: &C, _size: usize) {}
-
-    fn receive_event(&self, _item: &R, _size: usize) {}
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct StatEncoder<C, R, S> {
     _pd: PhantomData<(C, R)>,
@@ -101,15 +93,9 @@ where
         buf: &mut tonic::codec::DecodeBuf<'_>,
     ) -> Result<Option<Self::Item>, Self::Error> {
         let remaining_before = buf.remaining();
-        let item = Message::decode(buf)
-            .map(Option::Some)
-            .map_err(from_decode_error)?;
-
-        if let Some(item) = item {
-            self.stats_collector.receive_event(&item, remaining_before);
-            return Ok(Some(item));
-        }
-        Ok(None)
+        let item = Message::decode(buf).map_err(from_decode_error)?;
+        self.stats_collector.receive_event(&item, remaining_before);
+        Ok(Some(item))
     }
 }
 

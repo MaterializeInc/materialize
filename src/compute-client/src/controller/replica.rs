@@ -22,9 +22,9 @@ use mz_build_info::BuildInfo;
 use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_service::client::GenericClient;
-use mz_service::codec::NoopStatsCollector;
 
 use crate::logging::LoggingConfig;
+use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, ComputeStartupEpoch, TimelyConfig};
 use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -68,6 +68,7 @@ where
         build_info: &'static BuildInfo,
         config: ReplicaConfig,
         epoch: ComputeStartupEpoch,
+        metrics: ReplicaMetrics,
     ) -> Self {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
@@ -84,6 +85,7 @@ where
                 command_rx,
                 response_tx,
                 epoch,
+                metrics,
             }
             .run(),
         );
@@ -127,6 +129,8 @@ struct ReplicaTask<T> {
     /// A number (technically, pair of numbers) identifying this incarnation of the replica.
     /// The semantics of this don't matter, except that it must strictly increase.
     epoch: ComputeStartupEpoch,
+    /// Replica metrics
+    metrics: ReplicaMetrics,
 }
 
 impl<T> ReplicaTask<T>
@@ -143,6 +147,7 @@ where
             command_rx,
             response_tx,
             epoch,
+            metrics,
         } = self;
 
         tracing::info!("starting replica task for {replica_id}");
@@ -167,6 +172,7 @@ where
             build_info,
             addrs,
             cmd_spec,
+            metrics,
         )
         .await;
 
@@ -191,6 +197,7 @@ async fn run_message_loop<T>(
     build_info: &BuildInfo,
     addrs: Vec<String>,
     cmd_spec: CommandSpecialization,
+    metrics: ReplicaMetrics,
 ) -> Result<(), anyhow::Error>
 where
     T: Timestamp + Lattice,
@@ -202,7 +209,7 @@ where
             let dests = addrs
                 .clone()
                 .into_iter()
-                .map(|addr| (addr, NoopStatsCollector {}))
+                .map(|addr| (addr, metrics.clone()))
                 .collect();
             let version = build_info.semver_version();
 

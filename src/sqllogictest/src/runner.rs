@@ -832,6 +832,7 @@ impl RunnerInner {
                 storage_stash_url,
                 now: SYSTEM_TIME.clone(),
                 postgres_factory: postgres_factory.clone(),
+                metrics_registry: metrics_registry.clone(),
             },
             secrets_controller,
             cloud_resource_controller: None,
