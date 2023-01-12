@@ -18,4 +18,5 @@ mz-ore = { path = "../ore", features = ["async"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+# "anyhow" and "mz-ore" only used on linux
+normal = ["anyhow", "mz-ore", "workspace-hack"]

@@ -37,7 +37,6 @@ clap = { version = "3.2.20", features = [ "derive" ] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.25"
 futures-util = "0.3"
-humantime = "2.1.0"
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore", features = ["tracing_"] }
 mz-persist = { path = "../persist" }
@@ -68,6 +67,7 @@ clap = { version = "3.2.20", features = ["derive", "env"] }
 criterion = { version = "0.4.0", features = ["html_reports"] }
 datadriven = { version = "0.6.0", features = ["async"] }
 futures-task = "0.3.21"
+humantime = "2.1.0"
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["network", "tracing_", "test"] }

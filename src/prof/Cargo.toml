@@ -46,4 +46,5 @@ dev-web = []
 jemalloc = ["tikv-jemalloc-ctl"]
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+# "bytesize" not used on linux
+normal = ["bytesize", "workspace-hack"]
