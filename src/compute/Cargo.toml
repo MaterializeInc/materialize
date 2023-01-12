@@ -41,4 +41,4 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux
-normal = ["inotify"]
+normal = ["inotify", "workspace-hack"]

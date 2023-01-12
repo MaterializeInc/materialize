@@ -44,3 +44,6 @@ tower-http = { version = "0.3.5", features = ["cors"] }
 uuid = "1.2.2"
 walkdir = "2.3.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

@@ -34,3 +34,6 @@ tikv-jemallocator = { version = "0.5.0", features = ["profiling", "stats", "unpr
 [features]
 # Whether to enable the use of jemalloc on platforms that support it.
 jemalloc = ["tikv-jemallocator", "mz-prof/jemalloc"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

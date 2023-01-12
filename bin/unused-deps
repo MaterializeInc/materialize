@@ -25,4 +25,4 @@ cd "$(dirname "$0")/.."
 . misc/shlib/shlib.bash
 
 export RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:=nightly}
-cargo udeps --workspace --all-targets "$@"
+cargo udeps --workspace --all-targets --exclude=workspace-hack "$@"

@@ -12,3 +12,6 @@ csv = "1.1.6"
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]
