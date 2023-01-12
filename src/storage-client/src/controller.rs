@@ -1300,7 +1300,7 @@ where
             let as_of = MetadataExportFetcher::get_stash_collection()
                 .insert_key_without_overwrite(
                     &mut self.state.stash,
-                    &id,
+                    id,
                     DurableExportMetadata {
                         initial_as_of: description.sink.as_of,
                     },
@@ -1946,7 +1946,7 @@ where
         new_metadata: DurableCollectionMetadata,
     ) {
         let current_metadata = METADATA_COLLECTION
-            .peek_key_one(&mut self.state.stash, &id)
+            .peek_key_one(&mut self.state.stash, id)
             .await
             .expect("connect to stash");
 

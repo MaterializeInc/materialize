@@ -333,7 +333,9 @@ impl Usage {
                     let key = serde_json::from_value(key)?;
                     let value = serde_json::from_value(value)?;
                     let (prev, _next) = $col
-                        .upsert_key(stash, &key, |_| Ok::<_, std::convert::Infallible>(value))
+                        .upsert_key(stash, key, move |_| {
+                            Ok::<_, std::convert::Infallible>(value)
+                        })
                         .await??;
                     return Ok(prev.map(|v| serde_json::to_value(v).unwrap()));
                 }
