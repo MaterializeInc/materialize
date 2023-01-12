@@ -259,6 +259,16 @@ Field      | Type       | Meaning
 `index_id` | [`text`]   | The ID of the index the peek is targeting.
 `time`     | [`mz_timestamp`] | The timestamp the peek has requested.
 
+### `mz_object_dependencies`
+
+The `mz_object_dependencies` table describes the dependency structure between
+all database objects in the system.
+
+Field                  | Type       | Meaning
+-----------------------|------------|--------
+`object_id`            | [`text`]   | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).
+`referenced_object_id` | [`text`]   | The ID of the referenced object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).
+
 ### `mz_raw_peek_durations`
 
 The `mz_raw_peek_durations` source describes a histogram of the duration in
@@ -582,6 +592,7 @@ Field         | Type                          | Meaning
 `status`      | [`text`]                      | The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
 `error`       | [`text`]                      | If the sink is in an error state, the error message.
 `details`     | [`jsonb`]                     | Additional metadata provided by the sink.
+
 
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list
