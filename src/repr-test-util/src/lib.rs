@@ -242,7 +242,7 @@ where
                 // Must error instead of handling the tokens using default
                 // behavior since `stream_iter` has advanced.
                 Some(other) => Err(format!(
-                    "{}{:?} is not a valid literal",
+                    "`{}` `{}` is not a valid literal",
                     punct.as_char(),
                     other
                 )),
@@ -264,14 +264,17 @@ pub fn parse_vec_of_literals(token: &TokenTree) -> Result<Vec<String>, String> {
                 match extract_literal_string(&symbol, &mut inner_iter)? {
                     Some(dat) => result.push(dat),
                     None => {
-                        return Err(format!("{:?} cannot be interpreted as a literal.", symbol));
+                        return Err(format!(
+                            "TokenTree `{}` cannot be interpreted as a literal.",
+                            symbol
+                        ));
                     }
                 }
             }
             Ok(result)
         }
         invalid => Err(format!(
-            "{:?} cannot be parsed as a vec of literals",
+            "TokenTree `{}` cannot be parsed as a vec of literals",
             invalid
         )),
     }
