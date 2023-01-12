@@ -462,10 +462,12 @@ fn test_storage_usage_collection_interval() {
             .max_duration(Duration::from_secs(10))
             .retry(|_| {
                 let row = client.query_one(
-                    "SELECT max(collection_timestamp) FROM mz_internal.mz_storage_usage_by_shard",
+                    "SELECT max(collection_timestamp)
+                    FROM mz_internal.mz_storage_usage_by_shard",
                     &[],
                 )?;
-                let ts = row.get::<_, DateTime<Utc>>("max");
+                // mz_storage_usage_by_shard may not be populated yet, which would result in a NULL ts.
+                let ts = row.try_get::<_, DateTime<Utc>>("max")?;
                 if ts <= last_timestamp {
                     bail!("next collection has not yet occurred")
                 }
