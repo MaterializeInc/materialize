@@ -236,7 +236,7 @@ WHERE (a,b) IN ((1,'l1'), (2,'l2'))
 1  l1
 2  l2
 
-# Exercise CanonicalizeMfp::distribute_and_over_or (by having 1 in both tuples)
+# Exercise LiteralConstraints::distribute_and_over_or (by having 1 in both tuples)
 
 query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * FROM t1
@@ -267,7 +267,7 @@ CREATE INDEX idx_t2_a_b_c ON t2(a,b,c)
 statement ok
 INSERT INTO t2 VALUES (1,11,21),(2,22,32),(3,23,33),(1,4,7)
 
-# CanonicalizeMfp::distribute_and_over_or needs to do 2 steps
+# LiteralConstraints::distribute_and_over_or needs to do 2 steps
 
 query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * FROM t2
@@ -659,8 +659,8 @@ Explained Query (fast path):
 EOF
 
 # IndexedFilter before a join.
-# - CanonicalizeMfp has to run before JoinImplementation. Otherwise, JoinImplementation lifts the predicate, and then
-#   CanonicalizeMfp can't create an IndexedFilter from the predicate anymore, because it's not on top of a Get.
+# - LiteralConstraints has to run before JoinImplementation. Otherwise, JoinImplementation lifts the predicate, and then
+#   LiteralConstraints can't create an IndexedFilter from the predicate anymore, because it's not on top of a Get.
 # - This should be a Delta join! To ensure this, we have to look behind the IndexedFilter when collecting the available
 #   arrangements on the join inputs.
 
