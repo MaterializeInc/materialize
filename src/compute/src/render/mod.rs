@@ -526,7 +526,7 @@ where
         import_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
-        mut probes: Vec<probe::Handle<mz_repr::Timestamp>>,
+        probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -547,9 +547,7 @@ where
         if let Some(arr) = &arrangement {
             let (collection, _) = arr.as_collection();
             let stream = collection.inner;
-            for handle in probes.iter_mut() {
-                stream.probe_notify_with(handle);
-            }
+            stream.probe_notify_with(probes.clone());
         }
 
         compute_state.flow_control_probes.insert(idx_id, probes);
@@ -597,7 +595,7 @@ where
         import_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
-        mut probes: Vec<probe::Handle<mz_repr::Timestamp>>,
+        probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -618,9 +616,7 @@ where
         if let Some(arr) = &arrangement {
             let (collection, _) = arr.as_collection();
             let stream = collection.leave().inner;
-            for handle in probes.iter_mut() {
-                stream.probe_notify_with(handle);
-            }
+            stream.probe_notify_with(probes.clone());
         }
 
         compute_state.flow_control_probes.insert(idx_id, probes);
