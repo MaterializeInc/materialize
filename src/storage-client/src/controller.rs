@@ -55,12 +55,13 @@ use mz_stash::{self, PostgresFactory, StashError, TypedCollection};
 
 use crate::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
-    SourceStatisticsUpdate, StorageCommand, StorageParameter, StorageResponse, Update,
+    SourceStatisticsUpdate, StorageCommand, StorageResponse, Update,
 };
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
 use crate::healthcheck;
 use crate::types::errors::DataflowError;
 use crate::types::hosts::StorageHostConfig;
+use crate::types::parameters::StorageParameters;
 use crate::types::sinks::{
     MetadataUnfilled, ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc,
 };
@@ -183,7 +184,7 @@ pub trait StorageController: Debug + Send {
     fn initialization_complete(&mut self);
 
     /// Update storage configuration.
-    fn update_configuration(&mut self, config_params: BTreeSet<StorageParameter>);
+    fn update_configuration(&mut self, config_params: StorageParameters);
 
     /// Acquire an immutable reference to the collection state, should it exist.
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError>;
@@ -788,7 +789,7 @@ where
         self.hosts.initialization_complete();
     }
 
-    fn update_configuration(&mut self, config_params: BTreeSet<StorageParameter>) {
+    fn update_configuration(&mut self, config_params: StorageParameters) {
         // TODO(#16753): apply config to `self.persist`
 
         self.hosts.update_configuration(config_params);

@@ -2197,12 +2197,15 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
 
 /// Returns whether the named variable is a compute configuration parameter.
 pub(crate) fn is_compute_config_var(name: &str) -> bool {
-    name == MAX_RESULT_SIZE.name()
-        || name == PERSIST_BLOB_TARGET_SIZE.name()
-        || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
+    name == MAX_RESULT_SIZE.name() || is_persist_config_var(name)
 }
 
 /// Returns whether the named variable is a storage configuration parameter.
 pub(crate) fn is_storage_config_var(name: &str) -> bool {
+    is_persist_config_var(name)
+}
+
+/// Returns whether the named variable is a persist configuration parameter.
+fn is_persist_config_var(name: &str) -> bool {
     name == PERSIST_BLOB_TARGET_SIZE.name() || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
 }

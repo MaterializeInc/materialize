@@ -27,7 +27,7 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::logging::LogVariant;
-use crate::protocol::command::{ComputeCommand, ComputeParameter, ComputeStartupEpoch, Peek};
+use crate::protocol::command::{ComputeCommand, ComputeParameters, ComputeStartupEpoch, Peek};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -203,7 +203,7 @@ where
     }
 
     /// Update instance configuration.
-    pub fn update_configuration(&mut self, config_params: BTreeSet<ComputeParameter>) {
+    pub fn update_configuration(&mut self, config_params: ComputeParameters) {
         self.send(ComputeCommand::UpdateConfiguration(config_params));
     }
 

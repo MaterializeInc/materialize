@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 use anyhow::bail;
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
-use mz_compute_client::protocol::command::ComputeParameter;
-use mz_storage_client::client::StorageParameter;
+use mz_compute_client::protocol::command::ComputeParameters;
 use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::types::parameters::{PersistParameters, StorageParameters};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -5752,28 +5752,27 @@ impl<S: Append> Catalog<S> {
     }
 
     /// Return the current compute configuration, derived from the system configuration.
-    pub fn compute_config(&self) -> BTreeSet<ComputeParameter> {
-        use ComputeParameter::*;
-
+    pub fn compute_config(&self) -> ComputeParameters {
         let config = self.system_config();
-        [
-            MaxResultSize(config.max_result_size()),
-            PersistBlobTargetSize(config.persist_blob_target_size()),
-            PersistCompactionMinimumTimeout(config.persist_compaction_minimum_timeout()),
-        ]
-        .into()
+        ComputeParameters {
+            max_result_size: Some(config.max_result_size()),
+            persist: self.persist_config(),
+        }
     }
 
     /// Return the current storage configuration, derived from the system configuration.
-    pub fn storage_config(&self) -> BTreeSet<StorageParameter> {
-        use StorageParameter::*;
+    pub fn storage_config(&self) -> StorageParameters {
+        StorageParameters {
+            persist: self.persist_config(),
+        }
+    }
 
+    fn persist_config(&self) -> PersistParameters {
         let config = self.system_config();
-        [
-            PersistBlobTargetSize(config.persist_blob_target_size()),
-            PersistCompactionMinimumTimeout(config.persist_compaction_minimum_timeout()),
-        ]
-        .into()
+        PersistParameters {
+            blob_target_size: Some(config.persist_blob_target_size()),
+            compaction_minimum_timeout: Some(config.persist_compaction_minimum_timeout()),
+        }
     }
 }
 

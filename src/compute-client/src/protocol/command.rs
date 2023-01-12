@@ -10,9 +10,7 @@
 //! Compute protocol commands.
 
 use std::collections::BTreeSet;
-use std::fmt;
 use std::num::NonZeroI64;
-use std::time::Duration;
 
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
@@ -22,12 +20,12 @@ use timely::progress::frontier::Antichain;
 use uuid::Uuid;
 
 use mz_expr::RowSetFinishing;
-use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::client::ProtoAllowCompaction;
 use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::parameters::PersistParameters;
 
 use crate::logging::LoggingConfig;
 use crate::types::dataflows::DataflowDescription;
@@ -87,7 +85,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     InitializationComplete,
 
     /// `UpdateConfiguration` instructs the replica to update its configuration, according to the
-    /// given [`ComputeParameter`]s.
+    /// given [`ComputeParameters`].
     ///
     /// Parameter updates transmitted through this command must be applied by the replica as soon
     /// as it receives the command, and they must be apply globally to all replica state, even
@@ -96,8 +94,8 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     ///
     /// Configuration parameters that should not be applied globally, but only to specific
     /// dataflows or peeks, should be added to the [`DataflowDescription`] or [`Peek`] types,
-    /// rather than as [`ComputeParameter`]s.
-    UpdateConfiguration(BTreeSet<ComputeParameter>),
+    /// rather than as [`ComputeParameters`].
+    UpdateConfiguration(ComputeParameters),
 
     /// `CreateDataflows` instructs the replica to create and start maintaining dataflows according
     /// to the given [`DataflowDescription`]s.
@@ -244,9 +242,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                 ComputeCommand::CreateInstance(logging) => CreateInstance(logging.into_proto()),
                 ComputeCommand::InitializationComplete => InitializationComplete(()),
                 ComputeCommand::UpdateConfiguration(params) => {
-                    UpdateConfiguration(ProtoUpdateConfiguration {
-                        params: params.into_proto(),
-                    })
+                    UpdateConfiguration(params.into_proto())
                 }
                 ComputeCommand::CreateDataflows(dataflows) => {
                     CreateDataflows(ProtoCreateDataflows {
@@ -280,7 +276,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                 Ok(ComputeCommand::CreateInstance(logging.into_rust()?))
             }
             Some(InitializationComplete(())) => Ok(ComputeCommand::InitializationComplete),
-            Some(UpdateConfiguration(ProtoUpdateConfiguration { params })) => {
+            Some(UpdateConfiguration(params)) => {
                 Ok(ComputeCommand::UpdateConfiguration(params.into_rust()?))
             }
             Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
@@ -309,7 +305,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
                 any::<LoggingConfig>()
                     .prop_map(ComputeCommand::CreateInstance)
                     .boxed(),
-                proptest::collection::btree_set(any::<ComputeParameter>(), 1..4)
+                any::<ComputeParameters>()
                     .prop_map(ComputeCommand::UpdateConfiguration)
                     .boxed(),
                 proptest::collection::vec(
@@ -469,8 +465,11 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
 }
 
 /// Compute instance configuration parameters.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub enum ComputeParameter {
+///
+/// Parameters can be set (`Some`) or unset (`None`).
+/// Unset parameters should be interpreted to mean "use the previous value".
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Arbitrary)]
+pub struct ComputeParameters {
     /// The maximum allowed size in bytes for results of peeks and subscribes.
     ///
     /// Peeks and subscribes that would return results larger than this maximum return the
@@ -481,67 +480,41 @@ pub enum ComputeParameter {
     /// [`PeekResponse::Rows`]: super::response::PeekResponse::Rows
     /// [`PeekResponse::Error`]: super::response::PeekResponse::Error
     /// [`SubscribeBatch::updates`]: super::response::SubscribeBatch::updates
-    MaxResultSize(u32),
-
-    /// Configures `PersistConfig::blob_target_size`.
-    PersistBlobTargetSize(usize),
-    /// Configures `PersistConfig::compaction_minimum_timeout`.
-    PersistCompactionMinimumTimeout(Duration),
+    pub max_result_size: Option<u32>,
+    /// Persist client configuration.
+    pub persist: PersistParameters,
 }
 
-impl ComputeParameter {
-    pub fn key(&self) -> &'static str {
-        match self {
-            Self::MaxResultSize(_) => "max_result_size",
-            Self::PersistBlobTargetSize(_) => "persist_blob_target_size",
-            Self::PersistCompactionMinimumTimeout(_) => "persist_compaction_minimum_timeout",
+impl ComputeParameters {
+    /// Update the parameter values with the set ones from `other`.
+    pub fn update(&mut self, other: ComputeParameters) {
+        if let Some(v) = other.max_result_size {
+            self.max_result_size = Some(v);
         }
+        self.persist.update(other.persist);
+    }
+
+    /// Return whether all parameters are unset.
+    pub fn all_unset(&self) -> bool {
+        self.max_result_size.is_none() && self.persist.all_unset()
     }
 }
 
-impl fmt::Display for ComputeParameter {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let value = match self {
-            Self::MaxResultSize(v) => v.to_string(),
-            Self::PersistBlobTargetSize(v) => v.to_string(),
-            Self::PersistCompactionMinimumTimeout(v) => format!("{v:?}"),
-        };
-        write!(f, "{}={}", self.key(), value)
-    }
-}
-
-impl RustType<ProtoComputeParameter> for ComputeParameter {
-    fn into_proto(&self) -> ProtoComputeParameter {
-        use proto_compute_parameter::*;
-
-        ProtoComputeParameter {
-            kind: Some(match self {
-                ComputeParameter::MaxResultSize(v) => Kind::MaxResultSize(*v),
-                ComputeParameter::PersistBlobTargetSize(v) => {
-                    Kind::PersistBlobTargetSize(v.into_proto())
-                }
-                ComputeParameter::PersistCompactionMinimumTimeout(v) => {
-                    Kind::PersistCompactionMinimumTimeout(v.into_proto())
-                }
-            }),
+impl RustType<ProtoComputeParameters> for ComputeParameters {
+    fn into_proto(&self) -> ProtoComputeParameters {
+        ProtoComputeParameters {
+            max_result_size: self.max_result_size.into_proto(),
+            persist: Some(self.persist.into_proto()),
         }
     }
 
-    fn from_proto(proto: ProtoComputeParameter) -> Result<Self, TryFromProtoError> {
-        use proto_compute_parameter::*;
-
-        match proto.kind {
-            Some(Kind::MaxResultSize(v)) => Ok(ComputeParameter::MaxResultSize(v)),
-            Some(Kind::PersistBlobTargetSize(v)) => {
-                Ok(ComputeParameter::PersistBlobTargetSize(usize::cast_from(v)))
-            }
-            Some(Kind::PersistCompactionMinimumTimeout(v)) => Ok(
-                ComputeParameter::PersistCompactionMinimumTimeout(v.into_rust()?),
-            ),
-            None => Err(TryFromProtoError::missing_field(
-                "ProtoComputeParameter::kind",
-            )),
-        }
+    fn from_proto(proto: ProtoComputeParameters) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            max_result_size: proto.max_result_size.into_rust()?,
+            persist: proto
+                .persist
+                .into_rust_if_some("ProtoComputeParameters::persist")?,
+        })
     }
 }
 

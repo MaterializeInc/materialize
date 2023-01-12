@@ -40,9 +40,10 @@ use mz_service::client::GenericClient;
 
 use crate::client::{
     CreateSinkCommand, CreateSourceCommand, StorageClient, StorageCommand, StorageGrpcClient,
-    StorageParameter, StorageResponse,
+    StorageResponse,
 };
 use crate::controller::ResumptionFrontierCalculator;
+use crate::types::parameters::StorageParameters;
 use crate::types::sources::SourceData;
 
 /// A storage client that replays the command stream on failure.
@@ -78,7 +79,7 @@ where
             sinks: BTreeMap::new(),
             uppers: HashMap::new(),
             initialized: false,
-            config: BTreeMap::new(),
+            config: Default::default(),
             persist,
         };
         let task = mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
@@ -122,7 +123,7 @@ struct RehydrationTask<T> {
     /// observed.
     initialized: bool,
     /// Storage configuration that has been observed.
-    config: BTreeMap<&'static str, StorageParameter>,
+    config: StorageParameters,
     /// A handle to Persist
     persist: Arc<Mutex<PersistClientCache>>,
 }
@@ -227,7 +228,7 @@ where
 
         // Rehydrate all commands.
         let mut commands = vec![
-            StorageCommand::UpdateConfiguration(self.config.values().cloned().collect()),
+            StorageCommand::UpdateConfiguration(self.config.clone()),
             StorageCommand::CreateSources(self.sources.values().cloned().collect()),
             StorageCommand::CreateSinks(self.sinks.values().cloned().collect()),
         ];
@@ -306,9 +307,7 @@ where
         match command {
             StorageCommand::InitializationComplete => self.initialized = true,
             StorageCommand::UpdateConfiguration(params) => {
-                for param in params {
-                    self.config.insert(param.key(), param.clone());
-                }
+                self.config.update(params.clone());
             }
             StorageCommand::CreateSources(ingestions) => {
                 for ingestion in ingestions {

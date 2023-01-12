@@ -31,7 +31,7 @@ use uuid::Uuid;
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::metrics::ComputeMetrics;
 use mz_compute_client::plan::Plan;
-use mz_compute_client::protocol::command::{ComputeCommand, ComputeParameter, Peek};
+use mz_compute_client::protocol::command::{ComputeCommand, ComputeParameters, Peek};
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use mz_compute_client::types::dataflows::DataflowDescription;
@@ -154,20 +154,15 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         self.initialize_logging(&logging);
     }
 
-    fn handle_update_configuration(&mut self, params: BTreeSet<ComputeParameter>) {
-        for param in params {
-            info!("Applying configuration update: {param}");
+    fn handle_update_configuration(&mut self, params: ComputeParameters) {
+        info!("Applying configuration update: {params:?}");
 
-            match param {
-                ComputeParameter::MaxResultSize(size) => {
-                    self.compute_state.max_result_size = size;
-                }
-
-                // TODO(#16753): apply config to `self.compute_state.persist_clients`
-                ComputeParameter::PersistBlobTargetSize(_) => {}
-                ComputeParameter::PersistCompactionMinimumTimeout(_) => {}
-            }
+        if let Some(v) = params.max_result_size {
+            self.compute_state.max_result_size = v;
         }
+
+        // TODO(#16753): apply config to `self.compute_state.persist_clients`
+        let _ = params.persist;
     }
 
     fn handle_create_dataflows(

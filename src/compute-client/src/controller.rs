@@ -56,7 +56,7 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::logging::{LogVariant, LogView, LoggingConfig};
-use crate::protocol::command::ComputeParameter;
+use crate::protocol::command::ComputeParameters;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::types::dataflows::DataflowDescription;
@@ -282,7 +282,7 @@ pub struct ComputeController<T> {
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
     /// Compute configuration to apply to new instances.
-    config: BTreeMap<&'static str, ComputeParameter>,
+    config: ComputeParameters,
     /// A response to handle on the next call to `ActiveComputeController::process`.
     stashed_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
     /// Times we have last received responses from replicas.
@@ -317,7 +317,7 @@ impl<T> ComputeController<T> {
                 init_container_image,
             ),
             initialized: false,
-            config: BTreeMap::new(),
+            config: Default::default(),
             stashed_response: None,
             replica_heartbeats: BTreeMap::new(),
             replica_metrics: BTreeMap::new(),
@@ -438,7 +438,7 @@ where
             instance.initialization_complete();
         }
 
-        let config_params = self.config.values().cloned().collect();
+        let config_params = self.config.clone();
         instance.update_configuration(config_params);
 
         Ok(())
@@ -456,14 +456,12 @@ where
     }
 
     /// Update compute configuration.
-    pub fn update_configuration(&mut self, config_params: BTreeSet<ComputeParameter>) {
+    pub fn update_configuration(&mut self, config_params: ComputeParameters) {
         for instance in self.instances.values_mut() {
             instance.update_configuration(config_params.clone());
         }
 
-        for param in config_params {
-            self.config.insert(param.key(), param);
-        }
+        self.config.update(config_params);
     }
 
     /// Mark the end of any initialization commands.
