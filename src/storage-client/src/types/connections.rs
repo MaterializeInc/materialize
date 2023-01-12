@@ -330,7 +330,10 @@ impl KafkaConnection {
                 Tunnel::AwsPrivatelink(aws_privatelink) => {
                     context.add_broker_rewrite(
                         &broker.address,
-                        &mz_cloud_resources::vpc_endpoint_name(aws_privatelink.connection_id),
+                        &mz_cloud_resources::vpc_endpoint_host(
+                            aws_privatelink.connection_id,
+                            aws_privatelink.availability_zone.as_deref(),
+                        ),
                         aws_privatelink.port,
                     );
                 }
@@ -565,8 +568,10 @@ impl CsrConnection {
                     .url
                     .host_str()
                     .ok_or_else(|| anyhow!("url missing host"))?;
-                let privatelink_host =
-                    mz_cloud_resources::vpc_endpoint_name(connection.connection_id);
+                let privatelink_host = mz_cloud_resources::vpc_endpoint_host(
+                    connection.connection_id,
+                    connection.availability_zone.as_deref(),
+                );
                 let addrs: Vec<_> = net::lookup_host((privatelink_host, DUMMY_PORT))
                     .await
                     .context("resolving PrivateLink host")?
@@ -926,6 +931,8 @@ impl RustType<ProtoSshConnection> for SshConnection {
 pub struct AwsPrivatelink {
     /// The ID of the connection to the AWS PrivateLink service.
     pub connection_id: GlobalId,
+    // The availability zone to use when connecting to the AWS PrivateLink service.
+    pub availability_zone: Option<String>,
     /// The port to use when connecting to the AWS PrivateLink service, if
     /// different from the port in [`KafkaBroker::address`].
     pub port: Option<u16>,
@@ -935,6 +942,7 @@ impl RustType<ProtoAwsPrivatelink> for AwsPrivatelink {
     fn into_proto(&self) -> ProtoAwsPrivatelink {
         ProtoAwsPrivatelink {
             connection_id: Some(self.connection_id.into_proto()),
+            availability_zone: self.availability_zone.into_proto(),
             port: self.port.into_proto(),
         }
     }
@@ -944,6 +952,7 @@ impl RustType<ProtoAwsPrivatelink> for AwsPrivatelink {
             connection_id: proto
                 .connection_id
                 .into_rust_if_some("ProtoAwsPrivatelink::connection_id")?,
+            availability_zone: proto.availability_zone.into_rust()?,
             port: proto.port.into_rust()?,
         })
     }

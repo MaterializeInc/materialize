@@ -2676,10 +2676,13 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
             let tunnel = match &broker.tunnel {
                 KafkaBrokerTunnel::Direct => Tunnel::Direct,
                 KafkaBrokerTunnel::AwsPrivatelink(aws_privatelink) => {
-                    let KafkaBrokerAwsPrivatelinkOptionExtracted { port, seen: _ } =
-                        KafkaBrokerAwsPrivatelinkOptionExtracted::try_from(
-                            aws_privatelink.options.clone(),
-                        )?;
+                    let KafkaBrokerAwsPrivatelinkOptionExtracted {
+                        availability_zone,
+                        port,
+                        seen: _,
+                    } = KafkaBrokerAwsPrivatelinkOptionExtracted::try_from(
+                        aws_privatelink.options.clone(),
+                    )?;
 
                     let id = match &aws_privatelink.connection {
                         ResolvedObjectName::Object { id, .. } => id,
@@ -2689,10 +2692,21 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                     };
                     let entry = scx.catalog.get_item(id);
                     match entry.connection()? {
-                        Connection::AwsPrivatelink(_) => Tunnel::AwsPrivatelink(AwsPrivatelink {
-                            connection_id: *id,
-                            port,
-                        }),
+                        Connection::AwsPrivatelink(connection) => {
+                            if let Some(az) = &availability_zone {
+                                if !connection.availability_zones.contains(az) {
+                                    sql_bail!("AWS PrivateLink availability zone {} does not match any of the \
+                                      availability zones on the AWS PrivateLink connection {}",
+                                      az.quoted(),
+                                      entry.name().to_string().quoted())
+                                }
+                            }
+                            Tunnel::AwsPrivatelink(AwsPrivatelink {
+                                connection_id: *id,
+                                availability_zone,
+                                port,
+                            })
+                        }
                         _ => {
                             sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item)
                         }
@@ -2823,7 +2837,11 @@ impl KafkaConnectionOptionExtracted {
     }
 }
 
-generate_extracted_config!(KafkaBrokerAwsPrivatelinkOption, (Port, u16));
+generate_extracted_config!(
+    KafkaBrokerAwsPrivatelinkOption,
+    (AvailabilityZone, String),
+    (Port, u16)
+);
 
 generate_extracted_config!(
     CsrConnectionOption,
