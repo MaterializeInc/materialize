@@ -1,0 +1,82 @@
+# Describes which individuals/teams are reponsible for which code in the
+# repository.
+#
+# NOTE: ownership by an individual is a smell, as is ownership by multiple
+# teams. We have a soft goal of arranging our code so that each entry names
+# a single team as owner. Better not to hide the truth, though; we'd rather
+# be honest about where we still have individuals as owners.
+#
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+/.cargo                             @benesch
+/.config                            @benesch
+/.devcontainer                      @mjibson
+/.github                            @benesch
+/bin
+/ci                                 @MaterializeInc/qa
+/doc/user                           @MaterializeInc/devex
+/doc/developer/reference/compute    @MaterializeInc/compute
+/doc/developer/reference/storage    @MaterializeInc/storage
+/misc/dbt-materialize               @MaterializeInc/devex
+/src/adapter                        @MaterializeInc/surfaces
+/src/alloc                          @benesch
+/src/audit-log                      @MaterializeInc/surfaces
+/src/avro                           @umanwizard
+/src/avro-derive                    @umanwizard
+/src/build-id                       @umanwizard
+/src/build-info                     @benesch
+/src/ccsr                           @benesch
+/src/cloud-resources                @MaterializeInc/cloud
+/src/clusterd                       @MaterializeInc/compute @MaterializeInc/storage
+/src/compute                        @MaterializeInc/compute
+/src/compute-client                 @MaterializeInc/compute
+/src/environmentd                   @MaterializeInc/surfaces
+/src/expr                           @MaterializeInc/compute
+/src/expr-test-util                 @MaterializeInc/compute
+/src/frontegg-auth                  @MaterializeInc/surfaces
+/src/http-util                      @MaterializeInc/surfaces
+/src/interchange                    @MaterializeInc/storage
+/src/kafka-util                     @MaterializeInc/storage
+/src/kinesis-util                   @MaterializeInc/storage
+/src/lowertest                      @MaterializeInc/compute
+/src/lowertest-derive               @MaterializeInc/compute
+/src/metabase                       @benesch
+/src/mz                             @MaterializeInc/surfaces
+/src/npm                            @benesch
+/src/orchestrator                   @benesch
+/src/orchestrator-kubernetes        @benesch
+/src/orchestrator-process           @benesch
+/src/orchestrator-tracing           @benesch
+/src/ore                            @benesch
+/src/persist                        @MaterializeInc/persist
+/src/persist-client                 @MaterializeInc/persist
+/src/persist-types                  @MaterializeInc/persist
+/src/pgcopy                         @MaterializeInc/surfaces
+/src/pgrepr                         @MaterializeInc/surfaces
+/src/pgtest                         @MaterializeInc/surfaces
+/src/pgwire                         @MaterializeInc/surfaces
+/src/pid-file                       @benesch
+/src/postgres-util                  @MaterializeInc/surfaces
+/src/prof                           @umanwizard
+/src/proto                          @aalexandrov
+/src/repr                           @MaterializeInc/storage @MaterializeInc/compute
+/src/repr/src/row                   @MaterializeInc/persist
+/src/repr-test-util                 @MaterializeInc/compute
+/src/s3-datagen                     @MaterializeInc/storage
+/src/secrets                        @MaterializeInc/cloud
+/src/segment                        @benesch
+/src/service                        @MaterializeInc/storage @MaterializeInc/compute
+/src/sql                            @MaterializeInc/surfaces
+/src/sql-parser                     @MaterializeInc/surfaces
+/src/sqllogictest                   @MaterializeInc/surfaces
+/src/ssh-util                       @MaterializeInc/storage
+/src/stash                          @MaterializeInc/surfaces
+/src/stash-debug                    @MaterializeInc/surfaces
+/src/storage                        @MaterializeInc/storage
+/src/storage-client                 @MaterializeInc/storage
+/src/testdrive                      @MaterializeInc/qa
+/src/timely-util                    @MaterializeInc/compute
+/src/transform                      @MaterializeInc/compute
+/src/walkabout                      @benesch
+/src/workspace-hack                 @benesch
+/test
