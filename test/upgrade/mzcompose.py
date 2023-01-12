@@ -51,9 +51,6 @@ SERVICES = [
     Postgres(),
     Materialized(
         options=list(mz_options.values()),
-        environment_extra=[
-            "SSL_KEY_PASSWORD=mzmzmz",
-        ],
         volumes_extra=["secrets:/share/secrets"],
     ),
     # N.B.: we need to use `validate_postgres_stash=False` because testdrive uses
@@ -161,15 +158,6 @@ def test_upgrade_from_version(
     )
 
     if from_version != "current_source":
-        # Older Mz versions are not configured to know SIZE '4-4' clusters by default
-        # so we need to compose MZ_STORAGE_HOST_SIZES and MZ_CLUSTER_REPLICA_SIZES
-        size = Materialized.Size.DEFAULT_SIZE
-        environment_extra = [
-            f'MZ_STORAGE_HOST_SIZES={{"{size}":{{"workers":{size}}}}}',
-            f'MZ_CLUSTER_REPLICA_SIZES={{"1":{{"workers":1,"scale":1}},"{size}-{size}":{{"workers":{size},"scale":{size}}}}}',
-            "SSL_KEY_PASSWORD=mzmzmz",
-        ]
-
         mz_from = Materialized(
             image=f"materialize/materialized:{from_version}",
             options=[
@@ -177,7 +165,6 @@ def test_upgrade_from_version(
                 for start_version, opt in mz_options.items()
                 if from_version[1:] >= start_version
             ],
-            environment_extra=environment_extra,
             volumes_extra=["secrets:/share/secrets"],
         )
         with c.override(mz_from):
