@@ -205,8 +205,9 @@ const TIMEZONE: ServerVar<TimeZone> = ServerVar {
     internal: false,
 };
 
+pub const TRANSACTION_ISOLATION_VAR_NAME: &UncasedStr = UncasedStr::new("transaction_isolation");
 const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
-    name: UncasedStr::new("transaction_isolation"),
+    name: TRANSACTION_ISOLATION_VAR_NAME,
     value: &IsolationLevel::StrictSerializable,
     description: "Sets the current transaction's isolation level (PostgreSQL).",
     internal: false,
