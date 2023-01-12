@@ -33,7 +33,7 @@ from materialize.mzcompose.services import Materialized
 size = Materialized.Size.DEFAULT_SIZE
 environment_extra = [
     f'MZ_STORAGE_HOST_SIZES={{"{size}":{{"workers":{size}}}}}',
-    f'MZ_CLUSTER_REPLICA_SIZES={{"1":{{"workers":1,"scale":1}},"{size}-{size}":{{"workers":{size},"scale":{size}}}}}',
+    f'MZ_CLUSTER_REPLICA_SIZES={{"1":{{"workers":1,"scale":1}},"{size}":{{"workers":"1","scale":{size}}},"{size}-{size}":{{"workers":{size},"scale":{size}}}}}',
 ]
 
 released_versions = util.released_materialize_versions()

@@ -166,7 +166,7 @@ def test_upgrade_from_version(
         size = Materialized.Size.DEFAULT_SIZE
         environment_extra = [
             f'MZ_STORAGE_HOST_SIZES={{"{size}":{{"workers":{size}}}}}',
-            f'MZ_CLUSTER_REPLICA_SIZES={{"1":{{"workers":1,"scale":1}},"{size}-{size}":{{"workers":{size},"scale":{size}}}}}',
+            f'MZ_CLUSTER_REPLICA_SIZES={{"1":{{"workers":1,"scale":1}},"{size}":{{"workers":1,"scale":{size}}},"{size}-{size}":{{"workers":{size},"scale":{size}}}}}',
             "SSL_KEY_PASSWORD=mzmzmz",
         ]
 
