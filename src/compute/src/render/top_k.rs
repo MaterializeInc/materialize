@@ -17,14 +17,15 @@ use std::rc::Rc;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arrange;
+use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::Consolidate;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
+use timely::dataflow::stream::Stream;
 use timely::dataflow::Scope;
 
 use mz_compute_client::plan::top_k::{
@@ -303,11 +304,6 @@ where
             G: Scope,
             G::Timestamp: Lattice,
         {
-            let shared = Rc::new(RefCell::new(monoids::Top1MonoidShared {
-                order_key,
-                left: DatumVec::new(),
-                right: DatumVec::new(),
-            }));
             // We can place our rows directly into the diff field, and only keep the relevant one
             // corresponding to evaluating our aggregate, instead of having to do a hierarchical
             // reduction.
@@ -327,43 +323,36 @@ where
                 }
             });
 
-            // We arrange the inputs ourself to force it into a leaner structure because we know we
-            // won't care about values.
-            //
-            // TODO: Could we use explode here? We'd lose the diff>0 assert and we'd have to impl Mul
-            // for the monoid, unclear if it's worth it.
-            let mut buffer = Default::default();
-            let partial: Collection<G, (Row, ()), monoids::Top1Monoid> = collection
-                .inner
-                .unary(
-                    Exchange::new(move |((key, _), _, _): &((Row, _), _, _)| key.hashed()),
-                    "Top1MonotonicPrepare",
-                    move |_cap, _op| {
-                        move |input, output| {
-                            while let Some((cap, data)) = input.next() {
-                                data.swap(&mut buffer);
-                                output.session(&cap).give_iterator(buffer.drain(..).map(
-                                    |((group_key, row), time, diff)| {
-                                        assert!(diff > 0);
-                                        // NB: Top1 can throw out the diff since we've asserted that it's > 0. A more
-                                        // general TopK monoid would have to account for diff.
-                                        (
-                                            (group_key, ()),
-                                            time,
-                                            monoids::Top1Monoid {
-                                                row,
-                                                shared: Rc::clone(&shared),
-                                            },
-                                        )
-                                    },
-                                ))
-                            }
-                        }
-                    },
-                )
-                .as_collection();
+            // Firstly, we render a pipelined step for pre-aggregation per worker, mapping rows to diffs
             let arranged =
-                partial.arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "Top1MonotonicArrange");
+                render_top1_preaggregation(collection.inner, order_key.clone(), Pipeline);
+
+            // Secondly, we map rows back from the diff field in preparation for another step
+            // Note that we do not use explode here since it's unclear whether we'd like to implement Multiply in the Top1Monoid
+            let mut buffer = Default::default();
+            let preaggregated = arranged.as_collection(|row, ()| row.clone()).inner.unary(
+                Pipeline,
+                "Top1MonotonicMapToRow",
+                move |_cap, _op| {
+                    move |input, output| {
+                        input.for_each(|time, data| {
+                            data.swap(&mut buffer);
+                            output.session(&time).give_iterator(
+                                buffer.drain(..).map(|x| ((x.0, x.2.into_row()), x.1, 1)),
+                            );
+                        })
+                    }
+                },
+            );
+
+            // Thirdly, we render an exchange step to correctly shuffle among workers
+            let arranged = render_top1_preaggregation(
+                preaggregated,
+                order_key,
+                Exchange::new(move |((group_key, _), _, _): &((Row, _), _, _)| group_key.hashed()),
+            );
+
+            // Lastly, we compute the result by a final reduction
             let result = arranged.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("Top1Monotonic", {
                 move |_key, input, output| {
                     let accum = &input[0].1;
@@ -372,6 +361,56 @@ where
             });
             // TODO(#7331): Here we discard the arranged output.
             result.as_collection(|_k, v| v.clone())
+        }
+
+        fn render_top1_preaggregation<G, P>(
+            input: Stream<G, ((Row, Row), G::Timestamp, Diff)>,
+            order_key: Vec<mz_expr::ColumnOrder>,
+            pact: P,
+        ) -> Arranged<G, TraceAgent<RowSpine<Row, (), G::Timestamp, monoids::Top1Monoid>>>
+        where
+            G: Scope,
+            G::Timestamp: Lattice,
+            P: ParallelizationContract<G::Timestamp, ((Row, Row), G::Timestamp, Diff)>,
+        {
+            // We allocate a single reference-counted object to represent the desired ordering
+            let shared = Rc::new(RefCell::new(monoids::Top1MonoidShared {
+                order_key,
+                left: DatumVec::new(),
+                right: DatumVec::new(),
+            }));
+
+            // We arrange the input ourselves to force it into a leaner structure because we know we
+            // won't care about values.
+            //
+            // TODO: Could we use explode here? We'd lose the diff>0 assert and we'd have to impl Mul
+            // for the monoid, unclear if it's worth it.
+            let mut buffer = Default::default();
+            let prepared: Collection<G, (Row, ()), monoids::Top1Monoid> = input
+                .unary(pact, "Top1MonotonicPrepare", move |_cap, _op| {
+                    move |input, output| {
+                        while let Some((cap, data)) = input.next() {
+                            data.swap(&mut buffer);
+                            output.session(&cap).give_iterator(buffer.drain(..).map(
+                                |((group_key, row), time, diff)| {
+                                    assert!(diff > 0);
+                                    // NB: Top1 can throw out the diff since we've asserted that it's > 0. A more
+                                    // general TopK monoid would have to account for diff.
+                                    (
+                                        (group_key, ()),
+                                        time,
+                                        monoids::Top1Monoid {
+                                            row,
+                                            shared: Rc::clone(&shared),
+                                        },
+                                    )
+                                },
+                            ))
+                        }
+                    }
+                })
+                .as_collection();
+            prepared.arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "Top1MonotonicArrange")
         }
 
         fn render_intra_ts_thinning<G>(
