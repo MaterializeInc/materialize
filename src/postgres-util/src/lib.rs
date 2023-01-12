@@ -94,6 +94,7 @@ use mz_ssh_util::tunnel::SshTunnelConfig;
 use crate::desc::{PostgresColumnDesc, PostgresTableDesc};
 
 pub mod desc;
+pub mod replication;
 
 /// An error representing pg, ssh, ssl, and other failures.
 #[derive(Debug, thiserror::Error)]

@@ -8,6 +8,11 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.66"
+bytes = "1.3.0"
+byteorder = "1.4.3"
+futures-util = { version = "0.3", features = ["sink"] }
+pin-project-lite = "0.2"
+memchr = { version = "2.5.0", features = ["use_std"] }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-ore = { path = "../ore", features = ["async"] }
 mz-proto = { path = "../proto" }
@@ -16,12 +21,14 @@ mz-ssh-util = { path = "../ssh-util" }
 openssl = { version = "0.10.43", features = ["vendored"] }
 openssh = "0.9.8"
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 serde = { version = "1.0.152", features = ["derive"] }
 thiserror = "1.0.37"
 tokio = { version = "1.24.2", features = ["fs", "rt", "sync"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
