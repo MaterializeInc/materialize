@@ -39,7 +39,7 @@ use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::Mutex;
-use tokio_stream::{StreamExt, StreamMap};
+use tokio_stream::StreamMap;
 use tracing::{debug, info};
 
 use mz_build_info::BuildInfo;
@@ -287,7 +287,7 @@ pub trait StorageController: Debug + Send {
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot(
-        &mut self,
+        &self,
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError>;
@@ -859,7 +859,8 @@ where
 
         let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
 
-        for (id, description) in collections {
+        use futures::stream::{StreamExt, TryStreamExt};
+        let enriched_with_metdata = collections.into_iter().map(|(id, description)| {
             let collection_shards = durable_metadata.remove(&id).expect("inserted above");
             let status_shard = if let Some(status_collection_id) = description.status_collection_id
             {
@@ -880,82 +881,126 @@ where
                 status_shard,
             };
 
-            // should be replaced with real introspection (https://github.com/MaterializeInc/materialize/issues/14266)
-            // but for now, it's helpful to have this mapping written down somewhere
-            debug!(
-                "mapping GlobalId={} to remap shard ({}), data shard ({}), status shard ({:?})",
-                id, metadata.remap_shard, metadata.data_shard, status_shard
-            );
+            Ok((id, description, metadata))
+        });
 
-            let persist_client = self
-                .persist
-                .lock()
-                .await
-                .open(self.persist_location.clone())
-                .await
-                .unwrap();
+        let persist_client = self
+            .persist
+            .lock()
+            .await
+            .open(self.persist_location.clone())
+            .await
+            .unwrap();
+        let persist_client = &persist_client;
+        let this = &*self;
+        let to_register: Vec<_> = futures::stream::iter(enriched_with_metdata)
+            .map(|data: Result<_, anyhow::Error>| async move {
+                let (id, description, metadata) = data?;
 
-            let purpose = format!("controller data {}", id);
-            let write = persist_client
-                .open_writer(metadata.data_shard, &purpose)
-                .await
-                .expect("invalid persist usage");
+                // should be replaced with real introspection (https://github.com/MaterializeInc/materialize/issues/14266)
+                // but for now, it's helpful to have this mapping written down somewhere
+                debug!(
+                    "mapping GlobalId={} to remap shard ({}), data shard ({}), status shard ({:?})",
+                    id, metadata.remap_shard, metadata.data_shard, metadata.status_shard
+                );
 
-            // Construct the handle in a separate block to ensure all error paths are diverging
-            let since_handle = {
-                let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
-                    .open_critical_since(
-                        metadata.data_shard,
-                        PersistClient::CONTROLLER_CRITICAL_SINCE,
-                        &purpose,
-                    )
+                let purpose = format!("controller data {}", id);
+                let write = persist_client
+                    .open_writer(metadata.data_shard, &purpose)
                     .await
                     .expect("invalid persist usage");
 
-                let since = description
-                    .since
-                    .clone()
-                    .unwrap_or_else(|| handle.since().clone());
+                // Construct the handle in a separate block to ensure all error paths are diverging
+                let since_handle = {
+                    let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
+                        .open_critical_since(
+                            metadata.data_shard,
+                            PersistClient::CONTROLLER_CRITICAL_SINCE,
+                            &purpose,
+                        )
+                        .await
+                        .expect("invalid persist usage");
 
-                // We should only continue if we can fence out any other processes
-                let our_epoch = self.state.envd_epoch;
-                loop {
-                    let their_epoch: PersistEpoch = handle.opaque().clone();
+                    let since = description
+                        .since
+                        .clone()
+                        .unwrap_or_else(|| handle.since().clone());
 
-                    let should_exchange = their_epoch.0.map(|e| e < our_epoch).unwrap_or(true);
-                    if should_exchange {
-                        let fenced_others = handle
-                            .compare_and_downgrade_since(
-                                &their_epoch,
-                                (&PersistEpoch::from(our_epoch), &since),
-                            )
-                            .await
-                            .is_ok();
-                        if fenced_others {
-                            break handle;
+                    // We should only continue if we can fence out any other processes
+                    let our_epoch = this.state.envd_epoch;
+                    loop {
+                        let their_epoch: PersistEpoch = handle.opaque().clone();
+
+                        let should_exchange = their_epoch.0.map(|e| e < our_epoch).unwrap_or(true);
+                        if should_exchange {
+                            let fenced_others = handle
+                                .compare_and_downgrade_since(
+                                    &their_epoch,
+                                    (&PersistEpoch::from(our_epoch), &since),
+                                )
+                                .await
+                                .is_ok();
+                            if fenced_others {
+                                break handle;
+                            }
+                        } else {
+                            mz_ore::halt!("fenced by envd @ {their_epoch:?}. ours = {our_epoch}");
                         }
-                    } else {
-                        mz_ore::halt!("fenced by envd @ {their_epoch:?}. ours = {our_epoch}");
                     }
-                }
-            };
+                };
 
-            let collection_state = CollectionState::new(
-                description.clone(),
-                since_handle.since().clone(),
-                write.upper().clone(),
-                metadata.clone(),
-            );
+                let cs = CollectionState::new(
+                    description.clone(),
+                    since_handle.since().clone(),
+                    write.upper().clone(),
+                    metadata.clone(),
+                );
+                Ok::<_, anyhow::Error>((id, description, write, since_handle, cs))
+            })
+            .buffer_unordered(50)
+            .try_collect()
+            .await?;
 
+        let mut to_migrate = vec![];
+        for (id, description, write, since_handle, collection_state) in to_register {
             self.state.persist_write_handles.register(id, write);
             self.state.persist_read_handles.register(id, since_handle);
 
             self.state.collections.insert(id, collection_state);
 
-            self.migrate_remap_shard(id, &description.data_source).await;
+            to_migrate.push((id, description));
+        }
 
-            self.register_shard_mapping(id).await;
+        let this = &*self;
+        let to_create: Vec<_> = futures::stream::iter(to_migrate)
+            .map(|(id, description)| async move {
+                let dc = this
+                    .determine_remap_shard_migration(id, &description.data_source)
+                    .await;
 
+                // Note we register the mapping AFTER the migration below if there is one.
+                if dc.is_none() {
+                    this.register_shard_mapping(id).await;
+                }
+                (id, description, dc)
+            })
+            .buffer_unordered(50)
+            .collect()
+            .await;
+
+        let mut need_remap_migration = vec![];
+        let to_create: Vec<_> = to_create
+            .into_iter()
+            .map(|(id, description, dc)| {
+                if let Some(dc) = dc {
+                    need_remap_migration.push((id, dc))
+                }
+                (id, description)
+            })
+            .collect();
+        self.migrate_collection_metadata(need_remap_migration).await;
+
+        for (id, description) in to_create {
             match description.data_source {
                 DataSource::Ingestion(ingestion) => {
                     // Each ingestion is augmented with the collection metadata.
@@ -1285,7 +1330,7 @@ where
     // actually existed. We should include the original time in the updates advanced by the as_of
     // frontier in the result and let the caller decide what to do with the information.
     async fn snapshot(
-        &mut self,
+        &self,
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError> {
@@ -1444,6 +1489,7 @@ where
             .enumerate()
             .collect::<StreamMap<_, _>>();
 
+        use tokio_stream::StreamExt;
         let msg = tokio::select! {
             // Order matters here. We want to process internal commands
             // before processing external commands.
@@ -1677,7 +1723,7 @@ where
     /// # Panics
     /// - If `id` does not belong to a collection or is not registered as a
     ///   managed collection.
-    async fn reconcile_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+    async fn reconcile_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         let mut reconciled_updates = HashMap::<Row, Diff>::with_capacity(updates.len());
 
         for (row, diff) in updates.into_iter() {
@@ -1719,7 +1765,7 @@ where
     ///
     /// # Panics
     /// - If `id` is not registered as a managed collection.
-    async fn append_to_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+    async fn append_to_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         self.state
             .collection_manager
             .append_to_collection(id, updates)
@@ -1768,7 +1814,7 @@ where
     /// - If `self.state.collections` does not have an entry for `global_id`.
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
-    async fn register_shard_mapping(&mut self, global_id: GlobalId) {
+    async fn register_shard_mapping(&self, global_id: GlobalId) {
         let id = match self
             .state
             .introspection_ids
@@ -1899,16 +1945,21 @@ where
         }
     }
 
-    /// For appropriate data sources, migrate the remap collection correlated
-    /// to `id` to one compatible with `Partitioned<PartitionId, MzOffset>`.
-    pub async fn migrate_remap_shard(&mut self, id: GlobalId, data_source: &DataSource) {
+    /// For appropriate data sources, determine if the remap collection correlated
+    /// to `id` is compatible with `Partitioned<PartitionId, MzOffset>`, returning
+    /// the new required metadata if not.
+    pub async fn determine_remap_shard_migration(
+        &self,
+        id: GlobalId,
+        data_source: &DataSource,
+    ) -> Option<DurableCollectionMetadata> {
         // We only want to migrate ingestion-based sources' remap collections
         let connection = match data_source {
             DataSource::Ingestion(IngestionDescription {
                 desc: crate::types::sources::SourceDesc { connection, .. },
                 ..
             }) => connection,
-            _ => return,
+            _ => return None,
         };
 
         let metadata = self
@@ -1945,24 +1996,28 @@ where
             }
         };
 
-        let remap_shard = match res {
+        match res {
             None => {
                 info!("remap shard migration({id:?}): unnecessary");
-                return;
+                None
             }
-            Some(s) => s,
-        };
-
-        self.rewrite_collection_metadata(
-            id,
-            DurableCollectionMetadata {
+            Some(s) => Some(DurableCollectionMetadata {
                 data_shard: metadata.data_shard,
-                remap_shard,
-            },
-        )
-        .await;
+                remap_shard: s,
+            }),
+        }
+    }
 
-        info!("remap shard migration({id:?}): complete");
+    async fn migrate_collection_metadata<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = (GlobalId, DurableCollectionMetadata)>,
+    {
+        for (id, dc) in iter {
+            self.rewrite_collection_metadata(id, dc).await;
+            self.register_shard_mapping(id).await;
+
+            info!("remap shard migration({id:?}): complete");
+        }
     }
 }
 
