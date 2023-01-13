@@ -225,7 +225,7 @@
 }
 
 .toc {
-    max-width: 360px;
+    max-width: 280px;
     min-width: 180px;
     padding: var(--x-small) 2rem;
     position: sticky;
@@ -266,14 +266,22 @@
         text-decoration: none;
 
         &.active {
-            font-weight: 500;
+
+            &,
+            code {
+                font-weight: 500;
+            }
         }
 
         &.active,
         &:hover,
         &:focus {
-            color: var(--highlight);
-            text-decoration: none;
+
+            &,
+            code {
+                color: var(--highlight);
+                text-decoration: none;
+            }
         }
     }
 
@@ -281,6 +289,12 @@
         font-family: "Fira Code", Courier, monospace;
         font-variant-ligatures: none;
     }
+}
+
+.sidebar a,
+.toc a {
+    word-wrap: break-word;
+    white-space: initial;
 }
 
 .footer {

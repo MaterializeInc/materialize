@@ -149,7 +149,6 @@ input[type="submit"] {
     cursor: pointer;
     transition: all 0.2s;
     transition-delay: 50ms;
-    white-space: nowrap;
 }
 
 a {
@@ -176,6 +175,7 @@ a {
     align-items: center;
     font-size: 12px;
     text-transform: uppercase;
+    white-space: nowrap;
     font-weight: 600;
     letter-spacing: 0.1em;
     background: var(--graidient-primary);
