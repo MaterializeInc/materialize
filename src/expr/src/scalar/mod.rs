@@ -48,7 +48,7 @@ pub mod like_pattern;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.rs"));
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
 pub enum MirScalarExpr {
     /// A column of the input row
     Column(usize),

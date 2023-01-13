@@ -1079,13 +1079,15 @@ where
 
 /// Identify whether the given aggregate function is Lag or Lead, since they share
 /// implementations.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub enum LagLeadType {
     Lag,
     Lead,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
 pub enum AggregateFunc {
     MaxNumeric,
     MaxInt16,
@@ -2069,7 +2071,9 @@ impl fmt::Display for AggregateFunc {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct CaptureGroupDesc {
     pub index: u32,
     pub name: Option<String>,
@@ -2094,7 +2098,9 @@ impl RustType<ProtoCaptureGroupDesc> for CaptureGroupDesc {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct AnalyzedRegex(
     #[proptest(strategy = "mz_repr::adt::regex::any_regex()")] ReprRegex,
     Vec<CaptureGroupDesc>,
@@ -2178,7 +2184,9 @@ fn wrap<'a>(datums: &'a [Datum<'a>], width: usize) -> impl Iterator<Item = (Row,
     datums.chunks(width).map(|chunk| (Row::pack(chunk), 1))
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub enum TableFunc {
     JsonbEach {
         stringify: bool,

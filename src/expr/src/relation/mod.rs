@@ -77,7 +77,7 @@ pub trait CollectionPlan {
 ///
 /// The AST is meant to reflect the capabilities of the `differential_dataflow::Collection` type,
 /// written generically enough to avoid run-time compilation work.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
 pub enum MirRelationExpr {
     /// A constant relation containing specified rows.
     ///
@@ -1943,7 +1943,9 @@ impl VisitChildren<Self> for MirRelationExpr {
 }
 
 /// Specification for an ordering by a column.
-#[derive(Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct ColumnOrder {
     /// The column index.
     pub column: usize,
@@ -1990,7 +1992,9 @@ impl fmt::Display for ColumnOrder {
 }
 
 /// Describes an aggregation expression.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct AggregateExpr {
     /// Names the aggregation function.
     pub func: AggregateFunc,
@@ -2466,7 +2470,7 @@ impl fmt::Display for AggregateExpr {
 }
 
 /// Describe a join implementation in dataflow.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
 pub enum JoinImplementation {
     /// Perform a sequence of binary differential dataflow joins.
     ///
@@ -2813,7 +2817,9 @@ where
 ///
 /// Window frames define a subset of the partition , and only a subset of
 /// window functions make use of the window frame.
-#[derive(Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct WindowFrame {
     /// ROWS, RANGE or GROUPS
     pub units: WindowFrameUnits,
@@ -2905,7 +2911,9 @@ impl RustType<ProtoWindowFrame> for WindowFrame {
 }
 
 /// Describe how frame bounds are interpreted
-#[derive(Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub enum WindowFrameUnits {
     /// Each row is treated as the unit of work for bounds
     Rows,
