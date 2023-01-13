@@ -225,12 +225,13 @@
 }
 
 .toc {
-    max-width: 280px;
+    max-width: 360px;
     min-width: 180px;
     padding: var(--x-small) 2rem;
     position: sticky;
     top: 0;
-    overflow: hidden;
+    height: 100vh;
+    overflow-y: auto;
     font-size: var(--sm);
 
     &-top {
