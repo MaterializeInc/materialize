@@ -60,7 +60,7 @@ In general, your index key should exactly match the columns that are constrained
 
 ### `JOIN`
 
-In general, you can improve the performance of your joins by creating indexes on the columns being joined. This comes at the cost of additional memory usage. Fortunately, Materialize can reuse these indexes for different queries, which means **for multiple queries, indexes are a fixed upfront cost with per-dataflow savings for each new query.**
+In general, you can improve the performance of your joins by creating indexes on the columns being joined. This comes at the cost of additional memory usage. Fortunately, Materialize can reuse these indexes for different queries, which means **for multiple queries, indexes are a fixed upfront cost with memory savings for each new query.**
 
 Let's create a few tables to work through examples.
 
@@ -90,9 +90,7 @@ CREATE INDEX teachers_id_index ON teachers (id);
 CREATE INDEX sections_teacher_id_index ON sections (teacher_id);
 ```
 
-Here, `teachers.id` uniquely identifies all teachers. When a column or set of columns uniquely identifies each record, it is called a **primary key**, and an index on the primary key is called a **primary index**.
 
-We also have `sections.teacher_id`, which is not the primary key of `sections`, but it *does* correspond to the primary key of `teachers`. Whenever we have a column that is a primary key of another collection, it is called a [foreign key](https://en.wikipedia.org/wiki/Foreign_key). When we create an index on a foreign key, it's called a **secondary index**.
 
 #### Optimize Multi-Way Joins with Delta Joins
 
@@ -107,8 +105,8 @@ CREATE VIEW course_schedule AS
       s.schedule,
       c.name AS course_name
   FROM teachers t
-  INNER JOIN sections s ON (t.id = s.teacher_id)
-  INNER JOIN courses c ON (c.id = s.course_id);
+  INNER JOIN sections s ON t.id = s.teacher_id
+  INNER JOIN courses c ON c.id = s.course_id;
 ```
 
 In this case, we create indexes on the join keys to optimize the query:
@@ -149,13 +147,17 @@ EXPLAIN VIEW course_schedule;
    - materialize.public.pk_courses               +
 ```
 
-If your query filters one or more of the join inputs by a literal equality (e.g., `WHERE t.name = 'Escalante'`), place one of those inputs first in the `FROM` clause. In particular, this can speed up [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) by accessing inputs using index lookups, rather than full scans.
+If your query filters one or more of the join inputs by a literal equality (e.g., `WHERE t.name = 'Escalante'`), place one of those input collections first in the `FROM` clause. In particular, this can speed up [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) by accessing collections using index lookups rather than full scans.
 
 #### Further Optimize with Late Materialization
 
-Materialize can further optimize memory usage - using a pattern known as **late materialization** - when joining relations containing primary and foreign key constraints. The idea is to create indexes on "narrow" views that only relate primary keys to foreign keys rather than creating a secondary index on the entire "wider" input collection.
+Materialize can further optimize memory usage when joining collections with primary and foreign key constraints using a pattern known as **late materialization**.
 
-1. Create indexes on the primary keys of your input collections.
+To understand late materialization, you need to know about primary and secondary indexes. In our example, the `teachers.id` column uniquely identifies all teachers. When a column or set of columns uniquely identifies each record, it is called a **primary key**, and an index on the primary key is called a **primary index**. We also have `sections.teacher_id`, which is not the primary key of `sections`, but it *does* correspond to the primary key of `teachers`. Whenever we have a column that is a primary key of another collection, it is called a [foreign key](https://en.wikipedia.org/wiki/Foreign_key). When we create an index on a foreign key, it's called a **secondary index**.
+
+In many relational databases, indexes don't replicate the entire collection of data. Rather, they maintain just a mapping from the indexed columns back to a primary key. These few columns can take substantially less space than the whole collection, and may also change less as various unrelated attributes are updated. This is called **late materialization**, and it is possible to achieve in Materialize as well. Here are the steps to implementing late materialization along with examples.
+
+1. Create primary indexes for your input collections.
     ```sql
     CREATE INDEX pk_teachers ON teachers (id);
     CREATE INDEX pk_sections ON sections (id);
@@ -168,11 +170,15 @@ Materialize can further optimize memory usage - using a pattern known as **late 
     -- Create a "narrow" view containing primary key sections.id
     -- and foreign key sections.teacher_id
     CREATE VIEW sections_narrow_teachers AS SELECT id, teacher_id FROM sections;
+    -- Create primary and secondary indexes
     CREATE INDEX sections_narrow_teachers_0 ON sections_narrow_teachers (id);
     CREATE INDEX sections_narrow_teachers_1 ON sections_narrow_teachers (teacher_id);
+    ```
+    ```sql
     -- Create a "narrow" view containing primary key sections.id
     -- and foreign key sections.course_id
     CREATE VIEW sections_narrow_courses AS SELECT id, course_id FROM sections;
+    -- Create primary and secondary indexes
     CREATE INDEX sections_narrow_courses_0 ON sections_narrow_courses (id);
     CREATE INDEX sections_narrow_courses_1 ON sections_narrow_courses (course_id);
     ```
@@ -180,7 +186,7 @@ Materialize can further optimize memory usage - using a pattern known as **late 
   In this case, because both foreign keys are in `sections`, we could have gotten away with one narrow collection `sections_narrow_teachers_and_courses` with indexes on `id`, `teacher_id`, and `course_id`. In general, we won't be so lucky to have all the foreign keys in the same collection, so we've shown the more general pattern of creating a narrow view and two indexes for each foreign key. 
     {{</ note >}}
 
-3. Use your narrow collections to perform the join. Example:
+3. Rewrite your query to use your narrow collections in the join conditions. Example:
 
     ```sql
     SELECT
