@@ -19,8 +19,6 @@ futures = "0.3.25"
 mz-build-info = { path = "../build-info" }
 mz-compute-client = { path = "../compute-client" }
 mz-expr = { path = "../expr" }
-mz-http-util = { path = "../http-util" }
-mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
 mz-pid-file = { path = "../pid-file" }
@@ -41,4 +39,4 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux
-normal = ["inotify"]
+normal = ["inotify", "workspace-hack"]

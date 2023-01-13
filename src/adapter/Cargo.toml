@@ -75,3 +75,6 @@ datadriven = "0.6.0"
 [[bench]]
 name = "catalog"
 harness = false
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

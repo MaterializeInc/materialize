@@ -44,3 +44,7 @@ mz-npm = { path = "../npm" }
 dev-web = []
 # Whether to enable profiling features that depend on jemalloc.
 jemalloc = ["tikv-jemalloc-ctl"]
+
+[package.metadata.cargo-udeps.ignore]
+# "bytesize" not used on linux
+normal = ["bytesize", "workspace-hack"]

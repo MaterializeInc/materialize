@@ -28,3 +28,6 @@ mz-walkabout = { path = "../walkabout" }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_codegen = "0.11.1"
 uncased = "0.9.7"
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

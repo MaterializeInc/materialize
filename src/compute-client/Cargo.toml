@@ -47,3 +47,6 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 [build-dependencies]
 protobuf-src = "1.1.0"
 tonic-build = "0.8.2"
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

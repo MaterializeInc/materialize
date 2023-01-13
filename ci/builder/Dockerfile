@@ -154,7 +154,8 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.12.2" cargo-deny \
     && cargo install --root /usr/local --version ="0.9.18" cargo-hakari \
     && cargo install --root /usr/local --version "=0.9.44" cargo-nextest \
-    && cargo install --root /usr/local --version "=0.1.34" cargo-udeps  --features=vendored-openssl \
+    && `: Until https://github.com/est31/cargo-udeps/pull/147 is released in cargo-udeps` \
+    && cargo install --root /usr/local --git https://github.com/est31/cargo-udeps --rev=b84d478ef3efd7264dba8c15c31a50c6399dc5bb --locked  cargo-udeps --features=vendored-openssl \
     && cargo install --root /usr/local --version "=0.2.15" --no-default-features --features=s3,openssl/vendored sccache
 
 # Link the system lld into the cross-compiling sysroot.

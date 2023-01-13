@@ -29,3 +29,6 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 [build-dependencies]
 prost-build = "0.11.2"
 protobuf-src = "1.1.0"
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]
