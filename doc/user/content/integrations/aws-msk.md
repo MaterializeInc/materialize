@@ -1,21 +1,21 @@
 ---
-title: "AWS Managed Streaming for Kafka (MSK)"
-description: "How to securely connect an AWS Managed Streaming for Kafka (MSK) cluster as a source to Materialize."
+title: "Amazon Managed Streaming for Apache Kafka (Amazon MSK)"
+description: "How to securely connect an Amazon Managed Streaming for Apache Kafka (Amazon MSK) cluster as a source to Materialize."
 menu:
   main:
     parent: "integration-guides"
     name: "AWS MSK"
 ---
 
-This guide goes through the required steps to connect Materialize to an AWS MSK cluster, including some of the more complicated bits around configuring security settings in MSK.
+This guide goes through the required steps to connect Materialize to an Amazon MSK cluster, including some of the more complicated bits around configuring security settings in Amazon MSK.
 
-If you already have an MSK cluster, you can skip step 1 and directly move on to [Make the cluster public and enable SASL](#make-the-cluster-public-and-enable-sasl). You can also skip steps 3 and 4 if you already have Kafka installed and running, and have created a topic that you want to create a source for.
+If you already have an Amazon MSK cluster, you can skip step 1 and directly move on to [Make the cluster public and enable SASL](#make-the-cluster-public-and-enable-sasl). You can also skip steps 3 and 4 if you already have Apache Kafka installed and running, and have created a topic that you want to create a source for.
 
 The process to connect Materialize to Amazon MSK consists of the following steps:
 1. #### Create an Amazon MSK cluster
-    If you already have an Amazon MSk cluster set up, then you can skip this step.
+    If you already have an Amazon MSK cluster set up, then you can skip this step.
 
-    a. Sign in to the AWS Management console and open the [Amazon MSK console](https://console.aws.amazon.com/msk/)
+    a. Sign in to the AWS Management Console and open the [Amazon MSK console](https://console.aws.amazon.com/msk/)
 
     b. Choose **Create cluster**
 
@@ -41,10 +41,10 @@ The process to connect Materialize to Amazon MSK consists of the following steps
 
     f. Click **Save changes**
 
-    You can find more details about updating an MSK cluster's security configurations [here](https://docs.aws.amazon.com/msk/latest/developerguide/msk-update-security.html).
+    You can find more details about updating a cluster's security configurations [here](https://docs.aws.amazon.com/msk/latest/developerguide/msk-update-security.html).
 
     ##### Create a symmetric key
-    a. Now go to the [Amazon KMS (Key Management Service) console](https://console.aws.amazon.com/kms)
+    a. Now go to the [AWS Key Management Service (AWS KMS) console](https://console.aws.amazon.com/kms)
 
     b. Click **Create Key**
 
@@ -113,17 +113,17 @@ The process to connect Materialize to Amazon MSK consists of the following steps
     ```
 
 
-    You can find more information about making your MSK cluster public [here](https://docs.aws.amazon.com/msk/latest/developerguide/public-access.html).
+    You can find more information about making your cluster public [here](https://docs.aws.amazon.com/msk/latest/developerguide/public-access.html).
 
 3. #### Create a client machine
-    If you already have a client machine set up that can interact with your MSK cluster, then you can skip this step.
+    If you already have a client machine set up that can interact with your cluster, then you can skip this step.
 
     If not, you can create an EC2 client machine and then add the security group of the client to the inbound rules of the cluster's security group from the VPC console. You can find more details about how to do that [here](https://docs.aws.amazon.com/msk/latest/developerguide/create-client-machine.html).
 
-4. #### Install Kafka and create a topic
-    To start using Materialize with Kafka, you need to create a Materialize source over a Kafka topic. If you already have Kafka installed and a topic created, you can skip this step.
+4. #### Install Apache Kafka and create a topic
+    To start using Materialize with Apache Kafka, you need to create a Materialize source over an Apache Kafka topic. If you already have Apache Kafka installed and a topic created, you can skip this step.
 
-    Otherwise, you can install Kafka on your client machine from the previous step and create a topic. You can find more information about how to do that [here](https://docs.aws.amazon.com/msk/latest/developerguide/create-topic.html).
+    Otherwise, you can install Apache Kafka on your client machine from the previous step and create a topic. You can find more information about how to do that [here](https://docs.aws.amazon.com/msk/latest/developerguide/create-topic.html).
 
 5. #### Create ACLs
     As `allow.everyone.if.no.acl.found` is set to `false`, you must create ACLs for the cluster and topics configured in the previous step to set appropriate access permissions. For more information, see the [Amazon MSK](https://docs.aws.amazon.com/msk/latest/developerguide/msk-acls.html) documentation.
@@ -156,12 +156,12 @@ The process to connect Materialize to Amazon MSK consists of the following steps
         WITH (SIZE = '3xsmall');
       ```
 
-    f. If the command executes without an error and outputs _CREATE SOURCE_, it means that you have successfully connected Materialize to your MSK cluster.
+    f. If the command executes without an error and outputs _CREATE SOURCE_, it means that you have successfully connected Materialize to your cluster.
 
-    **Note:** The example above walked through creating a source which is a way of connecting Materialize to an external data source. We created a connection to MSK using SASL authentication, using credentials securely stored as secrets in Materialize's secret management system. For input formats, we used `text`, however, Materialize supports various other options as well. For example, you can ingest Kafka messages formatted in [JSON, Avro and Protobuf](/sql/create-source/kafka/#supported-formats). You can find more details about the various different supported formats and possible configurations [here](/sql/create-source/kafka/).
+    **Note:** The example above walked through creating a source which is a way of connecting Materialize to an external data source. We created a connection to Amazon MSK using SASL authentication, using credentials securely stored as secrets in Materialize's secret management system. For input formats, we used `text`, however, Materialize supports various other options as well. For example, you can ingest messages formatted in [JSON, Avro and Protobuf](/sql/create-source/kafka/#supported-formats). You can find more details about the various different supported formats and possible configurations [here](/sql/create-source/kafka/).
 
 ## Related pages
 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
-- [`CREATE SOURCE`: Kafka](/sql/create-source/kafka/)
+- [`CREATE SOURCE`: Apache Kafka](/sql/create-source/kafka/)
