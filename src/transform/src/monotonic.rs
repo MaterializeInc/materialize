@@ -12,7 +12,7 @@ use mz_expr::visit::VisitChildren;
 use mz_expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::GlobalId;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 /// A struct that holds a recursive function that determines if a
 /// relation is monotonic, and applies any optimizations along the way.
@@ -41,8 +41,8 @@ impl MonotonicFlag {
     pub fn apply(
         &self,
         expr: &mut MirRelationExpr,
-        mon_ids: &HashSet<GlobalId>,
-        locals: &mut HashSet<LocalId>,
+        mon_ids: &BTreeSet<GlobalId>,
+        locals: &mut BTreeSet<LocalId>,
     ) -> Result<bool, crate::RecursionLimitError> {
         self.checked_recur(|_| {
             let is_monotonic = match expr {

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, BTreeSet};
 use std::ops::Range;
 
 use core::option::Option;
@@ -216,14 +216,14 @@ impl JoinInputMapper {
         column + self.prior_arities[index]
     }
 
-    /// Takes a HashSet of columns in the global context and splits it into
-    /// a `Vec` containing `self.total_inputs()` HashSets, each containing
+    /// Takes a sequence of columns in the global context and splits it into
+    /// a `Vec` containing `self.total_inputs()` `BTreeSet`s, each containing
     /// the localized columns that belong to the particular input.
-    pub fn split_column_set_by_input<'a, I>(&self, columns: I) -> Vec<HashSet<usize>>
+    pub fn split_column_set_by_input<'a, I>(&self, columns: I) -> Vec<BTreeSet<usize>>
     where
         I: Iterator<Item = &'a usize>,
     {
-        let mut new_columns = vec![HashSet::new(); self.total_inputs()];
+        let mut new_columns = vec![BTreeSet::new(); self.total_inputs()];
         for column in columns {
             let (new_col, input) = self.map_column_to_local(*column);
             new_columns[input].extend(std::iter::once(new_col));

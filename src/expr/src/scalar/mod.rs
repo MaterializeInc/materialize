@@ -11,6 +11,7 @@ use itertools::Itertools;
 use mz_repr::adt::date::DateError;
 use mz_repr::adt::timestamp::TimestampError;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::fmt;
 use std::mem;
@@ -1681,7 +1682,7 @@ impl MirScalarExpr {
     /* #endregion */
 
     /// Adds any columns that *must* be non-Null for `self` to be non-Null.
-    pub fn non_null_requirements(&self, columns: &mut HashSet<usize>) {
+    pub fn non_null_requirements(&self, columns: &mut BTreeSet<usize>) {
         match self {
             MirScalarExpr::Column(col) => {
                 columns.insert(*col);

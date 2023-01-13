@@ -9,7 +9,7 @@
 
 //! Transformation based on pushing demand information about columns toward sources.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::{
     AggregateExpr, AggregateFunc, Id, JoinInputMapper, MirRelationExpr, MirScalarExpr,
@@ -66,7 +66,7 @@ impl crate::Transform for Demand {
         let result = self.action(
             relation,
             (0..relation.arity()).collect(),
-            &mut HashMap::new(),
+            &mut BTreeMap::new(),
         );
         mz_repr::explain_new::trace_plan(&*relation);
         result
@@ -78,8 +78,8 @@ impl Demand {
     fn action(
         &self,
         relation: &mut MirRelationExpr,
-        mut columns: HashSet<usize>,
-        gets: &mut HashMap<Id, HashSet<usize>>,
+        mut columns: BTreeSet<usize>,
+        gets: &mut BTreeMap<Id, BTreeSet<usize>>,
     ) -> Result<(), crate::TransformError> {
         self.checked_recur(|_| {
             // A valid relation type is only needed for Maps, but we can't borrow
@@ -96,14 +96,16 @@ impl Demand {
                     Ok(())
                 }
                 MirRelationExpr::Get { id, .. } => {
-                    gets.entry(*id).or_insert_with(HashSet::new).extend(columns);
+                    gets.entry(*id)
+                        .or_insert_with(BTreeSet::new)
+                        .extend(columns);
                     Ok(())
                 }
                 MirRelationExpr::Let { id, value, body } => {
                     // Let harvests any requirements of get from its body,
                     // and pushes the union of the requirements at its value.
                     let id = Id::Local(*id);
-                    let prior = gets.insert(id, HashSet::new());
+                    let prior = gets.insert(id, BTreeSet::new());
                     self.action(body, columns, gets)?;
                     let needs = gets.remove(&id).unwrap();
                     if let Some(prior) = prior {
@@ -232,7 +234,7 @@ impl Demand {
                     monotonic: _,
                     expected_group_size: _,
                 } => {
-                    let mut new_columns = HashSet::new();
+                    let mut new_columns = BTreeSet::new();
                     // Group keys determine aggregation granularity and are
                     // each crucial in determining aggregates and even the
                     // multiplicities of other keys.

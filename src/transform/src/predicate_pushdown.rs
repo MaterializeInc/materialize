@@ -74,7 +74,7 @@
 //! assert_eq!(expected_expr, expr)
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{TransformArgs, TransformError};
 use itertools::Itertools;
@@ -118,7 +118,7 @@ impl crate::Transform for PredicatePushdown {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), TransformError> {
-        let mut empty = HashMap::new();
+        let mut empty = BTreeMap::new();
         let result = self.action(relation, &mut empty);
         mz_repr::explain_new::trace_plan(&*relation);
         result
@@ -139,7 +139,7 @@ impl PredicatePushdown {
     pub fn action(
         &self,
         relation: &mut MirRelationExpr,
-        get_predicates: &mut HashMap<Id, HashSet<MirScalarExpr>>,
+        get_predicates: &mut BTreeMap<Id, BTreeSet<MirScalarExpr>>,
     ) -> Result<(), TransformError> {
         self.checked_recur(|_| {
             // In the case of Filter or Get we have specific work to do;
@@ -428,7 +428,7 @@ impl PredicatePushdown {
                     // Purge all predicates associated with the id.
                     get_predicates
                         .entry(*id)
-                        .or_insert_with(HashSet::new)
+                        .or_insert_with(BTreeSet::new)
                         .clear();
 
                     Ok(())

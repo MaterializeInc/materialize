@@ -22,7 +22,7 @@
 //! This analysis relies on a careful understanding of `ScalarExpr` and the
 //! semantics of various functions, *some of which may be non-Null even with
 //! Null arguments*.
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::TransformArgs;
 use itertools::{Either, Itertools};
@@ -61,7 +61,7 @@ impl crate::Transform for NonNullRequirements {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let result = self.action(relation, HashSet::new(), &mut HashMap::new());
+        let result = self.action(relation, BTreeSet::new(), &mut BTreeMap::new());
         mz_repr::explain_new::trace_plan(&*relation);
         result
     }
@@ -72,8 +72,8 @@ impl NonNullRequirements {
     pub fn action(
         &self,
         relation: &mut MirRelationExpr,
-        mut columns: HashSet<usize>,
-        gets: &mut HashMap<Id, Vec<HashSet<usize>>>,
+        mut columns: BTreeSet<usize>,
+        gets: &mut BTreeMap<Id, Vec<BTreeSet<usize>>>,
     ) -> Result<(), crate::TransformError> {
         self.checked_recur(|_| {
             match relation {
@@ -218,7 +218,7 @@ impl NonNullRequirements {
                     monotonic: _,
                     expected_group_size: _,
                 } => {
-                    let mut new_columns = HashSet::new();
+                    let mut new_columns = BTreeSet::new();
                     let (group_key_columns, aggr_columns): (Vec<usize>, Vec<usize>) =
                         columns.iter().partition(|c| **c < group_key.len());
                     for column in group_key_columns {
@@ -229,9 +229,9 @@ impl NonNullRequirements {
                         let (
                             mut inferred_nonnull_constraints,
                             mut ignored_nulls_by_remaining_aggregates,
-                        ): (Vec<HashSet<usize>>, Vec<HashSet<usize>>) =
+                        ): (Vec<BTreeSet<usize>>, Vec<BTreeSet<usize>>) =
                             aggregates.iter().enumerate().partition_map(|(pos, aggr)| {
-                                let mut ignores_nulls_on_columns = HashSet::new();
+                                let mut ignores_nulls_on_columns = BTreeSet::new();
                                 if let mz_repr::Datum::Null = aggr.func.identity_datum() {
                                     aggr.expr
                                         .non_null_requirements(&mut ignores_nulls_on_columns);
@@ -252,7 +252,7 @@ impl NonNullRequirements {
                         //  We don't want to push down a !isnull(#2) because deleting a row like (1,1, null) would
                         //  make the MAX wrong.
                         // - SUM(#0 + #2), MAX(#0 + #1), non-null requirements only on the MAX => implies !isnull(#0).
-                        let mut pushable_nonnull_constraints: Option<HashSet<usize>> = None;
+                        let mut pushable_nonnull_constraints: Option<BTreeSet<usize>> = None;
                         if !inferred_nonnull_constraints.is_empty() {
                             for column_set in inferred_nonnull_constraints
                                 .drain(..)

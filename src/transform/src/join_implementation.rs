@@ -325,7 +325,7 @@ impl JoinImplementation {
 }
 
 mod index_map {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     use mz_expr::{Id, LocalId, MirScalarExpr};
 
@@ -335,7 +335,7 @@ mod index_map {
     /// a `MirRelationExpr`.
     #[derive(Debug)]
     pub struct IndexMap<'a> {
-        local: HashMap<LocalId, Vec<Vec<MirScalarExpr>>>,
+        local: BTreeMap<LocalId, Vec<Vec<MirScalarExpr>>>,
         global: &'a dyn IndexOracle,
     }
 
@@ -344,7 +344,7 @@ mod index_map {
         /// indexes.
         pub fn new(global: &dyn IndexOracle) -> IndexMap {
             IndexMap {
-                local: HashMap::new(),
+                local: BTreeMap::new(),
                 global,
             }
         }
