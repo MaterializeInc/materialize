@@ -619,7 +619,7 @@ pub fn plan_mutation_query_inner(
                     scope: &scope,
                     relation_type: &relation_type,
                     allow_aggregates: false,
-                    allow_subqueries: false,
+                    allow_subqueries: true,
                     allow_windows: false,
                 };
                 let expr = plan_expr(ecx, &value)?.cast_to(

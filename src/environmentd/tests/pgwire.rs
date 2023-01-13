@@ -111,7 +111,9 @@ fn test_bind_params() {
 
     match client.query("SELECT ROW(1, 2) = $1", &[&"(1,2)"]) {
         Ok(_) => panic!("query with invalid parameters executed successfully"),
-        Err(err) => assert!(err.to_string().contains("no overload")),
+        Err(err) => assert!(err
+            .to_string()
+            .contains("No operator matches the given name and argument types")),
     }
 
     assert!(client
@@ -168,6 +170,13 @@ fn test_bind_params() {
             .unwrap();
         let val: i32 = client.query_one("SELECT * FROM t", &[]).unwrap().get(0);
         assert_eq!(val, 42);
+    }
+
+    // Test that `UPDATE` permits parameters
+    {
+        client.query("UPDATE t SET a = $1", &[&43_i32]).unwrap();
+        let val: i32 = client.query_one("SELECT * FROM t", &[]).unwrap().get(0);
+        assert_eq!(val, 43);
     }
 }
 
