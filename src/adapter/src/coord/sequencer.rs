@@ -2691,9 +2691,7 @@ impl Coordinator {
                 });
 
                 // run optimization pipeline
-                let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
-                    qgm_optimizations: session.vars().qgm_optimizations(),
-                })?;
+                let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {})?;
 
                 self.validate_timeline_context(decorrelated_plan.depends_on())?;
 
@@ -2904,9 +2902,7 @@ impl Coordinator {
             raw_plan, format, ..
         } = plan;
 
-        let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
-            qgm_optimizations: session.vars().qgm_optimizations(),
-        })?;
+        let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {})?;
         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
         let source_ids = optimized_plan.depends_on();
         let compute_instance = self.catalog.active_compute_instance(session)?;
