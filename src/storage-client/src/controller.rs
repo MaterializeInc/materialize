@@ -57,7 +57,7 @@ use crate::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
     SourceStatisticsUpdate, StorageCommand, StorageResponse, Update,
 };
-use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
+use crate::controller::hosts::{StorageHosts, StorageHostsConfig, UnregisteredClient};
 use crate::healthcheck;
 use crate::types::errors::DataflowError;
 use crate::types::hosts::StorageHostConfig;
@@ -170,6 +170,13 @@ pub struct ExportDescription<T = mz_repr::Timestamp> {
 pub struct CreateExportToken {
     id: GlobalId,
     from_id: GlobalId,
+}
+
+/// Final actions to be performed serially after the final amount of concurrent work
+/// is done in `create_collections`.
+enum CreateCollectionsFinalizer<T> {
+    CreateSources(UnregisteredClient, Vec<CreateSourceCommand<T>>),
+    RegisterIntrospectionToken(GlobalId, Box<dyn Any + Send + Sync>),
 }
 
 #[async_trait(?Send)]
@@ -845,7 +852,7 @@ where
         // Install collection state for each bound description.
         // Note that this method implementation attempts to do AS MUCH work
         // concurrently as possible. There are inline comments explaining the motivation
-        // behind each section
+        // behind each section.
 
         // Perform all stash writes in a single transaction, to minimize transaction overhead and
         // the time spent waiting for stash.
@@ -992,6 +999,11 @@ where
             self.state.persist_write_handles.register(id, write);
             self.state.persist_read_handles.register(id, since_handle);
 
+            // `self.collection(id)` and `self.collection_mut(id)` are, after this point,
+            // available for use. Certain types of collections (like multi-output
+            // ingestions), require that the sub-collections are registered here _before_
+            // using them them while provisioning hosts, which is why this serial loop
+            // happens in between 2 concurrent processing sections.
             self.state.collections.insert(id, collection_state);
 
             to_migrate.push((id, description));
@@ -1043,125 +1055,182 @@ where
             .collect();
         self.migrate_collection_metadata(need_remap_migration).await;
 
+        // Pre-register some state before we build up ingestions and introspection sources.
+        for (id, description) in to_create.iter() {
+            if let DataSource::Introspection(i) = &description.data_source {
+                let prev = self.state.introspection_ids.insert(*i, *id);
+                assert!(
+                    prev.is_none(),
+                    "cannot have multiple IDs for introspection type"
+                );
+            }
+        }
+
         // TODO(guswynn): perform the io in this final section concurrently.
-        for (id, description) in to_create {
-            match description.data_source {
-                DataSource::Ingestion(ingestion) => {
-                    // Each ingestion is augmented with the collection metadata.
-                    let mut source_imports = BTreeMap::new();
-                    for (id, _) in ingestion.source_imports {
-                        let metadata = self.collection(id)?.collection_metadata.clone();
-                        source_imports.insert(id, metadata);
-                    }
+        // Reborrow `&mut self` immutably, same reasoning as above.
+        let this = &*self;
+        // Provision storage hosts and fill introspection collections with initialization data,
+        // concurrently, producing a list of a final changes the controller needs to make serially.
+        let finalizers: Vec<_> = futures::stream::iter(to_create)
+            .map(|(id, description)| async move {
+                match description.data_source {
+                    DataSource::Ingestion(ingestion) => {
+                        // Each ingestion is augmented with the collection metadata.
+                        let mut source_imports = BTreeMap::new();
+                        for (id, _) in ingestion.source_imports {
+                            let metadata = this.collection(id)?.collection_metadata.clone();
+                            source_imports.insert(id, metadata);
+                        }
 
-                    // The ingestion metadata is simply the collection metadata of the collection with
-                    // the associated ingestion
-                    let ingestion_metadata = self.collection(id)?.collection_metadata.clone();
+                        // The ingestion metadata is simply the collection metadata of the collection with
+                        // the associated ingestion
+                        let ingestion_metadata = this.collection(id)?.collection_metadata.clone();
 
-                    let mut source_exports = BTreeMap::new();
-                    for (id, export) in ingestion.source_exports {
-                        let storage_metadata = self.collection(id)?.collection_metadata.clone();
-                        source_exports.insert(
+                        let mut source_exports = BTreeMap::new();
+                        for (id, export) in ingestion.source_exports {
+                            let storage_metadata = this.collection(id)?.collection_metadata.clone();
+                            source_exports.insert(
+                                id,
+                                SourceExport {
+                                    storage_metadata,
+                                    output_index: export.output_index,
+                                },
+                            );
+                        }
+
+                        let desc = IngestionDescription {
+                            source_imports,
+                            source_exports,
+                            ingestion_metadata,
+                            // The rest of the fields are identical
+                            desc: ingestion.desc,
+                            host_config: ingestion.host_config,
+                        };
+                        let mut persist_clients = this.persist.lock().await;
+                        let mut state = <_ as ResumptionFrontierCalculator<T>>::initialize_state(
+                            &desc,
+                            &mut persist_clients,
+                        )
+                        .await;
+                        let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
+
+                        let unregistered_client = this
+                            .hosts
+                            .provision_host(id, desc.host_config.clone())
+                            .await?;
+                        let augmented_ingestion = CreateSourceCommand {
                             id,
-                            SourceExport {
-                                storage_metadata,
-                                output_index: export.output_index,
-                            },
-                        );
+                            description: desc,
+                            resume_upper,
+                        };
+
+                        Ok(Some(CreateCollectionsFinalizer::CreateSources(
+                            unregistered_client,
+                            vec![augmented_ingestion],
+                        )))
                     }
+                    DataSource::Introspection(i) => {
+                        this.state.collection_manager.register_collection(id).await;
 
-                    let desc = IngestionDescription {
-                        source_imports,
-                        source_exports,
-                        ingestion_metadata,
-                        // The rest of the fields are identical
-                        desc: ingestion.desc,
-                        host_config: ingestion.host_config,
-                    };
-                    let mut persist_clients = self.persist.lock().await;
-                    let mut state = desc.initialize_state(&mut persist_clients).await;
-                    let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
+                        match i {
+                            IntrospectionType::ShardMapping => {
+                                this.initialize_shard_mapping().await;
+                                Ok::<_, anyhow::Error>(None)
+                            }
+                            IntrospectionType::StorageHostMetrics => {
+                                // This has some subtlety, points from guswynn:
+                                //
+                                //   - This takes the collection to empty, at roughly
+                                //   now(), but doesn't delete the old data (that we
+                                //   definitely want to be able to see!
+                                //
+                                //   - This uses the CollectionManager once, which
+                                //   requires that this collection is registered to
+                                //   PersistWriteHandles, which it is, above.
+                                //
+                                //   - The CollectionManager manages writes and
+                                //   bumping the upper, the metric task simply
+                                //   produces the values that are send to the
+                                //   manager.
 
+                                // The metrics scraper assumes that the collection
+                                // sums up to empty when starting up. When needed,
+                                // we can change the scraper to reconcile its
+                                // internal state with the current state of the
+                                // output collection.
+                                this.reconcile_managed_collection(id, vec![]).await;
+
+                                let metrics_fetcher = this.hosts.metrics_fetcher();
+                                let scraper_token = metrics_scraper::spawn_metrics_scraper(
+                                    id.clone(),
+                                    metrics_fetcher,
+                                    // This does a shallow copy.
+                                    this.state.collection_manager.clone(),
+                                );
+
+                                Ok(Some(
+                                    CreateCollectionsFinalizer::RegisterIntrospectionToken(
+                                        id,
+                                        scraper_token,
+                                    ),
+                                ))
+                            }
+                            IntrospectionType::StorageSourceStatistics => {
+                                // Set the collection to empty.
+                                this.reconcile_managed_collection(id, vec![]).await;
+
+                                let scraper_token = statistics::spawn_statistics_scraper(
+                                    id.clone(),
+                                    // These do a shallow copy.
+                                    this.state.collection_manager.clone(),
+                                    Arc::clone(&this.state.source_statistics),
+                                );
+
+                                Ok(Some(
+                                    CreateCollectionsFinalizer::RegisterIntrospectionToken(
+                                        id,
+                                        scraper_token,
+                                    ),
+                                ))
+                            }
+                            IntrospectionType::SourceStatusHistory
+                            | IntrospectionType::SinkStatusHistory => {
+                                // nothing to do: these collections are append only
+                                Ok(None)
+                            }
+                        }
+                    }
+                    DataSource::Other => Ok(None),
+                }
+            })
+            .buffer_unordered(50)
+            // See the docs on `try_collect` above for more info before attempting to change
+            // this!
+            .try_collect()
+            .await?;
+
+        for finalizer in finalizers {
+            // We could do some complex stream combinator thing above with
+            // `futures::stream::StreamExt::flat_map` to avoid the `None` branch, but this keeps the `.try_collect` above
+            // simpler, for a tiny cost of a large `finalizers` vec.
+
+            match finalizer {
+                Some(CreateCollectionsFinalizer::RegisterIntrospectionToken(id, token)) => {
+                    // Make sure this is dropped when the controller is
+                    // dropped, so that the internal task will stop.
+                    self.state.introspection_tokens.insert(id, token);
+                }
+                Some(CreateCollectionsFinalizer::CreateSources(
+                    unregistered_client,
+                    ingestions,
+                )) => {
                     // Provision a storage host for the ingestion.
-                    let client = self.hosts.provision(id, desc.host_config.clone()).await?;
-                    let augmented_ingestion = CreateSourceCommand {
-                        id,
-                        description: desc,
-                        resume_upper,
-                    };
-
-                    client.send(StorageCommand::CreateSources(vec![augmented_ingestion]));
+                    let client = self.hosts.register_client(unregistered_client)?;
+                    // We could send these concurrently, but its just a send to unbounded channels,
+                    // so not worth it
+                    client.send(StorageCommand::CreateSources(ingestions));
                 }
-                DataSource::Introspection(i) => {
-                    let prev = self.state.introspection_ids.insert(i, id);
-                    assert!(
-                        prev.is_none(),
-                        "cannot have multiple IDs for introspection type"
-                    );
-
-                    self.state.collection_manager.register_collection(id).await;
-
-                    match i {
-                        IntrospectionType::ShardMapping => {
-                            self.initialize_shard_mapping().await;
-                        }
-                        IntrospectionType::StorageHostMetrics => {
-                            // This has some subtlety, points from guswynn:
-                            //
-                            //   - This takes the collection to empty, at roughly
-                            //   now(), but doesn't delete the old data (that we
-                            //   definitely want to be able to see!
-                            //
-                            //   - This uses the CollectionManager once, which
-                            //   requires that this collection is registered to
-                            //   PersistWriteHandles, which it is, above.
-                            //
-                            //   - The CollectionManager manages writes and
-                            //   bumping the upper, the metric task simply
-                            //   produces the values that are send to the
-                            //   manager.
-
-                            // The metrics scraper assumes that the collection
-                            // sums up to empty when starting up. When needed,
-                            // we can change the scraper to reconcile its
-                            // internal state with the current state of the
-                            // output collection.
-                            self.reconcile_managed_collection(id, vec![]).await;
-
-                            let metrics_fetcher = self.hosts.metrics_fetcher();
-                            let scraper_token = metrics_scraper::spawn_metrics_scraper(
-                                id.clone(),
-                                metrics_fetcher,
-                                // This does a shallow copy.
-                                self.state.collection_manager.clone(),
-                            );
-
-                            // Make sure this is dropped when the controller is
-                            // dropped, so that the internal task will stop.
-                            self.state.introspection_tokens.insert(id, scraper_token);
-                        }
-                        IntrospectionType::StorageSourceStatistics => {
-                            // Set the collection to empty.
-                            self.reconcile_managed_collection(id, vec![]).await;
-
-                            let scraper_token = statistics::spawn_statistics_scraper(
-                                id.clone(),
-                                // These do a shallow copy.
-                                self.state.collection_manager.clone(),
-                                Arc::clone(&self.state.source_statistics),
-                            );
-
-                            // Make sure this is dropped when the controller is
-                            // dropped, so that the internal task will stop.
-                            self.state.introspection_tokens.insert(id, scraper_token);
-                        }
-                        IntrospectionType::SourceStatusHistory
-                        | IntrospectionType::SinkStatusHistory => {
-                            // nothing to do: these collections are append only
-                        }
-                    }
-                }
-                DataSource::Other => {}
+                None => {}
             }
         }
 
@@ -1173,7 +1242,9 @@ where
         collections: Vec<(GlobalId, StorageHostConfig)>,
     ) -> Result<(), StorageError> {
         for (id, config) in collections {
-            let _ = self.hosts.provision(id, config).await?;
+            let _ = self
+                .hosts
+                .register_client(self.hosts.provision_host(id, config).await?)?;
         }
         Ok(())
     }
@@ -1301,7 +1372,11 @@ where
             };
 
             // Provision a storage host for the ingestion.
-            let client = self.hosts.provision(id, description.host_config).await?;
+            let client = self.hosts.register_client(
+                self.hosts
+                    .provision_host(id, description.host_config)
+                    .await?,
+            )?;
 
             client.send(StorageCommand::CreateSinks(vec![cmd]));
         }
@@ -1825,7 +1900,7 @@ where
     /// `GlobalId` in `self.state.introspection_ids`.
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
-    async fn initialize_shard_mapping(&mut self) {
+    async fn initialize_shard_mapping(&self) {
         let id = self.state.introspection_ids[&IntrospectionType::ShardMapping];
 
         let mut row_buf = Row::default();

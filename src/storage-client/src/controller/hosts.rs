@@ -46,6 +46,10 @@ use crate::types::parameters::StorageParameters;
 /// The network address of a storage host.
 pub type StorageHostAddr = String;
 
+/// Represents a storage host that cannot yet be sent commands until it
+/// is registered in the `StorageHosts` with `register_client`.
+pub struct UnregisteredClient(GlobalId, String);
+
 /// Configuration for [`StorageHosts`].
 pub struct StorageHostsConfig {
     /// The build information for this process.
@@ -146,7 +150,11 @@ where
         MetricsFetcher::new(Arc::clone(&self.orchestrator), Arc::clone(&self.objects))
     }
 
-    /// Provisions a storage host for the storage object with the specified ID.
+    /// Build an unregistered client. This client can be passed to `register_client` to
+    /// build a usable client object. These functions are split so that calls to this function
+    /// can be run concurrently.
+    ///
+    /// This function provisions a storage host for the storage object with the specified ID.
     /// If the storage host is managed, this will ensure that the backing orchestrator
     /// allocates resources, either by creating or updating the existing service.
     /// (For 'remote' clusterd instances, the user is required to independently make
@@ -155,15 +163,11 @@ where
     ///
     /// At present, the policy for storage host assignment creates a new storage
     /// host for each storage object. This policy is subject to change.
-    ///
-    /// Returns a client to the provisioned host. The client may be
-    /// retrieved in the future via the [`client`](StorageHosts::client)
-    /// method.
-    pub async fn provision(
-        &mut self,
+    pub async fn provision_host(
+        &self,
         id: GlobalId,
         host_config: StorageHostConfig,
-    ) -> Result<&mut RehydratingStorageClient<T>, anyhow::Error>
+    ) -> Result<UnregisteredClient, anyhow::Error>
     where
         StorageCommand<T>: RustType<ProtoStorageCommand>,
         StorageResponse<T>: RustType<ProtoStorageResponse>,
@@ -177,6 +181,24 @@ where
                 self.ensure_storage_host(id, allocation).await?
             }
         };
+        Ok(UnregisteredClient(id, host_addr))
+    }
+
+    /// Registers a client to a previously provisioned hosts (using `provision_host`).
+    ///
+    /// Returns a client to the provisioned host. The client may be
+    /// retrieved in the future via the [`client`](StorageHosts::client)
+    /// method.
+    pub fn register_client(
+        &mut self,
+        unregistered_client: UnregisteredClient,
+    ) -> Result<&mut RehydratingStorageClient<T>, anyhow::Error>
+    where
+        StorageCommand<T>: RustType<ProtoStorageCommand>,
+        StorageResponse<T>: RustType<ProtoStorageResponse>,
+    {
+        let id = unregistered_client.0;
+        let host_addr = unregistered_client.1;
 
         if let Some(previous_address) = {
             let mut objects = self.objects.lock().expect("lock poisoned");
