@@ -74,7 +74,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use proc_macro2::TokenTree;
 use serde::{Deserialize, Serialize};
@@ -167,8 +167,8 @@ pub fn json_to_spec(rel_json: &str, catalog: &TestCatalog) -> (String, Vec<Strin
 /// later.
 #[derive(Debug, Default)]
 pub struct TestCatalog {
-    objects: HashMap<String, (GlobalId, RelationType)>,
-    names: HashMap<GlobalId, String>,
+    objects: BTreeMap<String, (GlobalId, RelationType)>,
+    names: BTreeMap<GlobalId, String>,
 }
 
 /// Contains the arguments for a command for [TestCatalog].
@@ -776,8 +776,8 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
 /// in the body of the `let`.
 #[derive(Debug, Default)]
 struct Scope {
-    objects: HashMap<String, (Id, RelationType)>,
-    names: HashMap<Id, String>,
+    objects: BTreeMap<String, (Id, RelationType)>,
+    names: BTreeMap<Id, String>,
 }
 
 impl Scope {
