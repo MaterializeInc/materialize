@@ -33,7 +33,7 @@ anyhow = { version = "1.0.66", features = ["backtrace"] }
 async-stream = "0.3.3"
 async-trait = "0.1.59"
 bytes = "1.3.0"
-clap = { version = "3.2.20", features = [ "derive" ] }
+clap = { version = "4.1.0", features = [ "derive" ] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.25"
 futures-util = "0.3"
@@ -63,7 +63,7 @@ tokio-console = ["mz-ore/tokio-console"]
 [dev-dependencies]
 async-trait = "0.1.59"
 axum = { version = "0.6.1" }
-clap = { version = "3.2.20", features = ["derive", "env"] }
+clap = { version = "4.1.0", features = ["derive", "env"] }
 criterion = { version = "0.4.0", features = ["html_reports"] }
 datadriven = { version = "0.6.0", features = ["async"] }
 futures-task = "0.3.21"
