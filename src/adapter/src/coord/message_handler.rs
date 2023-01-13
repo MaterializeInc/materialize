@@ -10,6 +10,7 @@
 //! Logic for processing [`Coordinator`] messages. The [`Coordinator`] receives
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
+use anyhow::anyhow;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -17,12 +18,11 @@ use chrono::DurationRound;
 use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Level};
 
-use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId};
+use mz_compute_client::controller::ComputeInstanceEvent;
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_persist_client::ShardId;
-use mz_repr::GlobalId;
 use mz_sql::ast::Statement;
 use mz_sql::plan::{Plan, SendDiffsPlan};
 use mz_storage_client::controller::CollectionMetadata;
@@ -30,15 +30,13 @@ use mz_storage_client::controller::CollectionMetadata;
 use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
-use crate::util::ResultExt;
-use crate::{catalog, AdapterError, AdapterNotice};
-
-use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
     Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, RealTimeRecencyContext,
     SendDiffs, SinkConnectionReady,
 };
+use crate::util::ResultExt;
+use crate::{catalog, AdapterError, AdapterNotice};
 
 impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
@@ -91,17 +89,11 @@ impl Coordinator {
             Message::RealTimeRecencyTimestamp {
                 conn_id,
                 transient_revision,
-                compute_instance,
-                id_bundle,
-                object_names,
                 real_time_recency_ts,
             } => {
                 self.message_real_time_recency_timestamp(
                     conn_id,
                     transient_revision,
-                    compute_instance,
-                    id_bundle,
-                    object_names,
                     real_time_recency_ts,
                 )
                 .await;
@@ -703,9 +695,6 @@ impl Coordinator {
         &mut self,
         conn_id: ConnectionId,
         transient_revision: u64,
-        (compute_instance_id, compute_instance_name): (ComputeInstanceId, String),
-        id_bundle: CollectionIdBundle,
-        mut object_names: HashMap<GlobalId, String>,
         real_time_recency_ts: mz_repr::Timestamp,
     ) {
         let real_time_recency_context =
@@ -715,35 +704,11 @@ impl Coordinator {
                 None => return,
             };
 
-        // Re-validate that the involved objects still exist.
+        // Re-validate that the catalog hasn't changed.
         if transient_revision != self.catalog.transient_revision() {
-            if self
-                .catalog
-                .try_get_compute_instance(compute_instance_id)
-                .is_none()
-            {
-                let (tx, session) = real_time_recency_context.take_tx_and_session();
-                return tx.send(
-                    Err(AdapterError::UnknownCluster {
-                        cluster_name: compute_instance_name,
-                    }),
-                    session,
-                );
-            }
-            if let Some(id) = id_bundle
-                .iter()
-                .find(|id| self.catalog.try_get_entry(id).is_none())
-            {
-                let (tx, session) = real_time_recency_context.take_tx_and_session();
-                return tx.send(
-                    Err(AdapterError::UnknownRelation {
-                        relation_name: object_names
-                            .remove(&id)
-                            .expect("object names is populated by id_bundle"),
-                    }),
-                    session,
-                );
-            }
+            // TODO(jkosh44) It would be preferable to re-validate the query instead of blindly failing.
+            let (tx, session) = real_time_recency_context.take_tx_and_session();
+            return tx.send(Err(AdapterError::Unstructured(anyhow!("Catalog contents have changed mid-query due to concurrent DDL, please re-try query"))), session);
         }
 
         match real_time_recency_context {
@@ -751,12 +716,14 @@ impl Coordinator {
                 tx,
                 session,
                 format,
+                compute_instance,
                 optimized_plan,
+                id_bundle,
             } => tx.send(
                 self.sequence_explain_timestamp_finish(
                     &session,
                     format,
-                    compute_instance_id,
+                    compute_instance,
                     optimized_plan,
                     id_bundle,
                     Some(real_time_recency_ts),
@@ -769,12 +736,14 @@ impl Coordinator {
                 copy_to,
                 source,
                 mut session,
+                compute_instance,
                 when,
                 target_replica,
                 view_id,
                 index_id,
                 timeline_context,
                 source_ids,
+                id_bundle,
                 in_immediate_multi_stmt_txn,
             } => {
                 tx.send(
@@ -783,7 +752,7 @@ impl Coordinator {
                         copy_to,
                         source,
                         &mut session,
-                        compute_instance_id,
+                        compute_instance,
                         when,
                         target_replica,
                         view_id,

@@ -2048,8 +2048,7 @@ impl Coordinator {
             view_id,
             index_id,
             source_ids,
-            compute_instance_id,
-            compute_instance_name,
+            compute_instance,
             id_bundle,
             when,
             target_replica,
@@ -2061,11 +2060,6 @@ impl Coordinator {
             Some(fut) => {
                 let transient_revision = self.catalog.transient_revision();
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let compute_instance = (compute_instance_id, compute_instance_name);
-                let object_names: HashMap<_, _> = id_bundle
-                    .iter()
-                    .map(|id| (id, self.catalog.get_entry(&id).name().item.clone()))
-                    .collect();
                 let conn_id = session.conn_id();
                 self.pending_real_time_recency_timestamp.insert(
                     conn_id,
@@ -2075,12 +2069,14 @@ impl Coordinator {
                         copy_to,
                         source,
                         session,
+                        compute_instance,
                         when,
                         target_replica,
                         view_id,
                         index_id,
                         timeline_context,
                         source_ids,
+                        id_bundle,
                         in_immediate_multi_stmt_txn,
                     },
                 );
@@ -2090,9 +2086,6 @@ impl Coordinator {
                     let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
                         conn_id,
                         transient_revision,
-                        compute_instance,
-                        id_bundle,
-                        object_names,
                         real_time_recency_ts,
                     });
                     if let Err(e) = result {
@@ -2107,7 +2100,7 @@ impl Coordinator {
                         copy_to,
                         source,
                         &mut session,
-                        compute_instance_id,
+                        compute_instance,
                         when,
                         target_replica,
                         view_id,
@@ -2138,7 +2131,6 @@ impl Coordinator {
             GlobalId,
             BTreeSet<GlobalId>,
             ComputeInstanceId,
-            String,
             CollectionIdBundle,
             QueryWhen,
             Option<ReplicaId>,
@@ -2214,7 +2206,6 @@ impl Coordinator {
             index_id,
             source_ids,
             compute_instance.id(),
-            compute_instance.name().to_string(),
             id_bundle,
             when,
             target_replica,
@@ -2850,14 +2841,7 @@ impl Coordinator {
         session: Session,
         plan: ExplainPlan,
     ) {
-        let (
-            format,
-            source_ids,
-            optimized_plan,
-            compute_instance_id,
-            compute_instance_name,
-            id_bundle,
-        ) = return_if_err!(
+        let (format, source_ids, optimized_plan, compute_instance, id_bundle) = return_if_err!(
             self.sequence_explain_timestamp_begin_inner(&session, plan),
             tx,
             session
@@ -2866,11 +2850,6 @@ impl Coordinator {
             Some(fut) => {
                 let transient_revision = self.catalog.transient_revision();
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let compute_instance = (compute_instance_id, compute_instance_name);
-                let object_names: HashMap<_, _> = id_bundle
-                    .iter()
-                    .map(|id| (id, self.catalog.get_entry(&id).name().item.clone()))
-                    .collect();
                 let conn_id = session.conn_id();
                 self.pending_real_time_recency_timestamp.insert(
                     conn_id,
@@ -2878,7 +2857,9 @@ impl Coordinator {
                         tx,
                         session,
                         format,
+                        compute_instance,
                         optimized_plan,
+                        id_bundle,
                     },
                 );
                 task::spawn(|| "real_time_recency_explain_timestamp", async move {
@@ -2887,9 +2868,6 @@ impl Coordinator {
                     let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
                         conn_id,
                         transient_revision,
-                        compute_instance,
-                        id_bundle,
-                        object_names,
                         real_time_recency_ts,
                     });
                     if let Err(e) = result {
@@ -2901,7 +2879,7 @@ impl Coordinator {
                 self.sequence_explain_timestamp_finish(
                     &session,
                     format,
-                    compute_instance_id,
+                    compute_instance,
                     optimized_plan,
                     id_bundle,
                     None,
@@ -2921,7 +2899,6 @@ impl Coordinator {
             BTreeSet<GlobalId>,
             OptimizedMirRelationExpr,
             ComputeInstanceId,
-            String,
             CollectionIdBundle,
         ),
         AdapterError,
@@ -2951,7 +2928,6 @@ impl Coordinator {
             source_ids,
             optimized_plan,
             compute_instance.id(),
-            compute_instance.name.to_string(),
             id_bundle,
         ))
     }

@@ -204,9 +204,6 @@ pub enum Message<T = mz_repr::Timestamp> {
     RealTimeRecencyTimestamp {
         conn_id: ConnectionId,
         transient_revision: u64,
-        compute_instance: (ComputeInstanceId, String),
-        id_bundle: CollectionIdBundle,
-        object_names: HashMap<GlobalId, String>,
         real_time_recency_ts: Timestamp,
     },
 }
@@ -259,7 +256,9 @@ pub enum RealTimeRecencyContext {
         tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
         format: ExplainFormat,
+        compute_instance: ComputeInstanceId,
         optimized_plan: OptimizedMirRelationExpr,
+        id_bundle: CollectionIdBundle,
     },
     Peek {
         tx: ClientTransmitter<ExecuteResponse>,
@@ -267,12 +266,14 @@ pub enum RealTimeRecencyContext {
         copy_to: Option<CopyFormat>,
         source: MirRelationExpr,
         session: Session,
+        compute_instance: ComputeInstanceId,
         when: QueryWhen,
         target_replica: Option<ReplicaId>,
         view_id: GlobalId,
         index_id: GlobalId,
         timeline_context: TimelineContext,
         source_ids: BTreeSet<GlobalId>,
+        id_bundle: CollectionIdBundle,
         in_immediate_multi_stmt_txn: bool,
     },
 }
