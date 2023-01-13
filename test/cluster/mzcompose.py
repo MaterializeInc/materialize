@@ -551,8 +551,8 @@ def workflow_test_remote_storage(c: Composition) -> None:
         Materialized(external_cockroach=True),
     ):
         dependencies = [
-            "materialized",
             "cockroach",
+            "materialized",
             "storage",
             "zookeeper",
             "kafka",
