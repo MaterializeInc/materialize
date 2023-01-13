@@ -173,7 +173,7 @@ pub enum AdapterError {
     },
     /// The named object does not exist.
     UnknownRelation {
-        object_name: String,
+        relation_name: String,
     },
     /// A generic error occurred.
     //
@@ -490,9 +490,9 @@ impl fmt::Display for AdapterError {
             AdapterError::UnknownCluster { cluster_name } => {
                 write!(f, "cluster '{cluster_name}' does not exist")
             }
-            AdapterError::UnknownRelation {
-                object_name: relation_name,
-            } => write!(f, "relation '{relation_name}' does not exist"),
+            AdapterError::UnknownRelation { relation_name } => {
+                write!(f, "relation '{relation_name}' does not exist")
+            }
             AdapterError::UnstableDependency { object_type, .. } => {
                 write!(f, "cannot create {object_type} with unstable dependencies")
             }

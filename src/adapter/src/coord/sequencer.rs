@@ -2123,9 +2123,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.pending_real_time_recency_timestamp.insert(
                     conn_id,
                     RealTimeRecencyContext::Peek {
-                        transient_revision,
-                        compute_instance,
-                        object_names,
                         tx,
                         finishing,
                         copy_to,
@@ -2137,7 +2134,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         index_id,
                         timeline_context,
                         source_ids,
-                        id_bundle,
                         in_immediate_multi_stmt_txn,
                     },
                 );
@@ -2146,6 +2142,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
                     let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
                         conn_id,
+                        transient_revision,
+                        compute_instance,
+                        id_bundle,
+                        object_names,
                         real_time_recency_ts,
                     });
                     if let Err(e) = result {
@@ -2160,6 +2160,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         copy_to,
                         source,
                         &mut session,
+                        compute_instance.id(),
                         when,
                         target_replica,
                         view_id,
@@ -2184,6 +2185,7 @@ impl<S: Append + 'static> Coordinator<S> {
         copy_to: Option<CopyFormat>,
         source: MirRelationExpr,
         session: &mut Session,
+        compute_instance: ComputeInstanceId,
         when: QueryWhen,
         target_replica: Option<ReplicaId>,
         view_id: GlobalId,
@@ -2194,7 +2196,6 @@ impl<S: Append + 'static> Coordinator<S> {
         in_immediate_multi_stmt_txn: bool,
         real_time_recency_ts: Option<Timestamp>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let compute_instance = self.catalog.active_compute_instance(session)?;
         let mut peek_plan = self.plan_peek(
             source,
             session,
@@ -2208,8 +2209,6 @@ impl<S: Append + 'static> Coordinator<S> {
             in_immediate_multi_stmt_txn,
             real_time_recency_ts,
         )?;
-
-        let compute_instance = compute_instance.id;
 
         if let Some(id_bundle) = peek_plan.read_holds.take() {
             if let TimestampContext::TimelineTimestamp(_, timestamp) = peek_plan.timestamp_context {
@@ -2256,7 +2255,7 @@ impl<S: Append + 'static> Coordinator<S> {
         source: MirRelationExpr,
         session: &Session,
         when: &QueryWhen,
-        compute_instance: &ComputeInstance,
+        compute_instance: ComputeInstanceId,
         view_id: GlobalId,
         index_id: GlobalId,
         timeline_context: TimelineContext,
@@ -2266,7 +2265,6 @@ impl<S: Append + 'static> Coordinator<S> {
         real_time_recency_ts: Option<Timestamp>,
     ) -> Result<PlannedPeek, AdapterError> {
         let mut read_holds = None;
-        let compute_instance = compute_instance.id;
         let conn_id = session.conn_id();
         // For transactions that do not use AS OF, get the timestamp context of the
         // in-progress transaction or create one. If this is an AS OF query, we
@@ -2828,10 +2826,20 @@ impl<S: Append + 'static> Coordinator<S> {
         let optimized_plan =
             try_exec!(self.view_optimizer.optimize(decorrelated_plan), tx, session);
         let source_ids = optimized_plan.depends_on();
-
+        let compute_instance =
+            try_exec!(self.catalog.active_compute_instance(&session), tx, session);
+        let id_bundle = self
+            .index_oracle(compute_instance.id)
+            .sufficient_collections(&source_ids);
         match self.recent_timestamp(&session, source_ids.iter().cloned()) {
             Some(fut) => {
+                let transient_revision = self.catalog.transient_revision();
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
+                let compute_instance = (compute_instance.id(), compute_instance.name().to_string());
+                let object_names: HashMap<_, _> = id_bundle
+                    .iter()
+                    .map(|id| (id, self.catalog.get_entry(&id).name().item.clone()))
+                    .collect();
                 let conn_id = session.conn_id();
                 self.pending_real_time_recency_timestamp.insert(
                     conn_id,
@@ -2839,7 +2847,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         tx,
                         session,
                         format,
-                        source_ids,
                         optimized_plan,
                     },
                 );
@@ -2848,6 +2855,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
                     let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
                         conn_id,
+                        transient_revision,
+                        compute_instance,
+                        id_bundle,
+                        object_names,
                         real_time_recency_ts,
                     });
                     if let Err(e) = result {
@@ -2859,8 +2870,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.sequence_explain_timestamp_finish(
                     &session,
                     format,
-                    source_ids,
+                    compute_instance.id(),
                     optimized_plan,
+                    id_bundle,
                     None,
                 ),
                 session,
@@ -2872,8 +2884,9 @@ impl<S: Append + 'static> Coordinator<S> {
         &self,
         session: &Session,
         format: ExplainFormat,
-        source_ids: BTreeSet<GlobalId>,
+        compute_instance: ComputeInstanceId,
         optimized_plan: OptimizedMirRelationExpr,
+        id_bundle: CollectionIdBundle,
         real_time_recency_ts: Option<Timestamp>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let is_json = match format {
@@ -2883,10 +2896,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
             }
         };
-        let compute_instance = self.catalog.active_compute_instance(session)?.id;
-        let id_bundle = self
-            .index_oracle(compute_instance)
-            .sufficient_collections(&source_ids);
         let timeline_context = self.validate_timeline_context(optimized_plan.depends_on())?;
         let determination = self.determine_timestamp(
             session,
