@@ -120,14 +120,10 @@ where
         consumed_part_rx,
         chosen_worker,
     );
-    let (parts, tokens, fetch_shutdown) =
-        shard_source_fetch(&descs, name, clients, location, shard_id);
+    let (parts, tokens) = shard_source_fetch(&descs, name, clients, location, shard_id);
     shard_source_tokens(&tokens, name, consumed_part_tx, chosen_worker);
 
-    let token = Rc::new((
-        descs_shutdown.press_on_drop(),
-        fetch_shutdown.press_on_drop(),
-    ));
+    let token = Rc::new(descs_shutdown.press_on_drop());
     (parts, token)
 }
 
@@ -307,21 +303,26 @@ where
                         let mut descs_output = descs_output.activate();
                         let mut descs_session = descs_output.session(&session_cap);
 
-                        let mut bytes_emitted = 0;
-
-                        for part_desc in std::mem::take(&mut batch_parts) {
-                            bytes_emitted += part_desc.encoded_size_bytes();
-                            // Give the part to a random worker. This isn't
-                            // round robin in an attempt to avoid skew issues:
-                            // if your parts alternate size large, small, then
-                            // you'll end up only using half of your workers.
-                            //
-                            // There's certainly some other things we could be
-                            // doing instead here, but this has seemed to work
-                            // okay so far. Continue to revisit as necessary.
-                            let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
-                            descs_session.give((worker_idx, part_desc.into_exchangeable_part()));
-                        }
+                        // NB: in order to play nice with downstream operators whose invariants
+                        // depend on seeing the full contents of an individual batch, we must
+                        // atomically emit all parts here (e.g. no awaits).
+                        let bytes_emitted = {
+                            let mut bytes_emitted = 0;
+                            for part_desc in std::mem::take(&mut batch_parts) {
+                                bytes_emitted += part_desc.encoded_size_bytes();
+                                // Give the part to a random worker. This isn't
+                                // round robin in an attempt to avoid skew issues:
+                                // if your parts alternate size large, small, then
+                                // you'll end up only using half of your workers.
+                                //
+                                // There's certainly some other things we could be
+                                // doing instead here, but this has seemed to work
+                                // okay so far. Continue to revisit as necessary.
+                                let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
+                                descs_session.give((worker_idx, part_desc.into_exchangeable_part()));
+                            }
+                            bytes_emitted
+                        };
 
                         // Only track in-flight parts if flow control is enabled. Otherwise we
                         // would leak memory, as tracked parts would never be drained.
@@ -410,7 +411,6 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
 ) -> (
     Stream<G, FetchedPart<K, V, T, D>>,
     Stream<G, SerdeLeasedBatchPart>,
-    ShutdownButton<()>,
 )
 where
     K: Debug + Codec,
@@ -428,7 +428,22 @@ where
     let (mut fetched_output, fetched_stream) = builder.new_output();
     let (mut tokens_output, tokens_stream) = builder.new_output();
 
-    let shutdown_button = builder.build(move |_capabilities| async move {
+    // NB: we intentionally do _not_ pass along the shutdown button here so that
+    // we can be assured we always emit the full contents of a batch. If we used
+    // the shutdown token, on Drop, it is possible we'd only partially emit the
+    // contents of a batch which could lead to downstream operators seeing records
+    // and collections that never existed, which may break their invariants.
+    //
+    // The downside of this approach is that we may be left doing (considerable)
+    // work if the dataflow is dropped but we have a large numbers of parts left
+    // in the batch to fetch and yield.
+    //
+    // This also means that a pre-requisite to this operator is for the input to
+    // atomically provide the parts for each batch.
+    //
+    // Note that this requirement would not be necessary if we were emitting
+    // fully consolidated data: https://github.com/MaterializeInc/materialize/issues/16860#issuecomment-1366094925
+    let _shutdown_button = builder.build(move |_capabilities| async move {
         let fetcher = {
             let mut clients = clients.lock().await;
 
@@ -474,7 +489,7 @@ where
         }
     });
 
-    (fetched_stream, tokens_stream, shutdown_button)
+    (fetched_stream, tokens_stream)
 }
 
 pub(crate) fn shard_source_tokens<T, G>(
