@@ -10,13 +10,11 @@
 //! Logic for executing a planned SQL query.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::future::Future;
-
 use std::num::{NonZeroI64, NonZeroUsize};
-use std::pin::Pin;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use futures::future::BoxFuture;
 
 use maplit::btreeset;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -102,9 +100,9 @@ use super::ReplicaMetadata;
 
 use super::peek::PlannedPeek;
 
-/// Attempts to execute an expression. If an error is returned then the error is returned
+/// Attempts to execute an expression. If an error is returned then the error is sent
 /// to the client and the function is exited.
-macro_rules! try_exec {
+macro_rules! return_if_err {
     ($expr:expr, $tx:expr, $session:expr) => {
         match $expr {
             Ok(v) => v,
@@ -135,7 +133,7 @@ impl Coordinator {
 
         match plan {
             Plan::CreateSource(plan) => {
-                let source_id = try_exec!(self.catalog.allocate_user_id().await, tx, session);
+                let source_id = return_if_err!(self.catalog.allocate_user_id().await, tx, session);
                 tx.send(
                     self.sequence_create_source(&mut session, vec![(source_id, plan, depends_on)])
                         .await,
@@ -1266,17 +1264,17 @@ impl Coordinator {
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
-        let id = try_exec!(self.catalog.allocate_user_id().await, tx, session);
-        let oid = try_exec!(self.catalog.allocate_oid(), tx, session);
+        let id = return_if_err!(self.catalog.allocate_user_id().await, tx, session);
+        let oid = return_if_err!(self.catalog.allocate_oid(), tx, session);
 
         // Validate the storage host config.
-        let host_config = try_exec!(
+        let host_config = return_if_err!(
             self.catalog.resolve_storage_host_config(&plan_host_config),
             tx,
             session
         );
 
-        let linked_cluster_ops = try_exec!(
+        let linked_cluster_ops = return_if_err!(
             self.create_linked_cluster_ops(id, &name, &plan_host_config)
                 .await,
             tx,
@@ -1352,7 +1350,7 @@ impl Coordinator {
             }
         }
 
-        let create_export_token = try_exec!(
+        let create_export_token = return_if_err!(
             self.controller
                 .storage
                 .prepare_export(id, catalog_sink.from),
@@ -2054,13 +2052,13 @@ impl Coordinator {
 
         // Two transient allocations. We could reclaim these if we don't use them, potentially.
         // TODO: reclaim transient identifiers in fast path cases.
-        let view_id = try_exec!(self.allocate_transient_id(), tx, session);
-        let index_id = try_exec!(self.allocate_transient_id(), tx, session);
+        let view_id = return_if_err!(self.allocate_transient_id(), tx, session);
+        let index_id = return_if_err!(self.allocate_transient_id(), tx, session);
 
         let compute_instance =
-            try_exec!(self.catalog.active_compute_instance(&session), tx, session);
+            return_if_err!(self.catalog.active_compute_instance(&session), tx, session);
         let target_replica_name = session.vars().cluster_replica();
-        let mut target_replica = try_exec!(
+        let mut target_replica = return_if_err!(
             target_replica_name
                 .map(|name| {
                     compute_instance
@@ -2087,7 +2085,7 @@ impl Coordinator {
         }
 
         let source_ids = source.depends_on();
-        let mut timeline_context = try_exec!(
+        let mut timeline_context = return_if_err!(
             self.validate_timeline_context(source_ids.clone()),
             tx,
             session
@@ -2103,7 +2101,7 @@ impl Coordinator {
         let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
             && when == QueryWhen::Immediately;
 
-        try_exec!(
+        return_if_err!(
             check_no_invalid_log_reads(
                 &self.catalog,
                 compute_instance,
@@ -2442,7 +2440,7 @@ impl Coordinator {
         &self,
         session: &Session,
         source_ids: impl Iterator<Item = GlobalId>,
-    ) -> Option<Pin<Box<dyn Future<Output = Timestamp> + Send>>> {
+    ) -> Option<BoxFuture<'static, Timestamp>> {
         // Ideally this logic belongs inside of
         // `mz-adapter::coord::timestamp_selection::determine_timestamp`. However, including the
         // logic in there would make it extremely difficult and inconvenient to pull the waiting off
@@ -2823,7 +2821,7 @@ impl Coordinator {
         let window_functions = self.catalog.system_config().window_functions();
 
         let explainee_is_view = matches!(explainee, Explainee::Dataflow(_));
-        let decorrelated_plan = try_exec!(
+        let decorrelated_plan = return_if_err!(
             raw_plan.optimize_and_lower(&OptimizerConfig {
                 qgm_optimizations: session.vars().qgm_optimizations(),
                 window_functions: window_functions || explainee_is_view,
@@ -2832,10 +2830,10 @@ impl Coordinator {
             session
         );
         let optimized_plan =
-            try_exec!(self.view_optimizer.optimize(decorrelated_plan), tx, session);
+            return_if_err!(self.view_optimizer.optimize(decorrelated_plan), tx, session);
         let source_ids = optimized_plan.depends_on();
         let compute_instance =
-            try_exec!(self.catalog.active_compute_instance(&session), tx, session);
+            return_if_err!(self.catalog.active_compute_instance(&session), tx, session);
         let id_bundle = self
             .index_oracle(compute_instance.id)
             .sufficient_collections(&source_ids);
@@ -3057,7 +3055,7 @@ impl Coordinator {
             // a constant for writes, as we want to maximize bulk-insert throughput.
             OptimizedMirRelationExpr(plan.values)
         } else {
-            try_exec!(self.view_optimizer.optimize(plan.values), tx, session)
+            return_if_err!(self.view_optimizer.optimize(plan.values), tx, session)
         };
 
         match optimized_mir.into_inner() {

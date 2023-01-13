@@ -89,14 +89,13 @@
 //! about each of these interfaces.
 
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::mem;
 use std::num::NonZeroI64;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
+use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
@@ -293,7 +292,7 @@ where
     pub fn recent_timestamp(
         &self,
         source_ids: impl Iterator<Item = GlobalId>,
-    ) -> Pin<Box<dyn Future<Output = T> + Send>> {
+    ) -> BoxFuture<'static, T> {
         // Dummy implementation
         Box::pin(async { T::minimum() })
     }

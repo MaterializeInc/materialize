@@ -106,7 +106,7 @@ use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::Aug;
-use mz_sql::plan::{self, CopyFormat, MutationKind, Params};
+use mz_sql::plan::{self, CopyFormat, MutationKind, Params, QueryWhen};
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, StorageError,
 };

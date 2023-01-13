@@ -708,92 +708,95 @@ impl Coordinator {
         mut object_names: HashMap<GlobalId, String>,
         real_time_recency_ts: mz_repr::Timestamp,
     ) {
-        if let Some(real_time_recency_context) =
-            self.pending_real_time_recency_timestamp.remove(&conn_id)
-        {
-            // Re-validate that the involved objects still exist.
-            if transient_revision != self.catalog.transient_revision() {
-                if self
-                    .catalog
-                    .try_get_compute_instance(compute_instance_id)
-                    .is_none()
-                {
-                    let (tx, session) = real_time_recency_context.take_tx_and_session();
-                    return tx.send(
-                        Err(AdapterError::UnknownCluster {
-                            cluster_name: compute_instance_name,
-                        }),
-                        session,
-                    );
-                }
-                if let Some(id) = id_bundle
-                    .iter()
-                    .find(|id| self.catalog.try_get_entry(id).is_none())
-                {
-                    let (tx, session) = real_time_recency_context.take_tx_and_session();
-                    return tx.send(
-                        Err(AdapterError::UnknownRelation {
-                            relation_name: object_names
-                                .remove(&id)
-                                .expect("object names is populated by id_bundle"),
-                        }),
-                        session,
-                    );
-                }
-            }
+        let real_time_recency_context =
+            match self.pending_real_time_recency_timestamp.remove(&conn_id) {
+                Some(real_time_recency_context) => real_time_recency_context,
+                // Query was cancelled while waiting.
+                None => return,
+            };
 
-            match real_time_recency_context {
-                RealTimeRecencyContext::ExplainTimestamp {
-                    tx,
+        // Re-validate that the involved objects still exist.
+        if transient_revision != self.catalog.transient_revision() {
+            if self
+                .catalog
+                .try_get_compute_instance(compute_instance_id)
+                .is_none()
+            {
+                let (tx, session) = real_time_recency_context.take_tx_and_session();
+                return tx.send(
+                    Err(AdapterError::UnknownCluster {
+                        cluster_name: compute_instance_name,
+                    }),
                     session,
+                );
+            }
+            if let Some(id) = id_bundle
+                .iter()
+                .find(|id| self.catalog.try_get_entry(id).is_none())
+            {
+                let (tx, session) = real_time_recency_context.take_tx_and_session();
+                return tx.send(
+                    Err(AdapterError::UnknownRelation {
+                        relation_name: object_names
+                            .remove(&id)
+                            .expect("object names is populated by id_bundle"),
+                    }),
+                    session,
+                );
+            }
+        }
+
+        match real_time_recency_context {
+            RealTimeRecencyContext::ExplainTimestamp {
+                tx,
+                session,
+                format,
+                optimized_plan,
+            } => tx.send(
+                self.sequence_explain_timestamp_finish(
+                    &session,
                     format,
+                    compute_instance_id,
                     optimized_plan,
-                } => tx.send(
-                    self.sequence_explain_timestamp_finish(
-                        &session,
-                        format,
-                        compute_instance_id,
-                        optimized_plan,
-                        id_bundle,
-                        Some(real_time_recency_ts),
-                    ),
-                    session,
+                    id_bundle,
+                    Some(real_time_recency_ts),
                 ),
-                RealTimeRecencyContext::Peek {
-                    tx,
-                    finishing,
-                    copy_to,
-                    source,
-                    mut session,
-                    when,
-                    target_replica,
-                    view_id,
-                    index_id,
-                    timeline_context,
-                    source_ids,
-                    in_immediate_multi_stmt_txn,
-                } => {
-                    tx.send(
-                        self.sequence_peek_finish(
-                            finishing,
-                            copy_to,
-                            source,
-                            &mut session,
-                            compute_instance_id,
-                            when,
-                            target_replica,
-                            view_id,
-                            index_id,
-                            timeline_context,
-                            source_ids,
-                            id_bundle,
-                            in_immediate_multi_stmt_txn,
-                            Some(real_time_recency_ts),
-                        )
-                        .await,
-                        session,
-                    );
-                }
+                session,
+            ),
+            RealTimeRecencyContext::Peek {
+                tx,
+                finishing,
+                copy_to,
+                source,
+                mut session,
+                when,
+                target_replica,
+                view_id,
+                index_id,
+                timeline_context,
+                source_ids,
+                in_immediate_multi_stmt_txn,
+            } => {
+                tx.send(
+                    self.sequence_peek_finish(
+                        finishing,
+                        copy_to,
+                        source,
+                        &mut session,
+                        compute_instance_id,
+                        when,
+                        target_replica,
+                        view_id,
+                        index_id,
+                        timeline_context,
+                        source_ids,
+                        id_bundle,
+                        in_immediate_multi_stmt_txn,
+                        Some(real_time_recency_ts),
+                    )
+                    .await,
+                    session,
+                );
             }
         }
     }
