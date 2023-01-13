@@ -3619,6 +3619,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "differential-dataflow",
+ "futures",
  "mz-build-info",
  "mz-compute-client",
  "mz-orchestrator",

@@ -531,6 +531,14 @@ impl Coordinator {
                 }
             }
 
+            // Cancel commands waiting on a real time recency timestamp. There is at most one  per session.
+            if let Some(real_time_recency_context) =
+                self.pending_real_time_recency_timestamp.remove(&conn_id)
+            {
+                let (tx, session) = real_time_recency_context.take_tx_and_session();
+                tx.send(Ok(ExecuteResponse::Canceled), session);
+            }
+
             // Inform the target session (if it asks) about the cancellation.
             let _ = conn_meta.cancel_tx.send(Canceled::Canceled);
 

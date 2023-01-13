@@ -14,9 +14,11 @@ use std::num::{NonZeroI64, NonZeroUsize};
 use std::time::Duration;
 
 use anyhow::anyhow;
+use futures::future::BoxFuture;
+
 use maplit::btreeset;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tokio::sync::{mpsc, OwnedMutexGuard};
+use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::{event, warn, Level};
 
 use mz_cloud_resources::VpcEndpointConfig;
@@ -44,10 +46,10 @@ use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterOptionParameter, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, CreateComputeInstancePlan, CreateComputeReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DropComputeInstancesPlan,
+    AlterSystemResetPlan, AlterSystemSetPlan, CopyFormat, CreateComputeInstancePlan,
+    CreateComputeReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DropComputeInstancesPlan,
     DropComputeReplicasPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
     ExecutePlan, ExplainPlan, FetchPlan, IndexOption, InsertPlan, MaterializedView, MutationKind,
     OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
@@ -67,14 +69,15 @@ use crate::catalog::{
     self, Catalog, CatalogItem, ComputeInstance, Connection, DataSourceDesc, Ingestion,
     SerializedComputeReplicaLocation, StorageSinkConnectionState, SYSTEM_USER,
 };
-use crate::command::{Command, ExecuteResponse};
+use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
+use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
-    peek, Coordinator, Message, PendingReadTxn, PendingTxn, SendDiffs, SinkConnectionReady,
-    DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    peek, Coordinator, Message, PendingReadTxn, PendingTxn, RealTimeRecencyContext, SendDiffs,
+    SinkConnectionReady, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain_new::optimizer_trace::OptimizerTrace;
@@ -96,6 +99,17 @@ use super::timestamp_selection::{TimestampExplanation, TimestampSource};
 use super::ReplicaMetadata;
 
 use super::peek::PlannedPeek;
+
+/// Attempts to execute an expression. If an error is returned then the error is sent
+/// to the client and the function is exited.
+macro_rules! return_if_err {
+    ($expr:expr, $tx:expr, $session:expr) => {
+        match $expr {
+            Ok(v) => v,
+            Err(e) => return $tx.send(Err(e.into()), $session),
+        }
+    };
+}
 
 impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
@@ -119,10 +133,7 @@ impl Coordinator {
 
         match plan {
             Plan::CreateSource(plan) => {
-                let source_id = match self.catalog.allocate_user_id().await {
-                    Ok(id) => id,
-                    Err(e) => return tx.send(Err(e.into()), session),
-                };
+                let source_id = return_if_err!(self.catalog.allocate_user_id().await, tx, session);
                 tx.send(
                     self.sequence_create_source(&mut session, vec![(source_id, plan, depends_on)])
                         .await,
@@ -278,7 +289,7 @@ impl Coordinator {
                 self.sequence_end_transaction(tx, session, action);
             }
             Plan::Peek(plan) => {
-                tx.send(self.sequence_peek(&mut session, plan).await, session);
+                self.sequence_peek_begin(tx, session, plan).await;
             }
             Plan::Subscribe(plan) => {
                 tx.send(
@@ -301,7 +312,7 @@ impl Coordinator {
                 );
             }
             Plan::Explain(plan) => {
-                tx.send(self.sequence_explain(&session, plan).await, session);
+                self.sequence_explain(tx, session, plan);
             }
             Plan::SendDiffs(plan) => {
                 tx.send(self.sequence_send_diffs(&mut session, plan), session);
@@ -1253,40 +1264,22 @@ impl Coordinator {
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
-        let id = match self.catalog.allocate_user_id().await {
-            Ok(id) => id,
-            Err(e) => {
-                tx.send(Err(e.into()), session);
-                return;
-            }
-        };
-        let oid = match self.catalog.allocate_oid() {
-            Ok(id) => id,
-            Err(e) => {
-                tx.send(Err(e.into()), session);
-                return;
-            }
-        };
+        let id = return_if_err!(self.catalog.allocate_user_id().await, tx, session);
+        let oid = return_if_err!(self.catalog.allocate_oid(), tx, session);
 
         // Validate the storage host config.
-        let host_config = match self.catalog.resolve_storage_host_config(&plan_host_config) {
-            Ok(host_config) => host_config,
-            Err(e) => {
-                tx.send(Err(e), session);
-                return;
-            }
-        };
+        let host_config = return_if_err!(
+            self.catalog.resolve_storage_host_config(&plan_host_config),
+            tx,
+            session
+        );
 
-        let linked_cluster_ops = match self
-            .create_linked_cluster_ops(id, &name, &plan_host_config)
-            .await
-        {
-            Ok(linked_cluster_ops) => linked_cluster_ops,
-            Err(e) => {
-                tx.send(Err(e), session);
-                return;
-            }
-        };
+        let linked_cluster_ops = return_if_err!(
+            self.create_linked_cluster_ops(id, &name, &plan_host_config)
+                .await,
+            tx,
+            session
+        );
 
         // Knowing that we're only handling kafka sinks here helps us simplify.
         let StorageSinkConnectionBuilder::Kafka(connection_builder) =
@@ -1357,17 +1350,13 @@ impl Coordinator {
             }
         }
 
-        let create_export_token = match self
-            .controller
-            .storage
-            .prepare_export(id, catalog_sink.from)
-        {
-            Ok(t) => t,
-            Err(e) => {
-                tx.send(Err(e.into()), session);
-                return;
-            }
-        };
+        let create_export_token = return_if_err!(
+            self.controller
+                .storage
+                .prepare_export(id, catalog_sink.from),
+            tx,
+            session
+        );
 
         // Now we're ready to create the sink connection. Arrange to notify the
         // main coordinator thread when the future completes.
@@ -2046,11 +2035,110 @@ impl Coordinator {
     /// be a simple read out of an existing arrangement, or required a new dataflow to build
     /// the results to return.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn sequence_peek(
+    async fn sequence_peek_begin(
         &mut self,
-        session: &mut Session,
+        tx: ClientTransmitter<ExecuteResponse>,
+        mut session: Session,
         plan: PeekPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) {
+        let (
+            source,
+            finishing,
+            copy_to,
+            view_id,
+            index_id,
+            source_ids,
+            compute_instance,
+            id_bundle,
+            when,
+            target_replica,
+            timeline_context,
+            in_immediate_multi_stmt_txn,
+        ) = return_if_err!(self.sequence_peek_begin_inner(&session, plan), tx, session);
+
+        match self.recent_timestamp(&session, source_ids.iter().cloned()) {
+            Some(fut) => {
+                let transient_revision = self.catalog.transient_revision();
+                let internal_cmd_tx = self.internal_cmd_tx.clone();
+                let conn_id = session.conn_id();
+                self.pending_real_time_recency_timestamp.insert(
+                    conn_id,
+                    RealTimeRecencyContext::Peek {
+                        tx,
+                        finishing,
+                        copy_to,
+                        source,
+                        session,
+                        compute_instance,
+                        when,
+                        target_replica,
+                        view_id,
+                        index_id,
+                        timeline_context,
+                        source_ids,
+                        id_bundle,
+                        in_immediate_multi_stmt_txn,
+                    },
+                );
+                task::spawn(|| "real_time_recency_peek", async move {
+                    let real_time_recency_ts = fut.await;
+                    // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
+                    let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
+                        conn_id,
+                        transient_revision,
+                        real_time_recency_ts,
+                    });
+                    if let Err(e) = result {
+                        warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                    }
+                });
+            }
+            None => {
+                tx.send(
+                    self.sequence_peek_finish(
+                        finishing,
+                        copy_to,
+                        source,
+                        &mut session,
+                        compute_instance,
+                        when,
+                        target_replica,
+                        view_id,
+                        index_id,
+                        timeline_context,
+                        source_ids,
+                        id_bundle,
+                        in_immediate_multi_stmt_txn,
+                        None,
+                    )
+                    .await,
+                    session,
+                );
+            }
+        }
+    }
+
+    fn sequence_peek_begin_inner(
+        &mut self,
+        session: &Session,
+        plan: PeekPlan,
+    ) -> Result<
+        (
+            MirRelationExpr,
+            RowSetFinishing,
+            Option<CopyFormat>,
+            GlobalId,
+            GlobalId,
+            BTreeSet<GlobalId>,
+            ComputeInstanceId,
+            CollectionIdBundle,
+            QueryWhen,
+            Option<ReplicaId>,
+            TimelineContext,
+            bool,
+        ),
+        AdapterError,
+    > {
         event!(Level::TRACE, plan = format!("{:?}", plan));
 
         let PeekPlan {
@@ -2099,22 +2187,64 @@ impl Coordinator {
         let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
             && when == QueryWhen::Immediately;
 
-        let mut peek_plan = self
-            .plan_peek(
-                source,
-                session,
-                &when,
-                compute_instance,
-                &mut target_replica,
-                view_id,
-                index_id,
-                timeline_context,
-                &source_ids,
-                in_immediate_multi_stmt_txn,
-            )
-            .await?;
+        check_no_invalid_log_reads(
+            &self.catalog,
+            compute_instance,
+            &source_ids,
+            LogReadStyle::Peek(&mut target_replica),
+        )?;
 
-        let compute_instance = compute_instance.id;
+        let id_bundle = self
+            .index_oracle(compute_instance.id)
+            .sufficient_collections(&source_ids);
+
+        Ok((
+            source,
+            finishing,
+            copy_to,
+            view_id,
+            index_id,
+            source_ids,
+            compute_instance.id(),
+            id_bundle,
+            when,
+            target_replica,
+            timeline_context,
+            in_immediate_multi_stmt_txn,
+        ))
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn sequence_peek_finish(
+        &mut self,
+        finishing: RowSetFinishing,
+        copy_to: Option<CopyFormat>,
+        source: MirRelationExpr,
+        session: &mut Session,
+        compute_instance: ComputeInstanceId,
+        when: QueryWhen,
+        target_replica: Option<ReplicaId>,
+        view_id: GlobalId,
+        index_id: GlobalId,
+        timeline_context: TimelineContext,
+        source_ids: BTreeSet<GlobalId>,
+        id_bundle: CollectionIdBundle,
+        in_immediate_multi_stmt_txn: bool,
+        real_time_recency_ts: Option<Timestamp>,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let mut peek_plan = self.plan_peek(
+            source,
+            session,
+            &when,
+            compute_instance,
+            view_id,
+            index_id,
+            timeline_context,
+            &source_ids,
+            id_bundle,
+            in_immediate_multi_stmt_txn,
+            real_time_recency_ts,
+        )?;
 
         if let Some(id_bundle) = peek_plan.read_holds.take() {
             if let TimestampContext::TimelineTimestamp(_, timestamp) = peek_plan.timestamp_context {
@@ -2156,33 +2286,21 @@ impl Coordinator {
         }
     }
 
-    // TODO(jkosh44) Once RTR is pulled off the main coord loop, we can remove async from this method.
-    async fn plan_peek(
+    fn plan_peek(
         &self,
         source: MirRelationExpr,
         session: &Session,
         when: &QueryWhen,
-        compute_instance: &ComputeInstance,
-        target_replica: &mut Option<u64>,
+        compute_instance: ComputeInstanceId,
         view_id: GlobalId,
         index_id: GlobalId,
         timeline_context: TimelineContext,
         source_ids: &BTreeSet<GlobalId>,
+        id_bundle: CollectionIdBundle,
         in_immediate_multi_stmt_txn: bool,
+        real_time_recency_ts: Option<Timestamp>,
     ) -> Result<PlannedPeek, AdapterError> {
-        check_no_invalid_log_reads(
-            &self.catalog,
-            compute_instance,
-            source_ids,
-            LogReadStyle::Peek(target_replica),
-        )?;
-
-        let compute_instance = compute_instance.id;
         let mut read_holds = None;
-        let id_bundle = self
-            .index_oracle(compute_instance)
-            .sufficient_collections(source_ids);
-
         let conn_id = session.conn_id();
         // For transactions that do not use AS OF, get the timestamp context of the
         // in-progress transaction or create one. If this is an AS OF query, we
@@ -2190,9 +2308,6 @@ impl Coordinator {
         // single-statement transaction (TransactionStatus::Started), we don't
         // need to worry about preventing compaction or choosing a valid
         // timestamp context for future queries.
-        let real_time_recency_ts = self
-            .recent_timestamp(session, source_ids.iter().cloned())
-            .await?;
         let timestamp_context = if in_immediate_multi_stmt_txn {
             match session.get_transaction_timestamp_context() {
                 Some(ts_context @ TimestampContext::TimelineTimestamp(_, _)) => ts_context,
@@ -2349,31 +2464,25 @@ impl Coordinator {
         })
     }
 
-    /// Checks to see if the session needs a real time recency timestamp and if so acquires and
-    /// returns one. This may wait for an unbounded amount for the timestamp.
-    async fn recent_timestamp(
+    /// Checks to see if the session needs a real time recency timestamp and if so returns
+    /// a future that will return the timestamp.
+    fn recent_timestamp(
         &self,
         session: &Session,
         source_ids: impl Iterator<Item = GlobalId>,
-    ) -> Result<Option<Timestamp>, AdapterError> {
+    ) -> Option<BoxFuture<'static, Timestamp>> {
         // Ideally this logic belongs inside of
         // `mz-adapter::coord::timestamp_selection::determine_timestamp`. However, including the
         // logic in there would make it extremely difficult and inconvenient to pull the waiting off
         // of the main coord thread.
-        Ok(
-            if session.vars().real_time_recency()
-                && session.vars().transaction_isolation() == &IsolationLevel::StrictSerializable
-                && !session.contains_read_timestamp()
-            {
-                // We should have prevented anyone from turning on rtr outside of unsafe
-                // mode, but just incase check again.
-                // TODO(jkosh44) DO NOT remove unsafe until this waiting is removed from the main Coord loop.
-                self.catalog.require_unsafe_mode("REAL TIME RECENCY")?;
-                Some(self.controller.recent_timestamp(source_ids).await)
-            } else {
-                None
-            },
-        )
+        if session.vars().real_time_recency()
+            && session.vars().transaction_isolation() == &IsolationLevel::StrictSerializable
+            && !session.contains_read_timestamp()
+        {
+            Some(self.controller.recent_timestamp(source_ids))
+        } else {
+            None
+        }
     }
 
     async fn sequence_subscribe(
@@ -2532,14 +2641,15 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_explain(
+    fn sequence_explain(
         &mut self,
-        session: &Session,
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
         plan: ExplainPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) {
         match plan.stage {
-            ExplainStage::Timestamp => self.sequence_explain_timestamp(session, plan).await,
-            _ => self.sequence_explain_plan(session, plan),
+            ExplainStage::Timestamp => self.sequence_explain_timestamp_begin(tx, session, plan),
+            _ => tx.send(self.sequence_explain_plan(&session, plan), session),
         }
     }
 
@@ -2725,11 +2835,74 @@ impl Coordinator {
         Ok(send_immediate_rows(rows))
     }
 
-    async fn sequence_explain_timestamp(
+    fn sequence_explain_timestamp_begin(
+        &mut self,
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
+        plan: ExplainPlan,
+    ) {
+        let (format, source_ids, optimized_plan, compute_instance, id_bundle) = return_if_err!(
+            self.sequence_explain_timestamp_begin_inner(&session, plan),
+            tx,
+            session
+        );
+        match self.recent_timestamp(&session, source_ids.iter().cloned()) {
+            Some(fut) => {
+                let transient_revision = self.catalog.transient_revision();
+                let internal_cmd_tx = self.internal_cmd_tx.clone();
+                let conn_id = session.conn_id();
+                self.pending_real_time_recency_timestamp.insert(
+                    conn_id,
+                    RealTimeRecencyContext::ExplainTimestamp {
+                        tx,
+                        session,
+                        format,
+                        compute_instance,
+                        optimized_plan,
+                        id_bundle,
+                    },
+                );
+                task::spawn(|| "real_time_recency_explain_timestamp", async move {
+                    let real_time_recency_ts = fut.await;
+                    // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
+                    let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
+                        conn_id,
+                        transient_revision,
+                        real_time_recency_ts,
+                    });
+                    if let Err(e) = result {
+                        warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                    }
+                });
+            }
+            None => tx.send(
+                self.sequence_explain_timestamp_finish(
+                    &session,
+                    format,
+                    compute_instance,
+                    optimized_plan,
+                    id_bundle,
+                    None,
+                ),
+                session,
+            ),
+        }
+    }
+
+    fn sequence_explain_timestamp_begin_inner(
         &mut self,
         session: &Session,
         plan: ExplainPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) -> Result<
+        (
+            ExplainFormat,
+            BTreeSet<GlobalId>,
+            OptimizedMirRelationExpr,
+            ComputeInstanceId,
+            CollectionIdBundle,
+        ),
+        AdapterError,
+    > {
         let ExplainPlan {
             raw_plan,
             explainee,
@@ -2737,14 +2910,6 @@ impl Coordinator {
             ..
         } = plan;
 
-        let is_json = match format {
-            ExplainFormat::Text => false,
-            ExplainFormat::Json => true,
-            ExplainFormat::Dot => {
-                return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
-            }
-        };
-        let compute_instance = self.catalog.active_compute_instance(session)?.id;
         let window_functions = self.catalog.system_config().window_functions();
 
         let explainee_is_view = matches!(explainee, Explainee::Dataflow(_));
@@ -2753,14 +2918,37 @@ impl Coordinator {
             window_functions: window_functions || explainee_is_view,
         })?;
         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
-        let timeline_context = self.validate_timeline_context(optimized_plan.depends_on())?;
         let source_ids = optimized_plan.depends_on();
+        let compute_instance = self.catalog.active_compute_instance(session)?;
         let id_bundle = self
-            .index_oracle(compute_instance)
+            .index_oracle(compute_instance.id)
             .sufficient_collections(&source_ids);
-        let real_time_recency_ts = self
-            .recent_timestamp(session, source_ids.iter().cloned())
-            .await?;
+        Ok((
+            format,
+            source_ids,
+            optimized_plan,
+            compute_instance.id(),
+            id_bundle,
+        ))
+    }
+
+    pub(crate) fn sequence_explain_timestamp_finish(
+        &self,
+        session: &Session,
+        format: ExplainFormat,
+        compute_instance: ComputeInstanceId,
+        optimized_plan: OptimizedMirRelationExpr,
+        id_bundle: CollectionIdBundle,
+        real_time_recency_ts: Option<Timestamp>,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let is_json = match format {
+            ExplainFormat::Text => false,
+            ExplainFormat::Json => true,
+            ExplainFormat::Dot => {
+                return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
+            }
+        };
+        let timeline_context = self.validate_timeline_context(optimized_plan.depends_on())?;
         let determination = self.determine_timestamp(
             session,
             &id_bundle,
@@ -2913,13 +3101,7 @@ impl Coordinator {
             // a constant for writes, as we want to maximize bulk-insert throughput.
             OptimizedMirRelationExpr(plan.values)
         } else {
-            match self.view_optimizer.optimize(plan.values) {
-                Ok(m) => m,
-                Err(e) => {
-                    tx.send(Err(e.into()), session);
-                    return;
-                }
-            }
+            return_if_err!(self.view_optimizer.optimize(plan.values), tx, session)
         };
 
         match optimized_mir.into_inner() {
@@ -3122,30 +3304,36 @@ impl Coordinator {
             }
         }
 
-        let peek_response = match self
-            .sequence_peek(
-                &mut session,
-                PeekPlan {
-                    source: selection,
-                    when: QueryWhen::Freshest,
-                    finishing,
-                    copy_to: None,
-                },
-            )
-            .await
-        {
-            Ok(resp) => resp,
-            Err(e) => {
-                tx.send(Err(e), session);
-                return;
-            }
-        };
-
-        let timeout_dur = *session.vars().statement_timeout();
+        let (peek_tx, peek_rx) = oneshot::channel();
+        let peek_client_tx = ClientTransmitter::new(peek_tx, self.internal_cmd_tx.clone());
+        self.sequence_peek_begin(
+            peek_client_tx,
+            session,
+            PeekPlan {
+                source: selection,
+                when: QueryWhen::Freshest,
+                finishing,
+                copy_to: None,
+            },
+        )
+        .await;
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let strict_serializable_reads_tx = self.strict_serializable_reads_tx.clone();
         task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
+            let (peek_response, mut session) = match peek_rx.await {
+                Ok(Response {
+                    result: Ok(resp),
+                    session,
+                }) => (resp, session),
+                Ok(Response {
+                    result: Err(e),
+                    session,
+                }) => return tx.send(Err(e), session),
+                // It is not an error for these results to be ready after `peek_client_tx` has been dropped.
+                Err(e) => return warn!("internal_cmd_rx dropped before we could send: {:?}", e),
+            };
+            let timeout_dur = *session.vars().statement_timeout();
             let arena = RowArena::new();
             let diffs = match peek_response {
                 ExecuteResponse::SendingRows {
@@ -3224,7 +3412,10 @@ impl Coordinator {
                         }
                     }
                 }
-                _ => Err(AdapterError::Unstructured(anyhow!("expected SendingRows"))),
+                resp @ ExecuteResponse::Canceled => return tx.send(Ok(resp), session),
+                resp => Err(AdapterError::Unstructured(anyhow!(
+                    "unexpected peek response: {resp:?}"
+                ))),
             };
             let mut returning_rows = Vec::new();
             let mut diff_err: Option<AdapterError> = None;

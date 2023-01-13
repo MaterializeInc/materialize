@@ -10,6 +10,7 @@
 //! Logic for processing [`Coordinator`] messages. The [`Coordinator`] receives
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
+use anyhow::anyhow;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -26,16 +27,16 @@ use mz_sql::ast::Statement;
 use mz_sql::plan::{Plan, SendDiffsPlan};
 use mz_storage_client::controller::CollectionMetadata;
 
+use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
-use crate::util::ResultExt;
-use crate::{catalog, AdapterNotice};
-
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
-    Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, SendDiffs,
-    SinkConnectionReady,
+    Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, RealTimeRecencyContext,
+    SendDiffs, SinkConnectionReady,
 };
+use crate::util::ResultExt;
+use crate::{catalog, AdapterError, AdapterNotice};
 
 impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
@@ -84,6 +85,18 @@ impl Coordinator {
             }
             Message::Consolidate(collections) => {
                 self.consolidate(&collections).await;
+            }
+            Message::RealTimeRecencyTimestamp {
+                conn_id,
+                transient_revision,
+                real_time_recency_ts,
+            } => {
+                self.message_real_time_recency_timestamp(
+                    conn_id,
+                    transient_revision,
+                    real_time_recency_ts,
+                )
+                .await;
             }
         }
     }
@@ -673,6 +686,87 @@ impl Coordinator {
                     warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                 }
             });
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    /// Finishes sequencing a command that was waiting on a real time recency timestamp.
+    async fn message_real_time_recency_timestamp(
+        &mut self,
+        conn_id: ConnectionId,
+        transient_revision: u64,
+        real_time_recency_ts: mz_repr::Timestamp,
+    ) {
+        let real_time_recency_context =
+            match self.pending_real_time_recency_timestamp.remove(&conn_id) {
+                Some(real_time_recency_context) => real_time_recency_context,
+                // Query was cancelled while waiting.
+                None => return,
+            };
+
+        // Re-validate that the catalog hasn't changed.
+        if transient_revision != self.catalog.transient_revision() {
+            // TODO(jkosh44) It would be preferable to re-validate the query instead of blindly failing.
+            let (tx, session) = real_time_recency_context.take_tx_and_session();
+            return tx.send(Err(AdapterError::Unstructured(anyhow!("Catalog contents have changed mid-query due to concurrent DDL, please re-try query"))), session);
+        }
+
+        match real_time_recency_context {
+            RealTimeRecencyContext::ExplainTimestamp {
+                tx,
+                session,
+                format,
+                compute_instance,
+                optimized_plan,
+                id_bundle,
+            } => tx.send(
+                self.sequence_explain_timestamp_finish(
+                    &session,
+                    format,
+                    compute_instance,
+                    optimized_plan,
+                    id_bundle,
+                    Some(real_time_recency_ts),
+                ),
+                session,
+            ),
+            RealTimeRecencyContext::Peek {
+                tx,
+                finishing,
+                copy_to,
+                source,
+                mut session,
+                compute_instance,
+                when,
+                target_replica,
+                view_id,
+                index_id,
+                timeline_context,
+                source_ids,
+                id_bundle,
+                in_immediate_multi_stmt_txn,
+            } => {
+                tx.send(
+                    self.sequence_peek_finish(
+                        finishing,
+                        copy_to,
+                        source,
+                        &mut session,
+                        compute_instance,
+                        when,
+                        target_replica,
+                        view_id,
+                        index_id,
+                        timeline_context,
+                        source_ids,
+                        id_bundle,
+                        in_immediate_multi_stmt_txn,
+                        Some(real_time_recency_ts),
+                    )
+                    .await,
+                    session,
+                );
+            }
         }
     }
 }
