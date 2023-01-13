@@ -190,7 +190,7 @@ impl<T: TimestampManipulation> Session<T> {
                 let id = self.next_transaction_id;
                 self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
                 self.transaction = TransactionStatus::InTransaction(Transaction {
-                    pcx: PlanContext::new(wall_time, self.vars.qgm_optimizations()),
+                    pcx: PlanContext::new(wall_time),
                     ops: TransactionOps::None,
                     write_lock_guard: None,
                     access,
@@ -224,7 +224,7 @@ impl<T: TimestampManipulation> Session<T> {
             let id = self.next_transaction_id;
             self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
             let txn = Transaction {
-                pcx: PlanContext::new(wall_time, self.vars.qgm_optimizations()),
+                pcx: PlanContext::new(wall_time),
                 ops: TransactionOps::None,
                 write_lock_guard: None,
                 access: None,
