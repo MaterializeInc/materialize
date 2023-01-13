@@ -101,8 +101,8 @@ pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
     //    {
     //       // if the object is an enum
     //       if rti.enum_dict.contains_key(#name) { return; }
-    //       use std::collections::HashMap;
-    //       let mut result = HashMap::new();
+    //       use std::collections::BTreeMap;
+    //       let mut result = BTreeMap::new();
     //       // repeat line below for all variants
     //       result.insert(variant_name, (<field_names>, <field_types>));
     //       rti.enum_dist.insert(<enum_name>, result);
@@ -137,8 +137,8 @@ pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
             .collect::<Vec<_>>();
         quote! {
             if rti.enum_dict.contains_key(#object_name_as_string) { return; }
-            use std::collections::HashMap;
-            let mut result = HashMap::new();
+            use std::collections::BTreeMap;
+            let mut result = BTreeMap::new();
             #(#variants)*
             rti.enum_dict.insert(#object_name_as_string, result);
         }
