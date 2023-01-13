@@ -2677,13 +2677,11 @@ impl Coordinator {
 
         let optimizer_trace = match stage {
             Trace => OptimizerTrace::new(), // collect all trace entries
-            QueryGraph | OptimizedQueryGraph => OptimizerTrace::find(""), // don't collect anything
             stage => OptimizerTrace::find(stage.path()), // collect a trace entry only the selected stage
         };
 
         let (used_indexes, fast_path_plan) =
             optimizer_trace.collect_trace(|| -> Result<_, AdapterError> {
-                let raw_plan = raw_plan.clone(); // FIXME: remove `.clone()` once the QGM Model implements Clone.
                 let _span = tracing::span!(Level::INFO, "optimize").entered();
 
                 tracing::span!(Level::INFO, "raw").in_scope(|| {
@@ -2737,63 +2735,16 @@ impl Coordinator {
                 Ok((used_indexes, fast_path_plan))
             })?;
 
-        let trace = if matches!(stage, QueryGraph | OptimizedQueryGraph) {
-            vec![] // FIXME: remove this case once the QGM Model implements Clone
-        } else {
-            optimizer_trace.drain_all(
-                format.clone(), // FIXME: remove `.clone()` once the QGM Model implements Clone
-                config.clone(), // FIXME: remove `.clone()` once the QGM Model implements Clone
-                self.catalog.for_session(session),
-                row_set_finishing.clone(), // FIXME: remove `.clone()` once the QGM Model implements Clone
-                used_indexes,
-                fast_path_plan,
-            )?
-        };
+        let trace = optimizer_trace.drain_all(
+            format,
+            config,
+            self.catalog.for_session(session),
+            row_set_finishing,
+            used_indexes,
+            fast_path_plan,
+        )?;
 
         let rows = match stage {
-            // QGM graphs are not collected in the trace at the moment as they
-            // do not implement Clone (see the TODOs in try_qgm_path.
-            // Once this is done the next two cases will be handled by the catch-all
-            // case at the end of this method.
-            QueryGraph => {
-                use mz_repr::explain_new::Explain;
-                // run partial pipeline
-                let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
-                // construct explanation context
-                let catalog = self.catalog.for_session(session);
-                let context = crate::explain_new::ExplainContext {
-                    config: &config,
-                    humanizer: &catalog,
-                    used_indexes: crate::explain_new::UsedIndexes::new(Default::default()),
-                    finishing: row_set_finishing,
-                    fast_path_plan: Default::default(),
-                };
-                // explain plan
-                let mut explainable = crate::explain_new::Explainable::new(&mut model);
-                let explanation_string = explainable.explain(&format, &config, &context)?;
-                // pack rows in result vector
-                vec![Row::pack_slice(&[Datum::from(&*explanation_string)])]
-            }
-            OptimizedQueryGraph => {
-                use mz_repr::explain_new::Explain;
-                // run partial pipeline
-                let mut model = mz_sql::query_model::Model::try_from(raw_plan)?;
-                model.optimize();
-                // construct explanation context
-                let catalog = self.catalog.for_session(session);
-                let context = crate::explain_new::ExplainContext {
-                    config: &config,
-                    humanizer: &catalog,
-                    used_indexes: crate::explain_new::UsedIndexes::new(Default::default()),
-                    finishing: row_set_finishing,
-                    fast_path_plan: Default::default(),
-                };
-                // explain plan
-                let mut explainable = crate::explain_new::Explainable::new(&mut model);
-                let explanation_string = explainable.explain(&format, &config, &context)?;
-                // pack rows in result vector
-                vec![Row::pack_slice(&[Datum::from(&*explanation_string)])]
-            }
             // For the `Trace` stage, return the entire trace as (time, path, plan) triples.
             Trace => {
                 let rows = trace

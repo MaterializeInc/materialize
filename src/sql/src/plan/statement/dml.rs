@@ -195,14 +195,6 @@ pub fn describe_explain(
             relation_desc =
                 relation_desc.with_column("Raw Plan", ScalarType::String.nullable(false));
         }
-        ExplainStage::QueryGraph => {
-            relation_desc =
-                relation_desc.with_column("Query Graph", ScalarType::String.nullable(false));
-        }
-        ExplainStage::OptimizedQueryGraph => {
-            relation_desc = relation_desc
-                .with_column("Optimized Query Graph", ScalarType::String.nullable(false));
-        }
         ExplainStage::DecorrelatedPlan => {
             relation_desc =
                 relation_desc.with_column("Decorrelated Plan", ScalarType::String.nullable(false));

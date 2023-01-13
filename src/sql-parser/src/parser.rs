@@ -5545,22 +5545,13 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(PLAN)?;
                 Some(ExplainStage::RawPlan)
             }
-            Some(QUERY) => {
-                self.expect_keyword(GRAPH)?;
-                Some(ExplainStage::QueryGraph)
-            }
             Some(DECORRELATED) => {
                 self.expect_keyword(PLAN)?;
                 Some(ExplainStage::DecorrelatedPlan)
             }
             Some(OPTIMIZED) => {
-                if self.parse_keyword(QUERY) {
-                    self.expect_keyword(GRAPH)?;
-                    Some(ExplainStage::OptimizedQueryGraph)
-                } else {
-                    self.expect_keyword(PLAN)?;
-                    Some(ExplainStage::OptimizedPlan)
-                }
+                self.expect_keyword(PLAN)?;
+                Some(ExplainStage::OptimizedPlan)
             }
             Some(PLAN) => Some(ExplainStage::OptimizedPlan), // EXPLAIN PLAN ~= EXPLAIN OPTIMIZED PLAN
             Some(PHYSICAL) => {
