@@ -86,11 +86,13 @@ INNER JOIN sections s ON (t.id = s.teacher_id);
 We can optimize this query by creating an index for each column being joined.
 
 ```sql
-CREATE INDEX teachers_id_index ON teachers (id);
-CREATE INDEX sections_teacher_id_index ON sections (teacher_id);
+CREATE INDEX pk_teachers ON teachers (id);
+CREATE INDEX sections_fk_teachers ON sections (teacher_id);
 ```
 
+#### Joins with Filters
 
+If your query filters one or more of the join inputs by a literal equality (e.g., `WHERE t.name = 'Escalante'`), place one of those input collections first in the `FROM` clause. In particular, this can speed up [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) by accessing collections using index lookups rather than full scans.
 
 #### Optimize Multi-Way Joins with Delta Joins
 
@@ -146,8 +148,6 @@ EXPLAIN VIEW course_schedule;
    - materialize.public.sections_fk_courses      +
    - materialize.public.pk_courses               +
 ```
-
-If your query filters one or more of the join inputs by a literal equality (e.g., `WHERE t.name = 'Escalante'`), place one of those input collections first in the `FROM` clause. In particular, this can speed up [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) by accessing collections using index lookups rather than full scans.
 
 #### Further Optimize with Late Materialization
 
