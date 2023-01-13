@@ -532,6 +532,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
 
+            // Cancel commands waiting on a real time recency timestamp. There is at most one  per session.
             if let Some(real_time_recency_context) =
                 self.pending_real_time_recency_timestamp.remove(&conn_id)
             {
