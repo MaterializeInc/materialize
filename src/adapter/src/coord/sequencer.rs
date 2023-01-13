@@ -2153,7 +2153,7 @@ impl Coordinator {
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
 
-        let compute_instance = self.catalog.active_compute_instance(&session)?;
+        let compute_instance = self.catalog.active_compute_instance(session)?;
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {
@@ -2919,7 +2919,7 @@ impl Coordinator {
         })?;
         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
         let source_ids = optimized_plan.depends_on();
-        let compute_instance = self.catalog.active_compute_instance(&session)?;
+        let compute_instance = self.catalog.active_compute_instance(session)?;
         let id_bundle = self
             .index_oracle(compute_instance.id)
             .sufficient_collections(&source_ids);
