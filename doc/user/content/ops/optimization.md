@@ -62,6 +62,14 @@ In general, your index key should exactly match the columns that are constrained
 
 In general, you can improve the performance of your joins by creating indexes on the columns being joined. This comes at the cost of additional memory usage. Fortunately, Materialize can reuse these indexes for different queries, which means **for multiple queries, indexes are a fixed upfront cost with per-dataflow savings for each new query.**
 
+Let's create a few tables to work through examples.
+
+```sql
+create table teachers (id int, name text);
+create table sections (id int, teacher_id int, course_id int, schedule text);
+create table courses (id int, name text);
+```
+
 #### Joining Two Collections
 
 Here is an example where we join a collection `teachers` to a collection `sections` to see the name of the teacher, schedule, and course ID for a specific section of a course.
