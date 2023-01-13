@@ -129,13 +129,6 @@ const INTERVAL_STYLE: ServerVar<str> = ServerVar {
 
 const MZ_VERSION_NAME: &UncasedStr = UncasedStr::new("mz_version");
 
-const QGM_OPTIMIZATIONS: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("qgm_optimizations_experimental"),
-    value: &false,
-    description: "Enables optimizations based on a Query Graph Model (QGM) query representation.",
-    internal: false,
-};
-
 static DEFAULT_SEARCH_PATH: Lazy<[String; 1]> = Lazy::new(|| [DEFAULT_SCHEMA.to_owned()]);
 static SEARCH_PATH: Lazy<ServerVar<[String]>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("search_path"),
@@ -424,7 +417,6 @@ pub struct SessionVars {
     failpoints: ServerVar<str>,
     integer_datetimes: ServerVar<bool>,
     interval_style: ServerVar<str>,
-    qgm_optimizations: SessionVar<bool>,
     search_path: SessionVar<[String]>,
     server_version: ServerVar<str>,
     server_version_num: ServerVar<i32>,
@@ -455,7 +447,6 @@ impl SessionVars {
             failpoints: FAILPOINTS,
             integer_datetimes: INTEGER_DATETIMES,
             interval_style: INTERVAL_STYLE,
-            qgm_optimizations: SessionVar::new(&QGM_OPTIMIZATIONS),
             search_path: SessionVar::new(&SEARCH_PATH),
             server_version: SERVER_VERSION,
             server_version_num: SERVER_VERSION_NUM,
@@ -483,7 +474,7 @@ impl SessionVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values for this session.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 25] = [
+        let vars: [&dyn Var; 24] = [
             &self.application_name,
             self.build_info,
             &self.client_encoding,
@@ -496,7 +487,6 @@ impl SessionVars {
             &self.failpoints,
             &self.integer_datetimes,
             &self.interval_style,
-            &self.qgm_optimizations,
             &self.search_path,
             &self.server_version,
             &self.server_version_num,
@@ -572,8 +562,6 @@ impl SessionVars {
             Ok(&self.interval_style)
         } else if name == MZ_VERSION_NAME {
             Ok(self.build_info)
-        } else if name == QGM_OPTIMIZATIONS.name {
-            Ok(&self.qgm_optimizations)
         } else if name == SEARCH_PATH.name {
             Ok(&self.search_path)
         } else if name == SERVER_VERSION.name {
@@ -690,8 +678,6 @@ impl SessionVars {
             } else {
                 Ok(())
             }
-        } else if name == QGM_OPTIMIZATIONS.name {
-            self.qgm_optimizations.set(value, local)
         } else if name == SEARCH_PATH.name {
             self.search_path.set(value, local)
         } else if name == SERVER_VERSION.name {
@@ -768,8 +754,6 @@ impl SessionVars {
             self.database.reset(local);
         } else if name == EXTRA_FLOAT_DIGITS.name {
             self.extra_float_digits.reset(local);
-        } else if name == QGM_OPTIMIZATIONS.name {
-            self.qgm_optimizations.reset(local);
         } else if name == SEARCH_PATH.name {
             self.search_path.reset(local);
         } else if name == SQL_SAFE_UPDATES.name {
@@ -822,7 +806,6 @@ impl SessionVars {
             failpoints: _,
             integer_datetimes: _,
             interval_style: _,
-            qgm_optimizations,
             search_path,
             server_version: _,
             server_version_num: _,
@@ -842,7 +825,6 @@ impl SessionVars {
         cluster_replica.end_transaction(action);
         database.end_transaction(action);
         extra_float_digits.end_transaction(action);
-        qgm_optimizations.end_transaction(action);
         search_path.end_transaction(action);
         sql_safe_updates.end_transaction(action);
         statement_timeout.end_transaction(action);
@@ -912,11 +894,6 @@ impl SessionVars {
     /// Returns the value of the `mz_version` configuration parameter.
     pub fn mz_version(&self) -> String {
         self.build_info.value()
-    }
-
-    /// Returns the value of the `qgm_optimizations` configuration parameter.
-    pub fn qgm_optimizations(&self) -> bool {
-        *self.qgm_optimizations.value()
     }
 
     /// Returns the value of the `search_path` configuration parameter.
