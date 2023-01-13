@@ -38,6 +38,7 @@ steps:
           - { value: zippy-postgres-cdc }
           - { value: zippy-cluster-replicas }
           - { value: zippy-crdb-minio-restart }
+          - { value: zippy-crdb-latest-restart }
           - { value: secrets }
           - { value: checks-oneatatime-drop-create-default-replica }
           - { value: checks-oneatatime-restart-clusterd-compute }
@@ -310,6 +311,16 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=CrdbMinioRestart, --actions=1000]
+
+  - id: zippy-crdb-latest-restart
+    label: "Zippy CRDB restarts w/ latest CRDB"
+    timeout_in_minutes: 120
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=CrdbRestart, --actions=1000, --cockroach-tag=latest]
 
   - id: secrets
     label: "Secrets"

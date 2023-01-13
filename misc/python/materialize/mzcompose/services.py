@@ -388,12 +388,19 @@ class MySql(Service):
 
 
 class Cockroach(Service):
+    DEFAULT_COCKROACH_TAG = "v22.2.0"
+
     def __init__(
         self,
         name: str = "cockroach",
-        setup_materialize: bool = False,
+        image: Optional[str] = None,
+        setup_materialize: bool = True,
     ):
         volumes = []
+
+        if image is None:
+            image = f"cockroachdb/cockroach:{Cockroach.DEFAULT_COCKROACH_TAG}"
+
         if setup_materialize:
             path = os.path.relpath(
                 ROOT / "misc" / "cockroach" / "setup_materialize.sql",
@@ -403,7 +410,7 @@ class Cockroach(Service):
         super().__init__(
             name=name,
             config={
-                "image": "cockroachdb/cockroach:v22.2.0",
+                "image": image,
                 "ports": [26257],
                 "command": ["start-single-node", "--insecure"],
                 "volumes": volumes,

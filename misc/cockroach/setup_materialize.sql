@@ -15,6 +15,6 @@
 -- production.
 SET CLUSTER SETTING sql.stats.forecasts.enabled = false;
 
-CREATE SCHEMA consensus;
-CREATE SCHEMA adapter;
-CREATE SCHEMA storage;
+CREATE SCHEMA IF NOT EXISTS consensus;
+CREATE SCHEMA IF NOT EXISTS adapter;
+CREATE SCHEMA IF NOT EXISTS storage;
