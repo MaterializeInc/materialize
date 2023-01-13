@@ -2041,86 +2041,27 @@ impl Coordinator {
         mut session: Session,
         plan: PeekPlan,
     ) {
-        event!(Level::TRACE, plan = format!("{:?}", plan));
-
-        let PeekPlan {
+        let (
             source,
-            when,
             finishing,
             copy_to,
-        } = plan;
-
-        // Two transient allocations. We could reclaim these if we don't use them, potentially.
-        // TODO: reclaim transient identifiers in fast path cases.
-        let view_id = return_if_err!(self.allocate_transient_id(), tx, session);
-        let index_id = return_if_err!(self.allocate_transient_id(), tx, session);
-
-        let compute_instance =
-            return_if_err!(self.catalog.active_compute_instance(&session), tx, session);
-        let target_replica_name = session.vars().cluster_replica();
-        let mut target_replica = return_if_err!(
-            target_replica_name
-                .map(|name| {
-                    compute_instance
-                        .replica_id_by_name
-                        .get(name)
-                        .copied()
-                        .ok_or(AdapterError::UnknownClusterReplica {
-                            cluster_name: compute_instance.name.clone(),
-                            replica_name: name.to_string(),
-                        })
-                })
-                .transpose(),
-            tx,
-            session
-        );
-
-        if compute_instance.replicas_by_id.is_empty() {
-            return tx.send(
-                Err(AdapterError::NoClusterReplicasAvailable(
-                    compute_instance.name.clone(),
-                )),
-                session,
-            );
-        }
-
-        let source_ids = source.depends_on();
-        let mut timeline_context = return_if_err!(
-            self.validate_timeline_context(source_ids.clone()),
-            tx,
-            session
-        );
-        if matches!(timeline_context, TimelineContext::TimestampIndependent)
-            && source.contains_temporal()
-        {
-            // If the source IDs are timestamp independent but the query contains temporal functions,
-            // then the timeline context needs to be upgraded to timestamp dependent. This is
-            // required because `source_ids` doesn't contain functions.
-            timeline_context = TimelineContext::TimestampDependent;
-        }
-        let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
-            && when == QueryWhen::Immediately;
-
-        return_if_err!(
-            check_no_invalid_log_reads(
-                &self.catalog,
-                compute_instance,
-                &source_ids,
-                LogReadStyle::Peek(&mut target_replica),
-            ),
-            tx,
-            session
-        );
-
-        let id_bundle = self
-            .index_oracle(compute_instance.id)
-            .sufficient_collections(&source_ids);
+            view_id,
+            index_id,
+            source_ids,
+            compute_instance_id,
+            compute_instance_name,
+            id_bundle,
+            when,
+            target_replica,
+            timeline_context,
+            in_immediate_multi_stmt_txn,
+        ) = return_if_err!(self.sequence_peek_begin_inner(&session, plan), tx, session);
 
         match self.recent_timestamp(&session, source_ids.iter().cloned()) {
             Some(fut) => {
                 let transient_revision = self.catalog.transient_revision();
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let compute_instance = (compute_instance.id(), compute_instance.name().to_string());
+                let compute_instance = (compute_instance_id, compute_instance_name);
                 let object_names: HashMap<_, _> = id_bundle
                     .iter()
                     .map(|id| (id, self.catalog.get_entry(&id).name().item.clone()))
@@ -2166,7 +2107,7 @@ impl Coordinator {
                         copy_to,
                         source,
                         &mut session,
-                        compute_instance.id(),
+                        compute_instance_id,
                         when,
                         target_replica,
                         view_id,
@@ -2182,6 +2123,104 @@ impl Coordinator {
                 );
             }
         }
+    }
+
+    fn sequence_peek_begin_inner(
+        &mut self,
+        session: &Session,
+        plan: PeekPlan,
+    ) -> Result<
+        (
+            MirRelationExpr,
+            RowSetFinishing,
+            Option<CopyFormat>,
+            GlobalId,
+            GlobalId,
+            BTreeSet<GlobalId>,
+            ComputeInstanceId,
+            String,
+            CollectionIdBundle,
+            QueryWhen,
+            Option<ReplicaId>,
+            TimelineContext,
+            bool,
+        ),
+        AdapterError,
+    > {
+        event!(Level::TRACE, plan = format!("{:?}", plan));
+
+        let PeekPlan {
+            source,
+            when,
+            finishing,
+            copy_to,
+        } = plan;
+
+        // Two transient allocations. We could reclaim these if we don't use them, potentially.
+        // TODO: reclaim transient identifiers in fast path cases.
+        let view_id = self.allocate_transient_id()?;
+        let index_id = self.allocate_transient_id()?;
+
+        let compute_instance = self.catalog.active_compute_instance(&session)?;
+        let target_replica_name = session.vars().cluster_replica();
+        let mut target_replica = target_replica_name
+            .map(|name| {
+                compute_instance
+                    .replica_id_by_name
+                    .get(name)
+                    .copied()
+                    .ok_or(AdapterError::UnknownClusterReplica {
+                        cluster_name: compute_instance.name.clone(),
+                        replica_name: name.to_string(),
+                    })
+            })
+            .transpose()?;
+
+        if compute_instance.replicas_by_id.is_empty() {
+            return Err(AdapterError::NoClusterReplicasAvailable(
+                compute_instance.name.clone(),
+            ));
+        }
+
+        let source_ids = source.depends_on();
+        let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
+        if matches!(timeline_context, TimelineContext::TimestampIndependent)
+            && source.contains_temporal()
+        {
+            // If the source IDs are timestamp independent but the query contains temporal functions,
+            // then the timeline context needs to be upgraded to timestamp dependent. This is
+            // required because `source_ids` doesn't contain functions.
+            timeline_context = TimelineContext::TimestampDependent;
+        }
+        let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
+            && when == QueryWhen::Immediately;
+
+        check_no_invalid_log_reads(
+            &self.catalog,
+            compute_instance,
+            &source_ids,
+            LogReadStyle::Peek(&mut target_replica),
+        )?;
+
+        let id_bundle = self
+            .index_oracle(compute_instance.id)
+            .sufficient_collections(&source_ids);
+
+        Ok((
+            source,
+            finishing,
+            copy_to,
+            view_id,
+            index_id,
+            source_ids,
+            compute_instance.id(),
+            compute_instance.name().to_string(),
+            id_bundle,
+            when,
+            target_replica,
+            timeline_context,
+            in_immediate_multi_stmt_txn,
+        ))
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -2811,37 +2850,23 @@ impl Coordinator {
         session: Session,
         plan: ExplainPlan,
     ) {
-        let ExplainPlan {
-            raw_plan,
-            explainee,
+        let (
             format,
-            ..
-        } = plan;
-
-        let window_functions = self.catalog.system_config().window_functions();
-
-        let explainee_is_view = matches!(explainee, Explainee::Dataflow(_));
-        let decorrelated_plan = return_if_err!(
-            raw_plan.optimize_and_lower(&OptimizerConfig {
-                qgm_optimizations: session.vars().qgm_optimizations(),
-                window_functions: window_functions || explainee_is_view,
-            }),
+            source_ids,
+            optimized_plan,
+            compute_instance_id,
+            compute_instance_name,
+            id_bundle,
+        ) = return_if_err!(
+            self.sequence_explain_timestamp_begin_inner(&session, plan),
             tx,
             session
         );
-        let optimized_plan =
-            return_if_err!(self.view_optimizer.optimize(decorrelated_plan), tx, session);
-        let source_ids = optimized_plan.depends_on();
-        let compute_instance =
-            return_if_err!(self.catalog.active_compute_instance(&session), tx, session);
-        let id_bundle = self
-            .index_oracle(compute_instance.id)
-            .sufficient_collections(&source_ids);
         match self.recent_timestamp(&session, source_ids.iter().cloned()) {
             Some(fut) => {
                 let transient_revision = self.catalog.transient_revision();
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let compute_instance = (compute_instance.id(), compute_instance.name().to_string());
+                let compute_instance = (compute_instance_id, compute_instance_name);
                 let object_names: HashMap<_, _> = id_bundle
                     .iter()
                     .map(|id| (id, self.catalog.get_entry(&id).name().item.clone()))
@@ -2876,7 +2901,7 @@ impl Coordinator {
                 self.sequence_explain_timestamp_finish(
                     &session,
                     format,
-                    compute_instance.id(),
+                    compute_instance_id,
                     optimized_plan,
                     id_bundle,
                     None,
@@ -2884,6 +2909,51 @@ impl Coordinator {
                 session,
             ),
         }
+    }
+
+    fn sequence_explain_timestamp_begin_inner(
+        &mut self,
+        session: &Session,
+        plan: ExplainPlan,
+    ) -> Result<
+        (
+            ExplainFormat,
+            BTreeSet<GlobalId>,
+            OptimizedMirRelationExpr,
+            ComputeInstanceId,
+            String,
+            CollectionIdBundle,
+        ),
+        AdapterError,
+    > {
+        let ExplainPlan {
+            raw_plan,
+            explainee,
+            format,
+            ..
+        } = plan;
+
+        let window_functions = self.catalog.system_config().window_functions();
+
+        let explainee_is_view = matches!(explainee, Explainee::Dataflow(_));
+        let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {
+            qgm_optimizations: session.vars().qgm_optimizations(),
+            window_functions: window_functions || explainee_is_view,
+        })?;
+        let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
+        let source_ids = optimized_plan.depends_on();
+        let compute_instance = self.catalog.active_compute_instance(&session)?;
+        let id_bundle = self
+            .index_oracle(compute_instance.id)
+            .sufficient_collections(&source_ids);
+        Ok((
+            format,
+            source_ids,
+            optimized_plan,
+            compute_instance.id(),
+            compute_instance.name.to_string(),
+            id_bundle,
+        ))
     }
 
     pub(crate) fn sequence_explain_timestamp_finish(
