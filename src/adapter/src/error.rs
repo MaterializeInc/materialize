@@ -22,7 +22,6 @@ use mz_ore::str::StrExt;
 use mz_repr::explain_new::ExplainError;
 use mz_repr::NotNullViolation;
 use mz_sql::plan::PlanError;
-use mz_sql::query_model::QGMError;
 use mz_storage_client::controller::StorageError;
 use mz_transform::TransformError;
 
@@ -109,8 +108,6 @@ pub enum AdapterError {
     PlanError(PlanError),
     /// The named prepared statement already exists.
     PreparedStatementExists(String),
-    /// An error occurred in the QGM stage of the optimizer.
-    QGM(QGMError),
     /// The transaction is in read-only mode.
     ReadOnlyTransaction,
     /// The specified session parameter is read-only.
@@ -401,7 +398,6 @@ impl fmt::Display for AdapterError {
             AdapterError::PreparedStatementExists(name) => {
                 write!(f, "prepared statement {} already exists", name.quoted())
             }
-            AdapterError::QGM(e) => e.fmt(f),
             AdapterError::ReadOnlyTransaction => f.write_str("transaction in read-only mode"),
             AdapterError::ReadOnlyParameter(p) => {
                 write!(f, "parameter {} cannot be changed", p.name().quoted())
@@ -549,12 +545,6 @@ impl From<mz_sql::catalog::CatalogError> for AdapterError {
 impl From<PlanError> for AdapterError {
     fn from(e: PlanError) -> AdapterError {
         AdapterError::PlanError(e)
-    }
-}
-
-impl From<QGMError> for AdapterError {
-    fn from(e: QGMError) -> AdapterError {
-        AdapterError::QGM(e)
     }
 }
 

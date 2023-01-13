@@ -33,7 +33,6 @@ pub(crate) mod hir;
 pub(crate) mod lir;
 pub(crate) mod mir;
 pub(crate) mod optimizer_trace;
-pub(crate) mod qgm;
 
 /// Newtype struct for wrapping types that should
 /// implement the [`mz_repr::explain_new::Explain`] trait.
