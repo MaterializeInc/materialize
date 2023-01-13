@@ -410,7 +410,9 @@ where
         }
     }
 
-    /// Sets the given key value pairs, if not already set.
+    /// Sets the given key value pairs, if not already set. If a new key appears
+    /// multiple times in `entries`, its value will be from the first occurrence
+    /// in `entries`.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn insert_without_overwrite<I>(
         &self,
@@ -423,7 +425,7 @@ where
     {
         let collection = self.get(stash).await?;
         let mut batch = collection.make_batch(stash).await?;
-        let prev = match stash.peek_one(collection).await {
+        let mut prev = match stash.peek_one(collection).await {
             Ok(prev) => prev,
             Err(err) => match err.inner {
                 InternalStashError::PeekSinceUpper(_) => {
@@ -439,6 +441,7 @@ where
         for (k, v) in entries {
             if !prev.contains_key(&k) {
                 collection.append_to_batch(&mut batch, &k, &v, 1);
+                prev.insert(k, v);
             }
         }
         stash.append(&[batch]).await?;
