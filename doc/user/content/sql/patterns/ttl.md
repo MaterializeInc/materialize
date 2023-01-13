@@ -32,7 +32,7 @@ Pattern example:
 To know the remaining time to live:
 
 ```sql
-  SELECT (expiration_time - mz_now()) AS remaining_ttl
+  SELECT (expiration_time - now()) AS remaining_ttl
   FROM TTL_VIEW;
 ```
 
