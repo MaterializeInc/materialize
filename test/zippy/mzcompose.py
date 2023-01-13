@@ -86,6 +86,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="SIZE to use for sources, sinks, materialized views and clusters",
     )
 
+    parser.add_argument(
+        "--cockroach-tag",
+        type=str,
+        default=Cockroach.DEFAULT_COCKROACH_TAG,
+        help="Cockroach DockerHub tag to use.",
+    )
+
     args = parser.parse_args()
     scenario_class = globals()[args.scenario]
 
@@ -94,6 +101,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     random.seed(args.seed)
 
     with c.override(
+        Cockroach(image=f"cockroachdb/cockroach:{args.cockroach_tag}"),
         Testdrive(
             no_reset=True,
             seed=1,
