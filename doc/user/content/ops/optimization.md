@@ -36,8 +36,10 @@ Speed up a query involving a `WHERE` clause with equality comparisons to literal
 | `WHERE upper(y) = 'HELLO'`                        | `CREATE INDEX ON obj_name (upper(y));` |
 
 You can verify that Materialize is accessing the input by an index lookup using `EXPLAIN`. Check for `lookup_value` after the index name to confirm that an index lookup is happening, i.e., that Materialize is only reading the matching elements of the index instead of scanning the entire index:
+```sql
+EXPLAIN SELECT * FROM foo WHERE x = 42 AND y = 'hello';
 ```
-materialize=> EXPLAIN SELECT * FROM foo WHERE x = 42 AND y = 'hello';
+```
                                Optimized Plan
 -----------------------------------------------------------------------------
  Explained Query (fast path):                                               +
@@ -57,114 +59,131 @@ In general, your index key should exactly match the columns that are constrained
 - If `OR` is used and its arguments constrain completely disjoint sets of fields (e.g. `WHERE x = 5 OR y = 'aaa'`), try to rewrite your query using a `UNION` (or `UNION ALL`), where each argument of the `UNION` has one of the original `OR` arguments.
 
 ### `JOIN`
-Speed up a `JOIN` query by indexing the join keys:
 
-Clause                                      | Index                                                                       |
---------------------------------------------|-----------------------------------------------------------------------------|
-`FROM view V JOIN table T ON (V.id = T.id)` | `CREATE INDEX ON view (id);` <br /> `CREATE INDEX ON table (id);`           |
+In general, you can improve the performance of your joins by creating indexes on the columns being joined. This comes at the cost of additional memory usage. Fortunately, Materialize can reuse these indexes for different queries, which means **for multiple queries, indexes are a fixed upfront cost with per-dataflow savings for each new query.**
+
+#### Joining Two Collections
+
+Here is an example where we join a collection `teachers` to a collection `sections` to see the name of the teacher, schedule, and course ID for a specific section of a course.
+
+```sql
+SELECT
+    t.name,
+    s.schedule,
+    s.course_id
+FROM teachers t
+INNER JOIN sections s ON (t.id = s.teacher_id);
+```
+
+We can optimize this query by creating an index for each column being joined.
+
+```sql
+CREATE INDEX teachers_id_index ON teachers (id);
+CREATE INDEX sections_teacher_id_index ON sections (teacher_id);
+```
+
+Here, `teachers.id` uniquely identifies all teachers. When a column or set of columns uniquely identifies each record, it is called a **primary key**, and an index on the primary key is called a **primary index**.
+
+We also have `sections.teacher_id`, which is not the primary key of `sections`, but it *does* correspond to the primary key of `teachers`. Whenever we have a column that is a primary key of another collection, it is called a [foreign key](https://en.wikipedia.org/wiki/Foreign_key). When we create an index on a foreign key, it's called a **secondary index**.
 
 #### Optimize Multi-Way Joins with Delta Joins
 
-For joins between more than two inputs, you should strive for a *delta join* (a special join implementation of Materialize for making multi-way streaming joins memory-efficient), which is typically possible when you index all the join keys:
+Materialize has access to a join execution strategy we call `DeltaQuery`, a.k.a. **delta joins**, that aggressively re-uses indexes and maintains **_zero_** intermediate results. Materialize considers this plan only if all the necessary indexes already exist, in which case the **_additional_** memory cost of the join is **zero**. This is typically possible when you **index all the join keys**.
+
+From the previous example, suppose we want to add the name of the course rather than just the course ID. We will create a view `course_schedule` to reflect this:
+
+```sql
+CREATE VIEW course_schedule AS
+  SELECT
+      t.name AS teacher_name,
+      s.schedule,
+      c.name AS course_name
+  FROM teachers t
+  INNER JOIN sections s ON (t.id = s.teacher_id)
+  INNER JOIN courses c ON (c.id = s.course_id);
 ```
-materialize=> EXPLAIN SELECT * FROM t1, t2, t3 WHERE t1.y = t2.x AND t2.w = t3.z;
-                  Optimized Plan
+
+In this case, we create indexes on the join keys to optimize the query:
+
+```sql
+CREATE INDEX pk_teachers ON teachers (id);
+CREATE INDEX sections_fk_teachers ON sections (teacher_id);
+CREATE INDEX pk_courses ON courses (id);
+CREATE INDEX sections_fk_courses ON sections (course_id);
+```
+
+```sql
+EXPLAIN VIEW course_schedule;
+```
+
+```
+                  Optimized Plan                  
 --------------------------------------------------
  Explained Query:                                +
-   Project (#0, #1, #1, #3, #3, #5)              +
-     Filter (#1) IS NOT NULL AND (#3) IS NOT NULL+
-       Join on=(#1 = #2 AND #3 = #4) type=delta  +  <--- "type" should show "delta"
-         ArrangeBy keys=[[#1]]                   +
-           Get materialize.public.t1             +
-         ArrangeBy keys=[[#0], [#1]]             +
-           Get materialize.public.t2             +
+   Project (#1, #5, #7)                          +
+     Filter (#0) IS NOT NULL                     +
+       Join on=(#0 = #3 AND #4 = #6) type=delta  + <--- using delta join
          ArrangeBy keys=[[#0]]                   +
-           Get materialize.public.t3             +
+           Get materialize.public.teachers       +
+         ArrangeBy keys=[[#1], [#2]]             +
+           Get materialize.public.sections       +
+         ArrangeBy keys=[[#0]]                   +
+           Filter (#0) IS NOT NULL               +
+             Get materialize.public.courses      +
+                                                 +
+ Source materialize.public.courses               +
+   filter=((#0) IS NOT NULL)                     +
                                                  +
  Used Indexes:                                   +
-   - materialize.public.t1_y                     +
-   - materialize.public.t2_x                     +
-   - materialize.public.t2_w                     +
-   - materialize.public.t3_z                     +
+   - materialize.public.pk_teachers              +
+   - materialize.public.sections_fk_teachers     +
+   - materialize.public.sections_fk_courses      +
+   - materialize.public.pk_courses               +
 ```
-Delta joins have the advantage of using negligible additional memory outside the explicitly created indexes on the inputs. For more details, see [Delta Joins and Late Materialization](/overview/delta-joins).
 
-If your query filters one or more of the join inputs by a literal equality (e.g., `t1.y = 42`), place one of those inputs first in the `FROM` clause. In particular, this can speed up [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) by accessing inputs using index lookups, rather than full scans.
+If your query filters one or more of the join inputs by a literal equality (e.g., `WHERE t.name = 'Escalante'`), place one of those inputs first in the `FROM` clause. In particular, this can speed up [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) by accessing inputs using index lookups, rather than full scans.
 
 #### Further Optimize with Late Materialization
 
-Materialize can further optimize memory usage - using a pattern known as late materialization - when joining relations containing primary and foreign key constraints.
+Materialize can further optimize memory usage - using a pattern known as **late materialization** - when joining relations containing primary and foreign key constraints. The idea is to create indexes on "narrow" views that only relate primary keys to foreign keys rather than creating a secondary index on the entire "wider" input collection.
 
-1. Create indexes on the primary keys of your input collections. Example:
+1. Create indexes on the primary keys of your input collections.
     ```sql
-    CREATE INDEX pk_lineitem ON lineitem (l_orderkey, l_linenumber);
-    CREATE INDEX pk_customer ON customer (c_custkey);
-    CREATE INDEX pk_orders ON orders (o_orderkey);
+    CREATE INDEX pk_teachers ON teachers (id);
+    CREATE INDEX pk_sections ON sections (id);
+    CREATE INDEX pk_courses ON courses (id);
     ```
-2. For each foreign key in the join, create a "narrow" view with just two columns: foreign key and primary key. Then create two indexes: one for the foreign key and one for the primary key. Example from [Delta Joins and Late Materialization](/overview/delta-joins):
+
+
+2. For each foreign key in the join, create a "narrow" view with just two columns: foreign key and primary key. Then create two indexes: one for the foreign key and one for the primary key. In our example, the two foreign keys are `sections.teacher_id` and `sections.course_id`, so we do the following:
     ```sql
-    -- Create a "narrow" view containing foreign key `l_orderkey` and `lineitem`'s composite primary key (l_orderkey, l_linenumber) and their respective indexes.
-    CREATE VIEW lineitem_fk_orderkey AS SELECT l_orderkey, l_linenumber FROM lineitem;
-    CREATE INDEX lineitem_fk_orderkey_0 ON lineitem_fk_orderkey (l_orderkey, l_linenumber);
-    CREATE INDEX lineitem_fk_orderkey_1 ON lineitem_fk_orderkey (l_orderkey);
-    -- Create a "narrow" view containing foreign key `o_custkey` and `orders`'s primary key `o_orderkey` and their respective indexes.
-    CREATE VIEW orders_fk_custkey AS SELECT o_orderkey, o_custkey FROM orders;
-    CREATE INDEX orders_fk_custkey_0 on orders_fk_custkey (o_orderkey);
-    CREATE INDEX orders_fk_custkey_1 on orders_fk_custkey (o_custkey);
+    -- Create a "narrow" view containing primary key sections.id
+    -- and foreign key sections.teacher_id
+    CREATE VIEW sections_narrow_teachers AS SELECT id, teacher_id FROM sections;
+    CREATE INDEX sections_narrow_teachers_0 ON sections_narrow_teachers (id);
+    CREATE INDEX sections_narrow_teachers_1 ON sections_narrow_teachers (teacher_id);
+    -- Create a "narrow" view containing primary key sections.id
+    -- and foreign key sections.course_id
+    CREATE VIEW sections_narrow_courses AS SELECT id, course_id FROM sections;
+    CREATE INDEX sections_narrow_courses_0 ON sections_narrow_courses (id);
+    CREATE INDEX sections_narrow_courses_1 ON sections_narrow_courses (course_id);
     ```
-3. Update your query's `FROM` statement to include the narrow views. Example:
-    
-    Before:
+    {{< note >}}
+  In this case, because both foreign keys are in `sections`, we could have gotten away with one narrow collection `sections_narrow_teachers_and_courses` with indexes on `id`, `teacher_id`, and `course_id`. In general, we won't be so lucky to have all the foreign keys in the same collection, so we've shown the more general pattern of creating a narrow view and two indexes for each foreign key. 
+    {{</ note >}}
+
+3. Use your narrow collections to perform the join. Example:
+
     ```sql
-    ...
-    FROM
-        customer,
-        orders,
-        lineitem
-    ...
-    ```
-    After:
-    ```sql
-    ...
-    FROM
-        customer c,
-        orders o,
-        lineitem l,
-        -- NEW: "narrow" collections containing just primary and foreign keys.
-        lineitem_fk_orderkey l_ok,
-        orders_fk_custkey o_ck
-    ...
-    ```
-4. Replace each foreign key from "wide" collections with the foreign key from "narrow" collections. Example:
-    
-    Before:
-    ```sql
-    ...
-    WHERE
-    ...
-        AND l_orderkey = o_orderkey
-        AND o_custkey  = c_custkey
-    ...
-    ```
-    After:
-    ```sql
-    ...
-    WHERE
-        -- core equijoin constraints using "narrow" collections.
-        l_ok.l_orderkey = o.o_orderkey
-        AND o_ck.o_custkey = c.c_custkey
-    ...
-    ```
-5. Finally, add join conditions to equate each foreign key from "narrow" collections to a primary key from "wide" collections. Example:
-    ```sql
-    ...
-    WHERE
-    ...
-        -- connect narrow and wide collections.
-        AND o_ck.o_orderkey = o.o_orderkey
-        AND l_ok.l_orderkey = l.l_orderkey
-        AND l_ok.l_linenumber = l.l_linenumber
-    ...
+    SELECT
+      t.name AS teacher_name,
+      s.schedule,
+      c.name AS course_name
+    FROM sections_narrow_teachers s_t 
+    INNER JOIN sections s ON s_t.id = s.id
+    INNER JOIN teachers t ON s_t.teacher_id = t.id
+    INNER JOIN sections_narrow_courses s_c ON s_c.id = s.id
+    INNER JOIN courses c ON s_c.course_id = c.id;
     ```
 
 ### Default
