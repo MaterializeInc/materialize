@@ -65,9 +65,9 @@ In general, you can improve the performance of your joins by creating indexes on
 Let's create a few tables to work through examples.
 
 ```sql
-create table teachers (id int, name text);
-create table sections (id int, teacher_id int, course_id int, schedule text);
-create table courses (id int, name text);
+CREATE TABLE teachers (id INT, name TEXT);
+CREATE TABLE sections (id INT, teacher_id INT, course_id INT, schedule TEXT);
+CREATE TABLE courses (id INT, name TEXT);
 ```
 
 #### Joining Two Collections
