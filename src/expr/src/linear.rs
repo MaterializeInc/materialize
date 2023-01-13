@@ -6,7 +6,7 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
 use proptest::prelude::*;
@@ -472,7 +472,7 @@ impl MapFilterProject {
         });
 
         // Determine extended input columns used by temporal filters.
-        let mut support = HashSet::new();
+        let mut support = BTreeSet::new();
         for predicate in temporal_predicates.iter() {
             support.extend(predicate.support());
         }
@@ -527,7 +527,7 @@ impl MapFilterProject {
                 // unimplemented!()
 
                 // Then, look for unused columns and project them away.
-                let mut common_demand = HashSet::new();
+                let mut common_demand = BTreeSet::new();
                 for mfp in mfps.iter() {
                     common_demand.extend(mfp.demand());
                 }
@@ -654,7 +654,7 @@ impl MapFilterProject {
         let mut after_proj = Vec::new();
 
         // Track which output columns must be preserved in the output of `before`.
-        let mut demanded = HashSet::new();
+        let mut demanded = BTreeSet::new();
         demanded.extend(0..self.input_arity);
         demanded.extend(self.projection.iter());
 
@@ -794,8 +794,8 @@ impl MapFilterProject {
     /// It is entirely appropriate to determine the demand of an instance
     /// and then both apply a projection to the subject of the instance and
     /// `self.permute` this instance.
-    pub fn demand(&self) -> HashSet<usize> {
-        let mut demanded = HashSet::new();
+    pub fn demand(&self) -> BTreeSet<usize> {
+        let mut demanded = BTreeSet::new();
         for (_index, pred) in self.predicates.iter() {
             demanded.extend(pred.support());
         }
@@ -1239,7 +1239,7 @@ impl MapFilterProject {
     /// ```
     pub fn remove_undemanded(&mut self) {
         // Determine the demanded expressions to remove irrelevant ones.
-        let mut demand = std::collections::HashSet::new();
+        let mut demand = BTreeSet::new();
         for (_index, pred) in self.predicates.iter() {
             demand.extend(pred.support());
         }
@@ -1337,7 +1337,7 @@ pub fn memoize_expr(
 }
 
 pub mod util {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
 
     use crate::MirScalarExpr;
 
@@ -1355,7 +1355,7 @@ pub mod util {
         key: &[MirScalarExpr],
         unthinned_arity: usize,
     ) -> (BTreeMap<usize, usize>, Vec<usize>) {
-        let columns_in_key: HashMap<_, _> = key
+        let columns_in_key: BTreeMap<_, _> = key
             .iter()
             .enumerate()
             .filter_map(|(i, key_col)| key_col.as_column().map(|c| (c, i)))

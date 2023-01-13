@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{HashSet, BTreeSet};
+use std::collections::BTreeSet;
 use std::ops::Range;
 
 use core::option::Option;
@@ -120,7 +120,7 @@ impl JoinInputMapper {
         // for inputs `1..self.total_inputs()`, store a set of columns from that
         // input that exist in join constraints that have expressions belonging to
         // earlier inputs.
-        let mut column_with_prior_bound_by_input = vec![HashSet::new(); self.total_inputs() - 1];
+        let mut column_with_prior_bound_by_input = vec![BTreeSet::new(); self.total_inputs() - 1];
         for equivalence in equivalences {
             // do a scan to find the first input represented in the constraint
             let min_bound_input = equivalence

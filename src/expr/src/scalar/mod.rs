@@ -10,9 +10,7 @@
 use itertools::Itertools;
 use mz_repr::adt::date::DateError;
 use mz_repr::adt::timestamp::TimestampError;
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::mem;
 use std::ops::BitOrAssign;
@@ -572,8 +570,8 @@ impl MirScalarExpr {
         });
     }
 
-    pub fn support(&self) -> HashSet<usize> {
-        let mut support = HashSet::new();
+    pub fn support(&self) -> BTreeSet<usize> {
+        let mut support = BTreeSet::new();
         #[allow(deprecated)]
         self.visit_post_nolimit(&mut |e| {
             if let MirScalarExpr::Column(i) = e {
@@ -1099,7 +1097,7 @@ impl MirScalarExpr {
                             }
 
                             // Deduplicate arguments in cases like `coalesce(#0, #0)`.
-                            let mut prior_exprs = HashSet::new();
+                            let mut prior_exprs = BTreeSet::new();
                             exprs.retain(|e| prior_exprs.insert(e.clone()));
 
                             if let Some(expr) = exprs.iter_mut().find(|e| e.is_literal_err()) {

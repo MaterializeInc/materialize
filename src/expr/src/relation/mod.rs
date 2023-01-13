@@ -10,7 +10,7 @@
 #![warn(missing_docs)]
 
 use std::cmp::{max, Ordering};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::num::NonZeroUsize;
 
@@ -500,7 +500,7 @@ impl MirRelationExpr {
             } => {
                 let n_cols = typ.arity();
                 // If the `i`th entry is `Some`, then we have not yet observed non-uniqueness in the `i`th column.
-                let mut unique_values_per_col = vec![Some(HashSet::<Datum>::default()); n_cols];
+                let mut unique_values_per_col = vec![Some(BTreeSet::<Datum>::default()); n_cols];
                 for (row, diff) in rows {
                     for (i, datum) in row.iter().enumerate() {
                         if datum != Datum::Dummy {
@@ -670,12 +670,12 @@ impl MirRelationExpr {
                     });
 
                     // Keep doing replacements until the number of keys settles
-                    let mut prev_keys: HashSet<_> = input.drain(..).collect();
+                    let mut prev_keys: BTreeSet<_> = input.drain(..).collect();
                     let mut prev_keys_size = 0;
                     while prev_keys_size != prev_keys.len() {
                         prev_keys_size = prev_keys.len();
                         for (c1, c2) in classes.clone() {
-                            let mut new_keys = HashSet::new();
+                            let mut new_keys = BTreeSet::new();
                             for key in prev_keys.into_iter() {
                                 let contains_c1 = key.contains(&c1);
                                 let contains_c2 = key.contains(&c2);
@@ -1727,7 +1727,7 @@ impl MirRelationExpr {
     /// identifiers are rewritten to be the constant collection.
     /// This makes the computation perform exactly "one" iteration.
     pub fn make_nonrecursive(self: &mut MirRelationExpr) {
-        let mut deadlist = std::collections::HashSet::new();
+        let mut deadlist = BTreeSet::new();
         let mut worklist = vec![self];
         while let Some(expr) = worklist.pop() {
             if let MirRelationExpr::LetRec { ids, values, body } = expr {
