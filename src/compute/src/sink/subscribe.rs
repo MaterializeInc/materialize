@@ -142,7 +142,7 @@ fn subscribe<G>(
         },
     );
 
-    progress_stream.probe_notify_with(probes.clone());
+    progress_stream.probe_notify_with(probes);
 }
 
 /// A type that guides the transmission of rows back to the coordinator.

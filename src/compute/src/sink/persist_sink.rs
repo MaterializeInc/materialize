@@ -216,7 +216,7 @@ where
 
     append_frontier_stream.connect_loop(persist_feedback_handle);
 
-    append_frontier_stream.probe_notify_with(probes.clone());
+    append_frontier_stream.probe_notify_with(probes);
 
     let token = Rc::new((mint_token, write_token, append_token));
 
