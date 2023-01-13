@@ -74,8 +74,6 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::error::Error;
-
 use mz_adapter::catalog::Catalog;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
@@ -83,7 +81,7 @@ use mz_repr::ScalarType;
 use mz_sql::plan::PlanContext;
 
 #[tokio::test]
-async fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
+async fn test_parameter_type_inference() {
     let test_cases = vec![
         (
             "SELECT $1, $2, $3",
@@ -175,13 +173,14 @@ async fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
         ),
     ];
 
-    let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
-    let catalog = catalog.for_system_session();
-    for (sql, types) in test_cases {
-        let stmt = mz_sql::parse::parse(sql)?.into_element();
-        let (stmt, _) = mz_sql::names::resolve(&catalog, stmt)?;
-        let desc = mz_sql::plan::describe(&PlanContext::zero(), &catalog, stmt, &[])?;
-        assert_eq!(desc.param_types, types);
-    }
-    Ok(())
+    Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+        let catalog = catalog.for_system_session();
+        for (sql, types) in test_cases {
+            let stmt = mz_sql::parse::parse(sql).unwrap().into_element();
+            let (stmt, _) = mz_sql::names::resolve(&catalog, stmt).unwrap();
+            let desc = mz_sql::plan::describe(&PlanContext::zero(), &catalog, stmt, &[]).unwrap();
+            assert_eq!(desc.param_types, types);
+        }
+    })
+    .await
 }

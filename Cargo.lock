@@ -4633,7 +4633,6 @@ name = "mz-stash"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "criterion",
  "differential-dataflow",
  "futures",
@@ -8146,8 +8145,6 @@ dependencies = [
  "tikv-jemalloc-sys",
  "time",
  "time-macros",
- "timely",
- "timely_communication",
  "tokio",
  "tokio-postgres",
  "tokio-stream",

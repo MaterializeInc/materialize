@@ -28,9 +28,9 @@ use crate::config::SystemParameterFrontend;
 
 /// Configures a catalog.
 #[derive(Debug)]
-pub struct Config<'a, S> {
+pub struct Config<'a> {
     /// The connection to the stash.
-    pub storage: storage::Connection<S>,
+    pub storage: storage::Connection,
     /// Whether to enable unsafe mode.
     pub unsafe_mode: bool,
     /// Whether to enable persisted introspection sources.

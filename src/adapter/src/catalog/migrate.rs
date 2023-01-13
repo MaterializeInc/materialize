@@ -16,13 +16,12 @@ use mz_sql::ast::{
     RawObjectName, Statement, UnresolvedObjectName,
 };
 use mz_sql::ast::{CreateReferencedSubsources, Raw};
-use mz_stash::Append;
 
 use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem, SYSTEM_CONN_ID};
 
 use super::storage::Transaction;
 
-fn rewrite_items<F, S: Append>(tx: &mut Transaction<S>, mut f: F) -> Result<(), anyhow::Error>
+fn rewrite_items<F>(tx: &mut Transaction, mut f: F) -> Result<(), anyhow::Error>
 where
     F: FnMut(&mut mz_sql::ast::Statement<Raw>) -> Result<(), anyhow::Error>,
 {
@@ -43,7 +42,7 @@ where
     Ok(())
 }
 
-pub(crate) async fn migrate<S: Append>(catalog: &mut Catalog<S>) -> Result<(), anyhow::Error> {
+pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
     let mut storage = catalog.storage().await;
     let catalog_version = storage.get_catalog_content_version().await?;
     let _catalog_version = match catalog_version {

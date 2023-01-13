@@ -115,7 +115,7 @@ use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::{GlobalId, TimestampManipulation};
-use mz_stash::PostgresFactory;
+use mz_stash::StashFactory;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
@@ -143,7 +143,7 @@ pub struct ControllerConfig {
     /// The now function to advance the controller's introspection collections.
     pub now: NowFn,
     /// The postgres stash factory.
-    pub postgres_factory: PostgresFactory,
+    pub postgres_factory: StashFactory,
 }
 
 /// Responses that [`Controller`] can produce.

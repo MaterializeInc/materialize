@@ -74,6 +74,10 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 #![cfg_attr(nightly_doc_features, feature(doc_cfg))]
+// Without this, cargo clippy complains with:
+//     overflow evaluating the requirement `&str: std::marker::Send`
+// in implement_peek_plan's return of a Result<crate::ExecuteResponse, AdapterError>.
+#![recursion_limit = "256"]
 
 //! Coordinates client requests with the dataflow layer.
 //!

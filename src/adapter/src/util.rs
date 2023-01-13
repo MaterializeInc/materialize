@@ -22,7 +22,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     CreateIndexStatement, FetchStatement, Ident, Raw, RawClusterName, RawObjectName, Statement,
 };
-use mz_stash::{Append, StashError};
+use mz_stash::StashError;
 
 use crate::catalog::Catalog;
 use crate::command::{Command, Response};
@@ -196,8 +196,8 @@ pub fn index_sql(
 /// This function is identical to sql::plan::describe except this is also
 /// supports describing FETCH statements which need access to bound portals
 /// through the session.
-pub fn describe<S: Append>(
-    catalog: &Catalog<S>,
+pub fn describe(
+    catalog: &Catalog,
     stmt: Statement<Raw>,
     param_types: &[Option<ScalarType>],
     session: &Session,

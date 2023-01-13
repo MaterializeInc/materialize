@@ -105,7 +105,7 @@ use mz_ore::{
 };
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
-use mz_stash::{Append, PostgresFactory, Stash};
+use mz_stash::{Stash, StashFactory};
 use mz_storage_client::controller as storage;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
@@ -155,7 +155,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
         &args.postgres_url,
     )?)?;
-    let factory = PostgresFactory::new(&MetricsRegistry::new());
+    let factory = StashFactory::new(&MetricsRegistry::new());
     let mut stash = factory
         .open_readonly(args.postgres_url.clone(), None, tls.clone())
         .await?;
@@ -188,7 +188,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 }
 
 async fn edit(
-    mut stash: impl Append,
+    mut stash: Stash,
     usage: Usage,
     collection: String,
     key: serde_json::Value,
@@ -199,17 +199,13 @@ async fn edit(
     Ok(())
 }
 
-async fn dump(
-    mut stash: impl Stash,
-    usage: Usage,
-    mut target: impl Write,
-) -> Result<(), anyhow::Error> {
+async fn dump(mut stash: Stash, usage: Usage, mut target: impl Write) -> Result<(), anyhow::Error> {
     let data = usage.dump(&mut stash).await?;
     serde_json::to_writer_pretty(&mut target, &data)?;
     write!(&mut target, "\n")?;
     Ok(())
 }
-async fn upgrade_check(stash: impl Append, usage: Usage) -> Result<(), anyhow::Error> {
+async fn upgrade_check(stash: Stash, usage: Usage) -> Result<(), anyhow::Error> {
     let msg = usage.upgrade_check(stash).await?;
     println!("{msg}");
     Ok(())
@@ -243,7 +239,7 @@ impl Usage {
         Ok(())
     }
 
-    async fn from_stash(stash: &mut impl Stash) -> Result<Self, anyhow::Error> {
+    async fn from_stash(stash: &mut Stash) -> Result<Self, anyhow::Error> {
         // Determine which usage we are on by any collection matching any
         // expected name of a usage. To do that safely, we need to verify that
         // there is no overlap between expected names.
@@ -274,7 +270,7 @@ impl Usage {
 
     async fn dump(
         &self,
-        stash: &mut impl Stash,
+        stash: &mut Stash,
     ) -> Result<BTreeMap<&str, serde_json::Value>, anyhow::Error> {
         let mut collections = Vec::new();
         let collection_names = stash.collections().await?;
@@ -326,7 +322,7 @@ impl Usage {
 
     async fn edit(
         &self,
-        stash: &mut impl Append,
+        stash: &mut Stash,
         collection: String,
         key: serde_json::Value,
         value: serde_json::Value,
@@ -369,7 +365,7 @@ impl Usage {
         anyhow::bail!("unknown collection {} for stash {:?}", collection, self)
     }
 
-    async fn upgrade_check(&self, stash: impl Append) -> Result<String, anyhow::Error> {
+    async fn upgrade_check(&self, stash: Stash) -> Result<String, anyhow::Error> {
         if !matches!(self, Self::Catalog) {
             anyhow::bail!("upgrade_check expected Catalog stash, found {:?}", self);
         }

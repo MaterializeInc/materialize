@@ -87,28 +87,15 @@ use tokio_postgres::Config;
 use mz_ore::{assert_contains, metrics::MetricsRegistry};
 
 use mz_stash::{
-    Append, Cache, Memory, Postgres, PostgresFactory, Stash, StashCollection, StashError,
-    TableTransaction, Timestamp, TypedCollection,
+    Stash, StashCollection, StashError, StashFactory, TableTransaction, Timestamp, TypedCollection,
 };
-
-#[tokio::test]
-async fn test_stash_memory() {
-    test_stash(|| async { Memory::new() }).await;
-    test_append(|| async { Memory::new() }).await;
-}
-
-#[tokio::test]
-async fn test_stash_cache() {
-    test_stash(|| async { Cache::new(Memory::new()) }).await;
-    test_append(|| async { Cache::new(Memory::new()) }).await;
-}
 
 #[tokio::test]
 async fn test_stash_postgres() {
     mz_ore::test::init_logging();
 
     let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
-    let factory = PostgresFactory::new(&MetricsRegistry::new());
+    let factory = StashFactory::new(&MetricsRegistry::new());
 
     {
         // Verify invalid URLs fail on connect.
@@ -128,13 +115,13 @@ async fn test_stash_postgres() {
         }
     };
     async fn connect(
-        factory: &PostgresFactory,
+        factory: &StashFactory,
         connstr: &str,
         tls: MakeTlsConnector,
         clear: bool,
-    ) -> Postgres {
+    ) -> Stash {
         if clear {
-            Postgres::clear(connstr, tls.clone()).await.unwrap();
+            Stash::clear(connstr, tls.clone()).await.unwrap();
         }
         factory.open(connstr.to_string(), None, tls).await.unwrap()
     }
@@ -163,7 +150,7 @@ async fn test_stash_postgres() {
     }
     // Test readonly.
     {
-        Postgres::clear(&connstr, tls.clone()).await.unwrap();
+        Stash::clear(&connstr, tls.clone()).await.unwrap();
         let mut stash_rw = factory
             .open(connstr.to_string(), None, tls.clone())
             .await
@@ -242,10 +229,9 @@ async fn test_stash_postgres() {
     }
 }
 
-async fn test_append<F, S, O>(f: F) -> S
+async fn test_append<F, O>(f: F) -> Stash
 where
-    S: Append,
-    O: Future<Output = S>,
+    O: Future<Output = Stash>,
     F: Fn() -> O,
 {
     const TYPED: TypedCollection<String, String> = TypedCollection::new("typed");
@@ -445,10 +431,9 @@ where
     stash
 }
 
-async fn test_stash<F, S, O>(f: F) -> S
+async fn test_stash<F, O>(f: F) -> Stash
 where
-    S: Stash,
-    O: Future<Output = S>,
+    O: Future<Output = Stash>,
     F: Fn() -> O,
 {
     let mut stash = f().await;
@@ -661,7 +646,7 @@ where
     stash
 }
 
-async fn test_stash_table(stash: &mut impl Append) {
+async fn test_stash_table(stash: &mut Stash) {
     const TABLE: TypedCollection<Vec<u8>, String> = TypedCollection::new("table");
     fn uniqueness_violation(a: &String, b: &String) -> bool {
         a == b
@@ -669,7 +654,7 @@ async fn test_stash_table(stash: &mut impl Append) {
     let collection = TABLE.get(stash).await.unwrap();
 
     async fn commit(
-        stash: &mut impl Append,
+        stash: &mut Stash,
         collection: StashCollection<Vec<u8>, String>,
         pending: Vec<(Vec<u8>, String, i64)>,
     ) -> Result<(), StashError> {

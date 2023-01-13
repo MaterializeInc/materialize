@@ -28,7 +28,6 @@ use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::vec::VecExt;
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
-use mz_stash::Append;
 use mz_storage_client::types::sources::Timeline;
 
 use crate::catalog::CatalogItem;
@@ -338,7 +337,7 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
     }
 }
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     pub(crate) fn now(&self) -> EpochMillis {
         (self.catalog.config().now)()
     }
