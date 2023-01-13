@@ -153,11 +153,11 @@ EXPLAIN VIEW course_schedule;
 
 Materialize can further optimize memory usage when joining collections with primary and foreign key constraints using a pattern known as **late materialization**.
 
-To understand late materialization, you need to know about primary and secondary indexes. In our example, the `teachers.id` column uniquely identifies all teachers. When a column or set of columns uniquely identifies each record, it is called a **primary key**, and an index on the primary key is called a **primary index**. We also have `sections.teacher_id`, which is not the primary key of `sections`, but it *does* correspond to the primary key of `teachers`. Whenever we have a column that is a primary key of another collection, it is called a [foreign key](https://en.wikipedia.org/wiki/Foreign_key). When we create an index on a foreign key, it's called a **secondary index**.
+To understand late materialization, you need to know about primary and foreign keys. In our example, the `teachers.id` column uniquely identifies all teachers. When a column or set of columns uniquely identifies each record, it is called a **primary key**. We also have `sections.teacher_id`, which is not the primary key of `sections`, but it *does* correspond to the primary key of `teachers`. Whenever we have a column that is a primary key of another collection, it is called a [**foreign key**](https://en.wikipedia.org/wiki/Foreign_key).
 
 In many relational databases, indexes don't replicate the entire collection of data. Rather, they maintain just a mapping from the indexed columns back to a primary key. These few columns can take substantially less space than the whole collection, and may also change less as various unrelated attributes are updated. This is called **late materialization**, and it is possible to achieve in Materialize as well. Here are the steps to implementing late materialization along with examples.
 
-1. Create primary indexes for your input collections.
+1. Create indexes on the primary key column(s) for your input collections.
     ```sql
     CREATE INDEX pk_teachers ON teachers (id);
     CREATE INDEX pk_sections ON sections (id);
@@ -170,7 +170,7 @@ In many relational databases, indexes don't replicate the entire collection of d
     -- Create a "narrow" view containing primary key sections.id
     -- and foreign key sections.teacher_id
     CREATE VIEW sections_narrow_teachers AS SELECT id, teacher_id FROM sections;
-    -- Create primary and secondary indexes
+    -- Create indexes on those columns
     CREATE INDEX sections_narrow_teachers_0 ON sections_narrow_teachers (id);
     CREATE INDEX sections_narrow_teachers_1 ON sections_narrow_teachers (teacher_id);
     ```
@@ -178,7 +178,7 @@ In many relational databases, indexes don't replicate the entire collection of d
     -- Create a "narrow" view containing primary key sections.id
     -- and foreign key sections.course_id
     CREATE VIEW sections_narrow_courses AS SELECT id, course_id FROM sections;
-    -- Create primary and secondary indexes
+    -- Create indexes on those columns
     CREATE INDEX sections_narrow_courses_0 ON sections_narrow_courses (id);
     CREATE INDEX sections_narrow_courses_1 ON sections_narrow_courses (course_id);
     ```
