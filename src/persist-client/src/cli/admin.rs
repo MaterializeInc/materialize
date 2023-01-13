@@ -184,8 +184,8 @@ pub async fn force_compaction(
 
     let mut attempt = 0;
     'outer: loop {
-        machine.fetch_and_update_state().await;
-        let reqs = machine.state().collections.trace.all_fueled_merge_reqs();
+        machine.applier.fetch_and_update_state().await;
+        let reqs = machine.applier.all_fueled_merge_reqs();
         info!("attempt {}: got {} compaction reqs", attempt, reqs.len());
         for (idx, req) in reqs.clone().into_iter().enumerate() {
             let req = CompactReq {
@@ -441,7 +441,7 @@ async fn force_gc(
     let mut machine = make_machine(&cfg, consensus, blob, metrics, shard_id, commit).await?;
     let gc_req = GcReq {
         shard_id,
-        new_seqno_since: machine.state().seqno_since(),
+        new_seqno_since: machine.applier.state().seqno_since(),
     };
     GarbageCollector::gc_and_truncate(&mut machine, gc_req).await;
 

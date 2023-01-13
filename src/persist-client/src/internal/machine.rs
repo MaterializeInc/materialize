@@ -10,13 +10,12 @@
 //! Implementation of the persist state machine.
 
 use std::fmt::Debug;
-use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
+use std::ops::{ControlFlow, ControlFlow::Continue};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_ore::cast::CastFrom;
 use mz_ore::task::spawn;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -31,17 +30,15 @@ use mz_persist_types::{Codec, Codec64, Opaque};
 
 use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, InvalidUsage};
+use crate::internal::apply::Applier;
 use crate::internal::compact::CompactReq;
 use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
-use crate::internal::metrics::{
-    CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics, ShardMetrics,
-};
+use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
     CompareAndAppendBreak, CriticalReaderState, HollowBatch, IdempotencyToken, LeasedReaderState,
-    NoOpStateTransition, Since, State, StateCollections, Upper, WriterState,
+    NoOpStateTransition, Since, StateCollections, Upper, WriterState,
 };
-use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::read::LeasedReaderId;
@@ -50,26 +47,14 @@ use crate::{PersistConfig, ShardId};
 
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
-    pub(crate) cfg: PersistConfig,
-    pub(crate) metrics: Arc<Metrics>,
-    pub(crate) shard_metrics: Arc<ShardMetrics>,
-    pub(crate) state_versions: Arc<StateVersions>,
-
-    state: State<K, V, T, D>,
+    pub(crate) applier: Applier<K, V, T, D>,
 }
 
 // Impl Clone regardless of the type params.
 impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
-            cfg: self.cfg.clone(),
-            metrics: Arc::clone(&self.metrics),
-            shard_metrics: Arc::clone(&self.shard_metrics),
-            state_versions: Arc::clone(&self.state_versions),
-            state: self.state.clone(
-                self.state.applier_version.clone(),
-                self.state.hostname.clone(),
-            ),
+            applier: self.applier.clone(),
         }
     }
 }
@@ -87,66 +72,43 @@ where
         metrics: Arc<Metrics>,
         state_versions: Arc<StateVersions>,
     ) -> Result<Self, Box<CodecMismatch>> {
-        let shard_metrics = metrics.shards.shard(&shard_id);
-        let state = metrics
-            .cmds
-            .init_state
-            .run_cmd(&shard_metrics, |_cas_mismatch_metric| {
-                // No cas_mismatch retries because we just use the returned
-                // state on a mismatch.
-                state_versions.maybe_init_shard(&shard_metrics)
-            })
-            .await?;
-        Ok(Machine {
-            cfg,
-            metrics,
-            shard_metrics,
-            state_versions,
-            state,
-        })
+        let applier = Applier::new(cfg, shard_id, metrics, state_versions).await?;
+        Ok(Machine { applier })
     }
 
     pub fn shard_id(&self) -> ShardId {
-        self.state.shard_id()
+        self.applier.state().shard_id()
     }
 
     pub async fn fetch_upper(&mut self) -> &Antichain<T> {
-        self.fetch_and_update_state().await;
-        self.state.upper()
+        self.applier.fetch_and_update_state().await;
+        self.upper()
     }
 
     pub fn upper(&self) -> &Antichain<T> {
-        self.state.upper()
+        self.applier.state().upper()
     }
 
     pub fn seqno(&self) -> SeqNo {
-        self.state.seqno()
-    }
-
-    pub(crate) fn state(&self) -> &State<K, V, T, D> {
-        &self.state
+        self.applier.state().seqno()
     }
 
     #[cfg(test)]
     pub fn seqno_since(&self) -> SeqNo {
-        self.state.seqno_since()
+        self.applier.state().seqno_since()
     }
 
     pub async fn add_rollup_for_current_seqno(&mut self) {
-        let rollup_seqno = self.state.seqno;
-        let rollup_key = PartialRollupKey::new(rollup_seqno, &RollupId::new());
-        let () = self
-            .state_versions
-            .write_rollup_blob(&self.shard_metrics, &self.state, &rollup_key)
-            .await;
+        let rollup = self.applier.write_rollup_blob(&RollupId::new()).await;
         let applied = self
-            .add_and_remove_rollups((rollup_seqno, &rollup_key), &[])
+            .add_and_remove_rollups((rollup.seqno, &rollup.key), &[])
             .await;
         if !applied {
             // Someone else already wrote a rollup at this seqno, so ours didn't
             // get added. Delete it.
-            self.state_versions
-                .delete_rollup(&self.state.shard_id, &rollup_key)
+            self.applier
+                .state_versions
+                .delete_rollup(&rollup.shard_id, &rollup.key)
                 .await;
         }
     }
@@ -159,7 +121,7 @@ where
         // See the big SUBTLE comment in [Self::merge_res] for what's going on
         // here.
         let mut applied_ever_true = false;
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, _applied, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.add_and_remove_rollups, |_, _, state| {
                 let ret = state.add_and_remove_rollups(add_rollup, remove_rollups);
@@ -179,7 +141,7 @@ where
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> LeasedReaderState<T> {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, reader_state, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, cfg, state| {
                 state.register_leased_reader(
@@ -193,9 +155,10 @@ where
             })
             .await;
 
-        if !self.state.collections.is_tombstone()
+        if !self.applier.state().collections.is_tombstone()
             && !self
-                .state
+                .applier
+                .state()
                 .collections
                 .leased_readers
                 .contains_key(reader_id)
@@ -212,10 +175,10 @@ where
         // hold is >= the seqno_since, so validate that instead of anything more
         // specific.
         debug_assert!(
-            reader_state.seqno >= self.state.seqno_since(),
+            reader_state.seqno >= self.applier.state().seqno_since(),
             "{} vs {}",
             reader_state.seqno,
-            self.state.seqno_since()
+            self.applier.state().seqno_since()
         );
         reader_state
     }
@@ -225,7 +188,7 @@ where
         reader_id: &CriticalReaderId,
         purpose: &str,
     ) -> CriticalReaderState<T> {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, state, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
                 state.register_critical_reader::<O>(&cfg.hostname, reader_id, purpose)
@@ -241,7 +204,7 @@ where
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
     ) -> (Upper<T>, WriterState<T>) {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, (shard_upper, writer_state), _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
                 state.register_writer(
@@ -253,8 +216,13 @@ where
                 )
             })
             .await;
-        if !self.state.collections.is_tombstone()
-            && !self.state.collections.writers.contains_key(writer_id)
+        if !self.applier.state().collections.is_tombstone()
+            && !self
+                .applier
+                .state()
+                .collections
+                .writers
+                .contains_key(writer_id)
         {
             error!("Writer {writer_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
                     This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
@@ -288,7 +256,7 @@ where
                     // side-channel that didn't update our local cache of the
                     // machine state. So, fetch the latest state and try again
                     // if we indeed get something different.
-                    self.fetch_and_update_state().await;
+                    self.applier.fetch_and_update_state().await;
                     let current_upper = self.upper();
 
                     // We tried to to a compare_and_append with the wrong
@@ -315,7 +283,7 @@ where
         // error on the first attempt in tests.
         mut indeterminate: Option<Indeterminate>,
     ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, Upper<T>> {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         // SUBTLE: Retries of compare_and_append with Indeterminate errors are
         // tricky (more discussion of this in #12797):
         //
@@ -399,12 +367,14 @@ where
         // then commit to it and remove the Indeterminate from
         // [WriteHandle::compare_and_append_batch].
         let mut retry = self
+            .applier
             .metrics
             .retries
             .compare_and_append_idempotent
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
             let cmd_res = self
+                .applier
                 .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, _, state| {
                     state.compare_and_append(
                         batch,
@@ -461,7 +431,7 @@ where
                     // Indeterminate error but was successful. Sanity check this
                     // and pass along the good news.
                     assert!(indeterminate.is_some());
-                    self.metrics.cmds.compare_and_append_noop.inc();
+                    self.applier.metrics.cmds.compare_and_append_noop.inc();
                     return Ok(Ok((seqno, WriterMaintenance::default())));
                 }
                 Err(CompareAndAppendBreak::InvalidUsage(err)) => {
@@ -520,7 +490,7 @@ where
     }
 
     pub async fn merge_res(&mut self, res: &FueledMergeRes<T>) -> ApplyMergeResult {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
 
         // SUBTLE! If Machine::merge_res returns false, the blobs referenced in
         // compaction output are deleted so we don't leak them. Naively passing
@@ -579,7 +549,7 @@ where
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, Since<T>, RoutineMaintenance) {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |seqno, _cfg, state| {
             state.downgrade_since(
                 reader_id,
@@ -598,7 +568,7 @@ where
         expected_opaque: &O,
         (new_opaque, new_since): (&O, &Antichain<T>),
     ) -> (Result<Since<T>, (O, Since<T>)>, RoutineMaintenance) {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, res, maintenance) = self
             .apply_unbatched_idempotent_cmd(
                 &metrics.cmds.compare_and_downgrade_since,
@@ -623,7 +593,7 @@ where
         reader_id: &LeasedReaderId,
         heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, bool, RoutineMaintenance) {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (seqno, existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_reader, |_, _, state| {
                 state.heartbeat_leased_reader(reader_id, heartbeat_timestamp_ms)
@@ -635,7 +605,7 @@ where
     pub async fn start_reader_heartbeat_task(self, reader_id: LeasedReaderId) -> JoinHandle<()> {
         let mut machine = self;
         spawn(|| "persist::heartbeat_read", async move {
-            let sleep_duration = machine.cfg.reader_lease_duration / 2;
+            let sleep_duration = machine.applier.cfg.reader_lease_duration / 2;
             loop {
                 let before_sleep = Instant::now();
                 tokio::time::sleep(sleep_duration).await;
@@ -652,7 +622,7 @@ where
 
                 let before_heartbeat = Instant::now();
                 let (_seqno, existed, _maintenance) = machine
-                    .heartbeat_leased_reader(&reader_id, (machine.cfg.now)())
+                    .heartbeat_leased_reader(&reader_id, (machine.applier.cfg.now)())
                     .await;
 
                 let elapsed_since_heartbeat = before_heartbeat.elapsed();
@@ -677,7 +647,7 @@ where
         writer_id: &WriterId,
         heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, bool, RoutineMaintenance) {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (seqno, existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_writer, |_, _, state| {
                 state.heartbeat_writer(writer_id, heartbeat_timestamp_ms)
@@ -689,7 +659,7 @@ where
     pub async fn start_writer_heartbeat_task(self, writer_id: WriterId) -> JoinHandle<()> {
         let mut machine = self;
         spawn(|| "persist::heartbeat_write", async move {
-            let sleep_duration = machine.cfg.writer_lease_duration / 4;
+            let sleep_duration = machine.applier.cfg.writer_lease_duration / 4;
             loop {
                 let before_sleep = Instant::now();
                 tokio::time::sleep(sleep_duration).await;
@@ -706,7 +676,7 @@ where
 
                 let before_heartbeat = Instant::now();
                 let (_seqno, existed, _maintenance) = machine
-                    .heartbeat_writer(&writer_id, (machine.cfg.now)())
+                    .heartbeat_writer(&writer_id, (machine.applier.cfg.now)())
                     .await;
 
                 let elapsed_since_heartbeat = before_heartbeat.elapsed();
@@ -727,7 +697,7 @@ where
     }
 
     pub async fn expire_leased_reader(&mut self, reader_id: &LeasedReaderId) -> SeqNo {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (seqno, _existed, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, _, state| {
                 state.expire_leased_reader(reader_id)
@@ -737,7 +707,7 @@ where
     }
 
     pub async fn expire_critical_reader(&mut self, reader_id: &CriticalReaderId) -> SeqNo {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (seqno, _existed, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, _, state| {
                 state.expire_critical_reader(reader_id)
@@ -747,7 +717,7 @@ where
     }
 
     pub async fn expire_writer(&mut self, writer_id: &WriterId) -> SeqNo {
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let (seqno, _existed, _maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_writer, |_, _, state| {
                 state.expire_writer(writer_id)
@@ -757,18 +727,20 @@ where
     }
 
     pub async fn maybe_become_tombstone(&mut self) -> Option<RoutineMaintenance> {
-        if !self.state.upper().is_empty() || !self.state.since().is_empty() {
+        if !self.applier.state().upper().is_empty() || !self.applier.state().since().is_empty() {
             return None;
         }
 
-        let metrics = Arc::clone(&self.metrics);
+        let metrics = Arc::clone(&self.applier.metrics);
         let mut retry = self
+            .applier
             .metrics
             .retries
             .idempotent_cmd
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
             let res = self
+                .applier
                 .apply_unbatched_cmd(&metrics.cmds.become_tombstone, |_, _, state| {
                     state.become_tombstone()
                 })
@@ -800,7 +772,7 @@ where
     ) -> Result<Vec<HollowBatch<T>>, Since<T>> {
         let mut retry: Option<MetricsRetryStream> = None;
         loop {
-            let upper = match self.state.snapshot(as_of) {
+            let upper = match self.applier.snapshot(as_of) {
                 Ok(Ok(x)) => return Ok(x),
                 Ok(Err(Upper(upper))) => {
                     // The upper isn't ready yet, fall through and try again.
@@ -812,6 +784,7 @@ where
             // maybe our state was just out of date.
             retry = Some(match retry.take() {
                 None => self
+                    .applier
                     .metrics
                     .retries
                     .snapshot
@@ -840,13 +813,13 @@ where
                     retry.sleep().await
                 }
             });
-            self.fetch_and_update_state().await;
+            self.applier.fetch_and_update_state().await;
         }
     }
 
     // NB: Unlike the other methods here, this one is read-only.
     pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<(), Since<T>> {
-        match self.state.verify_listen(as_of) {
+        match self.applier.verify_listen(as_of) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(Upper(_))) => {
                 // The upper may not be ready yet (maybe it would be ready if we
@@ -861,7 +834,7 @@ where
     }
 
     pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
-        self.state.next_listen_batch(frontier)
+        self.applier.next_listen_batch(frontier)
     }
 
     async fn apply_unbatched_idempotent_cmd<
@@ -877,12 +850,13 @@ where
         mut work_fn: WorkFn,
     ) -> (SeqNo, R, RoutineMaintenance) {
         let mut retry = self
+            .applier
             .metrics
             .retries
             .idempotent_cmd
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
-            match self.apply_unbatched_cmd(cmd, &mut work_fn).await {
+            match self.applier.apply_unbatched_cmd(cmd, &mut work_fn).await {
                 Ok((seqno, x, mut maintenance)) => match x {
                     Ok(x) => {
                         if let Some(tombstone_maintenance) = self.maybe_become_tombstone().await {
@@ -1126,8 +1100,8 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         Ok(format!(
             "since={:?} upper={:?}\n",
-            datadriven.machine.state.since().elements(),
-            datadriven.machine.state.upper().elements()
+            datadriven.machine.applier.state().since().elements(),
+            datadriven.machine.applier.state().upper().elements()
         ))
     }
 
@@ -1139,7 +1113,12 @@ pub mod datadriven {
         let reader_id = args.expect("reader_id");
         let (_, since, routine) = datadriven
             .machine
-            .downgrade_since(&reader_id, None, &since, (datadriven.machine.cfg.now)())
+            .downgrade_since(
+                &reader_id,
+                None,
+                &since,
+                (datadriven.machine.applier.cfg.now)(),
+            )
             .await;
         datadriven.routine.push(routine);
         Ok(format!(
@@ -1646,7 +1625,7 @@ pub mod datadriven {
             let () = maintenance
                 .perform(&datadriven.machine, &datadriven.gc)
                 .await;
-            let () = datadriven.machine.fetch_and_update_state().await;
+            let () = datadriven.machine.applier.fetch_and_update_state().await;
             write!(s, "{} ok\n", datadriven.machine.seqno());
         }
         Ok(s)
@@ -1699,6 +1678,7 @@ pub mod tests {
         }
         let live_diffs = write
             .machine
+            .applier
             .state_versions
             .fetch_all_live_diffs(&write.machine.shard_id())
             .await;

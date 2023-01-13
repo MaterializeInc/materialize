@@ -589,7 +589,7 @@ where
         let elapsed_since_last_heartbeat =
             Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
-            if elapsed_since_last_heartbeat > self.machine.cfg.writer_lease_duration {
+            if elapsed_since_last_heartbeat > self.machine.applier.cfg.writer_lease_duration {
                 warn!(
                     "writer ({}) of shard ({}) went {}s between heartbeats",
                     self.writer_id,
@@ -602,7 +602,7 @@ where
                 .machine
                 .heartbeat_writer(&self.writer_id, heartbeat_ts)
                 .await;
-            if !existed && !self.machine.state().collections.is_tombstone() {
+            if !existed && !self.machine.applier.state().collections.is_tombstone() {
                 // It's probably surprising to the caller that the shard
                 // becoming a tombstone expired this writer. Possibly the right
                 // thing to do here is pass up a bool to the caller indicating

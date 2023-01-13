@@ -242,9 +242,9 @@ where
         new: (&O, &Antichain<T>),
     ) -> Option<Result<Antichain<T>, O>> {
         let elapsed_since_last_downgrade = Duration::from_millis(
-            (self.machine.cfg.now)().saturating_sub(self.last_downgrade_since),
+            (self.machine.applier.cfg.now)().saturating_sub(self.last_downgrade_since),
         );
-        if elapsed_since_last_downgrade >= self.machine.cfg.critical_downgrade_interval {
+        if elapsed_since_last_downgrade >= self.machine.applier.cfg.critical_downgrade_interval {
             Some(self.compare_and_downgrade_since(expected, new).await)
         } else {
             None
@@ -278,7 +278,7 @@ where
             .machine
             .compare_and_downgrade_since(&self.reader_id, expected, new)
             .await;
-        self.last_downgrade_since = (self.machine.cfg.now)();
+        self.last_downgrade_since = (self.machine.applier.cfg.now)();
         maintenance.start_performing(&self.machine, &self.gc);
         match res {
             Ok(Since(since)) => {
