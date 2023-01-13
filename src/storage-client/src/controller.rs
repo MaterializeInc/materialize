@@ -209,6 +209,10 @@ pub trait StorageController: Debug + Send {
     /// now valid to use in queries at times beyond the initial `since` frontiers. Each
     /// collection also acquires a read capability at this frontier, which will need to
     /// be repeatedly downgraded with `allow_compaction()` to permit compaction.
+    ///
+    /// This method is NOT idempotent; It can fail between processing of different
+    /// collections and leave the controller in an inconsistent state. It is almost
+    /// always wrong to do anything but abort the process on `Err`.
     async fn create_collections(
         &mut self,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
@@ -839,6 +843,9 @@ where
         }
 
         // Install collection state for each bound description.
+        // Note that this method implementation attempts to do AS MUCH work
+        // concurrently as possible. There are inline comments explaining the motivation
+        // behind each section
 
         // Perform all stash writes in a single transaction, to minimize transaction overhead and
         // the time spent waiting for stash.
@@ -859,6 +866,7 @@ where
 
         let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
 
+        // We first enrich each collection description with some additional metadata...
         use futures::stream::{StreamExt, TryStreamExt};
         let enriched_with_metdata = collections.into_iter().map(|(id, description)| {
             let collection_shards = durable_metadata.remove(&id).expect("inserted above");
@@ -884,6 +892,7 @@ where
             Ok((id, description, metadata))
         });
 
+        // So that we can open `SinceHandle`s for each collections concurrently.
         let persist_client = self
             .persist
             .lock()
@@ -892,6 +901,8 @@ where
             .await
             .unwrap();
         let persist_client = &persist_client;
+        // Reborrow the `&mut self` as immutable, as all the concurrent work to be processed in
+        // this stream cannot all have exclusive access.
         let this = &*self;
         let to_register: Vec<_> = futures::stream::iter(enriched_with_metdata)
             .map(|data: Result<_, anyhow::Error>| async move {
@@ -957,11 +968,26 @@ where
                 );
                 Ok::<_, anyhow::Error>((id, description, write, since_handle, cs))
             })
+            // Poll each future for each collection concurrently, maximum of 50 at a time.
             .buffer_unordered(50)
+            // HERE BE DRAGONS:
+            //
+            // There are at least 2 subtleties in using `FuturesUnordered` (which
+            // `buffer_unordered` uses underneath:
+            // - One is captured here <https://github.com/rust-lang/futures-rs/issues/2387>
+            // - And the other is deadlocking if processing an OUTPUT of a `FuturesUnordered`
+            // stream attempts to obtain an async mutex that is also obtained in the futures
+            // being polled.
+            //
+            // Both of these could potentially be issues in all usages of `buffer_unordered` in
+            // this method, so we stick the standard advice: only use `try_collect` or
+            // `collect`!
             .try_collect()
             .await?;
 
         let mut to_migrate = vec![];
+        // This work mutates the controller state, so must be done serially. Because there
+        // is no io-bound work, its very fast.
         for (id, description, write, since_handle, collection_state) in to_register {
             self.state.persist_write_handles.register(id, write);
             self.state.persist_read_handles.register(id, since_handle);
@@ -971,13 +997,22 @@ where
             to_migrate.push((id, description));
         }
 
+        // Reborrow `&mut self` immutably, same reasoning as above.
         let this = &*self;
+        // We now register the shard mapping for each collection, which is effectively appending
+        // some updates to `CollectionManager` channel concurrently.
+        //
+        // We also determine IF we need to migrate the remap shard for each collection, by
+        // concurrently reading from persist.
         let to_create: Vec<_> = futures::stream::iter(to_migrate)
             .map(|(id, description)| async move {
                 let dc = this
                     .determine_remap_shard_migration(id, &description.data_source)
                     .await;
 
+                // TODO(guswynn): determine if this is necessary if we perform all migrations before we initialize the
+                // shard mapping collection.
+                //
                 // Note we register the mapping AFTER the migration below if there is one.
                 if dc.is_none() {
                     this.register_shard_mapping(id).await;
@@ -985,9 +1020,17 @@ where
                 (id, description, dc)
             })
             .buffer_unordered(50)
+            // See the docs on `try_collect` above for more info before attempting to change
+            // this!
             .collect()
             .await;
 
+        // These migrations need to alter the internal controller state, so must be done
+        // serially.
+        //
+        // TODO(guswynn): In `migrate_collection_metadata` we could split out an appending part which
+        // could be processed concurrently. Because this is a one-time migration, it may not be
+        // worth it.
         let mut need_remap_migration = vec![];
         let to_create: Vec<_> = to_create
             .into_iter()
@@ -1000,6 +1043,7 @@ where
             .collect();
         self.migrate_collection_metadata(need_remap_migration).await;
 
+        // TODO(guswynn): perform the io in this final section concurrently.
         for (id, description) in to_create {
             match description.data_source {
                 DataSource::Ingestion(ingestion) => {
@@ -2008,6 +2052,11 @@ where
         }
     }
 
+    /// For each collection, migrate its collection metadata to the new
+    /// `DurableCollectionMetadata`. This is primarily intended to be used
+    /// with `determine_remap_shard_migration`, so that many
+    /// `determine_remap_shard_migration` can be processed concurrently,
+    /// which this method does not support.
     async fn migrate_collection_metadata<I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = (GlobalId, DurableCollectionMetadata)>,
