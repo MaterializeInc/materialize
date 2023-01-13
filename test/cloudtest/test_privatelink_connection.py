@@ -68,6 +68,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
                 BROKERS (
                     'customer-hostname-1:9092' USING AWS PRIVATELINK privatelinkconn,
                     'customer-hostname-2:9092' USING AWS PRIVATELINK privatelinkconn (PORT 9093),
+                    'customer-hostname-3:9092' USING AWS PRIVATELINK privatelinkconn (AVAILABILITY ZONE 'use1-az1', PORT 9093),
                     'customer-hostname-4:9094'
                 )
             );
@@ -114,11 +115,6 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
             )
         )
 
-    mz.environmentd.sql("DROP CONNECTION kafkaconn")
-    mz.environmentd.sql("DROP CONNECTION privatelinkconn")
-
-    not_exists(resource=f"vpcendpoint/connection-{aws_connection_id}")
-
     with pytest.raises(
         ProgrammingError, match='invalid AWS PrivateLink availability zone "us-east-1a"'
     ):
@@ -133,3 +129,24 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
                 """
             )
         )
+
+    with pytest.raises(
+        ProgrammingError,
+        match='AWS PrivateLink availability zone "use1-az3" does not match any of the availability zones on the AWS PrivateLink connection',
+    ):
+        mz.environmentd.sql(
+            dedent(
+                """\
+                CREATE CONNECTION kafkaconn2 TO KAFKA (
+                    BROKERS (
+                        'customer-hostname-3:9092' USING AWS PRIVATELINK privatelinkconn (AVAILABILITY ZONE 'use1-az3', PORT 9093)
+                    )
+                );
+                """
+            )
+        )
+
+    mz.environmentd.sql("DROP CONNECTION kafkaconn")
+    mz.environmentd.sql("DROP CONNECTION privatelinkconn")
+
+    not_exists(resource=f"vpcendpoint/connection-{aws_connection_id}")

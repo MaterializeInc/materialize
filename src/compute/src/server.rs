@@ -32,7 +32,6 @@ use timely::WorkerConfig;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
-use mz_compute_client::metrics::ComputeMetrics;
 use mz_compute_client::protocol::command::{ComputeCommand, ComputeStartupEpoch, TimelyConfig};
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::ComputeResponse;
@@ -49,6 +48,7 @@ use tracing::{info, warn};
 use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;
 use crate::compute_state::ComputeState;
+use crate::metrics::ComputeMetrics;
 use crate::{TraceManager, TraceMetrics};
 
 /// Configures a dataflow server.

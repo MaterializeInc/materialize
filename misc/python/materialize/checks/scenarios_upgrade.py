@@ -27,14 +27,6 @@ from materialize.checks.mzcompose_actions import (
     UseClusterdCompute,
 )
 from materialize.checks.scenarios import Scenario
-from materialize.mzcompose.services import Materialized
-
-# Older Mz versions are not configured to know SIZE '4-4' clusters by default
-size = Materialized.Size.DEFAULT_SIZE
-environment_extra = [
-    f'MZ_STORAGE_HOST_SIZES={{"{size}":{{"workers":{size}}}}}',
-    f'MZ_CLUSTER_REPLICA_SIZES={{"1":{{"workers":1,"scale":1}},"{size}-{size}":{{"workers":{size},"scale":{size}}}}}',
-]
 
 released_versions = util.released_materialize_versions()
 
@@ -54,7 +46,7 @@ class UpgradeEntireMz(Scenario):
     def actions(self) -> List[Action]:
         print(f"Upgrading from tag {self.tag()}")
         return [
-            StartMz(tag=self.tag(), environment_extra=environment_extra),
+            StartMz(tag=self.tag()),
             Initialize(self.checks),
             Manipulate(self.checks, phase=1),
             KillMz(),
@@ -89,7 +81,7 @@ class UpgradeClusterdComputeLast(Scenario):
 
     def actions(self) -> List[Action]:
         return [
-            StartMz(tag=last_version, environment_extra=environment_extra),
+            StartMz(tag=last_version),
             StartClusterdCompute(tag=last_version),
             UseClusterdCompute(),
             Initialize(self.checks),
@@ -118,7 +110,7 @@ class UpgradeClusterdComputeFirst(Scenario):
 
     def actions(self) -> List[Action]:
         return [
-            StartMz(tag=last_version, environment_extra=environment_extra),
+            StartMz(tag=last_version),
             StartClusterdCompute(tag=last_version),
             UseClusterdCompute(),
             Initialize(self.checks),

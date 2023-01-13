@@ -2236,3 +2236,40 @@ fn test_emit_timestamp_notice() {
         })
         .unwrap();
 }
+
+#[test]
+fn test_isolation_level_notice() {
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    client
+        .batch_execute("SET TRANSACTION_ISOLATION TO 'READ UNCOMMITTED'")
+        .unwrap();
+
+    let notice_re = Regex::new(
+        "transaction isolation level .* is unimplemented, the session will be upgraded to .*",
+    )
+    .unwrap();
+
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| match rx.try_next() {
+            Ok(Some(msg)) => notice_re
+                .captures(msg.message())
+                .ok_or("wrong message")
+                .map(|_| ()),
+            Ok(None) => panic!("unexpected channel close"),
+            Err(_) => Err("no messages available"),
+        })
+        .unwrap();
+}

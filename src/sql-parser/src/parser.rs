@@ -2124,7 +2124,11 @@ impl<'a> Parser<'a> {
     fn parse_kafka_broker_aws_private_link_option(
         &mut self,
     ) -> Result<KafkaBrokerAwsPrivatelinkOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[PORT])? {
+        let name = match self.expect_one_of_keywords(&[AVAILABILITY, PORT])? {
+            AVAILABILITY => {
+                self.expect_keywords(&[ZONE])?;
+                KafkaBrokerAwsPrivatelinkOptionName::AvailabilityZone
+            }
             PORT => KafkaBrokerAwsPrivatelinkOptionName::Port,
             _ => unreachable!(),
         };

@@ -112,87 +112,91 @@ async fn datadriven() {
         // test_case invocation, act on a stream of test_cases, or take and return a
         // Context. This is just a test, so the performance hit of this doesn't matter
         // (and in practice there will be no contention).
-        let catalog = Arc::new(Mutex::new(
-            Catalog::open_debug_memory(NOW_ZERO.clone()).await.unwrap(),
-        ));
-        f.run_async(|test_case| {
-            let catalog = Arc::clone(&catalog);
-            async move {
-                let mut catalog = catalog.lock().await;
-                match test_case.directive.as_str() {
-                    "add-table" => {
-                        let id = catalog.allocate_user_id().await.unwrap();
-                        let oid = catalog.allocate_oid().unwrap();
-                        let database_id = catalog
-                            .resolve_database(DEFAULT_DATABASE_NAME)
-                            .unwrap()
-                            .id();
-                        let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
-                        let schema_spec = catalog
-                            .resolve_schema_in_database(
-                                &database_spec,
-                                DEFAULT_SCHEMA,
-                                SYSTEM_CONN_ID,
-                            )
-                            .unwrap()
-                            .id
-                            .clone();
-                        catalog
-                            .transact(
-                                mz_repr::Timestamp::MIN,
-                                None,
-                                vec![Op::CreateItem {
-                                    id,
-                                    oid,
-                                    name: QualifiedObjectName {
-                                        qualifiers: ObjectQualifiers {
-                                            database_spec,
-                                            schema_spec,
-                                        },
-                                        item: test_case.input.trim_end().to_string(),
-                                    },
-                                    item: CatalogItem::Table(Table {
-                                        create_sql: "TODO".to_string(),
-                                        desc: RelationDesc::empty(),
-                                        defaults: vec![Expr::null(); 0],
-                                        conn_id: None,
-                                        depends_on: vec![],
-                                        custom_logical_compaction_window: None,
-                                        is_retained_metrics_relation: false,
-                                    }),
-                                }],
-                                |_| Ok(()),
-                            )
-                            .await
-                            .unwrap();
-                        format!("{}\n", id)
-                    }
-                    "resolve" => {
-                        let sess = Session::dummy();
-                        let catalog = catalog.for_session(&sess);
 
-                        let parsed = mz_sql::parse::parse(&test_case.input).unwrap();
-                        let pcx = &PlanContext::zero();
-                        let scx = StatementContext::new(Some(pcx), &catalog);
-                        let qcx =
-                            QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
-                        let q = parsed[0].clone();
-                        let q = match q {
-                            Statement::Select(s) => s.query,
-                            _ => unreachable!(),
-                        };
-                        let resolved = names::resolve(qcx.scx.catalog, q);
-                        match resolved {
-                            Ok((q, _depends_on)) => format!("{}\n", q),
-                            Err(e) => format!("error: {}\n", e),
+        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+            let catalog = Arc::new(Mutex::new(catalog));
+            f.run_async(|test_case| {
+                let catalog = Arc::clone(&catalog);
+                async move {
+                    let mut catalog = catalog.lock().await;
+                    match test_case.directive.as_str() {
+                        "add-table" => {
+                            let id = catalog.allocate_user_id().await.unwrap();
+                            let oid = catalog.allocate_oid().unwrap();
+                            let database_id = catalog
+                                .resolve_database(DEFAULT_DATABASE_NAME)
+                                .unwrap()
+                                .id();
+                            let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
+                            let schema_spec = catalog
+                                .resolve_schema_in_database(
+                                    &database_spec,
+                                    DEFAULT_SCHEMA,
+                                    SYSTEM_CONN_ID,
+                                )
+                                .unwrap()
+                                .id
+                                .clone();
+                            catalog
+                                .transact(
+                                    mz_repr::Timestamp::MIN,
+                                    None,
+                                    vec![Op::CreateItem {
+                                        id,
+                                        oid,
+                                        name: QualifiedObjectName {
+                                            qualifiers: ObjectQualifiers {
+                                                database_spec,
+                                                schema_spec,
+                                            },
+                                            item: test_case.input.trim_end().to_string(),
+                                        },
+                                        item: CatalogItem::Table(Table {
+                                            create_sql: "TODO".to_string(),
+                                            desc: RelationDesc::empty(),
+                                            defaults: vec![Expr::null(); 0],
+                                            conn_id: None,
+                                            depends_on: vec![],
+                                            custom_logical_compaction_window: None,
+                                            is_retained_metrics_relation: false,
+                                        }),
+                                    }],
+                                    |_| Ok(()),
+                                )
+                                .await
+                                .unwrap();
+                            format!("{}\n", id)
                         }
+                        "resolve" => {
+                            let sess = Session::dummy();
+                            let catalog = catalog.for_session(&sess);
+
+                            let parsed = mz_sql::parse::parse(&test_case.input).unwrap();
+                            let pcx = &PlanContext::zero();
+                            let scx = StatementContext::new(Some(pcx), &catalog);
+                            let qcx = QueryContext::root(
+                                &scx,
+                                QueryLifetime::OneShot(scx.pcx().unwrap()),
+                            );
+                            let q = parsed[0].clone();
+                            let q = match q {
+                                Statement::Select(s) => s.query,
+                                _ => unreachable!(),
+                            };
+                            let resolved = names::resolve(qcx.scx.catalog, q);
+                            match resolved {
+                                Ok((q, _depends_on)) => format!("{}\n", q),
+                                Err(e) => format!("error: {}\n", e),
+                            }
+                        }
+                        dir => panic!("unhandled directive {}", dir),
                     }
-                    dir => panic!("unhandled directive {}", dir),
                 }
-            }
+            })
+            .await;
+            f
         })
-        .await;
-        f
+        .await
     })
     .await;
 }

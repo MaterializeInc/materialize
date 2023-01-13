@@ -83,12 +83,11 @@ use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 
 use mz_ore::metrics::MetricsRegistry;
-use mz_stash::{Append, Postgres, PostgresFactory, Stash, StashError};
+use mz_stash::{Stash, StashError, StashFactory};
 
-pub static FACTORY: Lazy<PostgresFactory> =
-    Lazy::new(|| PostgresFactory::new(&MetricsRegistry::new()));
+pub static FACTORY: Lazy<StashFactory> = Lazy::new(|| StashFactory::new(&MetricsRegistry::new()));
 
-fn init_bench() -> (Runtime, Postgres) {
+fn init_bench() -> (Runtime, Stash) {
     let runtime = Runtime::new().unwrap();
     let connstr = std::env::var("POSTGRES_URL").unwrap();
     let tls = mz_postgres_util::make_tls(
@@ -97,7 +96,7 @@ fn init_bench() -> (Runtime, Postgres) {
     )
     .unwrap();
     runtime
-        .block_on(Postgres::clear(&connstr, tls.clone()))
+        .block_on(Stash::clear(&connstr, tls.clone()))
         .unwrap();
     let stash = runtime
         .block_on((*FACTORY).open(connstr, None, tls))

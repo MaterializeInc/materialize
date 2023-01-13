@@ -59,7 +59,6 @@ use mz_sql::plan::{
     StorageHostConfig, SubscribeFrom, SubscribePlan, View,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_stash::Append;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
@@ -88,6 +87,7 @@ use crate::metrics;
 use crate::notice::AdapterNotice;
 use crate::session::vars::{
     IsolationLevel, CLUSTER_VAR_NAME, DATABASE_VAR_NAME, REAL_TIME_RECENCY_VAR_NAME,
+    TRANSACTION_ISOLATION_VAR_NAME,
 };
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
@@ -113,7 +113,7 @@ macro_rules! try_exec {
     };
 }
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_plan(
         &mut self,
@@ -935,11 +935,9 @@ impl<S: Append + 'static> Coordinator<S> {
             .into_iter()
             .map(|(log, id)| (log.variant.clone(), id))
             .collect();
-        self.controller.compute.create_instance(
-            instance_id,
-            arranged_logs,
-            self.catalog.system_config().max_result_size(),
-        )?;
+        self.controller
+            .compute
+            .create_instance(instance_id, arranged_logs)?;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.controller
                 .active_compute()
@@ -1909,6 +1907,16 @@ impl<S: Append + 'static> Coordinator<S> {
                     session.add_notice(AdapterNotice::ClusterDoesNotExist {
                         name: v.to_string(),
                     });
+                } else if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME {
+                    let v = v.to_lowercase();
+                    if v == IsolationLevel::ReadUncommitted.as_str()
+                        || v == IsolationLevel::ReadCommitted.as_str()
+                        || v == IsolationLevel::RepeatableRead.as_str()
+                    {
+                        session.add_notice(AdapterNotice::UnimplementedIsolationLevel {
+                            isolation_level: v,
+                        });
+                    }
                 }
             }
             None => vars.reset(&name, local)?,
@@ -2475,7 +2483,7 @@ impl<S: Append + 'static> Coordinator<S> {
             session.add_transaction_ops(TransactionOps::Subscribe)?;
         }
 
-        let make_sink_desc = |coord: &mut Coordinator<S>,
+        let make_sink_desc = |coord: &mut Coordinator,
                               session: &mut Session,
                               from,
                               from_desc,
@@ -3218,10 +3226,7 @@ impl<S: Append + 'static> Coordinator<S> {
         //
         // This limitation is meant to ensure no writes occur between this read
         // and the subsequent write.
-        fn validate_read_dependencies<S>(catalog: &Catalog<S>, id: &GlobalId) -> bool
-        where
-            S: mz_stash::Append,
-        {
+        fn validate_read_dependencies(catalog: &Catalog, id: &GlobalId) -> bool {
             use CatalogItemType::*;
             match catalog.try_get_entry(id) {
                 Some(entry) => match entry.item().typ() {
@@ -3679,7 +3684,8 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
         use mz_sql::ast::{SetVariableValue, Value};
-        let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
+        let update_compute_config = session::vars::is_compute_config_var(&name);
+        let update_storage_config = session::vars::is_storage_config_var(&name);
         let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = match value {
             SetVariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
@@ -3696,8 +3702,11 @@ impl<S: Append + 'static> Coordinator<S> {
             },
         };
         self.catalog_transact(Some(session), vec![op]).await?;
-        if update_max_result_size {
-            self.update_max_result_size();
+        if update_compute_config {
+            self.update_compute_config();
+        }
+        if update_storage_config {
+            self.update_storage_config();
         }
         if update_metrics_retention {
             self.update_metrics_retention();
@@ -3711,12 +3720,16 @@ impl<S: Append + 'static> Coordinator<S> {
         AlterSystemResetPlan { name }: AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
-        let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
+        let update_compute_config = session::vars::is_compute_config_var(&name);
+        let update_storage_config = session::vars::is_storage_config_var(&name);
         let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = catalog::Op::ResetSystemConfiguration { name };
         self.catalog_transact(Some(session), vec![op]).await?;
-        if update_max_result_size {
-            self.update_max_result_size();
+        if update_compute_config {
+            self.update_compute_config();
+        }
+        if update_storage_config {
+            self.update_storage_config();
         }
         if update_metrics_retention {
             self.update_metrics_retention();
@@ -3732,7 +3745,8 @@ impl<S: Append + 'static> Coordinator<S> {
         self.is_user_allowed_to_alter_system(session)?;
         let op = catalog::Op::ResetAllSystemConfiguration {};
         self.catalog_transact(Some(session), vec![op]).await?;
-        self.update_max_result_size();
+        self.update_compute_config();
+        self.update_storage_config();
         self.update_metrics_retention();
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
@@ -3748,25 +3762,14 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    fn update_max_result_size(&mut self) {
-        let mut compute = self.controller.active_compute();
-        for compute_instance in self.catalog.compute_instances() {
-            // Linked clusters are presently a fiction maintained by the
-            // catalog. They do not yet result in the creation of actual
-            // compute instances.
-            //
-            // TODO(benesch): turn linked clusters into real clusters. See
-            // MaterializeInc/cloud#4929.
-            if compute_instance.linked_object_id.is_some() {
-                continue;
-            }
-            compute
-                .update_max_result_size(
-                    compute_instance.id,
-                    self.catalog.system_config().max_result_size(),
-                )
-                .unwrap();
-        }
+    fn update_compute_config(&mut self) {
+        let config_params = self.catalog.compute_config();
+        self.controller.compute.update_configuration(config_params);
+    }
+
+    fn update_storage_config(&mut self) {
+        let config_params = self.catalog.storage_config();
+        self.controller.storage.update_configuration(config_params);
     }
 
     fn update_metrics_retention(&mut self) {
@@ -4019,14 +4022,13 @@ enum LogReadStyle<'a> {
     Subscribe,
 }
 
-fn check_no_invalid_log_reads<'a, S>(
-    catalog: &Catalog<S>,
+fn check_no_invalid_log_reads<'a>(
+    catalog: &Catalog,
     compute_instance: &ComputeInstance,
     source_ids: &BTreeSet<GlobalId>,
     log_read_style: LogReadStyle<'a>,
 ) -> Result<(), AdapterError>
 where
-    S: Append,
 {
     let log_names = source_ids
         .iter()

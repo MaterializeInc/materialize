@@ -12,7 +12,6 @@ use std::collections::BTreeSet;
 use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
 use mz_expr::MirScalarExpr;
 use mz_repr::{GlobalId, TimestampManipulation};
-use mz_stash::Append;
 use mz_transform::IndexOracle;
 
 use crate::catalog::{CatalogItem, CatalogState, Index, Log};
@@ -27,7 +26,7 @@ pub struct ComputeInstanceIndexOracle<'a, T> {
     compute: ComputeInstanceRef<'a, T>,
 }
 
-impl<S: Append> Coordinator<S> {
+impl Coordinator {
     /// Creates a new index oracle for the specified compute instance.
     pub fn index_oracle(
         &self,

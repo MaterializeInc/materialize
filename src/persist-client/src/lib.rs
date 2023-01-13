@@ -266,6 +266,8 @@ pub struct PersistConfig {
     /// In Compactor::compact_and_apply_background, the maximum number of pending
     /// compaction requests to queue.
     pub compaction_queue_size: usize,
+    /// The maximum number of concurrent blob deletes during garbage collection.
+    pub gc_batch_part_delete_concurrency_limit: usize,
     /// In Compactor::compact_and_apply_background, the minimum amount of time to
     /// allow a compaction request to run before timing it out. A request may be
     /// given a timeout greater than this value depending on the inputs' size
@@ -357,7 +359,7 @@ impl PersistConfig {
         Self {
             build_version: build_info.semver_version(),
             now,
-            blob_target_size: 128 * MB,
+            blob_target_size: Self::DEFAULT_BLOB_TARGET_SIZE,
             batch_builder_max_outstanding_parts: 2,
             compaction_enabled: !compaction_disabled,
             compaction_memory_bound_bytes: 1024 * MB,
@@ -366,7 +368,8 @@ impl PersistConfig {
             compaction_heuristic_min_updates: 1024,
             compaction_concurrency_limit: 5,
             compaction_queue_size: 20,
-            compaction_minimum_timeout: Duration::from_secs(90),
+            gc_batch_part_delete_concurrency_limit: 32,
+            compaction_minimum_timeout: Self::DEFAULT_COMPACTION_MINIMUM_TIMEOUT,
             consensus_connection_pool_max_size: 50,
             consensus_connection_pool_ttl: Duration::from_secs(300),
             consensus_connection_pool_ttl_stagger: Duration::from_secs(6),
@@ -397,6 +400,11 @@ impl PersistConfig {
 }
 
 impl PersistConfig {
+    /// Default value for [`PersistConfig::blob_target_size`].
+    pub const DEFAULT_BLOB_TARGET_SIZE: usize = 128 * MB;
+    /// Default value for [`PersistConfig::compaction_minimum_timeout`].
+    pub const DEFAULT_COMPACTION_MINIMUM_TIMEOUT: Duration = Duration::from_secs(90);
+
     // Move this to a PersistConfig field when we actually have read leases.
     //
     // MIGRATION: Remove this once we remove the ReaderState <->
@@ -534,7 +542,7 @@ impl PersistClient {
 
         let reader_id = LeasedReaderId::new();
         let heartbeat_ts = (self.cfg.now)();
-        let (reader_state, maintenance) = machine
+        let reader_state = machine
             .register_leased_reader(
                 &reader_id,
                 purpose,
@@ -542,7 +550,6 @@ impl PersistClient {
                 heartbeat_ts,
             )
             .await;
-        maintenance.start_performing(&machine, &gc);
         let reader = ReadHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
@@ -669,10 +676,9 @@ impl PersistClient {
         .await?;
         let gc = GarbageCollector::new(machine.clone());
 
-        let (state, maintenance) = machine
+        let state = machine
             .register_critical_reader::<O>(&reader_id, purpose)
             .await;
-        maintenance.start_performing(&machine, &gc);
         let handle = SinceHandle::new(
             machine,
             gc,
@@ -721,11 +727,10 @@ impl PersistClient {
                 Arc::clone(&self.metrics),
                 Arc::clone(&self.cpu_heavy_runtime),
                 writer_id.clone(),
-                gc.clone(),
             )
         });
         let heartbeat_ts = (self.cfg.now)();
-        let (shard_upper, _, maintenance) = machine
+        let (shard_upper, _) = machine
             .register_writer(
                 &writer_id,
                 purpose,
@@ -733,7 +738,6 @@ impl PersistClient {
                 heartbeat_ts,
             )
             .await;
-        maintenance.start_performing(&machine, &gc);
         let writer = WriteHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),

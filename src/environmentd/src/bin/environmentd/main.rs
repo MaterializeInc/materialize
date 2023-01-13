@@ -128,7 +128,7 @@ use mz_persist_client::{PersistConfig, PersistLocation};
 use mz_secrets::SecretsController;
 use mz_service::emit_boot_diagnostics;
 use mz_sql::catalog::EnvironmentId;
-use mz_stash::PostgresFactory;
+use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
 
 mod sys;
@@ -724,7 +724,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         clusterd_image: args.clusterd_image.expect("clap enforced"),
         init_container_image: args.orchestrator_kubernetes_init_container_image,
         now: SYSTEM_TIME.clone(),
-        postgres_factory: PostgresFactory::new(&metrics_registry),
+        postgres_factory: StashFactory::new(&metrics_registry),
     };
 
     let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {

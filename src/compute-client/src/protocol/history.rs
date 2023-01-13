@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use timely::progress::Antichain;
 
-use super::command::{ComputeCommand, Peek};
+use super::command::{ComputeCommand, ComputeParameters, Peek};
 
 #[derive(Debug)]
 pub struct ComputeCommandHistory<T = mz_repr::Timestamp> {
@@ -81,7 +81,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         // Note that this is only correct as long as all config parameters apply globally. If we
         // ever introduce parameters that only affect subsequent commands, we will have to
         // reconsider this approach.
-        let mut final_configuration = BTreeSet::new();
+        let mut final_configuration = ComputeParameters::default();
 
         let mut initialization_complete = false;
 
@@ -100,7 +100,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                     initialization_complete = true;
                 }
                 ComputeCommand::UpdateConfiguration(params) => {
-                    final_configuration.extend(params);
+                    final_configuration.update(params);
                 }
                 ComputeCommand::CreateDataflows(dataflows) => {
                     live_dataflows.extend(dataflows);
@@ -167,7 +167,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         command_count += final_frontiers.len();
         command_count += live_peeks.len();
         command_count += live_cancels.len();
-        if !final_configuration.is_empty() {
+        if !final_configuration.all_unset() {
             command_count += 1;
         }
 
@@ -178,7 +178,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         if let Some(create_inst_command) = create_inst_command {
             self.commands.push(create_inst_command);
         }
-        if !final_configuration.is_empty() {
+        if !final_configuration.all_unset() {
             self.commands
                 .push(ComputeCommand::UpdateConfiguration(final_configuration));
         }

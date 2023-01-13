@@ -106,8 +106,7 @@ use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::Aug;
-use mz_sql::plan::{self, CopyFormat, MutationKind, Params, QueryWhen};
-use mz_stash::Append;
+use mz_sql::plan::{self, CopyFormat, MutationKind, Params};
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, StorageError,
 };
@@ -288,9 +287,9 @@ impl RealTimeRecencyContext {
 }
 
 /// Configures a coordinator.
-pub struct Config<S> {
+pub struct Config {
     pub dataflow_client: mz_controller::Controller,
-    pub storage: storage::Connection<S>,
+    pub storage: storage::Connection,
     pub unsafe_mode: bool,
     pub persisted_introspection: bool,
     pub build_info: &'static BuildInfo,
@@ -419,12 +418,12 @@ impl PendingReadTxn {
 }
 
 /// Glues the external world to the Timely workers.
-pub struct Coordinator<S> {
+pub struct Coordinator {
     /// The controller for the storage and compute layers.
     controller: mz_controller::Controller,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
-    catalog: Catalog<S>,
+    catalog: Catalog,
 
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
@@ -520,7 +519,7 @@ pub struct Coordinator<S> {
     metrics: Metrics,
 }
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
@@ -531,6 +530,12 @@ impl<S: Append + 'static> Coordinator<S> {
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
         info!("coordinator init: beginning bootstrap");
+
+        // Inform the controllers about their initial configuration.
+        let compute_config = self.catalog.compute_config();
+        self.controller.compute.update_configuration(compute_config);
+        let storage_config = self.catalog.storage_config();
+        self.controller.storage.update_configuration(storage_config);
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
         //
@@ -555,11 +560,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 continue;
             }
 
-            self.controller.compute.create_instance(
-                instance.id,
-                instance.log_indexes.clone(),
-                self.catalog.system_config().max_result_size(),
-            )?;
+            self.controller
+                .compute
+                .create_instance(instance.id, instance.log_indexes.clone())?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 let introspection_collections = replica
                     .config
@@ -1197,7 +1200,7 @@ impl<S: Append + 'static> Coordinator<S> {
 ///
 /// Returns a handle to the coordinator and a client to communicate with the
 /// coordinator.
-pub async fn serve<S: Append + 'static>(
+pub async fn serve(
     Config {
         dataflow_client,
         storage,
@@ -1224,7 +1227,7 @@ pub async fn serve<S: Append + 'static>(
         aws_account_id,
         aws_privatelink_availability_zones,
         system_parameter_frontend,
-    }: Config<S>,
+    }: Config,
 ) -> Result<(Handle, Client), AdapterError> {
     info!("coordinator init: beginning");
 
@@ -1303,7 +1306,7 @@ pub async fn serve<S: Append + 'static>(
         .spawn(move || {
             let mut timestamp_oracles = BTreeMap::new();
             for (timeline, initial_timestamp) in initial_timestamps {
-                handle.block_on(Coordinator::<S>::ensure_timeline_state_with_initial_time(
+                handle.block_on(Coordinator::ensure_timeline_state_with_initial_time(
                     &timeline,
                     initial_timestamp,
                     now.clone(),

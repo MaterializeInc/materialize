@@ -109,7 +109,6 @@ use mz_ore::tracing::TracingHandle;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
-use mz_stash::Stash;
 use mz_storage_client::types::connections::ConnectionContext;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
@@ -246,7 +245,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         .postgres_factory
         .open(config.adapter_stash_url.clone(), None, tls)
         .await?;
-    let stash = mz_stash::Cache::new(stash);
 
     // Validate TLS configuration, if present.
     let (pgwire_tls, http_tls) = match &config.tls {
@@ -354,13 +352,21 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let system_parameter_frontend = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
         let ld_key_map = config.launchdarkly_key_map;
         let env_id = config.environment_id.clone();
+        let metrics_registry = config.metrics_registry.clone();
         // The `SystemParameterFrontend::new` call needs to be wrapped in a
         // spawn_blocking call because the LaunchDarkly SDK initialization uses
         // `reqwest::blocking::client`. This should be revisited after the SDK
         // is updated to 1.0.0.
         let system_parameter_frontend = task::spawn_blocking(
             || "SystemParameterFrontend::new",
-            move || SystemParameterFrontend::new(env_id, ld_sdk_key.as_str(), ld_key_map),
+            move || {
+                SystemParameterFrontend::new(
+                    env_id,
+                    &metrics_registry,
+                    ld_sdk_key.as_str(),
+                    ld_key_map,
+                )
+            },
         )
         .await??;
         Some(Arc::new(system_parameter_frontend))

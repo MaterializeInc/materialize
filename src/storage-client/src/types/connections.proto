@@ -116,4 +116,5 @@ message ProtoSshConnection {
 message ProtoAwsPrivatelink {
     mz_repr.global_id.ProtoGlobalId connection_id = 1;
     optional uint32 port = 2;
+    optional string availability_zone = 3;
 }

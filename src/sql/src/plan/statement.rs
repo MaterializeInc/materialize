@@ -698,6 +698,8 @@ impl<'a> StatementContext<'a> {
                 match entry.connection()? {
                     Connection::AwsPrivatelink(_) => Ok(Tunnel::AwsPrivatelink(AwsPrivatelink {
                         connection_id: id,
+                        // By default we do not specify an availability zone for the tunnel.
+                        availability_zone: None,
                         // We always use the port as specified by the top-level connection.
                         port: None,
                     })),

@@ -38,6 +38,7 @@ use mz_timely_util::progress::any_antichain;
 use crate::client::proto_storage_client::ProtoStorageClient;
 use crate::client::proto_storage_server::ProtoStorage;
 use crate::controller::CollectionMetadata;
+use crate::types::parameters::StorageParameters;
 use crate::types::sinks::{MetadataFilled, StorageSinkDesc};
 use crate::types::sources::IngestionDescription;
 
@@ -103,6 +104,8 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Indicates that the controller has sent all commands reflecting its
     /// initial state.
     InitializationComplete,
+    /// Update storage instance configuration.
+    UpdateConfiguration(StorageParameters),
     /// Create the enumerated sources, each associated with its identifier.
     CreateSources(Vec<CreateSourceCommand<T>>),
     /// Enable compaction in storage-managed collections.
@@ -211,6 +214,9 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
         ProtoStorageCommand {
             kind: Some(match self {
                 StorageCommand::InitializationComplete => InitializationComplete(()),
+                StorageCommand::UpdateConfiguration(params) => {
+                    UpdateConfiguration(params.into_proto())
+                }
                 StorageCommand::CreateSources(sources) => CreateSources(ProtoCreateSources {
                     sources: sources.into_proto(),
                 }),
@@ -229,13 +235,16 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
     fn from_proto(proto: ProtoStorageCommand) -> Result<Self, TryFromProtoError> {
         use proto_storage_command::Kind::*;
         match proto.kind {
+            Some(InitializationComplete(())) => Ok(StorageCommand::InitializationComplete),
+            Some(UpdateConfiguration(params)) => {
+                Ok(StorageCommand::UpdateConfiguration(params.into_rust()?))
+            }
             Some(CreateSources(ProtoCreateSources { sources })) => {
                 Ok(StorageCommand::CreateSources(sources.into_rust()?))
             }
             Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
                 Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
             }
-            Some(InitializationComplete(())) => Ok(StorageCommand::InitializationComplete),
             Some(CreateSinks(ProtoCreateSinks { sinks })) => {
                 Ok(StorageCommand::CreateSinks(sinks.into_rust()?))
             }
@@ -448,7 +457,9 @@ where
                     assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export.id, command);
                 }
             }
-            StorageCommand::AllowCompaction(_) | StorageCommand::InitializationComplete => {
+            StorageCommand::InitializationComplete
+            | StorageCommand::UpdateConfiguration(_)
+            | StorageCommand::AllowCompaction(_) => {
                 // Other commands have no known impact on frontier tracking.
             }
         }

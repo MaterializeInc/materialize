@@ -51,7 +51,7 @@ use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
-use mz_stash::{self, PostgresFactory, StashError, TypedCollection};
+use mz_stash::{self, StashError, StashFactory, TypedCollection};
 
 use crate::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
@@ -61,6 +61,7 @@ use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
 use crate::healthcheck;
 use crate::types::errors::DataflowError;
 use crate::types::hosts::StorageHostConfig;
+use crate::types::parameters::StorageParameters;
 use crate::types::sinks::{
     MetadataUnfilled, ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc,
 };
@@ -181,6 +182,9 @@ pub trait StorageController: Debug + Send {
     /// and so it is important for a user to invoke this method as soon as it is comfortable.
     /// This method can be invoked immediately, at the potential expense of performance.
     fn initialization_complete(&mut self);
+
+    /// Update storage configuration.
+    fn update_configuration(&mut self, config_params: StorageParameters);
 
     /// Acquire an immutable reference to the collection state, should it exist.
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError>;
@@ -576,10 +580,7 @@ impl Arbitrary for DurableExportMetadata<mz_repr::Timestamp> {
 
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
-pub struct StorageControllerState<
-    T: Timestamp + Lattice + Codec64 + TimestampManipulation,
-    S = mz_stash::Cache<mz_stash::Postgres>,
-> {
+pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
     /// Collections maintained by the storage controller.
     ///
     /// This collection only grows, although individual collections may be rendered unusable.
@@ -587,7 +588,7 @@ pub struct StorageControllerState<
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
     pub(super) exports: BTreeMap<GlobalId, ExportState<T>>,
     pub(super) exported_collections: BTreeMap<GlobalId, Vec<GlobalId>>,
-    pub(super) stash: S,
+    pub(super) stash: mz_stash::Stash,
     /// Write handle for persist shards.
     pub(super) persist_write_handles: persist_handles::PersistWriteWorker<T>,
     /// Read handles for persist shards.
@@ -730,7 +731,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
         postgres_url: String,
         tx: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
         now: NowFn,
-        factory: &PostgresFactory,
+        factory: &StashFactory,
         envd_epoch: NonZeroI64,
     ) -> Self {
         let tls = mz_postgres_util::make_tls(
@@ -742,7 +743,6 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             .open(postgres_url, None, tls)
             .await
             .expect("could not connect to postgres storage stash");
-        let stash = mz_stash::Cache::new(stash);
 
         let persist_write_handles = persist_handles::PersistWriteWorker::new(tx);
         let collection_manager_write_handle = persist_write_handles.clone();
@@ -783,6 +783,12 @@ where
 
     fn initialization_complete(&mut self) {
         self.hosts.initialization_complete();
+    }
+
+    fn update_configuration(&mut self, config_params: StorageParameters) {
+        // TODO(#16753): apply config to `self.persist`
+
+        self.hosts.update_configuration(config_params);
     }
 
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError> {
@@ -1561,7 +1567,7 @@ where
         clusterd_image: String,
         init_container_image: Option<String>,
         now: NowFn,
-        postgres_factory: &PostgresFactory,
+        postgres_factory: &StashFactory,
         envd_epoch: NonZeroI64,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();

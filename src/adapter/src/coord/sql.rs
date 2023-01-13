@@ -14,14 +14,13 @@ use mz_repr::ScalarType;
 use mz_sql::names::Aug;
 use mz_sql::plan::StatementDesc;
 use mz_sql_parser::ast::{Raw, Statement};
-use mz_stash::Append;
 
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
 use crate::util::describe;
 use crate::AdapterError;
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     pub(crate) fn plan_statement(
         &mut self,
         session: &mut Session,

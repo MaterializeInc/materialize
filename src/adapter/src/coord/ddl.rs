@@ -25,7 +25,6 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::ResolvedDatabaseSpecifier;
-use mz_stash::Append;
 use mz_storage_client::controller::{CreateExportToken, ExportDescription};
 use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage_client::types::sources::{
@@ -51,7 +50,7 @@ pub struct CatalogTxn<'a, T> {
     pub(crate) catalog: &'a CatalogState,
 }
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     /// Same as [`Self::catalog_transact_with`] without a closure passed in.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn catalog_transact(

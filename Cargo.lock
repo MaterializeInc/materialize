@@ -2874,7 +2874,7 @@ dependencies = [
 [[package]]
 name = "launchdarkly-server-sdk"
 version = "1.0.0"
-source = "git+https://github.com/MaterializeInc/rust-server-sdk#d866421dbcaeee81679d06861594493797a8e7be"
+source = "git+https://github.com/MaterializeInc/rust-server-sdk#dcda26dad12a871795a6958ef238536c27c67164"
 dependencies = [
  "built",
  "chrono",
@@ -4633,7 +4633,6 @@ name = "mz-stash"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "criterion",
  "differential-dataflow",
  "futures",
@@ -8146,8 +8145,6 @@ dependencies = [
  "tikv-jemalloc-sys",
  "time",
  "time-macros",
- "timely",
- "timely_communication",
  "tokio",
  "tokio-postgres",
  "tokio-stream",

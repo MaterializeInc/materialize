@@ -475,12 +475,14 @@ impl_display_t!(KafkaBrokerTunnel);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KafkaBrokerAwsPrivatelinkOptionName {
+    AvailabilityZone,
     Port,
 }
 
 impl AstDisplay for KafkaBrokerAwsPrivatelinkOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
+            Self::AvailabilityZone => f.write_str("AVAILABILITY ZONE"),
             Self::Port => f.write_str("PORT"),
         }
     }

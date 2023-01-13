@@ -18,6 +18,7 @@ use uncased::UncasedStr;
 
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
+use mz_persist_client::PersistConfig;
 use mz_sql::ast::{Ident, SetVariableValue, Value as AstValue};
 use mz_sql::DEFAULT_SCHEMA;
 use mz_sql_parser::ast::TransactionIsolationLevel;
@@ -205,8 +206,9 @@ const TIMEZONE: ServerVar<TimeZone> = ServerVar {
     internal: false,
 };
 
+pub const TRANSACTION_ISOLATION_VAR_NAME: &UncasedStr = UncasedStr::new("transaction_isolation");
 const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
-    name: UncasedStr::new("transaction_isolation"),
+    name: TRANSACTION_ISOLATION_VAR_NAME,
     value: &IsolationLevel::StrictSerializable,
     description: "Sets the current transaction's isolation level (PostgreSQL).",
     internal: false,
@@ -335,6 +337,23 @@ static WINDOW_FUNCTIONS: ServerVar<bool> = ServerVar {
     value: &true,
     description: "Feature flag indicating whether window functions are enabled (Materialize).",
     internal: false,
+};
+
+/// Controls [`PersistConfig::blob_target_size`].
+const PERSIST_BLOB_TARGET_SIZE: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_blob_target_size"),
+    value: &PersistConfig::DEFAULT_BLOB_TARGET_SIZE,
+    description: "A target maximum size of persist blob payloads in bytes (Materialize).",
+    internal: true,
+};
+
+/// Controls [`PersistConfig::compaction_minimum_timeout`].
+const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_compaction_minimum_timeout"),
+    value: &PersistConfig::DEFAULT_COMPACTION_MINIMUM_TIMEOUT,
+    description: "The minimum amount of time to allow a persist compaction request to run before \
+                  timing it out (Materialize).",
+    internal: true,
 };
 
 /// Boolean flag indicating that the remote configuration was synchronized at
@@ -980,6 +999,10 @@ impl SessionVars {
 /// See [`SessionVars`] for more details on the Materialize configuration model.
 #[derive(Debug, Clone)]
 pub struct SystemVars {
+    // internal bookkeeping
+    config_has_synced_once: SystemVar<bool>,
+
+    // limits
     max_aws_privatelink_connections: SystemVar<u32>,
     max_tables: SystemVar<u32>,
     max_sources: SystemVar<u32>,
@@ -994,14 +1017,22 @@ pub struct SystemVars {
     max_roles: SystemVar<u32>,
     max_result_size: SystemVar<u32>,
     allowed_cluster_replica_sizes: SystemVar<Vec<String>>, // TODO: BTreeSet<String> will be better
+
+    // features
     window_functions: SystemVar<bool>,
-    config_has_synced_once: SystemVar<bool>,
+
+    // persist configuration
+    persist_blob_target_size: SystemVar<usize>,
+    persist_compaction_minimum_timeout: SystemVar<Duration>,
+
+    // misc
     metrics_retention: SystemVar<Duration>,
 }
 
 impl Default for SystemVars {
     fn default() -> Self {
         SystemVars {
+            config_has_synced_once: SystemVar::new(&CONFIG_HAS_SYNCED_ONCE),
             max_aws_privatelink_connections: SystemVar::new(&MAX_AWS_PRIVATELINK_CONNECTIONS),
             max_tables: SystemVar::new(&MAX_TABLES),
             max_sources: SystemVar::new(&MAX_SOURCES),
@@ -1017,7 +1048,8 @@ impl Default for SystemVars {
             max_result_size: SystemVar::new(&MAX_RESULT_SIZE),
             allowed_cluster_replica_sizes: SystemVar::new(&ALLOWED_CLUSTER_REPLICA_SIZES),
             window_functions: SystemVar::new(&WINDOW_FUNCTIONS),
-            config_has_synced_once: SystemVar::new(&CONFIG_HAS_SYNCED_ONCE),
+            persist_blob_target_size: SystemVar::new(&PERSIST_BLOB_TARGET_SIZE),
+            persist_compaction_minimum_timeout: SystemVar::new(&PERSIST_COMPACTION_MINIMUM_TIMEOUT),
             metrics_retention: SystemVar::new(&METRICS_RETENTION),
         }
     }
@@ -1027,7 +1059,8 @@ impl SystemVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 17] = [
+        let vars: [&dyn Var; 19] = [
+            &self.config_has_synced_once,
             &self.max_aws_privatelink_connections,
             &self.max_tables,
             &self.max_sources,
@@ -1043,7 +1076,8 @@ impl SystemVars {
             &self.max_result_size,
             &self.allowed_cluster_replica_sizes,
             &self.window_functions,
-            &self.config_has_synced_once,
+            &self.persist_blob_target_size,
+            &self.persist_compaction_minimum_timeout,
             &self.metrics_retention,
         ];
         vars.into_iter()
@@ -1072,7 +1106,9 @@ impl SystemVars {
     /// The call will return an error:
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     pub fn get(&self, name: &str) -> Result<&dyn Var, AdapterError> {
-        if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
+        if name == CONFIG_HAS_SYNCED_ONCE.name {
+            Ok(&self.config_has_synced_once)
+        } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
             Ok(&self.max_aws_privatelink_connections)
         } else if name == MAX_TABLES.name {
             Ok(&self.max_tables)
@@ -1102,8 +1138,10 @@ impl SystemVars {
             Ok(&self.allowed_cluster_replica_sizes)
         } else if name == WINDOW_FUNCTIONS.name {
             Ok(&self.window_functions)
-        } else if name == CONFIG_HAS_SYNCED_ONCE.name {
-            Ok(&self.config_has_synced_once)
+        } else if name == PERSIST_BLOB_TARGET_SIZE.name {
+            Ok(&self.persist_blob_target_size)
+        } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
+            Ok(&self.persist_compaction_minimum_timeout)
         } else if name == METRICS_RETENTION.name {
             Ok(&self.metrics_retention)
         } else {
@@ -1121,7 +1159,9 @@ impl SystemVars {
     /// 2. If `value` does not represent a valid [`SystemVars`] value for
     ///    `name`.
     pub fn is_default(&self, name: &str, value: &str) -> Result<bool, AdapterError> {
-        if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
+        if name == CONFIG_HAS_SYNCED_ONCE.name {
+            self.config_has_synced_once.is_default(value)
+        } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
             self.max_aws_privatelink_connections.is_default(value)
         } else if name == MAX_TABLES.name {
             self.max_tables.is_default(value)
@@ -1151,8 +1191,10 @@ impl SystemVars {
             self.allowed_cluster_replica_sizes.is_default(value)
         } else if name == WINDOW_FUNCTIONS.name {
             self.window_functions.is_default(value)
-        } else if name == CONFIG_HAS_SYNCED_ONCE.name {
-            self.config_has_synced_once.is_default(value)
+        } else if name == PERSIST_BLOB_TARGET_SIZE.name {
+            self.persist_blob_target_size.is_default(value)
+        } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
+            self.persist_compaction_minimum_timeout.is_default(value)
         } else if name == METRICS_RETENTION.name {
             self.metrics_retention.is_default(value)
         } else {
@@ -1179,7 +1221,9 @@ impl SystemVars {
     /// 2. If `value` does not represent a valid [`SystemVars`] value for
     ///    `name`.
     pub fn set(&mut self, name: &str, value: &str) -> Result<bool, AdapterError> {
-        if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
+        if name == CONFIG_HAS_SYNCED_ONCE.name {
+            self.config_has_synced_once.set(value)
+        } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
             self.max_aws_privatelink_connections.set(value)
         } else if name == MAX_TABLES.name {
             self.max_tables.set(value)
@@ -1209,8 +1253,10 @@ impl SystemVars {
             self.allowed_cluster_replica_sizes.set(value)
         } else if name == WINDOW_FUNCTIONS.name {
             self.window_functions.set(value)
-        } else if name == CONFIG_HAS_SYNCED_ONCE.name {
-            self.config_has_synced_once.set(value)
+        } else if name == PERSIST_BLOB_TARGET_SIZE.name {
+            self.persist_blob_target_size.set(value)
+        } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
+            self.persist_compaction_minimum_timeout.set(value)
         } else if name == METRICS_RETENTION.name {
             self.metrics_retention.set(value)
         } else {
@@ -1232,7 +1278,9 @@ impl SystemVars {
     /// The call will return an error:
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     pub fn reset(&mut self, name: &str) -> Result<bool, AdapterError> {
-        if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
+        if name == CONFIG_HAS_SYNCED_ONCE.name {
+            Ok(self.config_has_synced_once.reset())
+        } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
             Ok(self.max_aws_privatelink_connections.reset())
         } else if name == MAX_TABLES.name {
             Ok(self.max_tables.reset())
@@ -1262,13 +1310,20 @@ impl SystemVars {
             Ok(self.allowed_cluster_replica_sizes.reset())
         } else if name == WINDOW_FUNCTIONS.name {
             Ok(self.window_functions.reset())
-        } else if name == CONFIG_HAS_SYNCED_ONCE.name {
-            Ok(self.config_has_synced_once.reset())
+        } else if name == PERSIST_BLOB_TARGET_SIZE.name {
+            Ok(self.persist_blob_target_size.reset())
+        } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
+            Ok(self.persist_compaction_minimum_timeout.reset())
         } else if name == METRICS_RETENTION.name {
             Ok(self.metrics_retention.reset())
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
+    }
+
+    /// Returns the `config_has_synced_once` configuration parameter.
+    pub fn config_has_synced_once(&self) -> bool {
+        *self.config_has_synced_once.value()
     }
 
     /// Returns the value of the `max_aws_privatelink_connections` configuration parameter.
@@ -1346,9 +1401,14 @@ impl SystemVars {
         *self.window_functions.value()
     }
 
-    /// Returns the `config_has_synced_once` configuration parameter.
-    pub fn config_has_synced_once(&self) -> bool {
-        *self.config_has_synced_once.value()
+    /// Returns the `persist_blob_target_size` configuration parameter.
+    pub fn persist_blob_target_size(&self) -> usize {
+        *self.persist_blob_target_size.value()
+    }
+
+    /// Returns the `persist_compaction_minimum_timeout` configuration parameter.
+    pub fn persist_compaction_minimum_timeout(&self) -> Duration {
+        *self.persist_compaction_minimum_timeout.value()
     }
 
     pub fn metrics_retention(&self) -> Duration {
@@ -1686,6 +1746,18 @@ impl Value for u32 {
     }
 }
 
+impl Value for usize {
+    const TYPE_NAME: &'static str = "unsigned integer";
+
+    fn parse(s: &str) -> Result<usize, ()> {
+        s.parse().map_err(|_| ())
+    }
+
+    fn format(&self) -> String {
+        self.to_string()
+    }
+}
+
 const SEC_TO_MIN: u64 = 60u64;
 const SEC_TO_HOUR: u64 = 60u64 * 60;
 const SEC_TO_DAY: u64 = 60u64 * 60 * 24;
@@ -1887,16 +1959,16 @@ impl Value for Vec<String> {
 impl Value for Option<String> {
     const TYPE_NAME: &'static str = "optional string";
 
-    fn parse(s: &str) -> Result<Self::Owned, ()> {
+    fn parse(s: &str) -> Result<Option<String>, ()> {
         match s {
             "" => Ok(None),
-            _ => Ok(Some(s.into())),
+            _ => <str as Value>::parse(s).map(Some),
         }
     }
 
     fn format(&self) -> String {
         match self {
-            Some(s) => s.clone(),
+            Some(s) => s.format(),
             None => "".into(),
         }
     }
@@ -2122,4 +2194,19 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
             TransactionIsolationLevel::StrictSerializable => Self::StrictSerializable,
         }
     }
+}
+
+/// Returns whether the named variable is a compute configuration parameter.
+pub(crate) fn is_compute_config_var(name: &str) -> bool {
+    name == MAX_RESULT_SIZE.name() || is_persist_config_var(name)
+}
+
+/// Returns whether the named variable is a storage configuration parameter.
+pub(crate) fn is_storage_config_var(name: &str) -> bool {
+    is_persist_config_var(name)
+}
+
+/// Returns whether the named variable is a persist configuration parameter.
+fn is_persist_config_var(name: &str) -> bool {
+    name == PERSIST_BLOB_TARGET_SIZE.name() || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
 }

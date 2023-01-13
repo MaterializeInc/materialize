@@ -30,7 +30,7 @@ use mz_adapter::session::Session;
 use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_stash::PostgresFactory;
+use mz_stash::StashFactory;
 use once_cell::sync::Lazy;
 use rand::Rng;
 use rdkafka::producer::Producer;
@@ -159,7 +159,7 @@ pub struct State {
     backoff_factor: f64,
     regex: Option<Regex>,
     regex_replacement: String,
-    postgres_factory: PostgresFactory,
+    postgres_factory: StashFactory,
 
     // === Materialize state. ===
     materialize_catalog_postgres_stash: Option<String>,
@@ -355,7 +355,7 @@ impl State {
                 .postgres_factory
                 .open_readonly(url.clone(), None, tls)
                 .await?;
-            let catalog = Catalog::open_debug(stash, SYSTEM_TIME.clone()).await?;
+            let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone()).await?;
             let res = f(catalog.for_session(&Session::dummy()));
             Ok(Some(res))
         } else {
@@ -971,7 +971,7 @@ pub async fn create_state(
         backoff_factor: config.backoff_factor,
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
-        postgres_factory: PostgresFactory::new(&MetricsRegistry::new()),
+        postgres_factory: StashFactory::new(&MetricsRegistry::new()),
 
         // === Materialize state. ===
         materialize_catalog_postgres_stash,

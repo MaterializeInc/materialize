@@ -56,6 +56,7 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::logging::{LogVariant, LogView, LoggingConfig};
+use crate::protocol::command::ComputeParameters;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::types::dataflows::DataflowDescription;
@@ -280,6 +281,8 @@ pub struct ComputeController<T> {
     orchestrator: ComputeOrchestrator,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
+    /// Compute configuration to apply to new instances.
+    config: ComputeParameters,
     /// A response to handle on the next call to `ActiveComputeController::process`.
     stashed_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
     /// Times we have last received responses from replicas.
@@ -314,6 +317,7 @@ impl<T> ComputeController<T> {
                 init_container_image,
             ),
             initialized: false,
+            config: Default::default(),
             stashed_response: None,
             replica_heartbeats: BTreeMap::new(),
             replica_metrics: BTreeMap::new(),
@@ -413,7 +417,6 @@ where
         &mut self,
         id: ComputeInstanceId,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
-        max_result_size: u32,
     ) -> Result<(), InstanceExists> {
         if self.instances.contains_key(&id) {
             return Err(InstanceExists(id));
@@ -425,18 +428,18 @@ where
                 id,
                 self.build_info,
                 arranged_logs,
-                max_result_size,
                 self.orchestrator.clone(),
                 self.envd_epoch,
             ),
         );
 
+        let instance = self.instances.get_mut(&id).expect("instance just added");
         if self.initialized {
-            self.instances
-                .get_mut(&id)
-                .expect("instance just added")
-                .initialization_complete();
+            instance.initialization_complete();
         }
+
+        let config_params = self.config.clone();
+        instance.update_configuration(config_params);
 
         Ok(())
     }
@@ -450,6 +453,15 @@ where
         if let Some(compute_state) = self.instances.remove(&id) {
             compute_state.drop();
         }
+    }
+
+    /// Update compute configuration.
+    pub fn update_configuration(&mut self, config_params: ComputeParameters) {
+        for instance in self.instances.values_mut() {
+            instance.update_configuration(config_params.clone());
+        }
+
+        self.config.update(config_params);
     }
 
     /// Mark the end of any initialization commands.
@@ -709,17 +721,6 @@ where
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
     ) -> Result<(), CollectionUpdateError> {
         self.instance(instance_id)?.set_read_policy(policies)?;
-        Ok(())
-    }
-
-    /// Update the max size in bytes of any result.
-    pub fn update_max_result_size(
-        &mut self,
-        instance_id: ComputeInstanceId,
-        max_result_size: u32,
-    ) -> Result<(), InstanceMissing> {
-        self.instance(instance_id)?
-            .update_max_result_size(max_result_size);
         Ok(())
     }
 

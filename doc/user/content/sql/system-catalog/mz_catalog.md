@@ -70,7 +70,7 @@ The `mz_clusters` table contains a row for each cluster in the system.
 
 Field          | Type       | Meaning
 ---------------|------------|--------
-`id`           | [`uint8`]  | Materialize's unique ID for the cluster.
+`id`           | [`text`]   | Materialize's unique ID for the cluster.
 `name`         | [`text`]   | The name of the cluster.
 
 ### `mz_columns`

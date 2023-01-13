@@ -22,7 +22,6 @@ use mz_expr::MirScalarExpr;
 use mz_repr::explain_new::ExprHumanizer;
 use mz_repr::{RowArena, ScalarType, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
-use mz_stash::Append;
 use mz_storage_client::types::sources::Timeline;
 
 use crate::coord::dataflows::{prep_scalar_expr, ExprPrepStyle};
@@ -104,7 +103,7 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     }
 }
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     /// Determines the timestamp for a query.
     ///
     /// Timestamp determination may fail due to the restricted validity of

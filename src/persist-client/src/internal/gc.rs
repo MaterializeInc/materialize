@@ -7,29 +7,32 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::mem;
 use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use futures_util::stream::FuturesUnordered;
+use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
-use mz_persist::location::SeqNo;
+use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Semaphore};
 use tracing::{debug, debug_span, warn, Instrument, Span};
 
 use crate::internal::machine::{retry_external, Machine};
-use crate::internal::maintenance::RoutineMaintenance;
-use crate::internal::paths::{PartialRollupKey, RollupId};
+use crate::internal::paths::{BlobKey, PartialRollupKey, RollupId};
+use crate::metrics::Metrics;
 use crate::ShardId;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct GcReq {
     pub shard_id: ShardId,
     pub new_seqno_since: SeqNo,
@@ -37,7 +40,7 @@ pub struct GcReq {
 
 #[derive(Debug)]
 pub struct GarbageCollector<K, V, T, D> {
-    sender: UnboundedSender<(GcReq, oneshot::Sender<RoutineMaintenance>)>,
+    sender: UnboundedSender<(GcReq, oneshot::Sender<()>)>,
     _phantom: PhantomData<fn() -> (K, V, T, D)>,
 }
 
@@ -107,7 +110,7 @@ where
 {
     pub fn new(mut machine: Machine<K, V, T, D>) -> Self {
         let (gc_req_sender, mut gc_req_recv) =
-            mpsc::unbounded_channel::<(GcReq, oneshot::Sender<RoutineMaintenance>)>();
+            mpsc::unbounded_channel::<(GcReq, oneshot::Sender<()>)>();
 
         // spin off a single task responsible for executing GC requests.
         // work is enqueued into the task through a channel
@@ -143,7 +146,7 @@ where
 
                 let start = Instant::now();
                 machine.metrics.gc.started.inc();
-                let mut maintenance = Self::gc_and_truncate(&mut machine, consolidated_req)
+                Self::gc_and_truncate(&mut machine, consolidated_req)
                     .instrument(gc_span)
                     .await;
                 machine.metrics.gc.finished.inc();
@@ -157,9 +160,8 @@ where
                 // inform all callers who enqueued GC reqs that their work is complete
                 for sender in gc_completed_senders {
                     // we can safely ignore errors here, it's possible the caller
-                    // wasn't interested in waiting and dropped their receiver.
-                    // maintenance will be somewhat-arbitrarily assigned to the first oneshot.
-                    let _ = sender.send(mem::take(&mut maintenance));
+                    // wasn't interested in waiting and dropped their receiver
+                    let _ = sender.send(());
                 }
             }
         });
@@ -173,10 +175,7 @@ where
     /// Enqueues a [GcReq] to be consumed by the GC background task when available.
     ///
     /// Returns a future that indicates when GC has cleaned up to at least [GcReq::new_seqno_since]
-    pub fn gc_and_truncate_background(
-        &self,
-        req: GcReq,
-    ) -> Option<oneshot::Receiver<RoutineMaintenance>> {
+    pub fn gc_and_truncate_background(&self, req: GcReq) -> Option<oneshot::Receiver<()>> {
         let (gc_completed_sender, gc_completed_receiver) = oneshot::channel();
         let new_gc_sender = self.sender.clone();
         let send = new_gc_sender.send((req, gc_completed_sender));
@@ -194,10 +193,7 @@ where
         Some(gc_completed_receiver)
     }
 
-    pub async fn gc_and_truncate(
-        machine: &mut Machine<K, V, T, D>,
-        req: GcReq,
-    ) -> RoutineMaintenance {
+    pub async fn gc_and_truncate(machine: &mut Machine<K, V, T, D>, req: GcReq) {
         assert_eq!(req.shard_id, machine.shard_id());
         // NB: Because these requests can be processed concurrently (and in
         // arbitrary order), all of the logic below has to work even if we've
@@ -233,7 +229,7 @@ where
                 "gc {} early returning, already GC'd past {}",
                 req.shard_id, req.new_seqno_since,
             );
-            return RoutineMaintenance::default();
+            return;
         }
 
         let mut deleteable_batch_blobs = HashSet::new();
@@ -320,7 +316,7 @@ where
             .state_versions
             .write_rollup_blob(&machine.shard_metrics, state, &rollup_key)
             .await;
-        let (applied, maintenance) = machine
+        let applied = machine
             .add_and_remove_rollups((rollup_seqno, &rollup_key), &deleteable_rollup_blobs)
             .await;
         // We raced with some other GC process to write this rollup out. Ours
@@ -340,21 +336,42 @@ where
         // becomes an issue. Maybe make Blob::delete take a list of keys?
         //
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
-        //
-        // Another idea is to use a FuturesUnordered to at least run them
-        // concurrently, but this requires a bunch of Arc cloning, so wait to
-        // see if it's worth it.
-        for key in deleteable_batch_blobs {
-            retry_external(&machine.metrics.retries.external.batch_delete, || async {
-                machine
-                    .state_versions
-                    .blob
-                    .delete(&key.complete(&req.shard_id))
-                    .await
-            })
-            .instrument(debug_span!("batch::delete"))
-            .await;
+        async fn delete_all(
+            blob: &(dyn Blob + Send + Sync),
+            keys: impl Iterator<Item = BlobKey>,
+            metrics: &Metrics,
+            semaphore: &Semaphore,
+        ) {
+            let futures = FuturesUnordered::new();
+            for key in keys {
+                futures.push(
+                    retry_external(&metrics.retries.external.batch_delete, move || {
+                        let key = key.clone();
+                        async move {
+                            let _permit = semaphore
+                                .acquire()
+                                .await
+                                .expect("acquiring permit from open semaphore");
+                            blob.delete(&key).await.map(|_| ())
+                        }
+                    })
+                    .instrument(debug_span!("batch::delete")),
+                )
+            }
+
+            futures.collect().await
         }
+
+        delete_all(
+            machine.state_versions.blob.borrow(),
+            deleteable_batch_blobs
+                .into_iter()
+                .map(|k| k.complete(&req.shard_id)),
+            &machine.metrics,
+            &Semaphore::new(machine.cfg.gc_batch_part_delete_concurrency_limit),
+        )
+        .await;
+
         debug!("gc {} deleted batch blobs", req.shard_id);
 
         // Now that we've deleted the eligible blobs, "commit" this info by
@@ -390,7 +407,5 @@ where
         let shard_metrics = machine.metrics.shards.shard(&req.shard_id);
         shard_metrics.set_gc_seqno_held_parts(seqno_held_parts.len());
         shard_metrics.gc_live_diffs.set(live_diffs);
-
-        maintenance
     }
 }

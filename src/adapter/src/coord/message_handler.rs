@@ -25,7 +25,6 @@ use mz_persist_client::ShardId;
 use mz_repr::GlobalId;
 use mz_sql::ast::Statement;
 use mz_sql::plan::{Plan, SendDiffsPlan};
-use mz_stash::Append;
 use mz_storage_client::controller::CollectionMetadata;
 
 use crate::client::ConnectionId;
@@ -41,7 +40,7 @@ use crate::coord::{
     SendDiffs, SinkConnectionReady,
 };
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
         match msg {
             Message::Command(cmd) => self.message_command(cmd).await,

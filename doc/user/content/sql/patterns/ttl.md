@@ -55,9 +55,9 @@ For a real-world example of the pattern, let's build a task tracking system. It 
       CREATE MATERIALIZED VIEW tracking_tasks AS
       SELECT
         name,
-        extract(epoch from (created_ts + ttl)) * 1000 as expiration_time
+        created_ts + ttl as expiration_time
       FROM tasks
-      WHERE mz_now() < extract(epoch from (created_ts + ttl)) * 1000;
+      WHERE mz_now() < created_ts + ttl;
     ```
 
     The filter clause will discard any row with an **expiration time** less than or equal to `mz_now()`.
@@ -65,9 +65,9 @@ For a real-world example of the pattern, let's build a task tracking system. It 
 
 ### Usage examples
 
-- Run a query to know the time to live for a row:
+- Query the time to live for a row:
   ```sql
-    SELECT expiration_time - mz_now()::text::numeric AS remaining_ttl_in_ms
+    SELECT expiration_time - to_timestamp(mz_now()::text::numeric / 1000) AS remaining_ttl
     FROM tracking_tasks
     WHERE name = 'time_to_eat';
   ```
