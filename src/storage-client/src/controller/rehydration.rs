@@ -7,13 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Rehydration of storage hosts.
+//! Rehydration of storage clusters.
 //!
-//! Rehydration is the process of bringing a crashed `clusterd` process back
-//! up to date. The [`RehydratingStorageClient`] records all commands it
-//! observes in a minimal form. If it observes a send or receive failure while
-//! communicating with the underlying client, it will reconnect the client and
-//! replay the command stream.
+//! Rehydration is the process of bringing a crashed cluster back up to date.
+//! The [`RehydratingStorageClient`] records all commands it observes in a
+//! minimal form. If it observes a send or receive failure while communicating
+//! with the underlying client, it will reconnect the client and replay the
+//! command stream.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -61,8 +61,8 @@ where
     T: Timestamp + Lattice + Codec64,
     StorageGrpcClient: StorageClient<T>,
 {
-    /// Creates a `RehydratingStorageClient` for a storage host with the given
-    /// network address.
+    /// Creates a `RehydratingStorageClient` for a storage cluster with the
+    /// given network address.
     pub fn new(
         addr: String,
         build_info: &'static BuildInfo,
@@ -105,13 +105,13 @@ where
 
 /// A task that manages rehydration.
 struct RehydrationTask<T> {
-    /// The network address of the storage host.
+    /// The network address of the storage cluster.
     addr: String,
     /// The build information for this process.
     build_info: &'static BuildInfo,
-    /// A channel upon which commands intended for the storage host are delivered.
+    /// A channel upon which commands intended for the storage cluster are delivered.
     command_rx: UnboundedReceiver<StorageCommand<T>>,
-    /// A channel upon which responses from the storage host are delivered.
+    /// A channel upon which responses from the storage cluster are delivered.
     response_tx: UnboundedSender<StorageResponse<T>>,
     /// The sources that have been observed.
     sources: BTreeMap<GlobalId, CreateSourceCommand<T>>,
@@ -129,13 +129,13 @@ struct RehydrationTask<T> {
 }
 
 enum RehydrationTaskState {
-    /// The storage host should be (re)hydrated.
+    /// The storage cluster should be (re)hydrated.
     Rehydrate,
-    /// Communication with the storage host is live. Commands and responses should
-    /// be forwarded until an error occurs.
+    /// Communication with the storage cluster is live. Commands and responses
+    /// should be forwarded until an error occurs.
     Pump { client: StorageGrpcClient },
     /// The caller has asked us to shut down communication with this storage
-    /// host.
+    /// cluster.
     Done,
 }
 
@@ -156,7 +156,7 @@ where
     }
 
     async fn step_rehydrate(&mut self) -> RehydrationTaskState {
-        // Reconnect to the storage host.
+        // Reconnect to the storage cluster.
         let client = Retry::default()
             .clamp_backoff(Duration::from_secs(1))
             .retry_async(|state| {
@@ -168,12 +168,12 @@ where
                         Err(e) => {
                             if state.i >= mz_service::retry::INFO_MIN_RETRIES {
                                 tracing::info!(
-                                    "error connecting to storage host {addr}, retrying in {:?}: {e}",
+                                    "error connecting to storage cluster {addr}, retrying in {:?}: {e}",
                                     state.next_backoff.unwrap()
                                 );
                             } else {
                                 tracing::debug!(
-                                    "error connecting to storage host {addr}, retrying in {:?}: {e}",
+                                    "error connecting to storage cluster {addr}, retrying in {:?}: {e}",
                                     state.next_backoff.unwrap()
                                 );
                             }
@@ -240,7 +240,7 @@ where
 
     async fn step_pump(&mut self, mut client: StorageGrpcClient) -> RehydrationTaskState {
         select! {
-            // Command from controller to forward to storage host.
+            // Command from controller to forward to storage cluster.
             command = self.command_rx.recv() => match command {
                 None => RehydrationTaskState::Done,
                 Some(command) => {
@@ -248,15 +248,15 @@ where
                     self.send_commands(client, vec![command]).await
                 }
             },
-            // Response from storage host to forward to controller.
+            // Response from storage cluster to forward to controller.
             response = client.recv() => {
                 let response = match response.transpose() {
                     None => {
-                        // In the future, if a storage host politely hangs up,
-                        // we might want to take it as a signal that a new
+                        // In the future, if a storage cluster politely hangs
+                        // up, we might want to take it as a signal that a new
                         // controller has taken over. For now we just try to
                         // reconnect.
-                        Err(anyhow!("storage host unexpectedly gracefully terminated connection"))
+                        Err(anyhow!("storage cluster unexpectedly gracefully terminated connection"))
                     }
                     Some(response) => response,
                 };
@@ -297,7 +297,7 @@ where
                 }
             }
             Err(e) => {
-                warn!("storage host produced error, reconnecting: {e}");
+                warn!("storage cluster produced error, reconnecting: {e}");
                 RehydrationTaskState::Rehydrate
             }
         }

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Types related to storage hosts.
+//! Types related to storage Clusters.
 
 use std::num::NonZeroUsize;
 
@@ -22,15 +22,15 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
 include!(concat!(
     env!("OUT_DIR"),
-    "/mz_storage_client.types.hosts.rs"
+    "/mz_storage_client.types.clusters.rs"
 ));
 
-/// Resource allocations for a storage host.
+/// Resource allocations for a storage cluster.
 ///
 /// Has some overlap with mz_compute_client::controller::ComputeReplicaAllocation,
 /// but keeping it separate for now due slightly different semantics.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct StorageHostResourceAllocation {
+pub struct StorageClusterResourceAllocation {
     /// The memory limit for each process in the replica.
     pub memory_limit: Option<MemoryLimit>,
     /// The CPU limit for each process in the replica.
@@ -39,17 +39,17 @@ pub struct StorageHostResourceAllocation {
     pub workers: NonZeroUsize,
 }
 
-impl RustType<ProtoStorageHostResourceAllocation> for StorageHostResourceAllocation {
-    fn into_proto(&self) -> ProtoStorageHostResourceAllocation {
-        ProtoStorageHostResourceAllocation {
+impl RustType<ProtoStorageClusterResourceAllocation> for StorageClusterResourceAllocation {
+    fn into_proto(&self) -> ProtoStorageClusterResourceAllocation {
+        ProtoStorageClusterResourceAllocation {
             memory_limit: self.memory_limit.into_proto(),
             cpu_limit: self.cpu_limit.into_proto(),
             workers: self.workers.into_proto(),
         }
     }
 
-    fn from_proto(proto: ProtoStorageHostResourceAllocation) -> Result<Self, TryFromProtoError> {
-        Ok(StorageHostResourceAllocation {
+    fn from_proto(proto: ProtoStorageClusterResourceAllocation) -> Result<Self, TryFromProtoError> {
+        Ok(StorageClusterResourceAllocation {
             memory_limit: proto.memory_limit.into_rust()?,
             cpu_limit: proto.cpu_limit.into_rust()?,
             workers: proto.workers.into_rust()?,
@@ -62,7 +62,7 @@ impl RustType<ProtoStorageHostResourceAllocation> for StorageHostResourceAllocat
 /// This represents how resources for a storage instance are going to be
 /// provisioned.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum StorageHostConfig {
+pub enum StorageClusterConfig {
     /// Remote unmanaged storage
     Remote {
         /// The network address of the clusterd process.
@@ -71,22 +71,24 @@ pub enum StorageHostConfig {
     /// A remote but managed replica
     Managed {
         /// The resource allocation for the replica.
-        allocation: StorageHostResourceAllocation,
+        allocation: StorageClusterResourceAllocation,
         /// SQL size parameter used for allocation
         size: String,
     },
 }
 
-impl RustType<ProtoStorageHostConfig> for StorageHostConfig {
-    fn into_proto(&self) -> ProtoStorageHostConfig {
-        use proto_storage_host_config::*;
-        ProtoStorageHostConfig {
+impl RustType<ProtoStorageClusterConfig> for StorageClusterConfig {
+    fn into_proto(&self) -> ProtoStorageClusterConfig {
+        use proto_storage_cluster_config::*;
+        ProtoStorageClusterConfig {
             kind: Some(match self {
-                StorageHostConfig::Remote { addr } => Kind::Remote(ProtoStorageHostConfigRemote {
-                    addr: addr.into_proto(),
-                }),
-                StorageHostConfig::Managed { allocation, size } => {
-                    Kind::Managed(ProtoStorageHostConfigManaged {
+                StorageClusterConfig::Remote { addr } => {
+                    Kind::Remote(ProtoStorageClusterConfigRemote {
+                        addr: addr.into_proto(),
+                    })
+                }
+                StorageClusterConfig::Managed { allocation, size } => {
+                    Kind::Managed(ProtoStorageClusterConfigManaged {
                         allocation: Some(allocation.into_proto()),
                         size: size.into_proto(),
                     })
@@ -95,20 +97,19 @@ impl RustType<ProtoStorageHostConfig> for StorageHostConfig {
         }
     }
 
-    fn from_proto(proto: ProtoStorageHostConfig) -> Result<Self, TryFromProtoError> {
-        use proto_storage_host_config::*;
+    fn from_proto(proto: ProtoStorageClusterConfig) -> Result<Self, TryFromProtoError> {
+        use proto_storage_cluster_config::*;
         Ok(
-            match proto
-                .kind
-                .ok_or_else(|| TryFromProtoError::missing_field("ProtoStorageHostConfig::kind"))?
-            {
-                Kind::Remote(ProtoStorageHostConfigRemote { addr }) => {
-                    StorageHostConfig::Remote { addr }
+            match proto.kind.ok_or_else(|| {
+                TryFromProtoError::missing_field("ProtoStorageClusterConfig::kind")
+            })? {
+                Kind::Remote(ProtoStorageClusterConfigRemote { addr }) => {
+                    StorageClusterConfig::Remote { addr }
                 }
-                Kind::Managed(ProtoStorageHostConfigManaged { allocation, size }) => {
-                    StorageHostConfig::Managed {
+                Kind::Managed(ProtoStorageClusterConfigManaged { allocation, size }) => {
+                    StorageClusterConfig::Managed {
                         allocation: allocation
-                            .into_rust_if_some("ProtoStorageHostConfigManaged::allocation")?,
+                            .into_rust_if_some("ProtoStorageClusterConfigManaged::allocation")?,
                         size,
                     }
                 }
@@ -117,7 +118,7 @@ impl RustType<ProtoStorageHostConfig> for StorageHostConfig {
     }
 }
 
-impl Arbitrary for StorageHostConfig {
+impl Arbitrary for StorageClusterConfig {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -128,13 +129,13 @@ impl Arbitrary for StorageHostConfig {
     }
 }
 
-impl StorageHostConfig {
-    /// Returns the size specified by the storage host configuration, if
-    /// the storage host is a managed storage host.
+impl StorageClusterConfig {
+    /// Returns the size specified by the storage cluster configuration, if
+    /// the storage cluster is a managed storage cluster.
     pub fn size(&self) -> Option<&str> {
         match self {
-            StorageHostConfig::Remote { .. } => None,
-            StorageHostConfig::Managed { size, .. } => Some(size),
+            StorageClusterConfig::Remote { .. } => None,
+            StorageClusterConfig::Managed { size, .. } => Some(size),
         }
     }
 }

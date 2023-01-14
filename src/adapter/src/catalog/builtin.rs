@@ -1736,9 +1736,9 @@ pub static MZ_STORAGE_HOST_METRICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSo
     // TODO[btv] - make this public once we work out whether and how to fuse it with
     // the corresponding Compute tables.
     schema: MZ_INTERNAL_SCHEMA,
-    data_source: Some(IntrospectionType::StorageHostMetrics),
+    data_source: Some(IntrospectionType::StorageClusterMetrics),
     desc: RelationDesc::empty()
-        // Right now (in production) each storage host is running exactly one
+        // Right now (in production) each storage cluster is running exactly one
         // source or sink, so we identify the hosts by the source/sink id. We
         // have to change this once we allow multiple storage objects to share a
         // "cluster".

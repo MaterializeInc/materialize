@@ -57,18 +57,18 @@ use crate::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
     SourceStatisticsUpdate, StorageCommand, StorageResponse, Update,
 };
-use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
+use crate::controller::clusters::{StorageClusters, StorageClustersConfig};
 use crate::healthcheck;
+use crate::types::clusters::StorageClusterConfig;
 use crate::types::errors::DataflowError;
-use crate::types::hosts::StorageHostConfig;
 use crate::types::parameters::StorageParameters;
 use crate::types::sinks::{
     MetadataUnfilled, ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc,
 };
 use crate::types::sources::{IngestionDescription, MzOffset, SourceData, SourceExport};
 
+mod clusters;
 mod collection_mgmt;
-mod hosts;
 mod metrics_scraper;
 mod persist_handles;
 mod rehydration;
@@ -109,7 +109,7 @@ pub enum IntrospectionType {
     SinkStatusHistory,
     SourceStatusHistory,
     ShardMapping,
-    StorageHostMetrics,
+    StorageClusterMetrics,
 
     // Note that this single-shard introspection source will be changed to per-replica,
     // once we allow multiplexing multiple sources/sinks on a single cluster.
@@ -160,7 +160,7 @@ pub struct ExportDescription<T = mz_repr::Timestamp> {
     pub sink: StorageSinkDesc<MetadataUnfilled, T>,
     /// The address of a `clusterd` process on which to install the sink or the
     /// settings for spinning up a controller-managed process.
-    pub host_config: StorageHostConfig,
+    pub cluster_config: StorageClusterConfig,
 }
 
 /// Opaque token to ensure `prepare_export` is called before `create_exports`.  This token proves
@@ -220,7 +220,7 @@ pub trait StorageController: Debug + Send {
 
     async fn alter_collections(
         &mut self,
-        collections: Vec<(GlobalId, StorageHostConfig)>,
+        collections: Vec<(GlobalId, StorageClusterConfig)>,
     ) -> Result<(), StorageError>;
 
     /// Acquire an immutable reference to the export state, should it exist.
@@ -601,9 +601,9 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     /// without blocking the storage controller.
     persist_read_handles: persist_handles::PersistReadWorker<T>,
     stashed_response: Option<StorageResponse<T>>,
-    /// Storage hosts that should be deprovisioned during the next call to `StorageController::process`,
+    /// Storage clusters that should be deprovisioned during the next call to `StorageController::process`,
     /// along with the status collection to report the drop to.
-    pending_host_deprovisions: BTreeSet<(GlobalId, GlobalId)>,
+    pending_cluster_deprovisions: BTreeSet<(GlobalId, GlobalId)>,
     /// Commands that should be send to storage instances during the next call
     /// to `StorageController::process`.
     pending_compaction_commands: Vec<(GlobalId, Antichain<T>)>,
@@ -632,8 +632,8 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
 pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
 {
     state: StorageControllerState<T>,
-    /// Storage host provisioning and storage object assignment.
-    hosts: StorageHosts<T>,
+    /// Storage cluster provisioning and storage object assignment.
+    clusters: StorageClusters<T>,
     /// Mechanism for returning frontier advancement for tables.
     internal_response_queue: tokio::sync::mpsc::UnboundedReceiver<StorageResponse<T>>,
     /// The persist location where all storage collections are being written to
@@ -762,7 +762,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             persist_write_handles,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
             stashed_response: None,
-            pending_host_deprovisions: BTreeSet::new(),
+            pending_cluster_deprovisions: BTreeSet::new(),
             pending_compaction_commands: Vec::new(),
             collection_manager,
             introspection_ids: HashMap::new(),
@@ -786,13 +786,13 @@ where
     type Timestamp = T;
 
     fn initialization_complete(&mut self) {
-        self.hosts.initialization_complete();
+        self.clusters.initialization_complete();
     }
 
     fn update_configuration(&mut self, config_params: StorageParameters) {
         // TODO(#16753): apply config to `self.persist`
 
-        self.hosts.update_configuration(config_params);
+        self.clusters.update_configuration(config_params);
     }
 
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError> {
@@ -1076,14 +1076,17 @@ where
                         ingestion_metadata,
                         // The rest of the fields are identical
                         desc: ingestion.desc,
-                        host_config: ingestion.host_config,
+                        cluster_config: ingestion.cluster_config,
                     };
                     let mut persist_clients = self.persist.lock().await;
                     let mut state = desc.initialize_state(&mut persist_clients).await;
                     let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
 
-                    // Provision a storage host for the ingestion.
-                    let client = self.hosts.provision(id, desc.host_config.clone()).await?;
+                    // Provision a storage cluster for the ingestion.
+                    let client = self
+                        .clusters
+                        .provision(id, desc.cluster_config.clone())
+                        .await?;
                     let augmented_ingestion = CreateSourceCommand {
                         id,
                         description: desc,
@@ -1105,7 +1108,7 @@ where
                         IntrospectionType::ShardMapping => {
                             self.initialize_shard_mapping().await;
                         }
-                        IntrospectionType::StorageHostMetrics => {
+                        IntrospectionType::StorageClusterMetrics => {
                             // This has some subtlety, points from guswynn:
                             //
                             //   - This takes the collection to empty, at roughly
@@ -1128,7 +1131,7 @@ where
                             // output collection.
                             self.reconcile_managed_collection(id, vec![]).await;
 
-                            let metrics_fetcher = self.hosts.metrics_fetcher();
+                            let metrics_fetcher = self.clusters.metrics_fetcher();
                             let scraper_token = metrics_scraper::spawn_metrics_scraper(
                                 id.clone(),
                                 metrics_fetcher,
@@ -1170,10 +1173,10 @@ where
 
     async fn alter_collections(
         &mut self,
-        collections: Vec<(GlobalId, StorageHostConfig)>,
+        collections: Vec<(GlobalId, StorageClusterConfig)>,
     ) -> Result<(), StorageError> {
         for (id, config) in collections {
-            let _ = self.hosts.provision(id, config).await?;
+            let _ = self.clusters.provision(id, config).await?;
         }
         Ok(())
     }
@@ -1300,8 +1303,11 @@ where
                 },
             };
 
-            // Provision a storage host for the ingestion.
-            let client = self.hosts.provision(id, description.host_config).await?;
+            // Provision a storage cluster for the ingestion.
+            let client = self
+                .clusters
+                .provision(id, description.cluster_config)
+                .await?;
 
             client.send(StorageCommand::CreateSinks(vec![cmd]));
         }
@@ -1347,7 +1353,9 @@ where
             // Remove sink by removing its write frontier and arranging for deprovisioning.
             self.update_write_frontiers(&[(id, Antichain::new())]);
             let status_id = self.state.introspection_ids[&IntrospectionType::SinkStatusHistory];
-            self.state.pending_host_deprovisions.insert((id, status_id));
+            self.state
+                .pending_cluster_deprovisions
+                .insert((id, status_id));
         }
     }
 
@@ -1527,7 +1535,7 @@ where
 
     async fn ready(&mut self) {
         let mut clients = self
-            .hosts
+            .clusters
             .clients()
             .map(|client| client.response_stream())
             .enumerate()
@@ -1573,7 +1581,7 @@ where
         // instances, but this seems fine for now.
         for (id, frontier) in self.state.pending_compaction_commands.drain(..) {
             // TODO(petrosagg): make this a strict check
-            if let Some(client) = self.hosts.client(id) {
+            if let Some(client) = self.clusters.client(id) {
                 client.send(StorageCommand::AllowCompaction(vec![(
                     id,
                     frontier.clone(),
@@ -1582,26 +1590,28 @@ where
                 if frontier.is_empty() {
                     let status_id =
                         self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
-                    self.state.pending_host_deprovisions.insert((id, status_id));
+                    self.state
+                        .pending_cluster_deprovisions
+                        .insert((id, status_id));
                 }
             }
         }
 
-        let to_deprovision = std::mem::take(&mut self.state.pending_host_deprovisions);
+        let to_deprovision = std::mem::take(&mut self.state.pending_cluster_deprovisions);
         for (id, status_id) in to_deprovision {
             // Record the destruction of the source
             let status_row = healthcheck::pack_status_row(id, "dropped", None, (self.state.now)());
             self.append_to_managed_collection(status_id, vec![(status_row, 1)])
                 .await;
 
-            self.hosts.deprovision(id).await?;
+            self.clusters.deprovision(id).await?;
         }
 
         Ok(())
     }
 
     async fn remove_orphans(&mut self, next_id: GlobalId) -> Result<(), anyhow::Error> {
-        self.hosts.remove_orphans(next_id).await
+        self.clusters.remove_orphans(next_id).await
     }
 }
 
@@ -1662,8 +1672,8 @@ where
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let hosts = StorageHosts::new(
-            StorageHostsConfig {
+        let clusters = StorageClusters::new(
+            StorageClustersConfig {
                 build_info,
                 orchestrator,
                 clusterd_image,
@@ -1675,7 +1685,7 @@ where
         Self {
             state: StorageControllerState::new(postgres_url, tx, now, postgres_factory, envd_epoch)
                 .await,
-            hosts,
+            clusters,
             internal_response_queue: rx,
             persist_location,
             persist: persist_clients,

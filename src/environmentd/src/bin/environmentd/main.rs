@@ -106,7 +106,7 @@ use tower_http::cors::{self, AllowOrigin};
 use url::Url;
 use uuid::Uuid;
 
-use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
+use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageClusterSizeMap};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
 use mz_environmentd::{TlsConfig, TlsMode, BUILD_INFO};
@@ -732,15 +732,18 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
     };
 
-    let storage_host_sizes: StorageHostSizeMap = match args.storage_host_sizes {
+    let storage_cluster_sizes: StorageClusterSizeMap = match args.storage_host_sizes {
         None => Default::default(),
-        Some(json) => serde_json::from_str(&json).context("parsing storage host map")?,
+        Some(json) => serde_json::from_str(&json).context("parsing storage cluster map")?,
     };
 
-    // Ensure default storage host size actually exists in the passed map
-    if let Some(default_storage_host_size) = &args.default_storage_host_size {
-        if !storage_host_sizes.0.contains_key(default_storage_host_size) {
-            bail!("default storage host size is unknown");
+    // Ensure default storage cluster size actually exists in the passed map
+    if let Some(default_storage_cluster_size) = &args.default_storage_host_size {
+        if !storage_cluster_sizes
+            .0
+            .contains_key(default_storage_cluster_size)
+        {
+            bail!("default storage cluster size is unknown");
         }
     }
 
@@ -772,8 +775,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             .into_iter()
             .map(|kv| (kv.key, kv.value))
             .collect(),
-        storage_host_sizes,
-        default_storage_host_size: args.default_storage_host_size,
+        storage_cluster_sizes,
+        default_storage_cluster_size: args.default_storage_host_size,
         availability_zones: args.availability_zone,
         connection_context: ConnectionContext::from_cli_args(
             &args.tracing.log_filter.inner,

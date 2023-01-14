@@ -306,13 +306,13 @@ pub const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
 /// The logical compaction window for builtin tables and sources that have the
 /// `retained_metrics_relation` flag set.
 ///
-/// The existence of this variable is a bit of a hack until we have a fully general
-/// solution for controlling retention windows.
+/// The existence of this variable is a bit of a hack until we have a fully
+/// general solution for controlling retention windows.
 pub const METRICS_RETENTION: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("metrics_retention"),
     // 30 days
     value: &Duration::from_secs(30 * 24 * 60 * 60),
-    description: "The time to retain cluster and storage host utilization metrics (Materialize).",
+    description: "The time to retain cluster utilization metrics (Materialize).",
     internal: true,
 };
 

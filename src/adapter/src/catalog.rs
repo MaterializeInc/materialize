@@ -64,13 +64,13 @@ use mz_sql::names::{
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, StatementDesc, StorageHostConfig as PlanStorageHostConfig,
+    Plan, PlanContext, StatementDesc, StorageClusterConfig as PlanStorageClusterConfig,
 };
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_stash::{Stash, StashFactory};
-use mz_storage_client::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
+use mz_storage_client::types::clusters::{StorageClusterConfig, StorageClusterResourceAllocation};
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
 };
@@ -83,7 +83,7 @@ use crate::catalog::builtin::{
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{
-    AwsPrincipalContext, ClusterReplicaSizeMap, Config, StorageHostSizeMap,
+    AwsPrincipalContext, ClusterReplicaSizeMap, Config, StorageClusterSizeMap,
 };
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction};
@@ -189,8 +189,8 @@ pub struct CatalogState {
     config: mz_sql::catalog::CatalogConfig,
     oid_counter: u32,
     cluster_replica_sizes: ClusterReplicaSizeMap,
-    storage_host_sizes: StorageHostSizeMap,
-    default_storage_host_size: Option<String>,
+    storage_cluster_sizes: StorageClusterSizeMap,
+    default_storage_cluster_size: Option<String>,
     availability_zones: Vec<String>,
     system_configuration: SystemVars,
     egress_ips: Vec<Ipv4Addr>,
@@ -1169,16 +1169,16 @@ impl CatalogState {
         )
     }
 
-    pub fn resolve_storage_host_config(
+    pub fn resolve_storage_cluster_config(
         &self,
-        storage_host_config: &PlanStorageHostConfig,
-    ) -> Result<StorageHostConfig, AdapterError> {
-        let host_sizes = &self.storage_host_sizes;
-        let mut entries = host_sizes.0.iter().collect::<Vec<_>>();
+        storage_cluster_config: &PlanStorageClusterConfig,
+    ) -> Result<StorageClusterConfig, AdapterError> {
+        let cluster_sizes = &self.storage_cluster_sizes;
+        let mut entries = cluster_sizes.0.iter().collect::<Vec<_>>();
         entries.sort_by_key(
             |(
                 _name,
-                StorageHostResourceAllocation {
+                StorageClusterResourceAllocation {
                     workers,
                     memory_limit,
                     ..
@@ -1186,32 +1186,31 @@ impl CatalogState {
             )| (workers, memory_limit),
         );
         let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-        let storage_host_config =
-            match storage_host_config {
-                PlanStorageHostConfig::Remote { addr } => {
-                    StorageHostConfig::Remote { addr: addr.into() }
-                }
-                PlanStorageHostConfig::Managed { size } => {
-                    let allocation = host_sizes.0.get(size).ok_or_else(|| {
-                        AdapterError::InvalidStorageHostSize {
-                            size: size.clone(),
-                            expected,
-                        }
-                    })?;
-                    StorageHostConfig::Managed {
-                        allocation: allocation.clone(),
-                        size: size.into(),
+        let storage_cluster_config = match storage_cluster_config {
+            PlanStorageClusterConfig::Remote { addr } => {
+                StorageClusterConfig::Remote { addr: addr.into() }
+            }
+            PlanStorageClusterConfig::Managed { size } => {
+                let allocation = cluster_sizes.0.get(size).ok_or_else(|| {
+                    AdapterError::InvalidStorageClusterSize {
+                        size: size.clone(),
+                        expected,
                     }
+                })?;
+                StorageClusterConfig::Managed {
+                    allocation: allocation.clone(),
+                    size: size.into(),
                 }
-                PlanStorageHostConfig::Undefined => {
-                    if !self.config.unsafe_mode {
-                        return Err(AdapterError::StorageHostSizeRequired { expected });
-                    }
-                    let (size, allocation) = self.default_storage_host_size();
-                    StorageHostConfig::Managed { allocation, size }
+            }
+            PlanStorageClusterConfig::Undefined => {
+                if !self.config.unsafe_mode {
+                    return Err(AdapterError::StorageClusterSizeRequired { expected });
                 }
-            };
-        Ok(storage_host_config)
+                let (size, allocation) = self.default_storage_cluster_size();
+                StorageClusterConfig::Managed { allocation, size }
+            }
+        };
+        Ok(storage_cluster_config)
     }
 
     /// Return current system configuration.
@@ -1232,24 +1231,24 @@ impl CatalogState {
         &self.availability_zones
     }
 
-    /// Returns the default storage host size and allocation.
+    /// Returns the default storage cluster size and allocation.
     ///
     /// If a default size was given as configuration, it is always used,
-    /// otherwise the smallest host size is used instead.
-    pub fn default_storage_host_size(&self) -> (String, StorageHostResourceAllocation) {
-        match &self.default_storage_host_size {
-            Some(default_storage_host_size) => {
+    /// otherwise the smallest cluster size is used instead.
+    pub fn default_storage_cluster_size(&self) -> (String, StorageClusterResourceAllocation) {
+        match &self.default_storage_cluster_size {
+            Some(default_storage_cluster_size) => {
                 // The default is guaranteed to be in the size map during startup
                 let allocation = self
-                    .storage_host_sizes
+                    .storage_cluster_sizes
                     .0
-                    .get(default_storage_host_size)
-                    .expect("default storage host size must exist in size map");
-                (default_storage_host_size.clone(), allocation.clone())
+                    .get(default_storage_cluster_size)
+                    .expect("default storage cluster size must exist in size map");
+                (default_storage_cluster_size.clone(), allocation.clone())
             }
             None => {
                 let (size, allocation) = self
-                    .storage_host_sizes
+                    .storage_cluster_sizes
                     .0
                     .iter()
                     .min_by_key(|(_, a)| (a.workers, a.memory_limit))
@@ -1509,7 +1508,7 @@ pub struct Source {
 impl Source {
     pub fn size(&self) -> Option<&str> {
         match &self.data_source {
-            DataSourceDesc::Ingestion(Ingestion { host_config, .. }) => host_config.size(),
+            DataSourceDesc::Ingestion(Ingestion { cluster_config, .. }) => cluster_config.size(),
             DataSourceDesc::Introspection(_) | DataSourceDesc::Source => None,
         }
     }
@@ -1597,7 +1596,7 @@ pub struct Ingestion {
     ///
     /// This map does *not* include the export of the source associated with the ingestion itself
     pub subsource_exports: HashMap<GlobalId, usize>,
-    pub host_config: StorageHostConfig,
+    pub cluster_config: StorageClusterConfig,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1610,7 +1609,7 @@ pub struct Sink {
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
-    pub host_config: StorageHostConfig,
+    pub cluster_config: StorageClusterConfig,
 }
 
 impl Sink {
@@ -2206,8 +2205,8 @@ impl Catalog {
                 },
                 oid_counter: FIRST_USER_OID,
                 cluster_replica_sizes: config.cluster_replica_sizes,
-                storage_host_sizes: config.storage_host_sizes,
-                default_storage_host_size: config.default_storage_host_size,
+                storage_cluster_sizes: config.storage_cluster_sizes,
+                default_storage_cluster_size: config.default_storage_cluster_size,
                 availability_zones: config.availability_zones,
                 system_configuration: SystemVars::default(),
                 egress_ips: config.egress_ips,
@@ -3340,8 +3339,8 @@ impl Catalog {
             skip_migrations: true,
             metrics_registry,
             cluster_replica_sizes: Default::default(),
-            storage_host_sizes: Default::default(),
-            default_storage_host_size: None,
+            storage_cluster_sizes: Default::default(),
+            default_storage_cluster_size: None,
             bootstrap_system_parameters: Default::default(),
             availability_zones: vec![],
             secrets_reader,
@@ -3980,19 +3979,20 @@ impl Catalog {
         Ok(location)
     }
 
-    /// Returns the default storage host size and allocation.
+    /// Returns the default storage cluster size and allocation.
     ///
     /// If a default size was given as configuration, it is always used,
-    /// otherwise the smallest host size is used instead.
-    pub fn default_storage_host_size(&self) -> (String, StorageHostResourceAllocation) {
-        self.state.default_storage_host_size()
+    /// otherwise the smallest cluster size is used instead.
+    pub fn default_storage_cluster_size(&self) -> (String, StorageClusterResourceAllocation) {
+        self.state.default_storage_cluster_size()
     }
 
-    pub fn resolve_storage_host_config(
+    pub fn resolve_storage_cluster_config(
         &self,
-        storage_host_config: &PlanStorageHostConfig,
-    ) -> Result<StorageHostConfig, AdapterError> {
-        self.state.resolve_storage_host_config(storage_host_config)
+        storage_cluster_config: &PlanStorageClusterConfig,
+    ) -> Result<StorageClusterConfig, AdapterError> {
+        self.state
+            .resolve_storage_cluster_config(storage_cluster_config)
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -4167,7 +4167,7 @@ impl Catalog {
 
         for op in ops {
             match op {
-                Op::AlterSink { id, host_config } => {
+                Op::AlterSink { id, cluster_config } => {
                     use mz_sql::ast::Value;
                     use mz_sql_parser::ast::CreateSinkOptionName::*;
 
@@ -4206,24 +4206,24 @@ impl Catalog {
                         .with_options
                         .retain(|x| ![Remote, Size].contains(&x.name));
 
-                    let new_host_option = match &host_config {
-                        plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
-                        plan::StorageHostConfig::Remote { addr } => Some((Remote, addr.clone())),
-                        plan::StorageHostConfig::Undefined => None,
+                    let new_cluster_option = match &cluster_config {
+                        plan::StorageClusterConfig::Managed { size } => Some((Size, size.clone())),
+                        plan::StorageClusterConfig::Remote { addr } => Some((Remote, addr.clone())),
+                        plan::StorageClusterConfig::Undefined => None,
                     };
 
-                    if let Some((name, value)) = new_host_option {
+                    if let Some((name, value)) = new_cluster_option {
                         create_stmt.with_options.push(CreateSinkOption {
                             name,
                             value: Some(WithOptionValue::Value(Value::String(value))),
                         });
                     }
 
-                    let host_config = state.resolve_storage_host_config(&host_config)?;
+                    let cluster_config = state.resolve_storage_cluster_config(&cluster_config)?;
                     let create_sql = stmt.to_ast_string_stable();
                     let sink = CatalogItem::Sink(Sink {
                         create_sql,
-                        host_config: host_config.clone(),
+                        cluster_config: cluster_config.clone(),
                         ..old_sink
                     });
 
@@ -4247,8 +4247,8 @@ impl Catalog {
                                 &name,
                                 session.map(|session| session.conn_id()),
                             )),
-                            old_size: old_sink.host_config.size().map(|x| x.to_string()),
-                            new_size: host_config.size().map(|x| x.to_string()),
+                            old_size: old_sink.cluster_config.size().map(|x| x.to_string()),
+                            new_size: cluster_config.size().map(|x| x.to_string()),
                         }),
                     )?;
 
@@ -4263,7 +4263,7 @@ impl Catalog {
                         },
                     )?;
                 }
-                Op::AlterSource { id, host_config } => {
+                Op::AlterSource { id, cluster_config } => {
                     use mz_sql::ast::Value;
                     use mz_sql_parser::ast::CreateSourceOptionName::*;
 
@@ -4304,13 +4304,13 @@ impl Catalog {
                         .with_options
                         .retain(|x| ![Size, Remote].contains(&x.name));
 
-                    let new_host_option = match &host_config {
-                        plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
-                        plan::StorageHostConfig::Remote { addr } => Some((Remote, addr.clone())),
-                        plan::StorageHostConfig::Undefined => None,
+                    let new_cluster_option = match &cluster_config {
+                        plan::StorageClusterConfig::Managed { size } => Some((Size, size.clone())),
+                        plan::StorageClusterConfig::Remote { addr } => Some((Remote, addr.clone())),
+                        plan::StorageClusterConfig::Undefined => None,
                     };
 
-                    if let Some((name, value)) = new_host_option {
+                    if let Some((name, value)) = new_cluster_option {
                         create_stmt.with_options.push(CreateSourceOption {
                             name,
                             value: Some(WithOptionValue::Value(Value::String(value))),
@@ -4318,12 +4318,12 @@ impl Catalog {
                     }
 
                     let old_size = old_source.size().map(|s| s.to_string());
-                    let host_config = state.resolve_storage_host_config(&host_config)?;
-                    let new_size = host_config.size().map(|s| s.to_string());
+                    let cluster_config = state.resolve_storage_cluster_config(&cluster_config)?;
+                    let new_size = cluster_config.size().map(|s| s.to_string());
                     let data_source = match old_source.data_source {
                         DataSourceDesc::Ingestion(ingestion) => {
                                 DataSourceDesc::Ingestion(Ingestion {
-                                host_config,
+                                cluster_config,
                                 ..ingestion
                             })
                         }
@@ -4677,7 +4677,7 @@ impl Catalog {
                                 EventDetails::CreateSourceSinkV2(mz_audit_log::CreateSourceSinkV2 {
                                     id: id.to_string(),
                                     name,
-                                    size: s.host_config.size().map(|x| x.to_string()),
+                                    size: s.cluster_config.size().map(|x| x.to_string()),
                                     external_type: s.sink_type().to_string(),
                                 })
                             }
@@ -5507,7 +5507,7 @@ impl Catalog {
             Plan::CreateSource(CreateSourcePlan {
                 source,
                 timeline,
-                host_config,
+                cluster_config,
                 ..
             }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
@@ -5516,7 +5516,7 @@ impl Catalog {
                         desc: ingestion.desc,
                         source_imports: ingestion.source_imports,
                         subsource_exports: ingestion.subsource_exports,
-                        host_config: self.resolve_storage_host_config(&host_config)?,
+                        cluster_config: self.resolve_storage_cluster_config(&cluster_config)?,
                     }),
                     None => DataSourceDesc::Source,
                 },
@@ -5563,7 +5563,7 @@ impl Catalog {
             Plan::CreateSink(CreateSinkPlan {
                 sink,
                 with_snapshot,
-                host_config,
+                cluster_config,
                 ..
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
@@ -5572,7 +5572,7 @@ impl Catalog {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on,
-                host_config: self.resolve_storage_host_config(&host_config)?,
+                cluster_config: self.resolve_storage_cluster_config(&cluster_config)?,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
@@ -5800,11 +5800,11 @@ pub fn is_reserved_name(name: &str) -> bool {
 pub enum Op {
     AlterSink {
         id: GlobalId,
-        host_config: plan::StorageHostConfig,
+        cluster_config: plan::StorageClusterConfig,
     },
     AlterSource {
         id: GlobalId,
-        host_config: plan::StorageHostConfig,
+        cluster_config: plan::StorageClusterConfig,
     },
     CreateDatabase {
         name: String,

@@ -21,7 +21,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_sql::catalog::EnvironmentId;
-use mz_storage_client::types::hosts::StorageHostResourceAllocation;
+use mz_storage_client::types::clusters::StorageClusterResourceAllocation;
 
 use crate::catalog::storage;
 use crate::config::SystemParameterFrontend;
@@ -47,10 +47,10 @@ pub struct Config<'a> {
     pub metrics_registry: &'a MetricsRegistry,
     /// Map of strings to corresponding compute replica sizes.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
-    /// Map of strings to corresponding storage host sizes.
-    pub storage_host_sizes: StorageHostSizeMap,
-    /// Default storage host size, should be a key from storage_host_sizes.
-    pub default_storage_host_size: Option<String>,
+    /// Map of strings to corresponding storage cluster sizes.
+    pub storage_cluster_sizes: StorageClusterSizeMap,
+    /// Default storage cluster size, should be a key from storage_cluster_sizes.
+    pub default_storage_cluster_size: Option<String>,
     /// Values to set for system parameters, if those system parameters have not
     /// already been set by the system user.
     pub bootstrap_system_parameters: BTreeMap<String, String>,
@@ -144,9 +144,9 @@ impl Default for ClusterReplicaSizeMap {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct StorageHostSizeMap(pub HashMap<String, StorageHostResourceAllocation>);
+pub struct StorageClusterSizeMap(pub HashMap<String, StorageClusterResourceAllocation>);
 
-impl Default for StorageHostSizeMap {
+impl Default for StorageClusterSizeMap {
     fn default() -> Self {
         Self(
             (0..=5)
@@ -154,7 +154,7 @@ impl Default for StorageHostSizeMap {
                     let workers = 1 << i;
                     (
                         workers.to_string(),
-                        StorageHostResourceAllocation {
+                        StorageClusterResourceAllocation {
                             memory_limit: None,
                             cpu_limit: None,
                             workers: NonZeroUsize::new(workers).unwrap(),

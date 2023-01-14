@@ -284,8 +284,8 @@ where
                                 source_exports,
                                 // Only used for Debezium
                                 source_imports: BTreeMap::new(),
-                                host_config:
-                                    mz_storage_client::types::hosts::StorageHostConfig::Remote {
+                                cluster_config:
+                                    mz_storage_client::types::clusters::StorageClusterConfig::Remote {
                                         addr: "test".to_string(),
                                     },
                             },

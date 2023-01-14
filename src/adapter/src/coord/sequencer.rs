@@ -54,7 +54,7 @@ use mz_sql::plan::{
     ExecutePlan, ExplainPlan, FetchPlan, IndexOption, InsertPlan, MaterializedView, MutationKind,
     OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
     ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    StorageHostConfig, SubscribeFrom, SubscribePlan, View,
+    StorageClusterConfig, SubscribeFrom, SubscribePlan, View,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
@@ -502,19 +502,22 @@ impl Coordinator {
                 create_sql: plan.source.create_sql,
                 data_source: match plan.source.ingestion {
                     Some(ingestion) => {
-                        let host_config = self
+                        let cluster_config = self
                             .catalog
-                            .resolve_storage_host_config(&plan.host_config)?;
+                            .resolve_storage_cluster_config(&plan.cluster_config)?;
                         DataSourceDesc::Ingestion(catalog::Ingestion {
                             desc: ingestion.desc,
                             source_imports: ingestion.source_imports,
                             subsource_exports: ingestion.subsource_exports,
-                            host_config,
+                            cluster_config,
                         })
                     }
                     None => {
                         assert!(
-                            matches!(plan.host_config, mz_sql::plan::StorageHostConfig::Undefined),
+                            matches!(
+                                plan.cluster_config,
+                                mz_sql::plan::StorageClusterConfig::Undefined
+                            ),
                             "subsources must not have a host config defined"
                         );
                         DataSourceDesc::Source
@@ -534,7 +537,7 @@ impl Coordinator {
             });
             if let DataSourceDesc::Ingestion(_) = &source.data_source {
                 ops.extend(
-                    self.create_linked_cluster_ops(source_id, &plan.name, &plan.host_config)
+                    self.create_linked_cluster_ops(source_id, &plan.name, &plan.cluster_config)
                         .await?,
                 );
             }
@@ -576,7 +579,7 @@ impl Coordinator {
                                     ingestion_metadata: (),
                                     source_imports,
                                     source_exports,
-                                    host_config: ingestion.host_config,
+                                    cluster_config: ingestion.cluster_config,
                                 }),
                                 source_status_collection_id,
                             )
@@ -1260,22 +1263,23 @@ impl Coordinator {
             sink,
             with_snapshot,
             if_not_exists,
-            host_config: plan_host_config,
+            cluster_config: plan_cluster_config,
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
         let id = return_if_err!(self.catalog.allocate_user_id().await, tx, session);
         let oid = return_if_err!(self.catalog.allocate_oid(), tx, session);
 
-        // Validate the storage host config.
-        let host_config = return_if_err!(
-            self.catalog.resolve_storage_host_config(&plan_host_config),
+        // Validate the storage cluster config.
+        let cluster_config = return_if_err!(
+            self.catalog
+                .resolve_storage_cluster_config(&plan_cluster_config),
             tx,
             session
         );
 
         let linked_cluster_ops = return_if_err!(
-            self.create_linked_cluster_ops(id, &name, &plan_host_config)
+            self.create_linked_cluster_ops(id, &name, &plan_cluster_config)
                 .await,
             tx,
             session
@@ -1301,7 +1305,7 @@ impl Coordinator {
             envelope: sink.envelope,
             with_snapshot,
             depends_on,
-            host_config,
+            cluster_config,
         };
 
         let mut ops = vec![catalog::Op::CreateItem {
@@ -3537,13 +3541,13 @@ impl Coordinator {
         session: &Session,
         AlterSinkPlan { id, size, remote }: AlterSinkPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let host_config = alter_storage_host_config(size, remote)?;
-        if let Some(host_config) = host_config {
+        let cluster_config = alter_storage_cluster_config(size, remote)?;
+        if let Some(cluster_config) = cluster_config {
             let mut ops = vec![catalog::Op::AlterSink {
                 id,
-                host_config: host_config.clone(),
+                cluster_config: cluster_config.clone(),
             }];
-            ops.extend(self.alter_linked_cluster_ops(id, &host_config)?);
+            ops.extend(self.alter_linked_cluster_ops(id, &cluster_config)?);
             self.catalog_transact(Some(session), ops).await?;
 
             // Re-fetch the updated item from the catalog
@@ -3560,7 +3564,7 @@ impl Coordinator {
 
             self.controller
                 .storage
-                .alter_collections(vec![(id, updated_sink.host_config.clone())])
+                .alter_collections(vec![(id, updated_sink.cluster_config.clone())])
                 .await?;
         }
 
@@ -3583,24 +3587,24 @@ impl Coordinator {
                 coord_bail!("cannot ALTER this type of source");
             }
         }
-        let host_config = alter_storage_host_config(size, remote)?;
-        if let Some(host_config) = host_config {
+        let cluster_config = alter_storage_cluster_config(size, remote)?;
+        if let Some(cluster_config) = cluster_config {
             let mut ops = vec![catalog::Op::AlterSource {
                 id,
-                host_config: host_config.clone(),
+                cluster_config: cluster_config.clone(),
             }];
-            ops.extend(self.alter_linked_cluster_ops(id, &host_config)?);
+            ops.extend(self.alter_linked_cluster_ops(id, &cluster_config)?);
             self.catalog_transact(Some(session), ops).await?;
 
             // Re-fetch the updated item from the catalog
             let entry = self.catalog.get_entry(&id);
             let updated_source = entry.source().expect("known to be source");
-            if let DataSourceDesc::Ingestion(Ingestion { host_config, .. }) =
+            if let DataSourceDesc::Ingestion(Ingestion { cluster_config, .. }) =
                 &updated_source.data_source
             {
                 self.controller
                     .storage
-                    .alter_collections(vec![(id, host_config.clone())])
+                    .alter_collections(vec![(id, cluster_config.clone())])
                     .await?;
             }
         }
@@ -3900,7 +3904,7 @@ impl Coordinator {
         &mut self,
         linked_object_id: GlobalId,
         name: &QualifiedObjectName,
-        config: &StorageHostConfig,
+        config: &StorageClusterConfig,
     ) -> Result<Vec<catalog::Op>, AdapterError> {
         let name = self.catalog.resolve_full_name(name, None);
         let name = format!("{}_{}_{}", name.database, name.schema, name.item);
@@ -3917,19 +3921,19 @@ impl Coordinator {
     }
 
     /// Generates the catalog operation to create a replica of the given linked
-    /// cluster for the given storage host configuration.
+    /// cluster for the given storage cluster configuration.
     fn create_linked_cluster_op(
         &mut self,
         on_cluster_name: String,
-        config: &StorageHostConfig,
+        config: &StorageClusterConfig,
     ) -> Result<Option<catalog::Op>, AdapterError> {
         let size = match config {
-            StorageHostConfig::Managed { size } => size.clone(),
-            StorageHostConfig::Undefined => {
-                let (size, _alloc) = self.catalog.default_storage_host_size();
+            StorageClusterConfig::Managed { size } => size.clone(),
+            StorageClusterConfig::Undefined => {
+                let (size, _alloc) = self.catalog.default_storage_cluster_size();
                 size
             }
-            StorageHostConfig::Remote { .. } => return Ok(None),
+            StorageClusterConfig::Remote { .. } => return Ok(None),
         };
         let azs = self.catalog.state().availability_zones();
         let n_replicas_per_az = azs
@@ -3969,7 +3973,7 @@ impl Coordinator {
     fn alter_linked_cluster_ops(
         &mut self,
         linked_object_id: GlobalId,
-        config: &StorageHostConfig,
+        config: &StorageClusterConfig,
     ) -> Result<Vec<catalog::Op>, AdapterError> {
         let mut ops = vec![];
         if let Some(linked_cluster) = self.catalog.get_linked_cluster(linked_object_id) {
@@ -4043,20 +4047,20 @@ where
     Ok(())
 }
 
-/// Return a [`StorageHostConfig`] based on the possibly altered parameters.
-fn alter_storage_host_config(
+/// Return a [`StorageClusterConfig`] based on the possibly altered parameters.
+fn alter_storage_cluster_config(
     size: AlterOptionParameter,
     remote: AlterOptionParameter,
-) -> Result<Option<StorageHostConfig>, AdapterError> {
+) -> Result<Option<StorageClusterConfig>, AdapterError> {
     match (size, remote) {
         // Should be caught during planning, but it is better to be safe
         (AlterOptionParameter::Set(_), AlterOptionParameter::Set(_)) => {
             coord_bail!("only one of REMOTE and SIZE can be set")
         }
-        (AlterOptionParameter::Set(size), _) => Ok(Some(StorageHostConfig::Managed { size })),
-        (_, AlterOptionParameter::Set(addr)) => Ok(Some(StorageHostConfig::Remote { addr })),
+        (AlterOptionParameter::Set(size), _) => Ok(Some(StorageClusterConfig::Managed { size })),
+        (_, AlterOptionParameter::Set(addr)) => Ok(Some(StorageClusterConfig::Remote { addr })),
         (_, AlterOptionParameter::Reset) | (AlterOptionParameter::Reset, _) => {
-            Ok(Some(StorageHostConfig::Undefined))
+            Ok(Some(StorageClusterConfig::Undefined))
         }
         (_, _) => Ok(None),
     }

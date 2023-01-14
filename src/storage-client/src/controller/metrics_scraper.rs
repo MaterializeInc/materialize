@@ -20,8 +20,8 @@ use tokio::sync::oneshot;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, GlobalId, Row};
 
+use crate::controller::clusters::MetricsFetcher;
 use crate::controller::collection_mgmt::CollectionManager;
-use crate::controller::hosts::MetricsFetcher;
 
 /// Spawns a task that continually (at an interval) fetches metrics from the
 /// given [`MetricsFetcher`] and writes it out to the collection identified by
@@ -75,10 +75,10 @@ pub(super) fn spawn_metrics_scraper(
                         .map(|(row, diff)| (row, -diff))
                         .collect_vec();
 
-                    // NOTE: host_addr is currently unused, it will be
+                    // NOTE: cluster_addr is currently unused, it will be
                     // logged at trace level, which might be useful when
                     // debugging.
-                    for (service_id, _host_addr, metrics) in metrics {
+                    for (service_id, _cluster_addr, metrics) in metrics {
                         match metrics {
                             Ok(process_metrics) => {
                                 for (process_id, metrics) in process_metrics.into_iter().enumerate()
