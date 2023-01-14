@@ -16,8 +16,7 @@ use std::time::Instant;
 
 use mz_persist_client::operators::shard_source::shard_source;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::OkErr;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::progress::Antichain;
 use tokio::sync::Mutex;
 
@@ -32,6 +31,7 @@ use crate::types::errors::DataflowError;
 use crate::types::sources::SourceData;
 
 pub use mz_persist_client::operators::shard_source::FlowControl;
+use mz_timely_util::buffer::ConsolidateBuffer;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -74,7 +74,7 @@ where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     YFn: Fn(Instant, usize) -> bool + 'static,
 {
-    let (stream, token) = persist_source_core(
+    let (updates, errs, token) = persist_source_core(
         scope,
         source_id,
         persist_clients,
@@ -85,11 +85,7 @@ where
         flow_control,
         yield_fn,
     );
-    let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
-        Ok(row) => Ok((row, t, r)),
-        Err(err) => Err((err, t, r)),
-    });
-    (ok_stream, err_stream, token)
+    (updates, errs, token)
 }
 
 /// Creates a new source that reads from a persist shard, distributing the work
@@ -110,7 +106,8 @@ pub fn persist_source_core<G, YFn>(
     flow_control: Option<FlowControl<G>>,
     yield_fn: YFn,
 ) -> (
-    Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
+    Stream<G, (Row, Timestamp, Diff)>,
+    Stream<G, (DataflowError, Timestamp, Diff)>,
     Rc<dyn Any>,
 )
 where
@@ -128,8 +125,8 @@ where
         until.clone(),
         flow_control,
     );
-    let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
-    (rows, token)
+    let (updates, errs) = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
+    (updates, errs, token)
 }
 
 pub fn decode_and_mfp<G, YFn>(
@@ -138,7 +135,10 @@ pub fn decode_and_mfp<G, YFn>(
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
     yield_fn: YFn,
-) -> Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>
+) -> (
+    StreamCore<G, Vec<(Row, Timestamp, Diff)>>,
+    StreamCore<G, Vec<(DataflowError, Timestamp, Diff)>>,
+)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     YFn: Fn(Instant, usize) -> bool + 'static,
@@ -150,6 +150,7 @@ where
 
     let mut fetched_input = builder.new_input(fetched, Pipeline);
     let (mut updates_output, updates_stream) = builder.new_output();
+    let (mut err_output, err_stream) = builder.new_output();
 
     // Re-used state for processing and building rows.
     let mut datum_vec = mz_repr::DatumVec::new();
@@ -178,11 +179,12 @@ where
             // our yield counters here.
             let mut decode_start = Instant::now();
 
+            let mut updates_session = ConsolidateBuffer::new(updates_output.activate(), 0);
+            let mut err_session = ConsolidateBuffer::new(err_output.activate(), 1);
+
             for fetched_part in buffer.drain(..) {
                 // Apply as much logic to `updates` as we can, before we emit anything.
-                let (updates_size_hint_min, updates_size_hint_max) = fetched_part.size_hint();
-                let mut updates =
-                    Vec::with_capacity(updates_size_hint_max.unwrap_or(updates_size_hint_min));
+                let mut updates = 0;
                 for ((key, val), time, diff) in fetched_part {
                     if !until.less_equal(&time) {
                         match (key, val) {
@@ -202,23 +204,25 @@ where
                                             Ok((row, time, diff)) => {
                                                 // Additional `until` filtering due to temporal filters.
                                                 if !until.less_equal(&time) {
-                                                    updates.push((Ok(row), time, diff));
+                                                    updates_session.give(&cap, (row, time, diff));
+                                                    updates += 1;
                                                 }
                                             }
                                             Err((err, time, diff)) => {
                                                 // Additional `until` filtering due to temporal filters.
                                                 if !until.less_equal(&time) {
-                                                    updates.push((Err(err), time, diff));
+                                                    err_session.give(&cap, (err, time, diff));
                                                 }
                                             }
                                         }
                                     }
                                 } else {
-                                    updates.push((Ok(row), time, diff));
+                                    updates_session.give(&cap, (row, time, diff));
+                                    updates += 1;
                                 }
                             }
                             (Ok(SourceData(Err(err))), Ok(())) => {
-                                updates.push((Err(err), time, diff));
+                                err_session.give(&cap, (err, time, diff));
                             }
                             // TODO(petrosagg): error handling
                             (Err(_), Ok(_)) | (Ok(_), Err(_)) | (Err(_), Err(_)) => {
@@ -226,41 +230,19 @@ where
                             }
                         }
                     }
-                    if yield_fn(decode_start, updates.len()) {
-                        // A large part of the point of yielding is to let later operators
-                        // reduce down the data, so emit what we have. Note that this means
-                        // we don't get to consolidate everything, but that's part of the
-                        // tradeoff in tuning yield_fn.
-                        differential_dataflow::consolidation::consolidate_updates(&mut updates);
-
-                        {
-                            // Do very fine-grained output activation/session
-                            // creation to ensure that we don't hold activated
-                            // outputs or sessions across await points, which
-                            // would prevent messages from being flushed from
-                            // the shared timely output buffer.
-                            let mut updates_output = updates_output.activate();
-                            updates_output.session(&cap).give_vec(&mut updates);
-                        }
-
+                    if yield_fn(decode_start, updates) {
+                        updates = 0;
+                        updates_session.cease();
+                        err_session.cease();
                         // Force a yield to give back the timely thread, reactivating on our
                         // way out.
                         tokio::task::yield_now().await;
                         decode_start = Instant::now();
                     }
                 }
-                differential_dataflow::consolidation::consolidate_updates(&mut updates);
-
-                // Do very fine-grained output activation/session creation
-                // to ensure that we don't hold activated outputs or
-                // sessions across await points, which would prevent
-                // messages from being flushed from the shared timely output
-                // buffer.
-                let mut updates_output = updates_output.activate();
-                updates_output.session(&cap).give_vec(&mut updates);
             }
         }
     });
 
-    updates_stream
+    (updates_stream, err_stream)
 }

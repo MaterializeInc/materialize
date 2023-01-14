@@ -17,7 +17,9 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{Capability, CapabilityRef, Concat, OkErr, Operator};
+use timely::dataflow::operators::{
+    Capability, CapabilityRef, Concat, Concatenate, Map, OkErr, Operator,
+};
 use timely::dataflow::{Scope, Stream};
 use timely::order::PartialOrder;
 use timely::progress::frontier::AntichainRef;
@@ -58,7 +60,8 @@ pub(crate) fn upsert<G>(
     stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
     upsert_envelope: UpsertEnvelope,
-    previous: Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
+    previous_ok: Stream<G, (Row, Timestamp, Diff)>,
+    previous_err: Stream<G, (DataflowError, Timestamp, Diff)>,
     previous_token: Option<Rc<dyn Any>>,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
@@ -121,6 +124,14 @@ where
     } else {
         None
     };
+
+    // TODO: This multiplexes previous_ok and previous_err only to just demultiplex it differently
+    // in the next step.
+    let previous = previous_ok
+        .map(|(d, t, r)| (Ok(d), t, r))
+        .concatenate(std::iter::once(
+            previous_err.map(|(d, t, r)| (Err(d), t, r)),
+        ));
 
     // Break `previous` into:
     // On the one hand, "Ok" and "Err(UpsertError)", which we know how to deal with, and,

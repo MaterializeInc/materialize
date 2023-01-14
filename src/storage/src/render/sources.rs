@@ -389,9 +389,9 @@ where
                         }
                         Some(&t) => Some(t.saturating_sub(1)),
                     };
-                    let (previous_stream, previous_token) =
+                    let (previous_ok_stream, previous_err_stream, previous_token) =
                         if let Some(previous_as_of) = previous_as_of {
-                            let (stream, tok) = persist_source::persist_source_core(
+                            let (ok_stream, err_stream, tok) = persist_source::persist_source_core(
                                 scope,
                                 id,
                                 persist_clients,
@@ -410,15 +410,20 @@ where
                                 // Copy the logic in DeltaJoin/Get/Join to start.
                                 |_timer, count| count > 1_000_000,
                             );
-                            (stream, Some(tok))
+                            (ok_stream, err_stream, Some(tok))
                         } else {
-                            (std::iter::empty().to_stream(scope), None)
+                            (
+                                std::iter::empty().to_stream(scope),
+                                std::iter::empty().to_stream(scope),
+                                None,
+                            )
                         };
                     let (upsert_ok, upsert_err) = super::upsert::upsert(
                         &transformed_results,
                         resume_upper,
                         upsert_envelope.clone(),
-                        previous_stream,
+                        previous_ok_stream,
+                        previous_err_stream,
                         previous_token,
                     );
 
