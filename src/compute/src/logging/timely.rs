@@ -27,11 +27,12 @@ use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{datum_list_size, datum_size, Datum, DatumVec, Diff, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
+use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 
 use crate::compute_state::ComputeState;
 use crate::logging::persist::persist_sink;
-use crate::logging::{ConsolidateBuffer, LogVariant, TimelyLog};
+use crate::logging::{LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
 /// Constructs the logging dataflow for timely logs.

@@ -28,11 +28,12 @@ use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
+use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 
 use crate::compute_state::ComputeState;
 use crate::logging::persist::persist_sink;
-use crate::logging::{ConsolidateBuffer, DifferentialLog, LogVariant};
+use crate::logging::{DifferentialLog, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
 /// Constructs the logging dataflow for differential logs.

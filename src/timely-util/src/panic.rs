@@ -17,7 +17,7 @@ use std::panic;
 
 use mz_ore::halt;
 
-/// Intercepts expected [`timely_communication`] panics and downgrades them to
+/// Intercepts expected [`timely::communication`] panics and downgrades them to
 /// [`halt`]s.
 ///
 /// Because processes in a timely cluster are shared fate, once one process in
