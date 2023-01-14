@@ -87,11 +87,11 @@ pub enum AdapterError {
         expected: Vec<String>,
     },
     /// No such storage instance size has been configured.
-    InvalidStorageHostSize {
+    InvalidStorageClusterSize {
         size: String,
         expected: Vec<String>,
     },
-    StorageHostSizeRequired {
+    StorageClusterSizeRequired {
         expected: Vec<String>,
     },
     /// The selection value for a table mutation operation refers to an invalid object.
@@ -274,10 +274,10 @@ impl AdapterError {
                 "Valid cluster replica sizes are: {}",
                 expected.join(", ")
             )),
-            AdapterError::InvalidStorageHostSize { expected, .. } => {
+            AdapterError::InvalidStorageClusterSize { expected, .. } => {
                 Some(format!("Valid sizes are: {}", expected.join(", ")))
             }
-            Self::StorageHostSizeRequired { expected } => Some(format!(
+            Self::StorageClusterSizeRequired { expected } => Some(format!(
                 "Try choosing one of the smaller sizes to start. Available sizes: {}",
                 expected.join(", ")
             )),
@@ -364,10 +364,10 @@ impl fmt::Display for AdapterError {
             AdapterError::InvalidClusterReplicaSize { size, expected: _ } => {
                 write!(f, "unknown cluster replica size {size}",)
             }
-            AdapterError::InvalidStorageHostSize { size, .. } => {
+            AdapterError::InvalidStorageClusterSize { size, .. } => {
                 write!(f, "unknown source size {size}")
             }
-            Self::StorageHostSizeRequired { .. } => {
+            Self::StorageClusterSizeRequired { .. } => {
                 write!(f, "size option is required")
             }
             AdapterError::InvalidTableMutationSelection => {

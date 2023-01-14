@@ -110,8 +110,8 @@ use mz_sql::plan::{self, CopyFormat, MutationKind, Params, QueryWhen};
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, StorageError,
 };
+use mz_storage_client::types::clusters::StorageClusterConfig;
 use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::hosts::StorageHostConfig;
 use mz_storage_client::types::sinks::StorageSinkConnection;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_transform::Optimizer;
@@ -119,7 +119,7 @@ use mz_transform::Optimizer;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog,
-    CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, StorageHostSizeMap,
+    CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, StorageClusterSizeMap,
     StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
@@ -301,7 +301,7 @@ pub struct Config {
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
     pub availability_zones: Vec<String>,
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
-    pub storage_host_sizes: StorageHostSizeMap,
+    pub storage_cluster_sizes: StorageClusterSizeMap,
     pub default_storage_host_size: Option<String>,
     pub bootstrap_system_parameters: BTreeMap<String, String>,
     pub connection_context: ConnectionContext,
@@ -696,7 +696,7 @@ impl Coordinator {
                                     ingestion_metadata: (),
                                     source_imports,
                                     source_exports,
-                                    host_config: ingestion.host_config.clone(),
+                                    cluster_config: ingestion.cluster_config.clone(),
                                 }),
                                 source_status_collection_id,
                             )
@@ -1045,12 +1045,12 @@ impl Coordinator {
         let mut linked_cluster_ops = vec![];
         for entry in &entries {
             // Only sources with ingestions need linked clusters.
-            let host_config = match entry.item() {
+            let cluster_config = match entry.item() {
                 CatalogItem::Source(source) => match &source.data_source {
-                    DataSourceDesc::Ingestion(ingestion) => &ingestion.host_config,
+                    DataSourceDesc::Ingestion(ingestion) => &ingestion.cluster_config,
                     _ => continue,
                 },
-                CatalogItem::Sink(sink) => &sink.host_config,
+                CatalogItem::Sink(sink) => &sink.cluster_config,
                 _ => continue,
             };
 
@@ -1061,18 +1061,18 @@ impl Coordinator {
 
             // Convert resolved host config back to the host config we would
             // have gotten from the SQL layer.
-            let host_config = match host_config {
-                StorageHostConfig::Managed { size, .. } => {
-                    plan::StorageHostConfig::Managed { size: size.into() }
+            let cluster_config = match cluster_config {
+                StorageClusterConfig::Managed { size, .. } => {
+                    plan::StorageClusterConfig::Managed { size: size.into() }
                 }
-                StorageHostConfig::Remote { addr } => {
-                    plan::StorageHostConfig::Remote { addr: addr.into() }
+                StorageClusterConfig::Remote { addr } => {
+                    plan::StorageClusterConfig::Remote { addr: addr.into() }
                 }
             };
 
             info!("adding linked cluster for {}", entry.id());
             linked_cluster_ops.extend(
-                self.create_linked_cluster_ops(entry.id(), entry.name(), &host_config)
+                self.create_linked_cluster_ops(entry.id(), entry.name(), &cluster_config)
                     .await?,
             );
         }
@@ -1214,7 +1214,7 @@ pub async fn serve(
         secrets_controller,
         cloud_resource_controller,
         cluster_replica_sizes,
-        storage_host_sizes,
+        storage_cluster_sizes,
         default_storage_host_size,
         bootstrap_system_parameters,
         mut availability_zones,
@@ -1275,8 +1275,8 @@ pub async fn serve(
             skip_migrations: false,
             metrics_registry: &metrics_registry,
             cluster_replica_sizes,
-            storage_host_sizes,
-            default_storage_host_size,
+            storage_cluster_sizes,
+            default_storage_cluster_size: default_storage_host_size,
             bootstrap_system_parameters,
             availability_zones,
             secrets_reader: secrets_controller.reader(),

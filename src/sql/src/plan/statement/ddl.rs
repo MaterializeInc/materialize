@@ -116,7 +116,7 @@ use crate::plan::{
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DropComputeInstancesPlan,
     DropComputeReplicasPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
     FullObjectName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan, QueryContext,
-    RotateKeysPlan, Secret, Sink, Source, StorageHostConfig, Table, Type, View,
+    RotateKeysPlan, Secret, Sink, Source, StorageClusterConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -1028,7 +1028,7 @@ pub fn plan_create_source(
         }
     }
 
-    let host_config = host_config(remote, size)?;
+    let cluster_config = storage_cluster_config(remote, size)?;
 
     let timestamp_interval = match timestamp_interval {
         Some(timestamp_interval) => timestamp_interval.duration()?,
@@ -1079,7 +1079,7 @@ pub fn plan_create_source(
         source,
         if_not_exists,
         timeline,
-        host_config,
+        cluster_config,
     }))
 }
 
@@ -1184,7 +1184,7 @@ pub fn plan_create_subsource(
         source,
         if_not_exists,
         timeline: Timeline::EpochMilliseconds,
-        host_config: StorageHostConfig::Undefined,
+        cluster_config: StorageClusterConfig::Undefined,
     }))
 }
 
@@ -1327,14 +1327,14 @@ fn get_encoding(
     Ok(encoding)
 }
 
-fn host_config(
+fn storage_cluster_config(
     remote: Option<String>,
     size: Option<String>,
-) -> Result<StorageHostConfig, PlanError> {
+) -> Result<StorageClusterConfig, PlanError> {
     match (remote, size) {
-        (None, None) => Ok(StorageHostConfig::Undefined),
-        (None, Some(size)) => Ok(StorageHostConfig::Managed { size }),
-        (Some(addr), None) => Ok(StorageHostConfig::Remote { addr }),
+        (None, None) => Ok(StorageClusterConfig::Undefined),
+        (None, Some(size)) => Ok(StorageClusterConfig::Managed { size }),
+        (Some(addr), None) => Ok(StorageClusterConfig::Remote { addr }),
         (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
     }
 }
@@ -1895,7 +1895,7 @@ pub fn plan_create_sink(
         seen: _,
     } = with_options.try_into()?;
 
-    let host_config = host_config(remote, size)?;
+    let cluster_config = storage_cluster_config(remote, size)?;
 
     // WITH SNAPSHOT defaults to true
     let with_snapshot = snapshot.unwrap_or(true);
@@ -1910,7 +1910,7 @@ pub fn plan_create_sink(
         },
         with_snapshot,
         if_not_exists,
-        host_config,
+        cluster_config,
     }))
 }
 

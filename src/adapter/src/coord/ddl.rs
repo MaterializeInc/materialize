@@ -497,7 +497,7 @@ impl Coordinator {
                 create_export_token,
                 ExportDescription {
                     sink: storage_sink_desc,
-                    host_config: sink.host_config.clone(),
+                    cluster_config: sink.cluster_config.clone(),
                 },
             )])
             .await?)

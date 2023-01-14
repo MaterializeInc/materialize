@@ -95,7 +95,7 @@ use tokio::sync::{mpsc, oneshot};
 use tower_http::cors::AllowOrigin;
 
 use mz_adapter::catalog::storage::BootstrapArgs;
-use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageHostSizeMap};
+use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageClusterSizeMap};
 use mz_adapter::config::{system_parameter_sync, SystemParameterBackend, SystemParameterFrontend};
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::CloudResourceController;
@@ -182,10 +182,11 @@ pub struct Config {
     /// Values to set for system parameters, if those system parameters have not
     /// already been set by the system user.
     pub bootstrap_system_parameters: BTreeMap<String, String>,
-    /// A map from size name to resource allocations for storage hosts.
-    pub storage_host_sizes: StorageHostSizeMap,
-    /// Default storage host size, should be a key from storage_host_sizes.
-    pub default_storage_host_size: Option<String>,
+    /// A map from size name to resource allocations for storage clusters.
+    pub storage_cluster_sizes: StorageClusterSizeMap,
+    /// Default storage cluster size, should be a key from
+    /// storage_cluster_sizes.
+    pub default_storage_cluster_size: Option<String>,
     /// The interval at which to collect storage usage information.
     pub storage_usage_collection_interval: Duration,
     /// An API key for Segment. Enables export of audit events to Segment.
@@ -388,8 +389,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         secrets_controller: config.secrets_controller,
         cloud_resource_controller: config.cloud_resource_controller,
         cluster_replica_sizes: config.cluster_replica_sizes,
-        storage_host_sizes: config.storage_host_sizes,
-        default_storage_host_size: config.default_storage_host_size,
+        storage_cluster_sizes: config.storage_cluster_sizes,
+        default_storage_host_size: config.default_storage_cluster_size,
         availability_zones: config.availability_zones,
         bootstrap_system_parameters: config.bootstrap_system_parameters,
         connection_context: config.connection_context,

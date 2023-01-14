@@ -324,21 +324,21 @@ pub struct CreateSourcePlan {
     pub source: Source,
     pub if_not_exists: bool,
     pub timeline: Timeline,
-    pub host_config: StorageHostConfig,
+    pub cluster_config: StorageClusterConfig,
 }
 
-/// Settings related to storage hosts
+/// Settings related to storage clusters.
 ///
 /// This represents how resources for a storage instance are going to be
 /// provisioned, based on the SQL logic. Storage equivalent of ComputeReplicaConfig.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum StorageHostConfig {
+pub enum StorageClusterConfig {
     /// Remote unmanaged storage
     Remote {
         /// The network address of the clusterd process.
         addr: String,
     },
-    /// A remote but managed storage host
+    /// A remote but managed storage cluster.
     Managed {
         /// SQL size parameter used for allocation
         size: String,
@@ -368,7 +368,7 @@ pub struct CreateSinkPlan {
     pub sink: Sink,
     pub with_snapshot: bool,
     pub if_not_exists: bool,
-    pub host_config: StorageHostConfig,
+    pub cluster_config: StorageClusterConfig,
 }
 
 #[derive(Debug)]

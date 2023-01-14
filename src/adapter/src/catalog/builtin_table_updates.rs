@@ -28,8 +28,8 @@ use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_storage_client::types::clusters::{StorageClusterConfig, StorageClusterResourceAllocation};
 use mz_storage_client::types::connections::KafkaConnection;
-use mz_storage_client::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 use mz_storage_client::types::sources::{GenericSourceConnection, PostgresSourceConnection};
 
@@ -254,7 +254,7 @@ impl CatalogState {
                     connection_id,
                     match &source.data_source {
                         DataSourceDesc::Ingestion(Ingestion {
-                            host_config: StorageHostConfig::Managed { size, .. },
+                            cluster_config: StorageClusterConfig::Managed { size, .. },
                             ..
                         }) => Some(size.as_str()),
                         _ => None,
@@ -622,7 +622,7 @@ impl CatalogState {
                     Datum::String(name),
                     Datum::String(connection.name()),
                     Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
-                    Datum::from(sink.host_config.size()),
+                    Datum::from(sink.cluster_config.size()),
                 ]),
                 diff,
             });
@@ -987,13 +987,13 @@ impl CatalogState {
     pub fn pack_all_storage_host_size_updates(&self) -> Vec<BuiltinTableUpdate> {
         let id = self.resolve_builtin_table(&MZ_STORAGE_HOST_SIZES);
         let updates = self
-            .storage_host_sizes
+            .storage_cluster_sizes
             .0
             .iter()
             .map(
                 |(
                     size,
-                    StorageHostResourceAllocation {
+                    StorageClusterResourceAllocation {
                         memory_limit,
                         cpu_limit,
                         workers,
