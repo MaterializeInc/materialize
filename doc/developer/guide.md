@@ -290,6 +290,9 @@ Although the primary unit of code organization at the inter-team level is the
 crate, modules within a crate are also useful for code organization, especially
 because they are the level at which `pub` visibility operates.
 
+We make a best-effort attempt to document the ownership of the Rust code in this
+repository using GitHub's [CODEOWNERS](/.github/CODEOWNERS) file.
+
 You can view a relationship diagram of our crates by running the following
 command:
 
