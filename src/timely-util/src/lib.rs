@@ -84,6 +84,7 @@
 
 pub mod activator;
 pub mod antichain;
+pub mod buffer;
 pub mod builder_async;
 pub mod capture;
 pub mod event;

@@ -4908,7 +4908,6 @@ dependencies = [
  "proptest",
  "serde",
  "timely",
- "timely_communication",
  "tokio",
  "workspace-hack",
 ]
