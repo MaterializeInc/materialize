@@ -2055,8 +2055,8 @@ impl AggregateExpr {
             | AggregateFunc::MinTimestamp
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::Any
-            | AggregateFunc::All
-            | AggregateFunc::Count => self.expr.is_literal_null(),
+            | AggregateFunc::All => self.expr.is_literal(),
+            AggregateFunc::Count => self.expr.is_literal_null(),
             _ => self.expr.is_literal_err(),
         }
     }
