@@ -11,7 +11,7 @@
 //!
 //! Projections can be re-introduced in the physical planning stage.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::mem;
 
 use crate::TransformArgs;
@@ -50,7 +50,7 @@ impl crate::Transform for ProjectionLifting {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let result = self.action(relation, &mut HashMap::new());
+        let result = self.action(relation, &mut BTreeMap::new());
         mz_repr::explain_new::trace_plan(&*relation);
         result
     }
@@ -62,7 +62,7 @@ impl ProjectionLifting {
         &self,
         relation: &mut MirRelationExpr,
         // Map from names to new get type and projection required at use.
-        gets: &mut HashMap<Id, (mz_repr::RelationType, Vec<usize>)>,
+        gets: &mut BTreeMap<Id, (mz_repr::RelationType, Vec<usize>)>,
     ) -> Result<(), crate::TransformError> {
         self.checked_recur(|_| {
             match relation {

@@ -30,7 +30,8 @@
 //! constructor for [`Explain`] to indicate that the implementation does
 //! not support this `$format`.
 
-use std::{collections::HashSet, fmt};
+use std::collections::BTreeSet;
+use std::fmt;
 
 use mz_ore::{stack::RecursionLimitError, str::Indent, str::IndentLike};
 
@@ -388,9 +389,9 @@ impl ExplainConfig {
     }
 }
 
-impl TryFrom<HashSet<String>> for ExplainConfig {
+impl TryFrom<BTreeSet<String>> for ExplainConfig {
     type Error = anyhow::Error;
-    fn try_from(mut flags: HashSet<String>) -> Result<Self, anyhow::Error> {
+    fn try_from(mut flags: BTreeSet<String>) -> Result<Self, anyhow::Error> {
         // If `WITH(raw)` is specified, ensure that the config will be as
         // representative for the original plan as possible.
         if flags.remove("raw") {

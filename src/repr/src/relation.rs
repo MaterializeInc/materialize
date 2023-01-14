@@ -141,7 +141,9 @@ impl RustType<ProtoColumnType> for ColumnType {
 }
 
 /// The type of a relation.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct RelationType {
     /// The type for each column, in order.
     pub column_types: Vec<ColumnType>,

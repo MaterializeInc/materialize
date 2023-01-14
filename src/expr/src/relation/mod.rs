@@ -10,7 +10,7 @@
 #![warn(missing_docs)]
 
 use std::cmp::{max, Ordering};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::num::NonZeroUsize;
 
@@ -77,7 +77,7 @@ pub trait CollectionPlan {
 ///
 /// The AST is meant to reflect the capabilities of the `differential_dataflow::Collection` type,
 /// written generically enough to avoid run-time compilation work.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
 pub enum MirRelationExpr {
     /// A constant relation containing specified rows.
     ///
@@ -399,7 +399,7 @@ impl MirRelationExpr {
                 // Augment non-nullability of columns, by observing either
                 // 1. Predicates that explicitly test for null values, and
                 // 2. Columns that if null would make a predicate be null.
-                let mut nonnull_required_columns = HashSet::new();
+                let mut nonnull_required_columns = BTreeSet::new();
                 for predicate in predicates {
                     // Add any columns that being null would force the predicate to be null.
                     // Should that happen, the row would be discarded.
@@ -500,7 +500,7 @@ impl MirRelationExpr {
             } => {
                 let n_cols = typ.arity();
                 // If the `i`th entry is `Some`, then we have not yet observed non-uniqueness in the `i`th column.
-                let mut unique_values_per_col = vec![Some(HashSet::<Datum>::default()); n_cols];
+                let mut unique_values_per_col = vec![Some(BTreeSet::<Datum>::default()); n_cols];
                 for (row, diff) in rows {
                     for (i, datum) in row.iter().enumerate() {
                         if datum != Datum::Dummy {
@@ -670,12 +670,12 @@ impl MirRelationExpr {
                     });
 
                     // Keep doing replacements until the number of keys settles
-                    let mut prev_keys: HashSet<_> = input.drain(..).collect();
+                    let mut prev_keys: BTreeSet<_> = input.drain(..).collect();
                     let mut prev_keys_size = 0;
                     while prev_keys_size != prev_keys.len() {
                         prev_keys_size = prev_keys.len();
                         for (c1, c2) in classes.clone() {
-                            let mut new_keys = HashSet::new();
+                            let mut new_keys = BTreeSet::new();
                             for key in prev_keys.into_iter() {
                                 let contains_c1 = key.contains(&c1);
                                 let contains_c2 = key.contains(&c2);
@@ -1727,7 +1727,7 @@ impl MirRelationExpr {
     /// identifiers are rewritten to be the constant collection.
     /// This makes the computation perform exactly "one" iteration.
     pub fn make_nonrecursive(self: &mut MirRelationExpr) {
-        let mut deadlist = std::collections::HashSet::new();
+        let mut deadlist = BTreeSet::new();
         let mut worklist = vec![self];
         while let Some(expr) = worklist.pop() {
             if let MirRelationExpr::LetRec { ids, values, body } = expr {
@@ -1943,7 +1943,9 @@ impl VisitChildren<Self> for MirRelationExpr {
 }
 
 /// Specification for an ordering by a column.
-#[derive(Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct ColumnOrder {
     /// The column index.
     pub column: usize,
@@ -1990,7 +1992,9 @@ impl fmt::Display for ColumnOrder {
 }
 
 /// Describes an aggregation expression.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct AggregateExpr {
     /// Names the aggregation function.
     pub func: AggregateFunc,
@@ -2466,7 +2470,7 @@ impl fmt::Display for AggregateExpr {
 }
 
 /// Describe a join implementation in dataflow.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
 pub enum JoinImplementation {
     /// Perform a sequence of binary differential dataflow joins.
     ///
@@ -2813,7 +2817,9 @@ where
 ///
 /// Window frames define a subset of the partition , and only a subset of
 /// window functions make use of the window frame.
-#[derive(Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub struct WindowFrame {
     /// ROWS, RANGE or GROUPS
     pub units: WindowFrameUnits,
@@ -2905,7 +2911,9 @@ impl RustType<ProtoWindowFrame> for WindowFrame {
 }
 
 /// Describe how frame bounds are interpreted
-#[derive(Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
+#[derive(
+    Arbitrary, Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+)]
 pub enum WindowFrameUnits {
     /// Each row is treated as the unit of work for bounds
     Rows,

@@ -14,7 +14,7 @@
 //! pushdown can be applied across views once we understand the context
 //! in which the views will be executed.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_compute_client::types::dataflows::DataflowDesc;
 use mz_expr::visit::Visit;
@@ -207,7 +207,7 @@ fn optimize_dataflow_relations(
 fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     // Maps id -> union of known columns demanded from the source/view with the
     // corresponding id.
-    let mut demand = HashMap::new();
+    let mut demand = BTreeMap::new();
 
     if dataflow.index_exports.is_empty() && dataflow.sink_exports.is_empty() {
         // In the absence of any exports, just demand all columns from views
@@ -264,14 +264,14 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), Transform
 /// TODO: make this private once we allow multiple exports per dataflow.
 pub fn optimize_dataflow_demand_inner<'a, I>(
     view_sequence: I,
-    demand: &mut HashMap<Id, BTreeSet<usize>>,
+    demand: &mut BTreeMap<Id, BTreeSet<usize>>,
 ) -> Result<(), TransformError>
 where
     I: Iterator<Item = (Id, &'a mut MirRelationExpr)>,
 {
     // Maps id -> The projection that was pushed down on the view with the
     // corresponding id.
-    let mut applied_projection = HashMap::new();
+    let mut applied_projection = BTreeMap::new();
     // Collect the mutable references to views after pushing projection down
     // in order to run cleanup actions on them in a second loop.
     let mut view_refs = Vec::new();
@@ -306,7 +306,7 @@ where
 fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     // Contains id -> predicates map, describing those predicates that
     // can (but need not) be applied to the collection named by `id`.
-    let mut predicates = HashMap::<Id, HashSet<mz_expr::MirScalarExpr>>::new();
+    let mut predicates = BTreeMap::<Id, BTreeSet<mz_expr::MirScalarExpr>>::new();
 
     // Propagate predicate information from outputs to inputs.
     optimize_dataflow_filters_inner(
@@ -349,7 +349,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
 /// TODO: make this private once we allow multiple exports per dataflow.
 pub fn optimize_dataflow_filters_inner<'a, I>(
     view_iter: I,
-    predicates: &mut HashMap<Id, HashSet<mz_expr::MirScalarExpr>>,
+    predicates: &mut BTreeMap<Id, BTreeSet<mz_expr::MirScalarExpr>>,
 ) -> Result<(), TransformError>
 where
     I: Iterator<Item = (Id, &'a mut MirRelationExpr)>,
@@ -374,7 +374,7 @@ where
     fields(path.segment ="monotonic")
 )]
 pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
-    let mut monotonic_ids = HashSet::new();
+    let mut monotonic_ids = BTreeSet::new();
     for (source_id, (_source, is_monotonic)) in dataflow.source_imports.iter() {
         if *is_monotonic {
             monotonic_ids.insert(source_id.clone());
@@ -392,7 +392,7 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
         monotonic_flag.apply(
             build_desc.plan.as_inner_mut(),
             &monotonic_ids,
-            &mut HashSet::new(),
+            &mut BTreeSet::new(),
         )?;
     }
 
@@ -415,16 +415,16 @@ fn optimize_dataflow_index_imports(
 ) -> Result<(), TransformError> {
     // Generate (a mapping of views used by exports and objects to build) ->
     // (indexes from that view that have been explicitly chosen to be used)
-    let mut indexes_by_view = HashMap::new();
+    let mut indexes_by_view = BTreeMap::new();
     for sink_desc in dataflow.sink_exports.iter() {
         indexes_by_view
             .entry(sink_desc.1.from)
-            .or_insert_with(HashSet::new);
+            .or_insert_with(BTreeSet::new);
     }
     for (_, (index_desc, _)) in dataflow.index_exports.iter() {
         indexes_by_view
             .entry(index_desc.on_id)
-            .or_insert_with(HashSet::new);
+            .or_insert_with(BTreeSet::new);
     }
     for build_desc in dataflow.objects_to_build.iter_mut() {
         build_desc
@@ -434,7 +434,7 @@ fn optimize_dataflow_index_imports(
                 MirRelationExpr::Get {
                     id: Id::Global(id), ..
                 } => {
-                    indexes_by_view.entry(*id).or_insert_with(HashSet::new);
+                    indexes_by_view.entry(*id).or_insert_with(BTreeSet::new);
                 }
                 MirRelationExpr::ArrangeBy { input, keys } => {
                     if let MirRelationExpr::Get {

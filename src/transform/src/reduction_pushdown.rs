@@ -47,7 +47,7 @@
 //! work around condition 1 by pushing down an inner reduce through the join
 //! while retaining the original outer reduce.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::iter::FromIterator;
 
 use crate::TransformArgs;
@@ -194,7 +194,7 @@ fn try_push_reduce_through_join(
     let mut components = (0..inputs.len()).map(Component::new).collect::<Vec<_>>();
     for equivalence in component_equivalences {
         // a) Find the inputs referenced by the constraint.
-        let inputs_to_connect = HashSet::<usize>::from_iter(
+        let inputs_to_connect = BTreeSet::<usize>::from_iter(
             equivalence
                 .iter()
                 .flat_map(|expr| old_join_mapper.lookup_inputs(expr)),
@@ -226,7 +226,7 @@ fn try_push_reduce_through_join(
     // ```
 
     // Maps (input idxs from old join) -> (idx of component it belongs to)
-    let input_component_map = HashMap::from_iter(
+    let input_component_map = BTreeMap::from_iter(
         components
             .iter()
             .enumerate()
@@ -344,14 +344,14 @@ fn try_push_reduce_through_join(
 fn lookup_corresponding_component(
     expr: &MirScalarExpr,
     old_join_mapper: &JoinInputMapper,
-    input_component_map: &HashMap<usize, usize>,
+    input_component_map: &BTreeMap<usize, usize>,
 ) -> Option<usize> {
     let mut dedupped = old_join_mapper
         .lookup_inputs(expr)
         .map(|i| input_component_map[&i])
-        .collect::<HashSet<_>>();
+        .collect::<BTreeSet<_>>();
     if dedupped.len() == 1 {
-        dedupped.drain().next()
+        dedupped.pop_first()
     } else {
         None
     }

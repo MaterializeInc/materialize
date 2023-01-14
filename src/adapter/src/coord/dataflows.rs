@@ -14,7 +14,7 @@
 //! and indicate which identifiers have arrangements available. This module
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::Antichain;
@@ -464,7 +464,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
 
                     // Inspect global ids that occur in the Gets in view_expr, and collect the ids
                     // of monotonic (materialized) views and sources (but not indexes).
-                    let mut monotonic_ids = HashSet::new();
+                    let mut monotonic_ids = BTreeSet::new();
                     let recursion_result: Result<(), RecursionLimitError> = view_expr
                         .try_visit_post(&mut |e| {
                             if let MirRelationExpr::Get {
@@ -501,7 +501,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                     mz_transform::monotonic::MonotonicFlag::default().apply(
                         &mut view_expr,
                         &monotonic_ids,
-                        &mut HashSet::new(),
+                        &mut BTreeSet::new(),
                     )
                 }
                 CatalogItem::Secret(_)

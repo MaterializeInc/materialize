@@ -83,7 +83,7 @@
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::fmt::Write;
 
     use anyhow::{anyhow, Error};
@@ -438,14 +438,14 @@ mod tests {
     ) -> Result<String, String> {
         match transform {
             "filter" => {
-                let mut predicates = HashMap::new();
+                let mut predicates = BTreeMap::new();
                 match optimize_dataflow_filters_inner(dataflow.iter_mut().map(|(id, rel)| (Id::Global(*id), rel)).rev(), &mut predicates) {
                     Ok(()) => Ok(format!("Pushed-down predicates:\n{}", log_pushed_outside_of_dataflow(predicates, cat))),
                     Err(e) => Err(e.to_string()),
                 }
             }
             "project" => {
-                let mut demand = HashMap::new();
+                let mut demand = BTreeMap::new();
                 if let Some((id, rel)) = dataflow.last() {
                     demand.insert(Id::Global(*id), (0..rel.arity()).collect());
                 }
@@ -462,7 +462,7 @@ mod tests {
     }
 
     /// Converts a map of (source) -> (information pushed to source) into a string.
-    fn log_pushed_outside_of_dataflow<D>(map: HashMap<Id, D>, cat: &TestCatalog) -> String
+    fn log_pushed_outside_of_dataflow<D>(map: BTreeMap<Id, D>, cat: &TestCatalog) -> String
     where
         D: std::fmt::Debug + Clone,
     {

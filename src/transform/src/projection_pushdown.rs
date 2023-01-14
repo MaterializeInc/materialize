@@ -30,7 +30,7 @@
 //! and thus currently exists outside of both the physical and logical
 //! optimizers.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::visit::Visit;
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
@@ -57,7 +57,7 @@ impl crate::Transform for ProjectionPushdown {
         let result = self.action(
             relation,
             &(0..relation.arity()).collect(),
-            &mut HashMap::new(),
+            &mut BTreeMap::new(),
         );
         mz_repr::explain_new::trace_plan(&*relation);
         result
@@ -75,7 +75,7 @@ impl ProjectionPushdown {
         &self,
         relation: &mut MirRelationExpr,
         desired_projection: &Vec<usize>,
-        gets: &mut HashMap<Id, BTreeSet<usize>>,
+        gets: &mut BTreeMap<Id, BTreeSet<usize>>,
     ) -> Result<(), TransformError> {
         // First, try to push the desired projection down through `relation`.
         // In the process `relation` is transformed to a `MirRelationExpr`
@@ -115,7 +115,7 @@ impl ProjectionPushdown {
                 let new_type = value.typ();
                 self.update_projection_around_get(
                     body,
-                    &HashMap::from_iter(std::iter::once((
+                    &BTreeMap::from_iter(std::iter::once((
                         id,
                         (desired_value_projection, new_type),
                     ))),
@@ -360,7 +360,7 @@ impl ProjectionPushdown {
     pub fn update_projection_around_get(
         &self,
         relation: &mut MirRelationExpr,
-        applied_projections: &HashMap<Id, (Vec<usize>, mz_repr::RelationType)>,
+        applied_projections: &BTreeMap<Id, (Vec<usize>, mz_repr::RelationType)>,
     ) -> Result<(), TransformError> {
         relation.visit_mut_pre(&mut |e| {
             if let MirRelationExpr::Project { input, outputs } = e {
@@ -419,7 +419,7 @@ where
     let reverse_col_map = permutation
         .enumerate()
         .map(|(idx, c)| (*c, idx))
-        .collect::<HashMap<_, _>>();
+        .collect::<BTreeMap<_, _>>();
     for c in columns {
         *c = reverse_col_map[c];
     }

@@ -9,7 +9,7 @@
 
 //! Transformations based on pulling information about individual columns from sources.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use itertools::Itertools;
 
@@ -57,7 +57,7 @@ impl crate::Transform for ColumnKnowledge {
     ) -> Result<(), TransformError> {
         let mut knowledge_stack = Vec::<DatumKnowledge>::new();
         let result = self
-            .harvest(expr, &mut HashMap::new(), &mut knowledge_stack)
+            .harvest(expr, &mut BTreeMap::new(), &mut knowledge_stack)
             .map(|_| ());
         mz_repr::explain_new::trace_plan(&*expr);
         result
@@ -71,7 +71,7 @@ impl ColumnKnowledge {
     fn harvest(
         &self,
         expr: &mut MirRelationExpr,
-        knowledge: &mut HashMap<mz_expr::Id, Vec<DatumKnowledge>>,
+        knowledge: &mut BTreeMap<mz_expr::Id, Vec<DatumKnowledge>>,
         knowledge_stack: &mut Vec<DatumKnowledge>,
     ) -> Result<Vec<DatumKnowledge>, TransformError> {
         self.checked_recur(|_| {

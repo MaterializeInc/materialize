@@ -78,7 +78,7 @@
 //!
 //! See [README.md].
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use serde::de::DeserializeOwned;
@@ -115,8 +115,8 @@ impl<T: MzReflect> MzReflect for Vec<T> {
 #[derive(Debug, Default)]
 pub struct ReflectedTypeInfo {
     pub enum_dict:
-        HashMap<&'static str, HashMap<&'static str, (Vec<&'static str>, Vec<&'static str>)>>,
-    pub struct_dict: HashMap<&'static str, (Vec<&'static str>, Vec<&'static str>)>,
+        BTreeMap<&'static str, BTreeMap<&'static str, (Vec<&'static str>, Vec<&'static str>)>>,
+    pub struct_dict: BTreeMap<&'static str, (Vec<&'static str>, Vec<&'static str>)>,
 }
 
 /* #endregion */
