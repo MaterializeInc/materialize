@@ -100,7 +100,6 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
-use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -242,10 +241,6 @@ pub fn build_compute_dataflow<A: Allocate>(
                         &ok_stream, logger, *source_id, export_ids,
                     );
                 }
-
-                // TODO(petrosagg): this is just wrapping an Arc<T> into an Rc<Arc<T>> to make the
-                // type checker happy. We should decide what we want our tokens to look like
-                let token: Rc<dyn Any> = Rc::new(token);
 
                 let (oks, errs) = (
                     ok_stream.as_collection().leave_region(),
