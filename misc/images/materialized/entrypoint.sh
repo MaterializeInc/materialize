@@ -24,7 +24,8 @@ EOF
 
 COCKROACH_SKIP_ENABLING_DIAGNOSTIC_REPORTING=true cockroach start-single-node \
     --insecure \
-    --background
+    --background \
+    --store=/mzdata/cockroach
 
 cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS consensus"
 cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS storage"

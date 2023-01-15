@@ -86,7 +86,7 @@ def workflow_kafka_sources(
 
     c.kill("materialized")
     c.rm("materialized", "testdrive", destroy_volumes=True)
-    c.rm_volumes("mzdata", "pgdata")
+    c.rm_volumes("mzdata")
 
 
 def workflow_user_tables(
@@ -119,7 +119,7 @@ def workflow_user_tables(
 
     c.kill("materialized")
     c.rm("materialized", "testdrive", destroy_volumes=True)
-    c.rm_volumes("mzdata", "pgdata")
+    c.rm_volumes("mzdata")
 
 
 def workflow_failpoints(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -162,7 +162,7 @@ def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
 
     c.kill("materialized")
     c.rm("materialized", "testdrive", destroy_volumes=True)
-    c.rm_volumes("mzdata", "pgdata")
+    c.rm_volumes("mzdata")
 
 
 def workflow_compaction(c: Composition) -> None:
@@ -178,4 +178,4 @@ def workflow_compaction(c: Composition) -> None:
 
     c.rm("materialized", "testdrive", destroy_volumes=True)
 
-    c.rm_volumes("mzdata", "pgdata")
+    c.rm_volumes("mzdata")

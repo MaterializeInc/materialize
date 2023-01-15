@@ -25,7 +25,6 @@ LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
-    "pgdata:/cockroach-data",
     "mydata:/var/lib/mysql-files",
     "tmp:/share/tmp",
 ]

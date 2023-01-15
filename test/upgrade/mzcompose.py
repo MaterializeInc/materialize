@@ -191,12 +191,6 @@ def test_upgrade_from_version(
 
     c.kill("materialized")
     c.rm("materialized", "testdrive")
-    # Remove the pgdata volume, which is where the CockroachDB embedded into
-    # the materialized image stores its state. We don't use the embedded
-    # CockroachDB in this test, and we might *downgrade* it, if the new version
-    # of Materialize reverts a version bump of CockroachDB, and that would
-    # result in the new container failing to start up.
-    c.rm_volumes("pgdata")
 
     c.up("materialized")
     c.wait_for_materialized("materialized")
