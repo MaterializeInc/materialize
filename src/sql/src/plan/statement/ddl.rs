@@ -354,10 +354,6 @@ pub fn plan_create_source(
         subsources,
     } = &stmt;
 
-    if in_cluster.is_some() {
-        bail_unsupported!("CREATE SOURCE ... IN CLUSTER");
-    }
-
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
     const SAFE_WITH_OPTIONS: &[CreateSourceOptionName] = &[CreateSourceOptionName::Size];
@@ -1033,7 +1029,7 @@ pub fn plan_create_source(
         }
     }
 
-    let cluster_config = storage_cluster_config(remote, size)?;
+    let cluster_config = storage_cluster_config(in_cluster.as_ref(), remote, size)?;
 
     let timestamp_interval = match timestamp_interval {
         Some(timestamp_interval) => timestamp_interval.duration()?,
@@ -1333,14 +1329,16 @@ fn get_encoding(
 }
 
 fn storage_cluster_config(
+    in_cluster: Option<&ResolvedClusterName>,
     remote: Option<String>,
     size: Option<String>,
 ) -> Result<StorageClusterConfig, PlanError> {
-    match (remote, size) {
-        (None, None) => Ok(StorageClusterConfig::Undefined),
-        (None, Some(size)) => Ok(StorageClusterConfig::Managed { size }),
-        (Some(addr), None) => Ok(StorageClusterConfig::Remote { addr }),
-        (Some(_), Some(_)) => sql_bail!("only one of REMOTE and SIZE can be set"),
+    match (in_cluster, remote, size) {
+        (None, None, None) => Ok(StorageClusterConfig::Undefined),
+        (Some(in_cluster), None, None) => Ok(StorageClusterConfig::Cluster { id: in_cluster.id }),
+        (None, Some(addr), None) => Ok(StorageClusterConfig::Remote { addr }),
+        (None, None, Some(size)) => Ok(StorageClusterConfig::Managed { size }),
+        _ => sql_bail!("only one of IN CLUSTER, REMOTE and SIZE can be set"),
     }
 }
 
@@ -1792,10 +1790,6 @@ pub fn plan_create_sink(
         with_options,
     } = stmt;
 
-    if in_cluster.is_some() {
-        bail_unsupported!("CREATE SINK ... IN CLUSTER");
-    }
-
     const SAFE_WITH_OPTIONS: &[CreateSinkOptionName] =
         &[CreateSinkOptionName::Size, CreateSinkOptionName::Snapshot];
 
@@ -1905,7 +1899,7 @@ pub fn plan_create_sink(
         seen: _,
     } = with_options.try_into()?;
 
-    let cluster_config = storage_cluster_config(remote, size)?;
+    let cluster_config = storage_cluster_config(in_cluster.as_ref(), remote, size)?;
 
     // WITH SNAPSHOT defaults to true
     let with_snapshot = snapshot.unwrap_or(true);
