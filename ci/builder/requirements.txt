@@ -32,7 +32,7 @@ psutil==5.9.4
 # psycopg2 intentionally omitted. Use pg8000 instead.
 pydantic==1.10.4
 PyMySQL==1.0.2
-pytest==7.2.0
+pytest==7.2.1
 pyyaml==6.0
 requests==2.28.1
 scipy==1.7.3
