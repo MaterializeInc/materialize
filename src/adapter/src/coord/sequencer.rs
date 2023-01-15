@@ -3937,13 +3937,13 @@ impl Coordinator {
             linked_object_id: Some(linked_object_id),
             arranged_introspection_sources,
         }];
-        ops.extend(self.create_linked_cluster_op(name, config)?);
+        ops.extend(self.create_linked_cluster_replica_op(name, config)?);
         Ok(ops)
     }
 
     /// Generates the catalog operation to create a replica of the given linked
     /// cluster for the given storage cluster configuration.
-    fn create_linked_cluster_op(
+    fn create_linked_cluster_replica_op(
         &mut self,
         on_cluster_name: String,
         config: &StorageClusterConfig,
@@ -4007,7 +4007,7 @@ impl Coordinator {
                     .drop_compute_instance_replica_ops(&[(cluster_name.clone(), name.into())]);
                 ops.extend(drop_ops);
             }
-            ops.extend(self.create_linked_cluster_op(cluster_name, config)?)
+            ops.extend(self.create_linked_cluster_replica_op(cluster_name, config)?)
         }
         Ok(ops)
     }
