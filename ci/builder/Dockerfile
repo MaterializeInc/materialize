@@ -112,7 +112,7 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/au
     && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.8.0/shellcheck \
     && rm shellcheck.tar.xz \
     && mkdir -p /usr/local/lib/docker/cli-plugins \
-    && curl -fsSL https://github.com/docker/compose/releases/download/v2.6.0/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
+    && curl -fsSL https://github.com/docker/compose/releases/download/v2.15.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
