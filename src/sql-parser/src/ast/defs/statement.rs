@@ -550,6 +550,7 @@ impl_display_t!(CreateConnectionStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSourceStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
+    pub in_cluster: Option<T::ClusterName>,
     pub col_names: Vec<Ident>,
     pub connection: CreateSourceConnection<T>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
@@ -568,21 +569,24 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_str("IF NOT EXISTS ");
         }
         f.write_node(&self.name);
-        f.write_str(" ");
         if !self.col_names.is_empty() {
-            f.write_str("(");
+            f.write_str(" (");
             f.write_node(&display::comma_separated(&self.col_names));
             if self.key_constraint.is_some() {
                 f.write_str(", ");
                 f.write_node(self.key_constraint.as_ref().unwrap());
             }
-            f.write_str(") ");
+            f.write_str(")");
         } else if self.key_constraint.is_some() {
-            f.write_str("(");
+            f.write_str(" (");
             f.write_node(self.key_constraint.as_ref().unwrap());
-            f.write_str(") ")
+            f.write_str(")")
         }
-        f.write_str("FROM ");
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str(" IN CLUSTER ");
+            f.write_node(cluster);
+        }
+        f.write_str(" FROM ");
         f.write_node(&self.connection);
         f.write_node(&self.format);
         if !self.include_metadata.is_empty() {
@@ -720,6 +724,7 @@ impl<T: AstInfo> AstDisplay for CreateSinkOption<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSinkStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
+    pub in_cluster: Option<T::ClusterName>,
     pub if_not_exists: bool,
     pub from: T::ObjectName,
     pub connection: CreateSinkConnection<T>,
@@ -735,6 +740,10 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
             f.write_str("IF NOT EXISTS ");
         }
         f.write_node(&self.name);
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str(" IN CLUSTER ");
+            f.write_node(cluster);
+        }
         f.write_str(" FROM ");
         f.write_node(&self.from);
         f.write_str(" INTO ");
