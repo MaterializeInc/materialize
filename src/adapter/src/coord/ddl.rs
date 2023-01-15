@@ -490,6 +490,11 @@ impl Coordinator {
             from_storage_metadata: (),
         };
 
+        let cluster_config = self
+            .catalog
+            .get_storage_cluster_config(create_export_token.id())
+            .expect("sinks always have linked clusters");
+
         Ok(self
             .controller
             .storage
@@ -497,7 +502,7 @@ impl Coordinator {
                 create_export_token,
                 ExportDescription {
                     sink: storage_sink_desc,
-                    cluster_config: sink.cluster_config.clone(),
+                    cluster_config,
                 },
             )])
             .await?)
