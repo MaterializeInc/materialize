@@ -480,4 +480,4 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         cleanup_list = ["materialized", "testdrive", *[n.name for n in nodes]]
         c.kill(*cleanup_list)
         c.rm(*cleanup_list, destroy_volumes=True)
-        c.rm_volumes("mzdata", "pgdata")
+        c.rm_volumes("mzdata")

@@ -149,7 +149,7 @@ def run_one_scenario(
         comparator.append(outcome)
         c.kill("materialized", "testdrive")
         c.rm("materialized", "testdrive")
-        c.rm_volumes("mzdata", "pgdata")
+        c.rm_volumes("mzdata")
 
     return comparator
 

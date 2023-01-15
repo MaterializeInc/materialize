@@ -68,4 +68,4 @@ def workflow_default(c: Composition) -> None:
                 "testdrive",
                 destroy_volumes=True,
             )
-            c.rm_volumes("mzdata", "pgdata", force=True)
+            c.rm_volumes("mzdata", force=True)
