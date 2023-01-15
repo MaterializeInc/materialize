@@ -333,12 +333,17 @@ pub struct CreateSourcePlan {
 /// provisioned, based on the SQL logic. Storage equivalent of ComputeReplicaConfig.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StorageClusterConfig {
-    /// Remote unmanaged storage
+    /// Use an existing cluster.
+    Cluster {
+        /// The ID of the cluster to use.
+        id: ComputeInstanceId,
+    },
+    /// Remote unmanaged storage.
     Remote {
         /// The network address of the clusterd process.
         addr: String,
     },
-    /// A remote but managed storage cluster.
+    /// Create a new linked storage cluster of the specified size.
     Managed {
         /// SQL size parameter used for allocation
         size: String,

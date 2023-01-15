@@ -3954,7 +3954,9 @@ impl Coordinator {
                 let (size, _alloc) = self.catalog.default_storage_cluster_size();
                 size
             }
-            StorageClusterConfig::Remote { .. } => return Ok(None),
+            StorageClusterConfig::Remote { .. } | StorageClusterConfig::Cluster { .. } => {
+                return Ok(None)
+            }
         };
         let azs = self.catalog.state().availability_zones();
         let n_replicas_per_az = azs

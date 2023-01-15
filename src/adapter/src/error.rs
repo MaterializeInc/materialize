@@ -91,7 +91,8 @@ pub enum AdapterError {
         size: String,
         expected: Vec<String>,
     },
-    StorageClusterSizeRequired {
+    /// Creating a source or sink without specifying its size is forbidden.
+    SourceOrSinkSizeRequired {
         expected: Vec<String>,
     },
     /// The selection value for a table mutation operation refers to an invalid object.
@@ -277,7 +278,7 @@ impl AdapterError {
             AdapterError::InvalidStorageClusterSize { expected, .. } => {
                 Some(format!("Valid sizes are: {}", expected.join(", ")))
             }
-            Self::StorageClusterSizeRequired { expected } => Some(format!(
+            AdapterError::SourceOrSinkSizeRequired { expected } => Some(format!(
                 "Try choosing one of the smaller sizes to start. Available sizes: {}",
                 expected.join(", ")
             )),
@@ -367,7 +368,7 @@ impl fmt::Display for AdapterError {
             AdapterError::InvalidStorageClusterSize { size, .. } => {
                 write!(f, "unknown source size {size}")
             }
-            Self::StorageClusterSizeRequired { .. } => {
+            AdapterError::SourceOrSinkSizeRequired { .. } => {
                 write!(f, "size option is required")
             }
             AdapterError::InvalidTableMutationSelection => {

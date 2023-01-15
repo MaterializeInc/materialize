@@ -1187,6 +1187,9 @@ impl CatalogState {
         );
         let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
         let storage_cluster_config = match storage_cluster_config {
+            PlanStorageClusterConfig::Cluster { .. } => {
+                coord_bail!("IN CLUSTER is not yet supported");
+            }
             PlanStorageClusterConfig::Remote { addr } => {
                 StorageClusterConfig::Remote { addr: addr.into() }
             }
@@ -1204,7 +1207,7 @@ impl CatalogState {
             }
             PlanStorageClusterConfig::Undefined => {
                 if !self.config.unsafe_mode {
-                    return Err(AdapterError::StorageClusterSizeRequired { expected });
+                    return Err(AdapterError::SourceOrSinkSizeRequired { expected });
                 }
                 let (size, allocation) = self.default_storage_cluster_size();
                 StorageClusterConfig::Managed { allocation, size }
@@ -4207,9 +4210,12 @@ impl Catalog {
                         .retain(|x| ![Remote, Size].contains(&x.name));
 
                     let new_cluster_option = match &cluster_config {
-                        plan::StorageClusterConfig::Managed { size } => Some((Size, size.clone())),
-                        plan::StorageClusterConfig::Remote { addr } => Some((Remote, addr.clone())),
-                        plan::StorageClusterConfig::Undefined => None,
+                        PlanStorageClusterConfig::Cluster { .. } => {
+                            coord_bail!("IN CLUSTER is not yet supported")
+                        }
+                        PlanStorageClusterConfig::Managed { size } => Some((Size, size.clone())),
+                        PlanStorageClusterConfig::Remote { addr } => Some((Remote, addr.clone())),
+                        PlanStorageClusterConfig::Undefined => None,
                     };
 
                     if let Some((name, value)) = new_cluster_option {
@@ -4305,9 +4311,12 @@ impl Catalog {
                         .retain(|x| ![Size, Remote].contains(&x.name));
 
                     let new_cluster_option = match &cluster_config {
-                        plan::StorageClusterConfig::Managed { size } => Some((Size, size.clone())),
-                        plan::StorageClusterConfig::Remote { addr } => Some((Remote, addr.clone())),
-                        plan::StorageClusterConfig::Undefined => None,
+                        PlanStorageClusterConfig::Cluster { .. } => {
+                            coord_bail!("IN CLUSTER is not yet supported")
+                        }
+                        PlanStorageClusterConfig::Managed { size } => Some((Size, size.clone())),
+                        PlanStorageClusterConfig::Remote { addr } => Some((Remote, addr.clone())),
+                        PlanStorageClusterConfig::Undefined => None,
                     };
 
                     if let Some((name, value)) = new_cluster_option {
