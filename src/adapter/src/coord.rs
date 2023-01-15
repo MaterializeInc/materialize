@@ -106,11 +106,10 @@ use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::Aug;
-use mz_sql::plan::{self, CopyFormat, MutationKind, Params, QueryWhen};
+use mz_sql::plan::{CopyFormat, MutationKind, Params, QueryWhen};
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, StorageError,
 };
-use mz_storage_client::types::clusters::StorageClusterConfig;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::StorageSinkConnection;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport, Timeline};
@@ -1037,49 +1036,6 @@ impl Coordinator {
         info!("coordinator init: sending builtin table updates");
         self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
             .await;
-
-        // TODO(benesch): remove this migration in v0.40, since all sources and
-        // sinks created in v0.39+ will be created with linked clusters if
-        // appropriate.
-        info!("coordinator init: SPECIAL MIGRATION: ensuring all sources and sinks have linked clusters");
-        let mut linked_cluster_ops = vec![];
-        for entry in &entries {
-            // Only sources with ingestions need linked clusters.
-            let cluster_config = match entry.item() {
-                CatalogItem::Source(source) => match &source.data_source {
-                    DataSourceDesc::Ingestion(ingestion) => &ingestion.cluster_config,
-                    _ => continue,
-                },
-                CatalogItem::Sink(sink) => &sink.cluster_config,
-                _ => continue,
-            };
-
-            // Don't create linked clusters if one already exists.
-            if self.catalog.get_linked_cluster(entry.id()).is_some() {
-                continue;
-            }
-
-            // Convert resolved host config back to the host config we would
-            // have gotten from the SQL layer.
-            let cluster_config = match cluster_config {
-                StorageClusterConfig::Managed { size, .. } => {
-                    plan::StorageClusterConfig::Managed { size: size.into() }
-                }
-                StorageClusterConfig::Remote { addr } => {
-                    plan::StorageClusterConfig::Remote { addr: addr.into() }
-                }
-            };
-
-            info!("adding linked cluster for {}", entry.id());
-            linked_cluster_ops.extend(
-                self.create_linked_cluster_ops(entry.id(), entry.name(), &cluster_config)
-                    .await?,
-            );
-        }
-        // Dummy session is appropriate for system migrations, as it will
-        // present as user `mz_system` in the audit log.
-        self.catalog_transact(Some(&Session::dummy()), linked_cluster_ops)
-            .await?;
 
         info!("coordinator init: bootstrap complete");
         Ok(())
