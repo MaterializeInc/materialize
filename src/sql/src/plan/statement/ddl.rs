@@ -342,6 +342,7 @@ pub fn plan_create_source(
 ) -> Result<Plan, PlanError> {
     let CreateSourceStatement {
         name,
+        in_cluster,
         col_names,
         connection,
         envelope,
@@ -352,6 +353,10 @@ pub fn plan_create_source(
         with_options,
         subsources,
     } = &stmt;
+
+    if in_cluster.is_some() {
+        bail_unsupported!("CREATE SOURCE ... IN CLUSTER");
+    }
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
@@ -1778,6 +1783,7 @@ pub fn plan_create_sink(
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
     let CreateSinkStatement {
         name,
+        in_cluster,
         from,
         connection,
         format,
@@ -1785,6 +1791,10 @@ pub fn plan_create_sink(
         if_not_exists,
         with_options,
     } = stmt;
+
+    if in_cluster.is_some() {
+        bail_unsupported!("CREATE SINK ... IN CLUSTER");
+    }
 
     const SAFE_WITH_OPTIONS: &[CreateSinkOptionName] =
         &[CreateSinkOptionName::Size, CreateSinkOptionName::Snapshot];

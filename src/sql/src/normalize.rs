@@ -297,6 +297,7 @@ pub fn create_statement(
     match &mut stmt {
         Statement::CreateSource(CreateSourceStatement {
             name,
+            in_cluster: _,
             col_names: _,
             connection: _,
             format: _,
@@ -352,6 +353,7 @@ pub fn create_statement(
 
         Statement::CreateSink(CreateSinkStatement {
             name,
+            in_cluster: _,
             connection: _,
             format: _,
             envelope: _,
