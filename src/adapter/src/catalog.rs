@@ -132,6 +132,7 @@ pub static HTTP_DEFAULT_USER: Lazy<User> = Lazy::new(|| User {
 const CREATE_SQL_TODO: &str = "TODO";
 
 pub const DEFAULT_CLUSTER_REPLICA_NAME: &str = "r1";
+pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -410,6 +411,41 @@ impl CatalogState {
 
     pub fn try_get_entry(&self, id: &GlobalId) -> Option<&CatalogEntry> {
         self.entry_by_id.get(id)
+    }
+
+    fn get_linked_cluster(&self, object_id: GlobalId) -> Option<&ComputeInstance> {
+        self.compute_instances_by_linked_object_id
+            .get(&object_id)
+            .map(|id| &self.compute_instances_by_id[id])
+    }
+
+    fn get_storage_cluster_config(&self, object_id: GlobalId) -> Option<StorageClusterConfig> {
+        let cluster = self.get_linked_cluster(object_id)?;
+        let replica_id = cluster.replica_id_by_name[LINKED_CLUSTER_REPLICA_NAME];
+        let replica = &cluster.replicas_by_id[&replica_id];
+        match &replica.config.location {
+            ComputeReplicaLocation::Remote { addrs, .. } => {
+                // HACK: linked cluster replicas that are remote use the `addrs`
+                // field to transmit exactly one address.
+                //
+                // TODO(benesch): remove the `REMOTE` option from `CREATE
+                // SOURCE` and `CREATE SINK` in favor of `IN CLUSTER` with a
+                // cluster whose replicas are remote.
+                Some(StorageClusterConfig::Remote {
+                    addr: addrs.into_element().clone(),
+                })
+            }
+            ComputeReplicaLocation::Managed {
+                allocation, size, ..
+            } => Some(StorageClusterConfig::Managed {
+                allocation: StorageClusterResourceAllocation {
+                    memory_limit: allocation.memory_limit,
+                    cpu_limit: allocation.cpu_limit,
+                    workers: allocation.workers,
+                },
+                size: size.into(),
+            }),
+        }
     }
 
     /// Create and insert the per replica log sources and log views.
@@ -1024,6 +1060,10 @@ impl CatalogState {
         &self.config
     }
 
+    pub fn storage_cluster_sizes(&self) -> &StorageClusterSizeMap {
+        &self.storage_cluster_sizes
+    }
+
     pub fn resolve_database(&self, database_name: &str) -> Result<&Database, SqlCatalogError> {
         match self.database_by_name.get(database_name) {
             Some(id) => Ok(&self.database_by_id[id]),
@@ -1167,53 +1207,6 @@ impl CatalogState {
             name,
             conn_id,
         )
-    }
-
-    pub fn resolve_storage_cluster_config(
-        &self,
-        storage_cluster_config: &PlanStorageClusterConfig,
-    ) -> Result<StorageClusterConfig, AdapterError> {
-        let cluster_sizes = &self.storage_cluster_sizes;
-        let mut entries = cluster_sizes.0.iter().collect::<Vec<_>>();
-        entries.sort_by_key(
-            |(
-                _name,
-                StorageClusterResourceAllocation {
-                    workers,
-                    memory_limit,
-                    ..
-                },
-            )| (workers, memory_limit),
-        );
-        let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-        let storage_cluster_config = match storage_cluster_config {
-            PlanStorageClusterConfig::Cluster { .. } => {
-                coord_bail!("IN CLUSTER is not yet supported");
-            }
-            PlanStorageClusterConfig::Remote { addr } => {
-                StorageClusterConfig::Remote { addr: addr.into() }
-            }
-            PlanStorageClusterConfig::Managed { size } => {
-                let allocation = cluster_sizes.0.get(size).ok_or_else(|| {
-                    AdapterError::InvalidStorageClusterSize {
-                        size: size.clone(),
-                        expected,
-                    }
-                })?;
-                StorageClusterConfig::Managed {
-                    allocation: allocation.clone(),
-                    size: size.into(),
-                }
-            }
-            PlanStorageClusterConfig::Undefined => {
-                if !self.config.unsafe_mode {
-                    return Err(AdapterError::SourceOrSinkSizeRequired { expected });
-                }
-                let (size, allocation) = self.default_storage_cluster_size();
-                StorageClusterConfig::Managed { allocation, size }
-            }
-        };
-        Ok(storage_cluster_config)
     }
 
     /// Return current system configuration.
@@ -1509,13 +1502,6 @@ pub struct Source {
 }
 
 impl Source {
-    pub fn size(&self) -> Option<&str> {
-        match &self.data_source {
-            DataSourceDesc::Ingestion(Ingestion { cluster_config, .. }) => cluster_config.size(),
-            DataSourceDesc::Introspection(_) | DataSourceDesc::Source => None,
-        }
-    }
-
     /// Returns whether this source ingests data from an external source.
     pub fn is_external(&self) -> bool {
         match self.data_source {
@@ -1599,7 +1585,6 @@ pub struct Ingestion {
     ///
     /// This map does *not* include the export of the source associated with the ingestion itself
     pub subsource_exports: HashMap<GlobalId, usize>,
-    pub cluster_config: StorageClusterConfig,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1612,7 +1597,6 @@ pub struct Sink {
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
-    pub cluster_config: StorageClusterConfig,
 }
 
 impl Sink {
@@ -3842,6 +3826,7 @@ impl Catalog {
             for subsource in self.state.entry_by_id[&id].subsources() {
                 self.drop_item_cascade(subsource, ops, seen);
             }
+            ops.push(Op::DropItem(id));
             if let Some(linked_cluster_id) =
                 self.state.compute_instances_by_linked_object_id.get(&id)
             {
@@ -3849,7 +3834,6 @@ impl Catalog {
                 let (_ids, cluster_ops) = self.drop_compute_instance_ops(&[name.clone()]);
                 ops.extend(cluster_ops);
             }
-            ops.push(Op::DropItem(id));
         }
     }
 
@@ -3918,10 +3902,13 @@ impl Catalog {
     /// Gets the linked cluster associated with the provided object ID, if it
     /// exists.
     pub fn get_linked_cluster(&self, object_id: GlobalId) -> Option<&ComputeInstance> {
-        self.state
-            .compute_instances_by_linked_object_id
-            .get(&object_id)
-            .map(|id| &self.state.compute_instances_by_id[id])
+        self.state.get_linked_cluster(object_id)
+    }
+
+    /// Gets the storage cluster configuration associated with the provided
+    /// source or sink ID, if a linked cluster exists.
+    pub fn get_storage_cluster_config(&self, object_id: GlobalId) -> Option<StorageClusterConfig> {
+        self.state.get_storage_cluster_config(object_id)
     }
 
     pub fn concretize_replica_location(
@@ -3988,14 +3975,6 @@ impl Catalog {
     /// otherwise the smallest cluster size is used instead.
     pub fn default_storage_cluster_size(&self) -> (String, StorageClusterResourceAllocation) {
         self.state.default_storage_cluster_size()
-    }
-
-    pub fn resolve_storage_cluster_config(
-        &self,
-        storage_cluster_config: &PlanStorageClusterConfig,
-    ) -> Result<StorageClusterConfig, AdapterError> {
-        self.state
-            .resolve_storage_cluster_config(storage_cluster_config)
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -4225,11 +4204,19 @@ impl Catalog {
                         });
                     }
 
-                    let cluster_config = state.resolve_storage_cluster_config(&cluster_config)?;
+                    let old_size = state
+                        .get_storage_cluster_config(id)
+                        .as_ref()
+                        .and_then(|c| c.size())
+                        .map(|s| s.to_string());
+                    let new_size = match &cluster_config {
+                        PlanStorageClusterConfig::Managed { size } => Some(size.clone()),
+                        _ => None,
+                    };
+
                     let create_sql = stmt.to_ast_string_stable();
                     let sink = CatalogItem::Sink(Sink {
                         create_sql,
-                        cluster_config: cluster_config.clone(),
                         ..old_sink
                     });
 
@@ -4253,8 +4240,8 @@ impl Catalog {
                                 &name,
                                 session.map(|session| session.conn_id()),
                             )),
-                            old_size: old_sink.cluster_config.size().map(|x| x.to_string()),
-                            new_size: cluster_config.size().map(|x| x.to_string()),
+                            old_size,
+                            new_size,
                         }),
                     )?;
 
@@ -4326,23 +4313,19 @@ impl Catalog {
                         });
                     }
 
-                    let old_size = old_source.size().map(|s| s.to_string());
-                    let cluster_config = state.resolve_storage_cluster_config(&cluster_config)?;
-                    let new_size = cluster_config.size().map(|s| s.to_string());
-                    let data_source = match old_source.data_source {
-                        DataSourceDesc::Ingestion(ingestion) => {
-                                DataSourceDesc::Ingestion(Ingestion {
-                                cluster_config,
-                                ..ingestion
-                            })
-                        }
-                        _ => unreachable!("already guaranteed that we do not permit modifying either SIZE or REMOTE of subsource or introspection source"),
+                    let old_size = state
+                        .get_storage_cluster_config(id)
+                        .as_ref()
+                        .and_then(|c| c.size())
+                        .map(|s| s.to_string());
+                    let new_size = match &cluster_config {
+                        PlanStorageClusterConfig::Managed { size } => Some(size.clone()),
+                        _ => None,
                     };
 
                     let create_sql = stmt.to_ast_string_stable();
                     let source = CatalogItem::Source(Source {
                         create_sql,
-                        data_source,
                         ..old_source
                     });
 
@@ -4668,17 +4651,21 @@ impl Catalog {
                     }
 
                     if Self::should_audit_log_item(&item) {
-                        let id = id.to_string();
                         let name = Self::full_name_detail(
                             &state
                                 .resolve_full_name(&name, session.map(|session| session.conn_id())),
                         );
+                        let size = state
+                            .get_storage_cluster_config(id)
+                            .as_ref()
+                            .and_then(|c| c.size())
+                            .map(|s| s.to_string());
                         let details = match &item {
                             CatalogItem::Source(s) => {
                                 EventDetails::CreateSourceSinkV2(mz_audit_log::CreateSourceSinkV2 {
-                                    id,
+                                    id: id.to_string(),
                                     name,
-                                    size: s.size().map(|s| s.to_string()),
+                                    size,
                                     external_type: s.source_type().to_string(),
                                 })
                             }
@@ -4686,11 +4673,14 @@ impl Catalog {
                                 EventDetails::CreateSourceSinkV2(mz_audit_log::CreateSourceSinkV2 {
                                     id: id.to_string(),
                                     name,
-                                    size: s.cluster_config.size().map(|x| x.to_string()),
+                                    size,
                                     external_type: s.sink_type().to_string(),
                                 })
                             }
-                            _ => EventDetails::IdFullNameV1(IdFullNameV1 { id, name }),
+                            _ => EventDetails::IdFullNameV1(IdFullNameV1 {
+                                id: id.to_string(),
+                                name,
+                            }),
                         };
                         state.add_to_audit_log(
                             oracle_write_ts,
@@ -5514,10 +5504,7 @@ impl Catalog {
                 is_retained_metrics_relation: false,
             }),
             Plan::CreateSource(CreateSourcePlan {
-                source,
-                timeline,
-                cluster_config,
-                ..
+                source, timeline, ..
             }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
                 data_source: match source.ingestion {
@@ -5525,7 +5512,6 @@ impl Catalog {
                         desc: ingestion.desc,
                         source_imports: ingestion.source_imports,
                         subsource_exports: ingestion.subsource_exports,
-                        cluster_config: self.resolve_storage_cluster_config(&cluster_config)?,
                     }),
                     None => DataSourceDesc::Source,
                 },
@@ -5572,7 +5558,6 @@ impl Catalog {
             Plan::CreateSink(CreateSinkPlan {
                 sink,
                 with_snapshot,
-                cluster_config,
                 ..
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
@@ -5581,7 +5566,6 @@ impl Catalog {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on,
-                cluster_config: self.resolve_storage_cluster_config(&cluster_config)?,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,

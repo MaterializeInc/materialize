@@ -42,7 +42,7 @@ materialize_public_lg  linked  ${arg.default-storage-size}
 > DROP SOURCE lg
 
 # Test that creating a source with the REMOTE option creates a linked cluster
-# with no replicas. (Unsafe mode only.)
+# with a replica with NULL size. (Unsafe mode only.)
 > CREATE SOURCE lg FROM LOAD GENERATOR COUNTER WITH (REMOTE 'localhost:32323')
 > SHOW CLUSTERS
 default
@@ -53,6 +53,7 @@ materialize_public_lg
 default                r1      ${arg.default-replica-size}
 mz_introspection       r1      1
 mz_system              r1      1
+materialize_public_lg  linked  <null>
 > DROP SOURCE lg
 
 # Test that creating sources with an explicit size creates linked clusters, each
@@ -92,6 +93,7 @@ materialize_public_lg2  linked  4
 # managed source. (Unsafe mode only.)
 > ALTER SOURCE lg2 SET (REMOTE = 'localhost:32323')
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_lg2'
+materialize_public_lg2  linked  <null>
 > ALTER SOURCE lg2 SET (SIZE = '4')
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_lg2'
 materialize_public_lg2  linked  4
@@ -157,7 +159,7 @@ materialize_public_snk  linked  ${arg.default-storage-size}
 > DROP SINK snk
 
 # Test that creating a sink with the REMOTE option creates a linked cluster
-# with no replica. (Unsafe mode only.)
+# with a linked replica of NULL size. (Unsafe mode only.)
 > CREATE SINK snk FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM WITH (REMOTE 'localhost:32323')
@@ -170,6 +172,7 @@ materialize_public_snk
 default                r1      ${arg.default-replica-size}
 mz_introspection       r1      1
 mz_system              r1      1
+materialize_public_snk linked  <null>
 > DROP SINK snk
 
 # Test that creating sinks with an explicit size creates linked clusters, each
@@ -213,6 +216,7 @@ materialize_public_snk2  linked  4
 # sink. (Unsafe mode only.)
 > ALTER SINK snk2 SET (REMOTE 'localhost:32323')
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_snk2'
+materialize_public_snk2  linked  <null>
 > ALTER SINK snk2 SET (SIZE = '4')
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_snk2'
 materialize_public_snk2  linked  4

@@ -28,7 +28,7 @@ use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage_client::types::clusters::{StorageClusterConfig, StorageClusterResourceAllocation};
+use mz_storage_client::types::clusters::StorageClusterResourceAllocation;
 use mz_storage_client::types::connections::KafkaConnection;
 use mz_storage_client::types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 use mz_storage_client::types::sources::{GenericSourceConnection, PostgresSourceConnection};
@@ -50,7 +50,7 @@ use crate::catalog::{
 use super::builtin::{
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_CLUSTER_REPLICA_SIZES, MZ_STORAGE_HOST_SIZES,
 };
-use super::{AwsPrincipalContext, DataSourceDesc, Ingestion};
+use super::AwsPrincipalContext;
 
 /// An update to a built-in table.
 #[derive(Debug)]
@@ -252,13 +252,9 @@ impl CatalogState {
                     name,
                     source_type,
                     connection_id,
-                    match &source.data_source {
-                        DataSourceDesc::Ingestion(Ingestion {
-                            cluster_config: StorageClusterConfig::Managed { size, .. },
-                            ..
-                        }) => Some(size.as_str()),
-                        _ => None,
-                    },
+                    self.get_storage_cluster_config(id)
+                        .as_ref()
+                        .and_then(|s| s.size()),
                     envelope,
                     diff,
                 );
@@ -622,7 +618,11 @@ impl CatalogState {
                     Datum::String(name),
                     Datum::String(connection.name()),
                     Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
-                    Datum::from(sink.cluster_config.size()),
+                    Datum::from(
+                        self.get_storage_cluster_config(id)
+                            .as_ref()
+                            .and_then(|c| c.size()),
+                    ),
                 ]),
                 diff,
             });

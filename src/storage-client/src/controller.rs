@@ -172,6 +172,13 @@ pub struct CreateExportToken {
     from_id: GlobalId,
 }
 
+impl CreateExportToken {
+    /// Returns the ID of the export with which the token is associated.
+    pub fn id(&self) -> GlobalId {
+        self.id
+    }
+}
+
 #[async_trait(?Send)]
 pub trait StorageController: Debug + Send {
     type Timestamp;
