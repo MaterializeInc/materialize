@@ -51,15 +51,17 @@ use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
-use mz_stash::{self, PostgresFactory, StashError, TypedCollection};
+use mz_stash::{self, StashError, StashFactory, TypedCollection};
 
 use crate::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
-    StorageCommand, StorageResponse, Update,
+    SourceStatisticsUpdate, StorageCommand, StorageResponse, Update,
 };
 use crate::controller::hosts::{StorageHosts, StorageHostsConfig};
+use crate::healthcheck;
 use crate::types::errors::DataflowError;
 use crate::types::hosts::StorageHostConfig;
+use crate::types::parameters::StorageParameters;
 use crate::types::sinks::{
     MetadataUnfilled, ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc,
 };
@@ -71,6 +73,7 @@ mod metrics_scraper;
 mod persist_handles;
 mod rehydration;
 mod remap_migration;
+mod statistics;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
 
@@ -107,6 +110,10 @@ pub enum IntrospectionType {
     SourceStatusHistory,
     ShardMapping,
     StorageHostMetrics,
+
+    // Note that this single-shard introspection source will be changed to per-replica,
+    // once we allow multiplexing multiple sources/sinks on a single cluster.
+    StorageSourceStatistics,
 }
 
 /// Describes how data is written to the collection.
@@ -176,6 +183,9 @@ pub trait StorageController: Debug + Send {
     /// This method can be invoked immediately, at the potential expense of performance.
     fn initialization_complete(&mut self);
 
+    /// Update storage configuration.
+    fn update_configuration(&mut self, config_params: StorageParameters);
+
     /// Acquire an immutable reference to the collection state, should it exist.
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError>;
 
@@ -184,6 +194,11 @@ pub trait StorageController: Debug + Send {
         &mut self,
         id: GlobalId,
     ) -> Result<&mut CollectionState<Self::Timestamp>, StorageError>;
+
+    /// Acquire an iterator over all collection states.
+    fn collections(
+        &self,
+    ) -> Box<dyn Iterator<Item = (&GlobalId, &CollectionState<Self::Timestamp>)> + '_>;
 
     /// Create the sources described in the individual CreateSourceCommand commands.
     ///
@@ -565,10 +580,7 @@ impl Arbitrary for DurableExportMetadata<mz_repr::Timestamp> {
 
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
-pub struct StorageControllerState<
-    T: Timestamp + Lattice + Codec64 + TimestampManipulation,
-    S = mz_stash::Cache<mz_stash::Postgres>,
-> {
+pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
     /// Collections maintained by the storage controller.
     ///
     /// This collection only grows, although individual collections may be rendered unusable.
@@ -576,7 +588,7 @@ pub struct StorageControllerState<
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
     pub(super) exports: BTreeMap<GlobalId, ExportState<T>>,
     pub(super) exported_collections: BTreeMap<GlobalId, Vec<GlobalId>>,
-    pub(super) stash: S,
+    pub(super) stash: mz_stash::Stash,
     /// Write handle for persist shards.
     pub(super) persist_write_handles: persist_handles::PersistWriteWorker<T>,
     /// Read handles for persist shards.
@@ -585,8 +597,9 @@ pub struct StorageControllerState<
     /// without blocking the storage controller.
     persist_read_handles: persist_handles::PersistReadWorker<T>,
     stashed_response: Option<StorageResponse<T>>,
-    /// Storage hosts that should be deprovisioned during the next call to `StorageController::process`.
-    pending_host_deprovisions: BTreeSet<GlobalId>,
+    /// Storage hosts that should be deprovisioned during the next call to `StorageController::process`,
+    /// along with the status collection to report the drop to.
+    pending_host_deprovisions: BTreeSet<(GlobalId, GlobalId)>,
     /// Commands that should be send to storage instances during the next call
     /// to `StorageController::process`.
     pending_compaction_commands: Vec<(GlobalId, Antichain<T>)>,
@@ -600,8 +613,14 @@ pub struct StorageControllerState<
     /// needed.
     // TODO(aljoscha): Should these live somewhere else?
     introspection_tokens: HashMap<GlobalId, Box<dyn Any + Send + Sync>>,
+    now: NowFn,
     /// The fencing token for this instance of the controller.
     envd_epoch: NonZeroI64,
+
+    /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
+    /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
+    source_statistics:
+        Arc<std::sync::Mutex<HashMap<GlobalId, HashMap<usize, SourceStatisticsUpdate>>>>,
 }
 
 /// A storage controller for a storage instance.
@@ -712,7 +731,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
         postgres_url: String,
         tx: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
         now: NowFn,
-        factory: &PostgresFactory,
+        factory: &StashFactory,
         envd_epoch: NonZeroI64,
     ) -> Self {
         let tls = mz_postgres_util::make_tls(
@@ -724,13 +743,12 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             .open(postgres_url, None, tls)
             .await
             .expect("could not connect to postgres storage stash");
-        let stash = mz_stash::Cache::new(stash);
 
         let persist_write_handles = persist_handles::PersistWriteWorker::new(tx);
         let collection_manager_write_handle = persist_write_handles.clone();
 
         let collection_manager =
-            collection_mgmt::CollectionManager::new(collection_manager_write_handle, now);
+            collection_mgmt::CollectionManager::new(collection_manager_write_handle, now.clone());
 
         Self {
             collections: BTreeMap::default(),
@@ -745,7 +763,9 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             collection_manager,
             introspection_ids: HashMap::new(),
             introspection_tokens: HashMap::new(),
+            now,
             envd_epoch,
+            source_statistics: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 }
@@ -765,6 +785,12 @@ where
         self.hosts.initialization_complete();
     }
 
+    fn update_configuration(&mut self, config_params: StorageParameters) {
+        // TODO(#16753): apply config to `self.persist`
+
+        self.hosts.update_configuration(config_params);
+    }
+
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError> {
         self.state
             .collections
@@ -780,6 +806,12 @@ where
             .collections
             .get_mut(&id)
             .ok_or(StorageError::IdentifierMissing(id))
+    }
+
+    fn collections(
+        &self,
+    ) -> Box<dyn Iterator<Item = (&GlobalId, &CollectionState<Self::Timestamp>)> + '_> {
+        Box::new(self.state.collections.iter())
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -1019,9 +1051,24 @@ where
                             // dropped, so that the internal task will stop.
                             self.state.introspection_tokens.insert(id, scraper_token);
                         }
+                        IntrospectionType::StorageSourceStatistics => {
+                            // Set the collection to empty.
+                            self.reconcile_managed_collection(id, vec![]).await;
+
+                            let scraper_token = statistics::spawn_statistics_scraper(
+                                id.clone(),
+                                // These do a shallow copy.
+                                self.state.collection_manager.clone(),
+                                Arc::clone(&self.state.source_statistics),
+                            );
+
+                            // Make sure this is dropped when the controller is
+                            // dropped, so that the internal task will stop.
+                            self.state.introspection_tokens.insert(id, scraper_token);
+                        }
                         IntrospectionType::SourceStatusHistory
                         | IntrospectionType::SinkStatusHistory => {
-                            // nothing to do: only clusterd writes rows to these collections
+                            // nothing to do: these collections are append only
                         }
                     }
                 }
@@ -1210,7 +1257,8 @@ where
 
             // Remove sink by removing its write frontier and arranging for deprovisioning.
             self.update_write_frontiers(&[(id, Antichain::new())]);
-            self.state.pending_host_deprovisions.insert(id);
+            let status_id = self.state.introspection_ids[&IntrospectionType::SinkStatusHistory];
+            self.state.pending_host_deprovisions.insert((id, status_id));
         }
     }
 
@@ -1418,6 +1466,17 @@ where
                 // TODO(petrosagg): It looks like the storage controller never cleans up GlobalIds
                 // from its state. It should probably be done as a reaction to this response.
             }
+            Some(StorageResponse::StatisticsUpdates(source_stats)) => {
+                // Note we only hold the lock while moving some plain-old-data around here.
+                let mut shared_stats = self.state.source_statistics.lock().expect("poisoned");
+
+                for stat in source_stats {
+                    let shared_stats = shared_stats.entry(stat.id).or_default();
+                    // We just write the whole object, as the update from storage represents the
+                    // current values.
+                    shared_stats.insert(stat.worker_id, stat);
+                }
+            }
         }
 
         // TODO(aljoscha): We could consolidate these before sending to
@@ -1431,13 +1490,20 @@ where
                 )]));
 
                 if frontier.is_empty() {
-                    self.state.pending_host_deprovisions.insert(id);
+                    let status_id =
+                        self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
+                    self.state.pending_host_deprovisions.insert((id, status_id));
                 }
             }
         }
 
         let to_deprovision = std::mem::take(&mut self.state.pending_host_deprovisions);
-        for id in to_deprovision {
+        for (id, status_id) in to_deprovision {
+            // Record the destruction of the source
+            let status_row = healthcheck::pack_status_row(id, "dropped", None, (self.state.now)());
+            self.append_to_managed_collection(status_id, vec![(status_row, 1)])
+                .await;
+
             self.hosts.deprovision(id).await?;
         }
 
@@ -1501,7 +1567,7 @@ where
         clusterd_image: String,
         init_container_image: Option<String>,
         now: NowFn,
-        postgres_factory: &PostgresFactory,
+        postgres_factory: &StashFactory,
         envd_epoch: NonZeroI64,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();

@@ -2124,7 +2124,11 @@ impl<'a> Parser<'a> {
     fn parse_kafka_broker_aws_private_link_option(
         &mut self,
     ) -> Result<KafkaBrokerAwsPrivatelinkOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[PORT])? {
+        let name = match self.expect_one_of_keywords(&[AVAILABILITY, PORT])? {
+            AVAILABILITY => {
+                self.expect_keywords(&[ZONE])?;
+                KafkaBrokerAwsPrivatelinkOptionName::AvailabilityZone
+            }
             PORT => KafkaBrokerAwsPrivatelinkOptionName::Port,
             _ => unreachable!(),
         };
@@ -3095,6 +3099,7 @@ impl<'a> Parser<'a> {
         let name = match self.expect_one_of_keywords(&[
             AVAILABILITY,
             COMPUTE,
+            IDLE,
             INTROSPECTION,
             REMOTE,
             SIZE,
@@ -3105,6 +3110,10 @@ impl<'a> Parser<'a> {
                 ReplicaOptionName::AvailabilityZone
             }
             COMPUTE => ReplicaOptionName::Compute,
+            IDLE => {
+                self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
+                ReplicaOptionName::IdleArrangementMergeEffort
+            }
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => ReplicaOptionName::IntrospectionDebugging,
                 INTERVAL => ReplicaOptionName::IntrospectionInterval,

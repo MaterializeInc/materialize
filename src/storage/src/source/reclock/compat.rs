@@ -11,12 +11,12 @@
 //! timestamps
 
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::sync::Arc;
 
 use anyhow::Context;
 use differential_dataflow::lattice::Lattice;
 use futures::{stream::LocalBoxStream, StreamExt};
-use mz_persist_client::error::UpperMismatch;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
@@ -27,6 +27,7 @@ use mz_ore::halt;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::PersistClient;
@@ -43,7 +44,7 @@ use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, Recloc
 impl<FromTime, IntoTime> ReclockFollower<FromTime, IntoTime>
 where
     FromTime: SourceTimestamp,
-    IntoTime: Timestamp + Lattice + TotalOrder,
+    IntoTime: Timestamp + Lattice + TotalOrder + Display,
 {
     pub fn reclock_compat<'a, M>(
         &'a self,
@@ -105,7 +106,17 @@ where
 pub struct PersistHandle<FromTime: SourceTimestamp, IntoTime: Timestamp + Lattice + Codec64> {
     id: GlobalId,
     since_handle: SinceHandle<SourceData, (), IntoTime, Diff, PersistEpoch>,
-    events: LocalBoxStream<'static, ListenEvent<SourceData, (), IntoTime, Diff>>,
+    events: LocalBoxStream<
+        'static,
+        ListenEvent<
+            IntoTime,
+            (
+                (Result<SourceData, String>, Result<(), String>),
+                IntoTime,
+                Diff,
+            ),
+        >,
+    >,
     write_handle: WriteHandle<SourceData, (), IntoTime, Diff>,
     pending_batch: Vec<(FromTime, IntoTime, Diff)>,
 }
@@ -184,7 +195,7 @@ where
                 .expect("since <= as_of asserted");
 
             let listen_stream = stream::unfold(listener, |mut listener| async move {
-                let events = stream::iter(listener.next().await);
+                let events = stream::iter(listener.fetch_next().await);
                 Some((events, listener))
             })
             .flatten();

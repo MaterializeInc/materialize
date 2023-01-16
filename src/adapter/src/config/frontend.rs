@@ -7,12 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use derivative::Derivative;
 use launchdarkly_server_sdk as ld;
+use prometheus::IntCounter;
 use tokio::time;
 
+use mz_ore::{metric, metrics::MetricsRegistry};
 use mz_sql::catalog::{CloudProvider, EnvironmentId};
 
 use super::SynchronizedParameters;
@@ -31,32 +33,56 @@ pub struct SystemParameterFrontend {
     /// to use when populating the the [SynchronizedParameters]
     /// instance in [SystemParameterFrontend::pull].
     ld_key_map: BTreeMap<String, String>,
+    /// Frontend metrics.
+    ld_metrics: Metrics,
 }
 
 impl SystemParameterFrontend {
     /// Construct a new [SystemParameterFrontend] instance.
     pub fn new(
         env_id: EnvironmentId,
+        registry: &MetricsRegistry,
         ld_sdk_key: &str,
         ld_key_map: BTreeMap<String, String>,
     ) -> Result<Self, anyhow::Error> {
-        let ld_config = ld::ConfigBuilder::new(ld_sdk_key).build();
+        let ld_metrics = Metrics::register_into(registry);
+        let ld_config = ld::ConfigBuilder::new(ld_sdk_key)
+            .event_processor(ld::EventProcessorBuilder::new().on_success({
+                let last_known_time_seconds = ld_metrics.last_known_time_seconds.clone();
+                Arc::new(move |result| {
+                    if let Ok(t_next) = u64::try_from(result.time_from_server / 1000) {
+                        let t_curr = last_known_time_seconds.get();
+                        if t_next > t_curr {
+                            last_known_time_seconds.inc_by(t_next - t_curr);
+                        }
+                    } else {
+                        tracing::warn!("Cannot convert time_from_server / 1000 from u128 to u64");
+                    }
+                })
+            }))
+            .build();
         let ld_client = ld::Client::build(ld_config)?;
         let ld_ctx = if env_id.cloud_provider() != &CloudProvider::Local {
             ld::ContextBuilder::new(env_id.to_string())
-                // TODO: uncomment one once the EAP for contexts is enabled in LD
-                // .kind("environment")
-                // .set_string("cloud_provider", env_id.cloud_provider())
-                // .set_string("cloud_provider_region", env_id.cloud_provider_region())
-                // .set_string("organization_id", env_id.organization_id().to_string())
-                // .set_string("ordinal", env_id.ordinal().to_string())
+                .kind("environment")
+                .set_string("cloud_provider", env_id.cloud_provider().to_string())
+                .set_string("cloud_provider_region", env_id.cloud_provider_region())
+                .set_string("organization_id", env_id.organization_id().to_string())
+                .set_string("ordinal", env_id.ordinal().to_string())
                 .build()
                 .map_err(|e| anyhow::anyhow!(e))?
         } else {
             // If cloud_provider is 'local', use an anonymous user with a custom
-            // email.
+            // email and set the organization_id to `uuid::Uuid::nil()`, as
+            // otherwise we will create a lot of additional contexts (which are
+            // the billable entity for LaunchDarkly).
             ld::ContextBuilder::new("anonymous-dev@materialize.com")
-                .anonymous(true)
+                .anonymous(true) // exclude this user from the dashboard
+                .kind("environment")
+                .set_string("cloud_provider", env_id.cloud_provider().to_string())
+                .set_string("cloud_provider_region", env_id.cloud_provider_region())
+                .set_string("organization_id", uuid::Uuid::nil().to_string())
+                .set_string("ordinal", env_id.ordinal().to_string())
                 .build()
                 .map_err(|e| anyhow::anyhow!(e))?
         };
@@ -65,6 +91,7 @@ impl SystemParameterFrontend {
             ld_client,
             ld_ctx,
             ld_key_map,
+            ld_metrics,
         })
     }
 
@@ -113,9 +140,32 @@ impl SystemParameterFrontend {
                 ld::FlagValue::Json(v) => v.to_string(),
             };
 
-            changed |= params.modify(param_name, flag_str.as_str());
+            let change = params.modify(param_name, flag_str.as_str());
+            self.ld_metrics.params_changed.inc_by(u64::from(change));
+            changed |= change;
         }
 
         changed
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Metrics {
+    pub last_known_time_seconds: IntCounter,
+    pub params_changed: IntCounter,
+}
+
+impl Metrics {
+    fn register_into(registry: &MetricsRegistry) -> Self {
+        Self {
+            last_known_time_seconds: registry.register(metric!(
+                name: "mz_parameter_frontend_last_known_time_seconds",
+                help: "The last known time of the LaunchDarkly frontend (as unix timestamp).",
+            )),
+            params_changed: registry.register(metric!(
+                name: "mz_parameter_frontend_params_changed",
+                help: "The number of parameter changes pulled from the LaunchDarkly frontend.",
+            )),
+        }
     }
 }

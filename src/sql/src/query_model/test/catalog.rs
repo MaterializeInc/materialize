@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -305,6 +305,10 @@ impl SessionCatalog for TestCatalog {
 
     fn now(&self) -> EpochMillis {
         (self.config().now)()
+    }
+
+    fn aws_privatelink_availability_zones(&self) -> Option<HashSet<String>> {
+        unimplemented!()
     }
 
     fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {

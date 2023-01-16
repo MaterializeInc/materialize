@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# The linked cluster for the source will be created by the mz_system user
+# when upgrading to v0.39.
+> CREATE TABLE IF NOT EXISTS linked_cluster_audit_event_user (priority int, user text)
+> INSERT INTO linked_cluster_audit_event_user VALUES (27, 'mz_system')
+
 $ set schema={
     "type": "record",
     "name": "cpx",

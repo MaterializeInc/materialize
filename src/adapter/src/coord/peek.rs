@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::{collections::HashMap, num::NonZeroUsize};
+use std::num::NonZeroUsize;
 
 use futures::TryFutureExt;
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
-use mz_compute_client::response::PeekResponse;
+use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_expr::explain::Indices;
 use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
@@ -33,7 +33,6 @@ use mz_ore::str::StrExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
-use mz_stash::Append;
 
 use crate::client::ConnectionId;
 use crate::coord::timestamp_selection::TimestampContext;
@@ -64,7 +63,7 @@ pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
     desc: DataflowDescription<mz_compute_client::plan::Plan<T>, (), T>,
     id: GlobalId,
     key: Vec<MirScalarExpr>,
-    permutation: HashMap<usize, usize>,
+    permutation: BTreeMap<usize, usize>,
     thinned_arity: usize,
 }
 
@@ -164,8 +163,7 @@ fn permute_oneshot_mfp_around_index(
         .map_err(|_e| {
             AdapterError::Unstructured(::anyhow::anyhow!("OneShot plan has temporal constraints"))
         })?;
-    let (permute, thinning) =
-        mz_expr::permutation_for_arrangement::<HashMap<_, _>>(key, mfp.input_arity);
+    let (permute, thinning) = mz_expr::permutation_for_arrangement(key, mfp.input_arity);
     safe_mfp.permute(permute, key.len() + thinning.len());
     Ok(safe_mfp)
 }
@@ -242,7 +240,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
     Ok(None)
 }
 
-impl<S: Append + 'static> crate::coord::Coordinator<S> {
+impl crate::coord::Coordinator {
     /// Creates a [`PeekPlan`] for the given `dataflow`.
     ///
     /// The result will be a [`PeekPlan::FastPath`] plan iff the [`create_fast_path_plan`]
@@ -255,7 +253,7 @@ impl<S: Append + 'static> crate::coord::Coordinator<S> {
         compute_instance: ComputeInstanceId,
         index_id: GlobalId,
         key: Vec<MirScalarExpr>,
-        permutation: HashMap<usize, usize>,
+        permutation: BTreeMap<usize, usize>,
         thinned_arity: usize,
     ) -> Result<PeekPlan, AdapterError> {
         // try to produce a `FastPathPlan`

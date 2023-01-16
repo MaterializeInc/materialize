@@ -26,7 +26,7 @@ SERVICES = [
     Materialized(),
     Testdrive(),
     testdrive_no_reset,
-    Cockroach(),
+    Cockroach(setup_materialize=True),
 ]
 
 
@@ -94,24 +94,10 @@ def workflow_stash(c: Composition) -> None:
         stop=True,
         destroy_volumes=True,
     )
-    c.rm_volumes("mzdata", "pgdata", force=True)
+    c.rm_volumes("mzdata", force=True)
 
-    materialized = Materialized(
-        options=[
-            "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
-            "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
-            "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
-        ],
-    )
-    cockroach = Cockroach()
-
-    with c.override(materialized, cockroach):
+    with c.override(Materialized(external_cockroach=True)):
         c.up("cockroach")
-        c.wait_for_cockroach()
-
-        c.sql("CREATE SCHEMA adapter", service="cockroach", user="root")
-        c.sql("CREATE SCHEMA storage", service="cockroach", user="root")
-        c.sql("CREATE SCHEMA consensus", service="cockroach", user="root")
 
         c.start_and_wait_for_tcp(services=["materialized"])
         c.wait_for_materialized("materialized")
@@ -120,13 +106,11 @@ def workflow_stash(c: Composition) -> None:
 
         c.stop("cockroach")
         c.up("cockroach")
-        c.wait_for_cockroach()
 
         c.sql("CREATE TABLE b (i INT)")
 
         c.rm("cockroach")
         c.up("cockroach")
-        c.wait_for_cockroach()
 
         # CockroachDB cleared its database, so this should fail.
         try:

@@ -27,7 +27,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
         CREATE CONNECTION privatelinkconn
         TO AWS PRIVATELINK (
             SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
-            AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+            AVAILABILITY ZONES ('use1-az1', 'use1-az2')
         )
         """
     )
@@ -68,6 +68,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
                 BROKERS (
                     'customer-hostname-1:9092' USING AWS PRIVATELINK privatelinkconn,
                     'customer-hostname-2:9092' USING AWS PRIVATELINK privatelinkconn (PORT 9093),
+                    'customer-hostname-3:9092' USING AWS PRIVATELINK privatelinkconn (AVAILABILITY ZONE 'use1-az1', PORT 9093),
                     'customer-hostname-4:9094'
                 )
             );
@@ -104,13 +105,44 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
             dedent(
                 """\
             CREATE CONNECTION pg TO POSTGRES (
-                HOST 'postgres-source',
+                HOST 'postgres',
                 DATABASE postgres,
                 USER postgres,
                 AWS PRIVATELINK privatelinkconn,
                 SSH TUNNEL sshconn
             )
             """
+            )
+        )
+
+    with pytest.raises(
+        ProgrammingError, match='invalid AWS PrivateLink availability zone "us-east-1a"'
+    ):
+        mz.environmentd.sql(
+            dedent(
+                """\
+                CREATE CONNECTION privatelinkconn2
+                TO AWS PRIVATELINK (
+                SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+                AVAILABILITY ZONES ('use1-az2', 'us-east-1a')
+                );
+                """
+            )
+        )
+
+    with pytest.raises(
+        ProgrammingError,
+        match='AWS PrivateLink availability zone "use1-az3" does not match any of the availability zones on the AWS PrivateLink connection',
+    ):
+        mz.environmentd.sql(
+            dedent(
+                """\
+                CREATE CONNECTION kafkaconn2 TO KAFKA (
+                    BROKERS (
+                        'customer-hostname-3:9092' USING AWS PRIVATELINK privatelinkconn (AVAILABILITY ZONE 'use1-az3', PORT 9093)
+                    )
+                );
+                """
             )
         )
 

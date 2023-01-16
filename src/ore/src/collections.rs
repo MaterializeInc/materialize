@@ -39,13 +39,14 @@ where
     ///
     /// This method panics if the collection does not have exactly one element.
     fn into_element(self) -> T::Item {
-        self.expect_element("into_element called on collection with more than one element")
+        self.expect_element(|| "into_element called on collection with more than one element")
     }
 
     /// Consumes the collection and returns its only element.
     ///
-    /// This method panics with the given error message if the collection does not have exactly one element.
-    fn expect_element<Err: Display>(self, msg: Err) -> T::Item;
+    /// This method panics with the given error function's return value if the collection does not
+    /// have exactly one element.
+    fn expect_element<Err: Display>(self, msg_fn: impl FnOnce() -> Err) -> T::Item;
 }
 
 impl<T> CollectionExt<T> for T
@@ -60,11 +61,11 @@ where
         self.into_iter().last().unwrap()
     }
 
-    fn expect_element<Err: Display>(self, msg: Err) -> T::Item {
+    fn expect_element<Err: Display>(self, msg_fn: impl FnOnce() -> Err) -> T::Item {
         let mut iter = self.into_iter();
         match (iter.next(), iter.next()) {
             (Some(el), None) => el,
-            _ => panic!("{}", msg),
+            _ => panic!("{}", msg_fn()),
         }
     }
 }

@@ -33,7 +33,7 @@ Field           | Type                         | Meaning
 `object_type`   | [`text`]                     | The type of the affected object: `cluster`, `cluster-replica`, `connection`, `database`, `function`, `index`, `materialized-view`, `role`, `schema`, `secret`, `sink`, `source`, `table`, `type`, or `view`.
 `details`       | [`jsonb`]                    | Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.
 `user`          | [`text`]                     | The user who triggered the event, or `NULL` if triggered by the system.
-`occurred_at`   | [`timestamp with time zone`] | The time at which the event occurred.
+`occurred_at`   | [`timestamp with time zone`] | The time at which the event occurred. Guaranteed to be in order of event creation. Events created in the same transaction will have identical values.
 
 ### `mz_aws_privatelink_connections`
 
@@ -70,7 +70,7 @@ The `mz_clusters` table contains a row for each cluster in the system.
 
 Field          | Type       | Meaning
 ---------------|------------|--------
-`id`           | [`uint8`]  | Materialize's unique ID for the cluster.
+`id`           | [`text`]   | Materialize's unique ID for the cluster.
 `name`         | [`text`]   | The name of the cluster.
 
 ### `mz_columns`

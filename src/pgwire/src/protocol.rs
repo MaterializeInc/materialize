@@ -18,7 +18,6 @@ use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
 use mz_adapter::AdapterNotice;
-use openssl::nid::Nid;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
@@ -29,7 +28,7 @@ use mz_adapter::catalog::INTERNAL_USER_NAMES;
 use mz_adapter::session::User;
 use mz_adapter::session::{
     EndTransactionAction, ExternalUserMetadata, InProgressRows, Portal, PortalState,
-    RowBatchStream, Session, TransactionStatus,
+    RowBatchStream, TransactionStatus,
 };
 use mz_adapter::{ExecuteResponse, PeekResponseUnary, RowsFuture};
 use mz_frontegg_auth::FronteggAuthentication;
@@ -72,7 +71,7 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 /// Parameters for the [`run`] function.
 pub struct RunParams<'a, A> {
     /// The TLS mode of the pgwire server.
-    pub tls_mode: Option<TlsMode>,
+    pub tls_mode: TlsMode,
     /// A client for the adapter.
     pub adapter_client: mz_adapter::ConnClient,
     /// The connection to the client.
@@ -146,38 +145,16 @@ where
     // The match here explicitly spells out all cases to be resilient to
     // future changes to TlsMode.
     match (tls_mode, conn.inner()) {
-        (None, Conn::Unencrypted(_)) => (),
-        (None, Conn::Ssl(_)) => unreachable!(),
-        (Some(TlsMode::Require), Conn::Ssl(_)) => (),
-        (Some(TlsMode::Require), Conn::Unencrypted(_))
-        | (Some(TlsMode::VerifyUser), Conn::Unencrypted(_)) => {
+        (TlsMode::Disable, Conn::Unencrypted(_)) => (),
+        (TlsMode::Disable, Conn::Ssl(_)) => unreachable!(),
+        (TlsMode::Enable, Conn::Ssl(_)) => (),
+        (TlsMode::Enable, Conn::Unencrypted(_)) => {
             return conn
                 .send(ErrorResponse::fatal(
                     SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
                     "TLS encryption is required",
                 ))
                 .await;
-        }
-        (Some(TlsMode::VerifyUser), Conn::Ssl(inner_conn)) => {
-            let cn_matches = match inner_conn.ssl().peer_certificate() {
-                None => false,
-                Some(cert) => cert
-                    .subject_name()
-                    .entries_by_nid(Nid::COMMONNAME)
-                    .any(|n| n.data().as_slice() == user.as_bytes()),
-            };
-            if !cn_matches {
-                let msg = format!(
-                    "certificate authentication failed for user {}",
-                    user.quoted()
-                );
-                return conn
-                    .send(ErrorResponse::fatal(
-                        SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                        msg,
-                    ))
-                    .await;
-            }
         }
     }
 
@@ -224,42 +201,53 @@ where
     };
 
     // Construct session.
-    let mut session = Session::new(
-        conn.id(),
-        User {
-            name: user,
-            external_metadata,
-        },
-    );
+    let mut session = adapter_client.new_session(User {
+        name: user,
+        external_metadata,
+    });
     for (name, value) in params {
         let local = false;
         let _ = session.vars_mut().set(&name, &value, local);
     }
 
-    // Register session with adapter.
-    let (mut adapter_client, startup) =
-        match adapter_client.startup(session, frontegg.is_some()).await {
-            Ok(startup) => startup,
-            Err(e) => {
-                return conn
-                    .send(ErrorResponse::from_adapter_error(Severity::Fatal, e))
-                    .await
-            }
-        };
-
-    let session = adapter_client.session();
     let mut buf = vec![BackendMessage::AuthenticationOk];
     for var in session.vars().notify_set() {
         buf.push(BackendMessage::ParameterStatus(var.name(), var.value()));
     }
     buf.push(BackendMessage::BackendKeyData {
         conn_id: session.conn_id(),
-        secret_key: startup.secret_key,
+        secret_key: session.secret_key(),
     });
+    // Immediately respond with connection success without waiting on the
+    // coordinator. This allows us to better meet SLA goals (like able to
+    // connect) at the expense of some specific problems:
+    // - Startup notices (like unknown database) won't be sent until the first
+    //   query.
+    // - An unknown username won't error until the first query. This won't be
+    //   noticed by users, though, since with frontegg enabled unknown users are
+    //   always created.
+    buf.push(BackendMessage::ReadyForQuery(session.transaction().into()));
+    conn.send_all(buf).await?;
+    conn.flush().await?;
+
+    // Register session with adapter.
+    let (adapter_client, startup) = match adapter_client.startup(session, frontegg.is_some()).await
+    {
+        Ok(startup) => startup,
+        Err(e) => {
+            return conn
+                .send(ErrorResponse::from_adapter_error(Severity::Fatal, e))
+                .await
+        }
+    };
+
+    let mut buf = Vec::new();
+    // NoticeResponse messages can be sent at any time
+    // (https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-ASYNC),
+    // so it is within spec to send them after the initial ReadyForQuery.
     for startup_message in startup.messages {
         buf.push(ErrorResponse::from_startup_message(startup_message).into());
     }
-    buf.push(BackendMessage::ReadyForQuery(session.transaction().into()));
     conn.send_all(buf).await?;
     conn.flush().await?;
 

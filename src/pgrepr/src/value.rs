@@ -12,7 +12,7 @@ use std::error::Error;
 use std::io;
 use std::str;
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use uuid::Uuid;
@@ -27,12 +27,14 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv::{self, Nestable};
 use mz_repr::{Datum, RelationType, Row, RowArena, ScalarType};
 
-use crate::{Format, Interval, Jsonb, Numeric, Type};
+use crate::types::{UINT2, UINT4, UINT8};
+use crate::{Format, Interval, Jsonb, Numeric, Type, UInt2, UInt4, UInt8};
 
 pub mod interval;
 pub mod jsonb;
 pub mod numeric;
 pub mod record;
+pub mod unsigned;
 
 /// A PostgreSQL datum.
 #[derive(Debug)]
@@ -63,11 +65,11 @@ pub enum Value {
     /// An 8-byte signed integer.
     Int8(i64),
     /// A 2-byte unsigned integer.
-    UInt2(u16),
+    UInt2(UInt2),
     /// A 4-byte unsigned integer.
-    UInt4(u32),
+    UInt4(UInt4),
     /// An 8-byte unsigned integer.
-    UInt8(u64),
+    UInt8(UInt8),
     /// A time interval.
     Interval(Interval),
     /// A binary JSON blob.
@@ -121,13 +123,13 @@ impl Value {
             (Datum::Int32(i), ScalarType::Int32) => Some(Value::Int4(i)),
             (Datum::Int64(i), ScalarType::Int64) => Some(Value::Int8(i)),
             (Datum::UInt8(c), ScalarType::PgLegacyChar) => Some(Value::Char(c)),
-            (Datum::UInt16(u), ScalarType::UInt16) => Some(Value::UInt2(u)),
+            (Datum::UInt16(u), ScalarType::UInt16) => Some(Value::UInt2(UInt2(u))),
             (Datum::UInt32(oid), ScalarType::Oid) => Some(Value::Oid(oid)),
             (Datum::UInt32(oid), ScalarType::RegClass) => Some(Value::Oid(oid)),
             (Datum::UInt32(oid), ScalarType::RegProc) => Some(Value::Oid(oid)),
             (Datum::UInt32(oid), ScalarType::RegType) => Some(Value::Oid(oid)),
-            (Datum::UInt32(u), ScalarType::UInt32) => Some(Value::UInt4(u)),
-            (Datum::UInt64(u), ScalarType::UInt64) => Some(Value::UInt8(u)),
+            (Datum::UInt32(u), ScalarType::UInt32) => Some(Value::UInt4(UInt4(u))),
+            (Datum::UInt64(u), ScalarType::UInt64) => Some(Value::UInt8(UInt8(u))),
             (Datum::Float32(f), ScalarType::Float32) => Some(Value::Float4(*f)),
             (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
             (Datum::Numeric(d), ScalarType::Numeric { .. }) => Some(Value::Numeric(Numeric(d))),
@@ -224,9 +226,9 @@ impl Value {
             Value::Int2(i) => Datum::Int16(i),
             Value::Int4(i) => Datum::Int32(i),
             Value::Int8(i) => Datum::Int64(i),
-            Value::UInt2(u) => Datum::UInt16(u),
-            Value::UInt4(u) => Datum::UInt32(u),
-            Value::UInt8(u) => Datum::UInt64(u),
+            Value::UInt2(u) => Datum::UInt16(u.0),
+            Value::UInt4(u) => Datum::UInt32(u.0),
+            Value::UInt8(u) => Datum::UInt64(u.0),
             Value::Jsonb(js) => buf.push_unary_row(js.0.into_row()),
             Value::List(elems) => {
                 let elem_pg_type = match typ {
@@ -327,9 +329,9 @@ impl Value {
             Value::Int2(i) => strconv::format_int16(buf, *i),
             Value::Int4(i) => strconv::format_int32(buf, *i),
             Value::Int8(i) => strconv::format_int64(buf, *i),
-            Value::UInt2(u) => strconv::format_uint16(buf, *u),
-            Value::UInt4(u) => strconv::format_uint32(buf, *u),
-            Value::UInt8(u) => strconv::format_uint64(buf, *u),
+            Value::UInt2(u) => strconv::format_uint16(buf, u.0),
+            Value::UInt4(u) => strconv::format_uint32(buf, u.0),
+            Value::UInt8(u) => strconv::format_uint64(buf, u.0),
             Value::Interval(iv) => strconv::format_interval(buf, iv.0),
             Value::Float4(f) => strconv::format_float32(buf, *f),
             Value::Float8(f) => strconv::format_float64(buf, *f),
@@ -401,18 +403,9 @@ impl Value {
             Value::Int2(i) => i.to_sql(&PgType::INT2, buf),
             Value::Int4(i) => i.to_sql(&PgType::INT4, buf),
             Value::Int8(i) => i.to_sql(&PgType::INT8, buf),
-            Value::UInt2(u) => {
-                buf.put_u16(*u);
-                Ok(IsNull::No)
-            }
-            Value::UInt4(u) => {
-                buf.put_u32(*u);
-                Ok(IsNull::No)
-            }
-            Value::UInt8(u) => {
-                buf.put_u64(*u);
-                Ok(IsNull::No)
-            }
+            Value::UInt2(u) => u.to_sql(&*UINT2, buf),
+            Value::UInt4(u) => u.to_sql(&*UINT4, buf),
+            Value::UInt8(u) => u.to_sql(&*UINT8, buf),
             Value::Interval(iv) => iv.to_sql(&PgType::INTERVAL, buf),
             Value::Jsonb(js) => js.to_sql(&PgType::JSONB, buf),
             Value::List(_) => {
@@ -537,9 +530,9 @@ impl Value {
             Type::Int2 => Value::Int2(strconv::parse_int16(s)?),
             Type::Int4 => Value::Int4(strconv::parse_int32(s)?),
             Type::Int8 => Value::Int8(strconv::parse_int64(s)?),
-            Type::UInt2 => Value::UInt2(strconv::parse_uint16(s)?),
-            Type::UInt4 => Value::UInt4(strconv::parse_uint32(s)?),
-            Type::UInt8 => Value::UInt8(strconv::parse_uint64(s)?),
+            Type::UInt2 => Value::UInt2(UInt2(strconv::parse_uint16(s)?)),
+            Type::UInt4 => Value::UInt4(UInt4(strconv::parse_uint32(s)?)),
+            Type::UInt8 => Value::UInt8(UInt8(strconv::parse_uint64(s)?)),
             Type::Interval { .. } => Value::Interval(Interval(strconv::parse_interval(s)?)),
             Type::Json => return Err("input of json types is not implemented".into()),
             Type::Jsonb => Value::Jsonb(Jsonb(strconv::parse_jsonb(s)?)),
@@ -578,7 +571,7 @@ impl Value {
 
     /// Deserializes a value of type `ty` from `raw` using the [binary encoding
     /// format](Format::Binary).
-    pub fn decode_binary(ty: &Type, mut raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
+    pub fn decode_binary(ty: &Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
         match ty {
             Type::Array(_) => Err("input of array types is not implemented".into()),
             Type::Int2Vector => Err("input of int2vector types is not implemented".into()),
@@ -596,27 +589,9 @@ impl Value {
             Type::Int2 => i16::from_sql(ty.inner(), raw).map(Value::Int2),
             Type::Int4 => i32::from_sql(ty.inner(), raw).map(Value::Int4),
             Type::Int8 => i64::from_sql(ty.inner(), raw).map(Value::Int8),
-            Type::UInt2 => {
-                let v = raw.get_u16();
-                if !raw.is_empty() {
-                    return Err("invalid buffer size".into());
-                }
-                Ok(Value::UInt2(v))
-            }
-            Type::UInt4 => {
-                let v = raw.get_u32();
-                if !raw.is_empty() {
-                    return Err("invalid buffer size".into());
-                }
-                Ok(Value::UInt4(v))
-            }
-            Type::UInt8 => {
-                let v = raw.get_u64();
-                if !raw.is_empty() {
-                    return Err("invalid buffer size".into());
-                }
-                Ok(Value::UInt8(v))
-            }
+            Type::UInt2 => UInt2::from_sql(ty.inner(), raw).map(Value::UInt2),
+            Type::UInt4 => UInt4::from_sql(ty.inner(), raw).map(Value::UInt4),
+            Type::UInt8 => UInt8::from_sql(ty.inner(), raw).map(Value::UInt8),
             Type::Interval { .. } => Interval::from_sql(ty.inner(), raw).map(Value::Interval),
             Type::Json => Err("input of json types is not implemented".into()),
             Type::Jsonb => Jsonb::from_sql(ty.inner(), raw).map(Value::Jsonb),

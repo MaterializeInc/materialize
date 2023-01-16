@@ -50,6 +50,10 @@ Delete this section if no tips.
 
 - [ ] This PR has adequate test coverage / QA involvement has been duly considered.
 - [ ] This PR evolves [an existing `$T ⇔ Proto$T` mapping](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/command-and-response-binary-encoding.md) (possibly in a backwards-incompatible way) and therefore is tagged with a `T-proto` label.
+- [ ] If this PR will require changes to cloud orchestration, there is a
+  companion cloud PR to account for those changes that is tagged with
+  the release-blocker label ([example](https://github.com/MaterializeInc/cloud/pull/5021)).
+  <!-- Ask in #team-cloud on Slack if you need help preparing the cloud PR. -->
 - [ ] This PR includes the following [user-facing behavior changes](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/guide-changes.md#what-changes-require-a-release-note):
 
   - <!-- Add release notes here or explicitly state that there are no user-facing behavior changes. -->

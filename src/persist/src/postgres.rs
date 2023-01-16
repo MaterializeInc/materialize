@@ -230,39 +230,17 @@ impl PostgresConsensus {
         let mut client = pool.get().await?;
 
         let tx = client.transaction().await?;
-        let version: String = tx.query_one("SELECT version()", &[]).await?.get(0);
-        // Only get the advisory lock on Postgres (but not Cockroach which doesn't
-        // support this function and (we suspect) doesn't have this bug anyway). Use
-        // this construction (not cockroach instead of yes postgres) to avoid
-        // accidentally not executing in Postgres.
-        let is_cockroach = version.starts_with("CockroachDB");
-        if !is_cockroach {
-            // Obtain an advisory lock before attempting to create the schema. This is
-            // necessary to work around concurrency bugs in `CREATE TABLE IF NOT EXISTS`
-            // in PostgreSQL.
-            //
-            // See: https://github.com/MaterializeInc/materialize/issues/12560
-            // See: https://www.postgresql.org/message-id/CA%2BTgmoZAdYVtwBfp1FL2sMZbiHCWT4UPrzRLNnX1Nb30Ku3-gg%40mail.gmail.com
-            // See: https://stackoverflow.com/a/29908840
-            //
-            // The lock ID was randomly generated.
-            tx.batch_execute("SELECT pg_advisory_xact_lock(135664303235462630);")
-                .await?;
-        }
-
         tx.batch_execute(SCHEMA).await?;
 
-        if is_cockroach {
-            // The `consensus` table creates and deletes rows at a high frequency, generating many
-            // tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
-            // these tombstones accumulate, scanning over the table will take increasingly and
-            // prohibitively long.
-            //
-            // See: https://github.com/MaterializeInc/materialize/issues/13975
-            // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
-            tx.batch_execute("ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;")
-                .await?;
-        }
+        // The `consensus` table creates and deletes rows at a high frequency, generating many
+        // tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
+        // these tombstones accumulate, scanning over the table will take increasingly and
+        // prohibitively long.
+        //
+        // See: https://github.com/MaterializeInc/materialize/issues/13975
+        // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
+        tx.batch_execute("ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;")
+            .await?;
 
         tx.commit().await?;
         Ok(PostgresConsensus {

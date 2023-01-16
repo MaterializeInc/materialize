@@ -34,20 +34,17 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Localstack(),
+    Cockroach(setup_materialize=True),
     Clusterd(name="compute_1"),
     Clusterd(name="compute_2"),
     Clusterd(name="compute_3"),
     Clusterd(name="compute_4"),
     # We use mz_panic() in some test scenarios, so environmentd must stay up.
-    Materialized(propagate_crashes=False),
+    Materialized(propagate_crashes=False, external_cockroach=True),
     Redpanda(),
     Testdrive(
-        volumes=[
-            "mzdata:/mzdata",
-            "tmp:/share/tmp",
-            ".:/workdir/smoke",
-            "../testdrive:/workdir/testdrive",
-        ],
+        volume_workdir="../testdrive:/workdir/testdrive",
+        volumes_extra=[".:/workdir/smoke"],
         materialize_params={"cluster": "cluster1"},
     ),
     Clusterd(name="storage"),
@@ -544,15 +541,10 @@ def workflow_test_remote_storage(c: Composition) -> None:
 
     with c.override(
         Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
-        # Use a separate CockroachDB service for persist rather than the one in
-        # the `Materialized` service, so that crashing `environmentd` does not
-        # also take down CockroachDB.
-        Cockroach(),
-        Materialized(options="--persist-consensus-url=postgres://root@cockroach:26257"),
     ):
         dependencies = [
-            "materialized",
             "cockroach",
+            "materialized",
             "storage",
             "zookeeper",
             "kafka",
@@ -620,11 +612,16 @@ def workflow_test_builtin_migration(c: Composition) -> None:
             name="materialized",
             config={
                 "image": "materialize/materialized:devel-aa4128c9c485322f90ab0af2b9cb4d16e1c470c0",
-                "command": "--persist-blob-url=file:///mzdata/persist/blob",
+                "command": [
+                    "--persist-blob-url=file:///mzdata/persist/blob",
+                    "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
+                    "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
+                    "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
+                ],
+                "depends_on": {"cockroach": {"condition": "service_healthy"}},
                 "ports": [6875],
                 "volumes": [
                     "mzdata:/mzdata",
-                    "pgdata:/cockroach-data",
                 ],
             },
         ),
@@ -686,7 +683,7 @@ def workflow_test_builtin_migration(c: Composition) -> None:
 
     with c.override(
         # This will stop working if we introduce a breaking change.
-        Materialized(),
+        Materialized(external_cockroach=True),
         Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
     ):
         c.up("testdrive", persistent=True)
@@ -734,7 +731,7 @@ def workflow_test_builtin_migration(c: Composition) -> None:
     # Restart materialize and test that everything still works to ensure that the migration was persisted correctly.
     with c.override(
         # This will stop working if we introduce a breaking change.
-        Materialized(),
+        Materialized(external_cockroach=True),
         Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
     ):
         c.up("testdrive", persistent=True)
@@ -833,7 +830,9 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
     with c.override(
         Testdrive(no_reset=True),
         Materialized(
-            options="--bootstrap-system-parameter=\"allowed_cluster_replica_sizes='1', '2', 'oops'\"",
+            options=[
+                "--bootstrap-system-parameter=allowed_cluster_replica_sizes='1', '2', 'oops'"
+            ],
         ),
     ):
         dependencies = [

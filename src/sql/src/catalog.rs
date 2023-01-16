@@ -201,6 +201,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// this means the Unix epoch. This can safely be mocked in tests and start
     /// at 0.
     fn now(&self) -> EpochMillis;
+
+    /// Returns the set of supported AWS PrivateLink availability zone ids.
+    fn aws_privatelink_availability_zones(&self) -> Option<HashSet<String>>;
 }
 
 /// Configuration associated with a catalog.
@@ -286,6 +289,10 @@ pub trait CatalogComputeInstance<'a> {
 
     /// Returns a stable ID for the compute instance.
     fn id(&self) -> ComputeInstanceId;
+
+    /// Returns the ID of the object this compute instance is linked to, if
+    /// any.
+    fn linked_object_id(&self) -> Option<GlobalId>;
 
     /// Returns the set of non-transient exports (indexes, materialized views)
     /// of this cluster.
@@ -685,6 +692,9 @@ pub enum CloudProvider {
     Local,
     /// A pseudo-provider value used by Docker.
     Docker,
+    /// A deprecated psuedo-provider value used by mzcompose.
+    // TODO(benesch): remove once v0.39 ships.
+    MzCompose,
     /// A pseudo-provider value used by cloudtest.
     Cloudtest,
     /// Amazon Web Services.
@@ -696,6 +706,7 @@ impl fmt::Display for CloudProvider {
         match self {
             CloudProvider::Local => f.write_str("local"),
             CloudProvider::Docker => f.write_str("docker"),
+            CloudProvider::MzCompose => f.write_str("mzcompose"),
             CloudProvider::Cloudtest => f.write_str("cloudtest"),
             CloudProvider::Aws => f.write_str("aws"),
         }
@@ -709,6 +720,7 @@ impl FromStr for CloudProvider {
         match s {
             "local" => Ok(CloudProvider::Local),
             "docker" => Ok(CloudProvider::Docker),
+            "mzcompose" => Ok(CloudProvider::MzCompose),
             "cloudtest" => Ok(CloudProvider::Cloudtest),
             "aws" => Ok(CloudProvider::Aws),
             _ => Err(InvalidCloudProviderError),
@@ -920,6 +932,10 @@ impl SessionCatalog for DummyCatalog {
 
     fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
         name
+    }
+
+    fn aws_privatelink_availability_zones(&self) -> Option<HashSet<String>> {
+        unimplemented!()
     }
 }
 

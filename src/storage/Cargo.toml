@@ -32,18 +32,15 @@ mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-expr = { path = "../expr" }
-mz-http-util = { path = "../http-util" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-kinesis-util = { path = "../kinesis-util" }
-mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["async", "tracing_", "chrono"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-pgcopy = { path = "../pgcopy" }
 mz-pid-file = { path = "../pid-file" }
 mz-postgres-util = { path = "../postgres-util" }
-mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
@@ -81,4 +78,4 @@ tokio = { version = "1.23.0", features = ["test-util"] }
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux
-normal = ["inotify"]
+normal = ["inotify", "workspace-hack"]

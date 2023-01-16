@@ -734,12 +734,15 @@ mod tests {
             },
         );
 
-        // The next try should indicate a next backoff of between 0 and 5ms. The
+        // The next try should indicate a next backoff of between 0 (None) and 5ms. The
         // exact value depends on how long it took for the first try itself to
         // execute.
         assert_eq!(states[1].i, 1);
-        let backoff = states[1].next_backoff.unwrap();
-        assert!(backoff > Duration::from_millis(0) && backoff < Duration::from_millis(5));
+        assert!(match states[1].next_backoff {
+            None => true,
+            Some(backoff) =>
+                backoff > Duration::from_millis(0) && backoff < Duration::from_millis(5),
+        });
 
         // The final try should indicate that the operation is complete with
         // a next backoff of None.

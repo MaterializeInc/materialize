@@ -9,8 +9,10 @@
 
 //! A mechanism to ensure that a sequence of writes and reads proceed correctly through timestamps.
 
+use std::cmp;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
+use std::thread;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -26,7 +28,6 @@ use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::vec::VecExt;
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
-use mz_stash::Append;
 use mz_storage_client::types::sources::Timeline;
 
 use crate::catalog::CatalogItem;
@@ -182,10 +183,47 @@ pub const TIMESTAMP_INTERVAL_UPPER_BOUND: u64 = 2;
 
 /// Convenience function for calculating the current upper bound that we want to
 /// prevent the global timestamp from exceeding.
-pub fn upper_bound(now: &Timestamp) -> Timestamp {
+fn upper_bound(now: &Timestamp) -> Timestamp {
     now.saturating_add(
         TIMESTAMP_PERSIST_INTERVAL.saturating_mul(Timestamp::from(TIMESTAMP_INTERVAL_UPPER_BOUND)),
     )
+}
+
+/// Returns the current system time while protecting against backwards time
+/// jumps.
+///
+/// The caller is responsible for providing the previously recorded system time
+/// via the `previous_now` parameter.
+///
+/// If `previous_now` is more than `TIMESTAMP_INTERVAL_UPPER_BOUND *
+/// TIMESTAMP_PERSIST_INTERVAL` milliseconds ahead of the current system time
+/// (i.e., due to a backwards time jump), this function will block until the
+/// system time advances.
+///
+/// The returned time is guaranteed to be greater than or equal to
+/// `previous_now`.
+pub fn monotonic_now(now: NowFn, previous_now: Timestamp) -> Timestamp {
+    let mut now_ts = now();
+    let monotonic_now = cmp::max(previous_now, now_ts.into());
+    let mut upper_bound = timeline::upper_bound(&mz_repr::Timestamp::from(now_ts));
+    while monotonic_now > upper_bound {
+        // Cap retry time to 1s. In cases where the system clock has retreated
+        // by some large amount of time, this prevents against then waiting for
+        // that large amount of time in case the system clock then advances back
+        // to near what it was.
+        let remaining_ms = cmp::min(monotonic_now.saturating_sub(upper_bound), 1_000.into());
+        error!(
+            "Coordinator tried to start with initial timestamp of \
+            {monotonic_now}, which is more than \
+            {TIMESTAMP_INTERVAL_UPPER_BOUND} intervals of size {} larger than \
+            now, {now_ts}. Sleeping for {remaining_ms} ms.",
+            *TIMESTAMP_PERSIST_INTERVAL
+        );
+        thread::sleep(Duration::from_millis(remaining_ms.into()));
+        now_ts = now();
+        upper_bound = timeline::upper_bound(&mz_repr::Timestamp::from(now_ts));
+    }
+    monotonic_now
 }
 
 /// A type that wraps a [`TimestampOracle`] and provides durable timestamps. This allows us to
@@ -299,17 +337,13 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
     }
 }
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     pub(crate) fn now(&self) -> EpochMillis {
         (self.catalog.config().now)()
     }
 
     pub(crate) fn now_datetime(&self) -> DateTime<Utc> {
         to_datetime(self.now())
-    }
-
-    pub(crate) fn now_fn(&self) -> NowFn {
-        self.catalog.config().now.clone()
     }
 
     pub(crate) fn get_timestamp_oracle_mut(
@@ -340,19 +374,11 @@ impl<S: Append + 'static> Coordinator<S> {
         self.get_timestamp_oracle(&Timeline::EpochMilliseconds)
     }
 
-    /// Returns a mutable reference to the timestamp oracle used for reads and writes
-    /// from/to a local input.
-    pub(crate) fn get_local_timestamp_oracle_mut(
-        &mut self,
-    ) -> &mut DurableTimestampOracle<Timestamp> {
-        self.get_timestamp_oracle_mut(&Timeline::EpochMilliseconds)
-    }
-
     /// Assign a timestamp for a read from a local input. Reads following writes
     /// must be at a time >= the write's timestamp; we choose "equal to" for
     /// simplicity's sake and to open as few new timestamps as possible.
-    pub(crate) fn get_local_read_ts(&mut self) -> Timestamp {
-        self.get_local_timestamp_oracle_mut().read_ts()
+    pub(crate) fn get_local_read_ts(&self) -> Timestamp {
+        self.get_local_timestamp_oracle().read_ts()
     }
 
     /// Assign a timestamp for a write to a local input and increase the local ts.
@@ -372,7 +398,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     /// Peek the current timestamp used for operations on local inputs. Used to determine how much
     /// to block group commits by.
-    pub(crate) fn peek_local_write_ts(&mut self) -> Timestamp {
+    pub(crate) fn peek_local_write_ts(&self) -> Timestamp {
         self.get_local_timestamp_oracle().peek_write_ts()
     }
 

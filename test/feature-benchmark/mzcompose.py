@@ -128,6 +128,7 @@ def run_one_scenario(
                 "-c",
                 "environmentd --version | grep environmentd",
                 entrypoint="bash",
+                rm=True,
             )
 
             c.start_and_wait_for_tcp(services=["materialized"])
@@ -148,7 +149,7 @@ def run_one_scenario(
         comparator.append(outcome)
         c.kill("materialized", "testdrive")
         c.rm("materialized", "testdrive")
-        c.rm_volumes("mzdata", "pgdata")
+        c.rm_volumes("mzdata")
 
     return comparator
 

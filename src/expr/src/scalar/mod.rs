@@ -10,7 +10,7 @@
 use itertools::Itertools;
 use mz_repr::adt::date::DateError;
 use mz_repr::adt::timestamp::TimestampError;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::mem;
 use std::ops::BitOrAssign;
@@ -47,7 +47,7 @@ pub mod like_pattern;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.rs"));
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
 pub enum MirScalarExpr {
     /// A column of the input row
     Column(usize),
@@ -561,7 +561,7 @@ impl MirScalarExpr {
     /// This method is applicable even when `permutation` is not a
     /// strict permutation, and it only needs to have entries for
     /// each column referenced in `self`.
-    pub fn permute_map(&mut self, permutation: &std::collections::HashMap<usize, usize>) {
+    pub fn permute_map(&mut self, permutation: &BTreeMap<usize, usize>) {
         #[allow(deprecated)]
         self.visit_mut_post_nolimit(&mut |e| {
             if let MirScalarExpr::Column(old_i) = e {
@@ -570,8 +570,8 @@ impl MirScalarExpr {
         });
     }
 
-    pub fn support(&self) -> HashSet<usize> {
-        let mut support = HashSet::new();
+    pub fn support(&self) -> BTreeSet<usize> {
+        let mut support = BTreeSet::new();
         #[allow(deprecated)]
         self.visit_post_nolimit(&mut |e| {
             if let MirScalarExpr::Column(i) = e {
@@ -1097,7 +1097,7 @@ impl MirScalarExpr {
                             }
 
                             // Deduplicate arguments in cases like `coalesce(#0, #0)`.
-                            let mut prior_exprs = HashSet::new();
+                            let mut prior_exprs = BTreeSet::new();
                             exprs.retain(|e| prior_exprs.insert(e.clone()));
 
                             if let Some(expr) = exprs.iter_mut().find(|e| e.is_literal_err()) {
@@ -1140,7 +1140,7 @@ impl MirScalarExpr {
                         } else if *func == VariadicFunc::ListIndex && is_list_create_call(&exprs[0])
                         {
                             // We are looking for ListIndex(ListCreate, literal), and eliminate
-                            // both the ListIndex and the ListCreate. E.g.: LIST[f1,f2][2] --> f2
+                            // both the ListIndex and the ListCreate. E.g.: `LIST[f1,f2][2]` --> `f2`
                             let ind_exprs = exprs.split_off(1);
                             let top_list_create = exprs.swap_remove(0);
                             *e = reduce_list_create_list_index_literal(top_list_create, ind_exprs);
@@ -1249,10 +1249,10 @@ impl MirScalarExpr {
         ///
         /// # Examples
         ///
-        /// LIST[f1,f2][2] --> f2.
+        /// `LIST[f1,f2][2]` --> `f2`.
         ///
         /// A multi-dimensional list, with only some of the indexes being literals:
-        /// LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2] --> LIST[f6, f8] [n]
+        /// `LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2]` --> `LIST[f6, f8] [n]`
         ///
         /// See more examples in list.slt.
         fn reduce_list_create_list_index_literal(
@@ -1680,7 +1680,7 @@ impl MirScalarExpr {
     /* #endregion */
 
     /// Adds any columns that *must* be non-Null for `self` to be non-Null.
-    pub fn non_null_requirements(&self, columns: &mut HashSet<usize>) {
+    pub fn non_null_requirements(&self, columns: &mut BTreeSet<usize>) {
         match self {
             MirScalarExpr::Column(col) => {
                 columns.insert(*col);

@@ -307,7 +307,8 @@
     padding: var(--x-small) 2rem;
     position: sticky;
     top: 0;
-    overflow: hidden;
+    height: 100vh;
+    overflow-y: auto;
     font-size: var(--sm);
 
     &-top {
@@ -342,14 +343,22 @@
         text-decoration: none;
 
         &.active {
-            font-weight: 500;
+
+            &,
+            code {
+                font-weight: 500;
+            }
         }
 
         &.active,
         &:hover,
         &:focus {
-            color: var(--highlight);
-            text-decoration: none;
+
+            &,
+            code {
+                color: var(--highlight);
+                text-decoration: none;
+            }
         }
     }
 
@@ -357,6 +366,12 @@
         font-family: "Fira Code", Courier, monospace;
         font-variant-ligatures: none;
     }
+}
+
+.sidebar a,
+.toc a {
+    word-wrap: break-word;
+    white-space: initial;
 }
 
 .footer {

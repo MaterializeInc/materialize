@@ -40,7 +40,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
-use bytes::{Buf, BytesMut};
+use bytes::BytesMut;
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
@@ -70,7 +70,7 @@ use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistConfig, PersistLocation};
-use mz_pgrepr::{oid, Interval, Jsonb, Numeric, Value};
+use mz_pgrepr::{oid, Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
@@ -81,7 +81,7 @@ use mz_sql_parser::{
     ast::{display::AstDisplay, CreateIndexStatement, RawObjectName, Statement as AstStatement},
     parser,
 };
-use mz_stash::PostgresFactory;
+use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
@@ -433,27 +433,9 @@ impl<'a> FromSql<'a> for Slt {
                     })
                 }
                 _ => match ty.oid() {
-                    oid::TYPE_UINT2_OID => {
-                        let v = raw.get_u16();
-                        if !raw.is_empty() {
-                            return Err("invalid buffer size".into());
-                        }
-                        Self(Value::UInt2(v))
-                    }
-                    oid::TYPE_UINT4_OID => {
-                        let v = raw.get_u32();
-                        if !raw.is_empty() {
-                            return Err("invalid buffer size".into());
-                        }
-                        Self(Value::UInt4(v))
-                    }
-                    oid::TYPE_UINT8_OID => {
-                        let v = raw.get_u64();
-                        if !raw.is_empty() {
-                            return Err("invalid buffer size".into());
-                        }
-                        Self(Value::UInt8(v))
-                    }
+                    oid::TYPE_UINT2_OID => Self(Value::UInt2(UInt2::from_sql(ty, raw)?)),
+                    oid::TYPE_UINT4_OID => Self(Value::UInt4(UInt4::from_sql(ty, raw)?)),
+                    oid::TYPE_UINT8_OID => Self(Value::UInt8(UInt8::from_sql(ty, raw)?)),
                     oid::TYPE_MZ_TIMESTAMP_OID => {
                         let s = types::text_from_sql(raw)?;
                         let t: mz_repr::Timestamp = s.parse()?;
@@ -543,9 +525,9 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         (Type::Integer, Value::Int2(i)) => i.to_string(),
         (Type::Integer, Value::Int4(i)) => i.to_string(),
         (Type::Integer, Value::Int8(i)) => i.to_string(),
-        (Type::Integer, Value::UInt2(u)) => u.to_string(),
-        (Type::Integer, Value::UInt4(u)) => u.to_string(),
-        (Type::Integer, Value::UInt8(u)) => u.to_string(),
+        (Type::Integer, Value::UInt2(u)) => u.0.to_string(),
+        (Type::Integer, Value::UInt4(u)) => u.0.to_string(),
+        (Type::Integer, Value::UInt8(u)) => u.0.to_string(),
         (Type::Integer, Value::Oid(i)) => i.to_string(),
         // TODO(benesch): rewrite to avoid `as`.
         #[allow(clippy::as_conversions)]
@@ -832,7 +814,7 @@ impl RunnerInner {
             &metrics_registry,
         );
         let persist_clients = Arc::new(Mutex::new(persist_clients));
-        let postgres_factory = PostgresFactory::new(&metrics_registry);
+        let postgres_factory = StashFactory::new(&metrics_registry);
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
         let server_config = mz_environmentd::Config {
@@ -880,6 +862,7 @@ impl RunnerInner {
             segment_api_key: None,
             egress_ips: vec![],
             aws_account_id: None,
+            aws_privatelink_availability_zones: None,
             launchdarkly_sdk_key: None,
             launchdarkly_key_map: Default::default(),
             config_sync_loop_interval: None,

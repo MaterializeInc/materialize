@@ -39,7 +39,6 @@ where
         &mut self,
         inputs: Vec<CollectionBundle<G, Row>>,
         join_plan: DeltaJoinPlan,
-        scope: &mut G,
     ) -> CollectionBundle<G, Row> {
         // Collects error streams for the ambient scope.
         let mut scope_errs = Vec::new();
@@ -48,7 +47,7 @@ where
         let mut err_dedup = HashSet::new();
 
         // We create a new region to contain the dataflow paths for the delta join.
-        let (oks, errs) = scope.clone().region_named("delta query", |inner| {
+        let (oks, errs) = self.scope.clone().region_named("delta query", |inner| {
             // Our plan is to iterate through each input relation, and attempt
             // to find a plan that maximally uses existing keys (better: uses
             // existing arrangements, to which we have access).
@@ -283,7 +282,7 @@ where
             // Concatenate the results of each delta query as the accumulated results.
             (
                 differential_dataflow::collection::concatenate(inner, join_results).leave(),
-                differential_dataflow::collection::concatenate(scope, scope_errs),
+                differential_dataflow::collection::concatenate(&mut self.scope, scope_errs),
             )
         });
         CollectionBundle::from_collections(oks, errs)

@@ -22,4 +22,4 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]
 # Only used in macro generated code
-normal = ["include_dir"]
+normal = ["include_dir", "workspace-hack"]

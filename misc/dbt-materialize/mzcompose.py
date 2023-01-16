@@ -11,17 +11,15 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized, Redpanda, Service, TestCerts
+from materialize.mzcompose.services import Materialized, Redpanda, Service
 
 SERVICES = [
-    TestCerts(),
     Materialized(),
     Redpanda(),
     Service(
         "dbt-test",
         {
             "mzbuild": "dbt-materialize",
-            "depends_on": ["test-certs"],
             "environment": [
                 "TMPDIR=/share/tmp",
             ],
@@ -63,7 +61,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             materialized = Materialized(
                 options=test_case.materialized_options,
                 image=test_case.materialized_image,
-                depends_on=["test-certs"],
                 volumes_extra=["secrets:/secrets"],
             )
 

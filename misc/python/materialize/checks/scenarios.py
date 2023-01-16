@@ -29,7 +29,7 @@ from materialize.checks.mzcompose_actions import (
 )
 from materialize.checks.mzcompose_actions import KillMz
 from materialize.checks.mzcompose_actions import (
-    RestartPostgresBackend as RestartPostgresBackendAction,
+    RestartCockroach as RestartCockroachAction,
 )
 from materialize.checks.mzcompose_actions import (
     RestartRedpandaDebezium as RestartRedpandaDebeziumAction,
@@ -155,16 +155,16 @@ class KillClusterdStorage(Scenario):
         ]
 
 
-class RestartPostgresBackend(Scenario):
+class RestartCockroach(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
             Initialize(self.checks),
-            RestartPostgresBackendAction(),
+            RestartCockroachAction(),
             Manipulate(self.checks, phase=1),
-            RestartPostgresBackendAction(),
+            RestartCockroachAction(),
             Manipulate(self.checks, phase=2),
-            RestartPostgresBackendAction(),
+            RestartCockroachAction(),
             Validate(self.checks),
         ]
 

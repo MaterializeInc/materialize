@@ -403,6 +403,13 @@ message ProtoUnaryFunc {
         google.protobuf.Empty cast_uint16_to_int16 = 278;
         google.protobuf.Empty cast_uint32_to_int16 = 279;
         google.protobuf.Empty cast_uint64_to_int16 = 280;
+        google.protobuf.Empty range_lower = 283;
+        google.protobuf.Empty range_upper = 284;
+        google.protobuf.Empty range_empty = 285;
+        google.protobuf.Empty range_lower_inc = 286;
+        google.protobuf.Empty range_upper_inc = 287;
+        google.protobuf.Empty range_lower_inf = 288;
+        google.protobuf.Empty range_upper_inf = 289;
     }
 }
 

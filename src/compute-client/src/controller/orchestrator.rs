@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -20,8 +20,6 @@ use mz_orchestrator::{
     LabelSelectionLogic, LabelSelector, NamespacedOrchestrator, Service, ServiceConfig,
     ServiceEvent, ServicePort, ServiceProcessMetrics,
 };
-
-use crate::command::CommunicationConfig;
 
 use super::{
     ComputeInstanceEvent, ComputeInstanceId, ComputeReplicaAllocation, ComputeReplicaLocation,
@@ -47,25 +45,31 @@ impl ComputeOrchestrator {
             init_container_image,
         }
     }
+
+    /// Ensure that a service for the given replica exists at the given `location`.
+    ///
+    /// Returns a tuple `(compute_addrs, workers, timely_addrs)`, where:
+    ///  * `command_addrs` is the list of addresses on which the replica's processes listen for
+    ///    controller connections.
+    ///  * `workers` is the number of timely workers per process.
+    ///  * `timely_addrs` is the list of addresses used by the timely cluster for inter-process
+    ///    communication.
     pub(super) async fn ensure_replica_location(
         &self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
         location: ComputeReplicaLocation,
-    ) -> Result<(Vec<String>, CommunicationConfig), anyhow::Error> {
+    ) -> Result<(Vec<String>, usize, Vec<String>), anyhow::Error> {
         match location {
             ComputeReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
                 workers,
             } => {
-                let addrs = addrs.into_iter().collect();
-                let comm_config = CommunicationConfig {
-                    workers: workers.get(),
-                    process: 0,
-                    addresses: compute_addrs.into_iter().collect(),
-                };
-                Ok((addrs, comm_config))
+                let server_addrs = addrs.into_iter().collect();
+                let workers = workers.get();
+                let worker_addrs = compute_addrs.into_iter().collect();
+                Ok((server_addrs, workers, worker_addrs))
             }
             ComputeReplicaLocation::Managed {
                 allocation,
@@ -76,15 +80,10 @@ impl ComputeOrchestrator {
                     .ensure_replica(instance_id, replica_id, allocation, availability_zone)
                     .await?;
 
-                let addrs = service.addresses("computectl");
-                let comm_config = CommunicationConfig {
-                    workers: allocation.workers.get(),
-                    process: 0,
-                    addresses: service.addresses("compute"),
-                };
-
-                tracing::debug!("Obtained comm_config: {:?}", comm_config);
-                Ok((addrs, comm_config))
+                let command_addrs = service.addresses("computectl");
+                let workers = allocation.workers.get();
+                let timely_addrs = service.addresses("compute");
+                Ok((command_addrs, workers, timely_addrs))
             }
         }
     }
@@ -141,7 +140,7 @@ impl ComputeOrchestrator {
                     cpu_limit: allocation.cpu_limit,
                     memory_limit: allocation.memory_limit,
                     scale: allocation.scale,
-                    labels: HashMap::from([
+                    labels: BTreeMap::from([
                         ("replica-id".into(), replica_id.to_string()),
                         ("cluster-id".into(), instance_id.to_string()),
                         ("type".into(), "cluster".into()),

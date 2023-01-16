@@ -14,21 +14,20 @@ use std::time::Duration;
 
 use itertools::{max, Itertools};
 use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
 use tokio::sync::mpsc;
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::controller::{ComputeInstanceId, ComputeReplicaConfig, ReplicaId};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::EpochMillis;
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::GlobalId;
 use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType};
 use mz_sql::names::{
     DatabaseId, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier, RoleId, SchemaId,
     SchemaSpecifier,
 };
-use mz_stash::{Append, AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
+use mz_stash::{AppendBatch, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage_client::types::sources::Timeline;
 
 use crate::catalog;
@@ -39,6 +38,7 @@ use crate::catalog::builtin::{
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::{is_reserved_name, SystemObjectMapping};
 use crate::catalog::{SerializedComputeReplicaConfig, DEFAULT_CLUSTER_REPLICA_NAME};
+use crate::coord::timeline;
 
 use super::{
     SerializedCatalogItem, SerializedComputeReplicaLocation, SerializedComputeReplicaLogging,
@@ -66,17 +66,19 @@ const REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub(crate) const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub(crate) const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 
-async fn migrate<S: Append>(
-    stash: &mut S,
+async fn migrate(
+    stash: &mut Stash,
     version: u64,
+    now: EpochMillis,
     bootstrap_args: &BootstrapArgs,
 ) -> Result<(), catalog::error::Error> {
     // Initial state.
     let migrations: &[for<'a> fn(
-        &mut Transaction<'a, S>,
+        &mut Transaction<'a>,
+        EpochMillis,
         &'a BootstrapArgs,
     ) -> Result<(), catalog::error::Error>] = &[
-        |txn: &mut Transaction<'_, S>, bootstrap_args| {
+        |txn: &mut Transaction<'_>, now, bootstrap_args| {
             txn.id_allocator.insert(
                 IdAllocKey {
                     name: "user".into(),
@@ -181,7 +183,7 @@ async fn migrate<S: Append>(
                             name: "materialize".into(),
                         }),
                         None,
-                        bootstrap_args.now,
+                        now,
                     ),
                 },
                 (),
@@ -227,7 +229,7 @@ async fn migrate<S: Append>(
                             database_name: "materialize".into(),
                         }),
                         None,
-                        bootstrap_args.now,
+                        now,
                     ),
                 },
                 (),
@@ -271,7 +273,7 @@ async fn migrate<S: Append>(
                             name: "materialize".into(),
                         }),
                         None,
-                        bootstrap_args.now,
+                        now,
                     ),
                 },
                 (),
@@ -279,6 +281,7 @@ async fn migrate<S: Append>(
             ));
             let default_instance = ComputeInstanceValue {
                 name: "default".into(),
+                linked_object_id: None,
             };
             let default_replica = ComputeReplicaValue {
                 compute_instance_id: DEFAULT_USER_COMPUTE_INSTANCE_ID,
@@ -309,7 +312,7 @@ async fn migrate<S: Append>(
                             name: default_instance.name.clone(),
                         }),
                         None,
-                        bootstrap_args.now,
+                        now,
                     ),
                 },
                 (),
@@ -332,20 +335,12 @@ async fn migrate<S: Append>(
                             },
                         ),
                         None,
-                        bootstrap_args.now,
+                        now,
                     ),
                 },
                 (),
                 1,
             ));
-            txn.timestamps.insert(
-                TimestampKey {
-                    id: Timeline::EpochMilliseconds.to_string(),
-                },
-                TimestampValue {
-                    ts: mz_repr::Timestamp::minimum(),
-                },
-            )?;
             txn.configs
                 .insert(USER_VERSION.to_string(), ConfigValue { value: 0 })?;
             Ok(())
@@ -353,9 +348,19 @@ async fn migrate<S: Append>(
         // These three migrations were removed, but we need to keep empty migrations because the
         // user version depends on the length of this array. New migrations should still go after
         // these empty migrations.
-        |_, _| Ok(()),
-        |_, _| Ok(()),
-        |_, _| Ok(()),
+        |_, _, _| Ok(()),
+        |_, _, _| Ok(()),
+        |_, _, _| Ok(()),
+        // An optional field, `idle_arrangement_merge_effort`, was added to replica configs, which
+        // should default to `None` for existing configs. The deserialization is able deserialize
+        // the missing values as `None`. This migration updates the on-disk version to explicitly
+        // have a `None` value instead of a missing value.
+        //
+        // Introduced in v0.39.0
+        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
+            txn.compute_replicas.update(|_k, v| Some(v.clone()))?;
+            Ok(())
+        },
         // Add new migrations above.
         //
         // Migrations should be preceded with a comment of the following form:
@@ -381,7 +386,7 @@ async fn migrate<S: Append>(
         .enumerate()
         .skip(usize::cast_from(version))
     {
-        (migration)(&mut txn, bootstrap_args)?;
+        (migration)(&mut txn, now, bootstrap_args)?;
         txn.update_user_version(u64::cast_from(i))?;
     }
     add_new_builtin_roles_migration(&mut txn)?;
@@ -391,9 +396,7 @@ async fn migrate<S: Append>(
     Ok(())
 }
 
-fn add_new_builtin_roles_migration<S: Append>(
-    txn: &mut Transaction<'_, S>,
-) -> Result<(), catalog::error::Error> {
+fn add_new_builtin_roles_migration(txn: &mut Transaction<'_>) -> Result<(), catalog::error::Error> {
     let role_names: HashSet<_> = txn
         .roles
         .items()
@@ -413,8 +416,8 @@ fn add_new_builtin_roles_migration<S: Append>(
     Ok(())
 }
 
-fn add_new_builtin_compute_instances_migration<S: Append>(
-    txn: &mut Transaction<'_, S>,
+fn add_new_builtin_compute_instances_migration(
+    txn: &mut Transaction<'_>,
 ) -> Result<(), catalog::error::Error> {
     let compute_instance_names: HashSet<_> = txn
         .compute_instances
@@ -436,8 +439,8 @@ fn add_new_builtin_compute_instances_migration<S: Append>(
     Ok(())
 }
 
-fn add_new_builtin_compute_replicas_migration<S: Append>(
-    txn: &mut Transaction<'_, S>,
+fn add_new_builtin_compute_replicas_migration(
+    txn: &mut Transaction<'_>,
     bootstrap_args: &BootstrapArgs,
 ) -> Result<(), catalog::error::Error> {
     let compute_instance_lookup: HashMap<_, _> = txn
@@ -488,6 +491,7 @@ fn default_compute_replica_config(
             az_user_specified: false,
         },
         logging: default_logging_config(),
+        idle_arrangement_merge_effort: None,
     }
 }
 
@@ -501,6 +505,7 @@ fn builtin_compute_replica_config(
             az_user_specified: false,
         },
         logging: default_logging_config(),
+        idle_arrangement_merge_effort: None,
     }
 }
 
@@ -514,27 +519,27 @@ fn default_logging_config() -> SerializedComputeReplicaLogging {
 }
 
 pub struct BootstrapArgs {
-    pub now: EpochMillis,
     pub default_cluster_replica_size: String,
     pub builtin_cluster_replica_size: String,
     pub default_availability_zone: String,
 }
 
 #[derive(Debug)]
-pub struct Connection<S> {
-    stash: S,
+pub struct Connection {
+    stash: Stash,
     consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
+    boot_ts: mz_repr::Timestamp,
 }
 
-impl<S: Append> Connection<S> {
+impl Connection {
     pub async fn open(
-        mut stash: S,
+        mut stash: Stash,
+        now: NowFn,
         bootstrap_args: &BootstrapArgs,
         consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
-    ) -> Result<Connection<S>, Error> {
-        // Run unapplied migrations. The `user_version` field stores the index
-        // of the last migration that was run. If the upper is min, the config
-        // collection is empty.
+    ) -> Result<Connection, Error> {
+        // The `user_version` field stores the index of the last migration that
+        // was run. If the upper is min, the config collection is empty.
         let skip = if is_collection_uninitialized(&mut stash, &COLLECTION_CONFIG).await? {
             0
         } else {
@@ -547,19 +552,52 @@ impl<S: Append> Connection<S> {
                 .value
                 + 1
         };
-        initialize_stash(&mut stash).await?;
-        migrate(&mut stash, skip, bootstrap_args).await?;
 
-        let conn = Connection {
+        // Initialize connection.
+        initialize_stash(&mut stash).await?;
+
+        // Choose a time at which to boot. This is the time at which we will run
+        // internal migrations, and is also exposed upwards in case higher
+        // layers want to run their own migrations at the same timestamp.
+        //
+        // This time is usually the current system time, but with protection
+        // against backwards time jumps, even across restarts.
+        let previous_now_ts = try_get_persisted_timestamp(&mut stash, &Timeline::EpochMilliseconds)
+            .await?
+            .unwrap_or(mz_repr::Timestamp::MIN);
+        let boot_ts = timeline::monotonic_now(now, previous_now_ts);
+
+        let mut conn = Connection {
             stash,
             consolidations_tx,
+            boot_ts,
         };
+
+        if !conn.stash.is_readonly() {
+            // IMPORTANT: we durably record the new timestamp before using it.
+            conn.persist_timestamp(&Timeline::EpochMilliseconds, boot_ts)
+                .await?;
+            migrate(&mut conn.stash, skip, boot_ts.into(), bootstrap_args).await?;
+        }
 
         Ok(conn)
     }
+
+    /// Returns the timestamp at which the storage layer booted.
+    ///
+    /// This is the timestamp that will have been used to write any data during
+    /// migrations. It is exposed so that higher layers performing their own
+    /// migrations can write data at the same timestamp, if desired.
+    ///
+    /// The boot timestamp is derived from the durable timestamp oracle and is
+    /// guaranteed to never go backwards, even in the face of backwards time
+    /// jumps across restarts.
+    pub fn boot_ts(&self) -> mz_repr::Timestamp {
+        self.boot_ts
+    }
 }
 
-impl<S: Append> Connection<S> {
+impl Connection {
     async fn get_setting(&mut self, key: &str) -> Result<Option<String>, Error> {
         Self::get_setting_stash(&mut self.stash, key).await
     }
@@ -568,7 +606,7 @@ impl<S: Append> Connection<S> {
         Self::set_setting_stash(&mut self.stash, key, value).await
     }
 
-    async fn get_setting_stash(stash: &mut impl Stash, key: &str) -> Result<Option<String>, Error> {
+    async fn get_setting_stash(stash: &mut Stash, key: &str) -> Result<Option<String>, Error> {
         let settings = COLLECTION_SETTING.get(stash).await?;
         let v = stash
             .peek_key_one(
@@ -582,7 +620,7 @@ impl<S: Append> Connection<S> {
     }
 
     async fn set_setting_stash<V: Into<String> + std::fmt::Display>(
-        stash: &mut impl Append,
+        stash: &mut Stash,
         key: &str,
         value: V,
     ) -> Result<(), Error> {
@@ -644,12 +682,12 @@ impl<S: Append> Connection<S> {
 
     pub async fn load_compute_instances(
         &mut self,
-    ) -> Result<Vec<(ComputeInstanceId, String)>, Error> {
+    ) -> Result<Vec<(ComputeInstanceId, String, Option<GlobalId>)>, Error> {
         Ok(COLLECTION_COMPUTE_INSTANCES
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
-            .map(|(k, v)| (k.id, v.name))
+            .map(|(k, v)| (k.id, v.name, v.linked_object_id))
             .collect())
     }
 
@@ -896,21 +934,6 @@ impl<S: Append> Connection<S> {
             .collect())
     }
 
-    /// Get a global timestamp for a timeline that has been persisted to disk.
-    pub async fn get_persisted_timestamp(
-        &mut self,
-        timeline: &Timeline,
-    ) -> Result<mz_repr::Timestamp, Error> {
-        let key = TimestampKey {
-            id: timeline.to_string(),
-        };
-        Ok(COLLECTION_TIMESTAMP
-            .peek_key_one(&mut self.stash, &key)
-            .await?
-            .expect("must have a persisted timestamp")
-            .ts)
-    }
-
     /// Persist new global timestamp for a timeline to disk.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn persist_timestamp(
@@ -935,7 +958,7 @@ impl<S: Append> Connection<S> {
         Ok(())
     }
 
-    pub async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a, S>, Error> {
+    pub async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a>, Error> {
         transaction(&mut self.stash).await
     }
 
@@ -948,8 +971,26 @@ impl<S: Append> Connection<S> {
     }
 }
 
+/// Gets a global timestamp for a timeline that has been persisted to disk.
+///
+/// Returns `None` if no persisted timestamp for the specified timeline exists.
+async fn try_get_persisted_timestamp(
+    stash: &mut Stash,
+    timeline: &Timeline,
+) -> Result<Option<mz_repr::Timestamp>, Error>
+where
+{
+    let key = TimestampKey {
+        id: timeline.to_string(),
+    };
+    Ok(COLLECTION_TIMESTAMP
+        .peek_key_one(stash, &key)
+        .await?
+        .map(|v| v.ts))
+}
+
 #[tracing::instrument(level = "trace", skip_all)]
-pub async fn transaction<'a, S: Append>(stash: &'a mut S) -> Result<Transaction<'a, S>, Error> {
+pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error> {
     let databases = COLLECTION_DATABASE.peek_one(stash).await?;
     let schemas = COLLECTION_SCHEMA.peek_one(stash).await?;
     let roles = COLLECTION_ROLE.peek_one(stash).await?;
@@ -990,8 +1031,8 @@ pub async fn transaction<'a, S: Append>(stash: &'a mut S) -> Result<Transaction<
     })
 }
 
-pub struct Transaction<'a, S> {
-    stash: &'a mut S,
+pub struct Transaction<'a> {
+    stash: &'a mut Stash,
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
@@ -1012,7 +1053,7 @@ pub struct Transaction<'a, S> {
     storage_usage_updates: Vec<(StorageUsageKey, (), i64)>,
 }
 
-impl<'a, S: Append> Transaction<'a, S> {
+impl<'a> Transaction<'a> {
     pub fn loaded_items(&self) -> Vec<(GlobalId, QualifiedObjectName, SerializedCatalogItem)> {
         let databases = self.databases.items();
         let schemas = self.schemas.items();
@@ -1134,10 +1175,12 @@ impl<'a, S: Append> Transaction<'a, S> {
     pub fn insert_user_compute_instance(
         &mut self,
         cluster_name: &str,
+        linked_object_id: Option<GlobalId>,
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
     ) -> Result<ComputeInstanceId, Error> {
         self.insert_compute_instance(
             cluster_name,
+            linked_object_id,
             introspection_source_indexes,
             USER_COMPUTE_ID_ALLOC_KEY,
             ComputeInstanceId::User,
@@ -1152,6 +1195,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     ) -> Result<ComputeInstanceId, Error> {
         self.insert_compute_instance(
             cluster_name,
+            None,
             introspection_source_indexes,
             SYSTEM_COMPUTE_ID_ALLOC_KEY,
             ComputeInstanceId::System,
@@ -1161,6 +1205,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     fn insert_compute_instance<F>(
         &mut self,
         cluster_name: &str,
+        linked_object_id: Option<GlobalId>,
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
         id_alloc_key: &str,
         compute_instance_id_variant: F,
@@ -1174,6 +1219,7 @@ impl<'a, S: Append> Transaction<'a, S> {
             ComputeInstanceKey { id },
             ComputeInstanceValue {
                 name: cluster_name.to_string(),
+                linked_object_id,
             },
         ) {
             return Err(Error::new(ErrorKind::ClusterAlreadyExists(
@@ -1209,7 +1255,7 @@ impl<'a, S: Append> Transaction<'a, S> {
     ) -> Result<(ReplicaId, ComputeInstanceId), Error> {
         let id = self.get_and_increment_id(REPLICA_ID_ALLOC_KEY.to_string())?;
         let mut compute_instance_id = None;
-        for (ComputeInstanceKey { id }, ComputeInstanceValue { name }) in
+        for (ComputeInstanceKey { id }, ComputeInstanceValue { name, .. }) in
             self.compute_instances.items()
         {
             if &name == compute_name {
@@ -1338,14 +1384,16 @@ impl<'a, S: Append> Transaction<'a, S> {
     pub fn remove_compute_instance(
         &mut self,
         name: &str,
-    ) -> Result<(ComputeInstanceId, Vec<GlobalId>), Error> {
+    ) -> Result<(ComputeInstanceId, Option<GlobalId>, Vec<GlobalId>), Error> {
         let deleted = self.compute_instances.delete(|_k, v| v.name == name);
         if deleted.is_empty() {
             Err(SqlCatalogError::UnknownComputeInstance(name.to_owned()).into())
         } else {
             assert_eq!(deleted.len(), 1);
             // Cascade delete introsepction sources and cluster replicas.
-            let id = deleted.into_element().0.id;
+            let (key, value) = deleted.into_element();
+            let id = key.id;
+            let linked_object_id = value.linked_object_id;
             self.compute_replicas
                 .delete(|_k, v| v.compute_instance_id == id);
             let introspection_source_indexes = self
@@ -1353,6 +1401,7 @@ impl<'a, S: Append> Transaction<'a, S> {
                 .delete(|k, _v| k.compute_id == id);
             Ok((
                 id,
+                linked_object_id,
                 introspection_source_indexes
                     .into_iter()
                     .map(|(_, v)| GlobalId::System(v.index_id))
@@ -1560,10 +1609,12 @@ impl<'a, S: Append> Transaction<'a, S> {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn commit_without_consolidate(self) -> Result<(&'a mut S, Vec<mz_stash::Id>), Error> {
+    pub async fn commit_without_consolidate(
+        self,
+    ) -> Result<(&'a mut Stash, Vec<mz_stash::Id>), Error> {
         let mut batches = Vec::new();
-        async fn add_batch<K, V, S, I>(
-            stash: &mut S,
+        async fn add_batch<K, V, I>(
+            stash: &mut Stash,
             batches: &mut Vec<AppendBatch>,
             collection: &TypedCollection<K, V>,
             changes: I,
@@ -1571,7 +1622,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         where
             K: mz_stash::Data,
             V: mz_stash::Data,
-            S: Append,
+
             I: IntoIterator<Item = (K, V, mz_stash::Diff)>,
         {
             let mut changes = changes.into_iter().peekable();
@@ -1707,30 +1758,28 @@ impl<'a, S: Append> Transaction<'a, S> {
 }
 
 /// Returns true if collection is uninitialized, false otherwise.
-pub async fn is_collection_uninitialized<K, V, S>(
-    stash: &mut S,
+pub async fn is_collection_uninitialized<K, V>(
+    stash: &mut Stash,
     collection: &TypedCollection<K, V>,
 ) -> Result<bool, Error>
 where
     K: mz_stash::Data,
     V: mz_stash::Data,
-    S: Append,
 {
     Ok(collection.upper(stash).await?.elements() == [mz_stash::Timestamp::MIN])
 }
 
 /// Inserts empty values into all new collections, so the collections are readable.
-pub async fn initialize_stash<S: Append>(stash: &mut S) -> Result<(), Error> {
+pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
     let mut batches = Vec::new();
-    async fn add_batch<K, V, S>(
-        stash: &mut S,
+    async fn add_batch<K, V>(
+        stash: &mut Stash,
         batches: &mut Vec<AppendBatch>,
         collection: &TypedCollection<K, V>,
     ) -> Result<(), Error>
     where
         K: mz_stash::Data,
         V: mz_stash::Data,
-        S: Append,
     {
         if is_collection_uninitialized(stash, collection).await? {
             let collection = collection.get(stash).await?;
@@ -1803,6 +1852,7 @@ pub struct ComputeInstanceKey {
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ComputeInstanceValue {
     name: String,
+    linked_object_id: Option<GlobalId>,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]

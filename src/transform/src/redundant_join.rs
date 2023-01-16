@@ -22,7 +22,7 @@
 // that replace simple and common alternatives frustrate developers.
 #![allow(clippy::comparison_chain, clippy::filter_next)]
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use itertools::Itertools;
 use mz_expr::visit::Visit;
@@ -63,7 +63,7 @@ impl crate::Transform for RedundantJoin {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let result = self.action(relation, &mut HashMap::new()).map(|_| ());
+        let result = self.action(relation, &mut BTreeMap::new()).map(|_| ());
         mz_repr::explain_new::trace_plan(&*relation);
         result
     }
@@ -86,7 +86,7 @@ impl RedundantJoin {
     pub fn action(
         &self,
         relation: &mut MirRelationExpr,
-        lets: &mut HashMap<Id, Vec<ProvInfo>>,
+        lets: &mut BTreeMap<Id, Vec<ProvInfo>>,
     ) -> Result<Vec<ProvInfo>, crate::TransformError> {
         self.checked_recur(|_| {
             match relation {

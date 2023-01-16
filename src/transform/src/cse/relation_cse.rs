@@ -14,7 +14,7 @@
 //! The resulting expressions likely have an excess of `Let` expressions, and therefore
 //! we automatically run the `NormalizeLets` transformation to remove those that are not necessary.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use mz_expr::visit::VisitChildren;
 use mz_expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
@@ -73,9 +73,9 @@ impl crate::Transform for RelationCSE {
 #[derive(Debug)]
 pub struct Bindings {
     /// A list of let-bound expressions and their order / identifier.
-    bindings: HashMap<MirRelationExpr, u64>,
+    bindings: BTreeMap<MirRelationExpr, u64>,
     /// Mapping from conventional local `Get` identifiers to new ones.
-    rebindings: HashMap<LocalId, LocalId>,
+    rebindings: BTreeMap<LocalId, LocalId>,
     // A guard for tracking the maximum depth of recursive tree traversal.
     recursion_guard: RecursionGuard,
 }
@@ -83,8 +83,8 @@ pub struct Bindings {
 impl Default for Bindings {
     fn default() -> Bindings {
         Bindings {
-            bindings: HashMap::new(),
-            rebindings: HashMap::new(),
+            bindings: BTreeMap::new(),
+            rebindings: BTreeMap::new(),
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
     }

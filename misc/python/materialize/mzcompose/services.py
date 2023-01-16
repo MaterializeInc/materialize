@@ -11,7 +11,8 @@ import os
 import random
 from typing import Dict, List, Optional, Tuple, Union
 
-from materialize.mzcompose import Service, ServiceConfig
+from materialize import ROOT
+from materialize.mzcompose import Service, ServiceConfig, ServiceDependency, loader
 
 DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.5"
 
@@ -24,12 +25,12 @@ LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
-    "pgdata:/cockroach-data",
     "mydata:/var/lib/mysql-files",
     "tmp:/share/tmp",
 ]
 
-DEFAULT_MZ_ENVIRONMENT_ID = "docker-mzcompose-00000000-0000-0000-0000-000000000000-0"
+# TODO(benesch): change to `docker-mzcompose` once v0.39 ships.
+DEFAULT_MZ_ENVIRONMENT_ID = "mzcompose-test-00000000-0000-0000-0000-000000000000-0"
 
 
 class Materialized(Service):
@@ -42,14 +43,20 @@ class Materialized(Service):
         image: Optional[str] = None,
         environment_extra: List[str] = [],
         volumes_extra: List[str] = [],
-        depends_on: Optional[List[str]] = None,
+        depends_on: List[str] = [],
         memory: Optional[str] = None,
-        options: Optional[Union[str, List[str]]] = "",
+        options: List[str] = [],
         persist_blob_url: Optional[str] = None,
         default_size: int = Size.DEFAULT_SIZE,
         environment_id: Optional[str] = None,
         propagate_crashes: bool = True,
+        external_cockroach: bool = False,
+        external_minio: bool = False,
     ) -> None:
+        depends_on: Dict[str, ServiceDependency] = {
+            s: {"condition": "service_started"} for s in depends_on
+        }
+
         environment = [
             "MZ_SOFT_ASSERTIONS=1",
             # TODO(benesch): remove the following environment variables
@@ -69,21 +76,23 @@ class Materialized(Service):
 
         command = ["--unsafe-mode"]
 
-        # TODO(benesch): remove this special case when v0.38 ships.
-        is_old_version = image is not None and (
-            image.endswith("v0.36.2") or image.endswith("v0.37.1")
-        )
-        if is_old_version:
+        # TODO(benesch): remove this special case when v0.39 ships.
+        # latest being 'v0.38.0' until then
+        if image is not None and any(
+            image.endswith(version)
+            for version in ["v0.36.2", "v0.37.3", "v0.38.0", "latest"]
+        ):
             persist_blob_url = "file:///mzdata/persist/blob"
             command.append("--orchestrator=process")
             command.append("--orchestrator-process-secrets-directory=/mzdata/secrets")
 
         if not environment_id:
-            if is_old_version:
-                environment_id = "mzcompose-test-00000000-0000-0000-0000-000000000000-0"
-            else:
-                environment_id = DEFAULT_MZ_ENVIRONMENT_ID
+            environment_id = DEFAULT_MZ_ENVIRONMENT_ID
         command += [f"--environment-id={environment_id}"]
+
+        if external_minio:
+            depends_on["minio"] = {"condition": "service_healthy"}
+            persist_blob_url = "s3://minioadmin:minioadmin@persist/persist?endpoint=http://minio:9000/&region=minio"
 
         if persist_blob_url:
             command.append(f"--persist-blob-url={persist_blob_url}")
@@ -103,11 +112,15 @@ class Materialized(Service):
             f"--default-storage-host-size={self.default_storage_size}",
         ]
 
-        if options:
-            if isinstance(options, str):
-                command.append(options)
-            else:
-                command.extend(options)
+        if external_cockroach:
+            depends_on["cockroach"] = {"condition": "service_healthy"}
+            command += [
+                "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
+                "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
+                "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
+            ]
+
+        command += options
 
         config: ServiceConfig = {}
 
@@ -124,8 +137,8 @@ class Materialized(Service):
 
         config.update(
             {
-                "depends_on": depends_on or [],
-                "command": " ".join(command),
+                "depends_on": depends_on,
+                "command": command,
                 "ports": [6875, 6876, 6877, 6878, 26257],
                 "environment": environment,
                 "volumes": [*DEFAULT_MZ_VOLUMES, *volumes_extra],
@@ -143,7 +156,7 @@ class Clusterd(Service):
         image: Optional[str] = None,
         environment_extra: List[str] = [],
         memory: Optional[str] = None,
-        options: Optional[Union[str, List[str]]] = "",
+        options: List[str] = [],
         storage_workers: Optional[int] = Materialized.Size.DEFAULT_SIZE,
     ) -> None:
         environment = [
@@ -153,14 +166,11 @@ class Clusterd(Service):
         ]
 
         command = []
-        if options:
-            if isinstance(options, str):
-                command.append(options)
-            else:
-                command.extend(options)
 
         if storage_workers:
-            command.append(f"--storage-workers {storage_workers}")
+            command += [f"--storage-workers={storage_workers}"]
+
+        command += options
 
         config: ServiceConfig = {}
 
@@ -177,7 +187,7 @@ class Clusterd(Service):
 
         config.update(
             {
-                "command": " ".join(command),
+                "command": command,
                 "ports": [2100, 2101],
                 "environment": environment,
                 "volumes": DEFAULT_MZ_VOLUMES,
@@ -290,16 +300,20 @@ class Redpanda(Service):
             "--reserve-memory=0M",
             "--node-id=0",
             "--check=false",
-            '--set "redpanda.enable_transactions=true"',
-            '--set "redpanda.enable_idempotence=true"',
-            f'--set "redpanda.auto_create_topics_enabled={auto_create_topics}"',
-            f"--advertise-kafka-addr kafka:{ports[0]}",
+            "--set",
+            "redpanda.enable_transactions=true",
+            "--set",
+            "redpanda.enable_idempotence=true",
+            "--set",
+            f"redpanda.auto_create_topics_enabled={auto_create_topics}",
+            "--set",
+            f"--advertise-kafka-addr=kafka:{ports[0]}",
         ]
 
         config: ServiceConfig = {
             "image": image,
             "ports": ports,
-            "command": " ".join(command_list),
+            "command": command_list,
             "networks": {"default": {"aliases": aliases}},
         }
 
@@ -350,30 +364,21 @@ class MySql(Service):
         mysql_root_password: str,
         name: str = "mysql",
         image: str = "mysql:8.0.27",
-        command: Optional[str] = None,
         port: int = 3306,
-        environment: Optional[List[str]] = None,
         volumes: list[str] = ["mydata:/var/lib/mysql-files"],
     ) -> None:
-        if environment is None:
-            environment = []
-        environment.append(f"MYSQL_ROOT_PASSWORD={mysql_root_password}")
-
-        if not command:
-            command = "\n".join(
-                [
-                    "--default-authentication-plugin=mysql_native_password",
-                    "--secure-file-priv=/var/lib/mysql-files",
-                ]
-            )
-
         super().__init__(
             name=name,
             config={
                 "image": image,
                 "ports": [port],
-                "environment": environment,
-                "command": command,
+                "environment": [
+                    f"MYSQL_ROOT_PASSWORD={mysql_root_password}",
+                ],
+                "command": [
+                    "--default-authentication-plugin=mysql_native_password",
+                    "--secure-file-priv=/var/lib/mysql-files",
+                ],
                 "volumes": volumes,
             },
         )
@@ -382,17 +387,40 @@ class MySql(Service):
 
 
 class Cockroach(Service):
+    DEFAULT_COCKROACH_TAG = "v22.2.0"
+
     def __init__(
         self,
         name: str = "cockroach",
+        image: Optional[str] = None,
+        setup_materialize: bool = True,
     ):
+        volumes = []
+
+        if image is None:
+            image = f"cockroachdb/cockroach:{Cockroach.DEFAULT_COCKROACH_TAG}"
+
+        if setup_materialize:
+            path = os.path.relpath(
+                ROOT / "misc" / "cockroach" / "setup_materialize.sql",
+                loader.composition_path,
+            )
+            volumes += [f"{path}:/docker-entrypoint-initdb.d/setup_materialize.sql"]
         super().__init__(
-            name="cockroach",
+            name=name,
             config={
-                "image": "cockroachdb/cockroach:v22.2.0",
+                "image": image,
                 "ports": [26257],
-                "command": "start-single-node --insecure",
-                "volumes": ["/cockroach/cockroach-data"],
+                "command": ["start-single-node", "--insecure"],
+                "volumes": volumes,
+                "init": True,
+                "healthcheck": {
+                    # init_success is a file created by the Cockroach container entrypoint
+                    "test": "[ -f init_success ] && curl --fail 'http://localhost:8080/health?ready=1'",
+                    "timeout": "5s",
+                    "interval": "1s",
+                    "start_period": "30s",
+                },
             },
         )
 
@@ -404,7 +432,17 @@ class Postgres(Service):
         mzbuild: str = "postgres",
         image: Optional[str] = None,
         port: int = 5432,
-        command: str = "postgres -c wal_level=logical -c max_wal_senders=20 -c max_replication_slots=20 -c max_connections=5000",
+        command: List[str] = [
+            "postgres",
+            "-c",
+            "wal_level=logical",
+            "-c",
+            "max_wal_senders=20",
+            "-c",
+            "max_replication_slots=20",
+            "-c",
+            "max_connections=5000",
+        ],
         environment: List[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
     ) -> None:
         config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
@@ -534,26 +572,33 @@ class Minio(Service):
         self,
         name: str = "minio",
         image: str = f"minio/minio:RELEASE.2022-09-25T15-44-53Z.fips",
+        setup_materialize: bool = False,
     ) -> None:
+        # We can pre-create buckets in minio by creating subdirectories in
+        # /data. A bit gross to do this via a shell command, but it's net
+        # less complicated than using a separate setup container that runs `mc`.
+        command = "minio server /data --console-address :9001"
+        if setup_materialize:
+            command = f"mkdir -p /data/persist && {command}"
         super().__init__(
             name=name,
             config={
-                "command": "minio server /data --console-address :9001",
+                "entrypoint": ["sh", "-c"],
+                "command": [command],
                 "image": image,
                 "ports": [9000, 9001],
+                "healthcheck": {
+                    "test": [
+                        "CMD",
+                        "curl",
+                        "--fail",
+                        "http://localhost:9000/minio/health/live",
+                    ],
+                    "timeout": "5s",
+                    "interval": "1s",
+                    "start_period": "30s",
+                },
             },
-        )
-
-
-class MinioMc(Service):
-    def __init__(
-        self,
-        name: str = "minio_mc",
-        image: str = f"minio/mc:RELEASE.2022-09-16T09-16-47Z",
-    ) -> None:
-        super().__init__(
-            name=name,
-            config={"image": image},
         )
 
 
@@ -571,12 +616,11 @@ class Testdrive(Service):
         default_timeout: str = "120s",
         seed: Optional[int] = None,
         consistent_seed: bool = False,
-        validate_postgres_stash: bool = False,
+        validate_postgres_stash: Optional[str] = None,
         entrypoint: Optional[List[str]] = None,
         entrypoint_extra: List[str] = [],
         environment: Optional[List[str]] = None,
-        volumes: Optional[List[str]] = None,
-        volumes_extra: Optional[List[str]] = None,
+        volumes_extra: List[str] = [],
         volume_workdir: str = ".:/workdir",
         propagate_uid_gid: bool = True,
         forward_buildkite_shard: bool = False,
@@ -599,11 +643,12 @@ class Testdrive(Service):
                 "AWS_SESSION_TOKEN",
             ]
 
-        if volumes is None:
-            volumes = [*DEFAULT_MZ_VOLUMES]
+        volumes = [
+            volume_workdir,
+            *(v for v in DEFAULT_MZ_VOLUMES if v.startswith("tmp:")),
+        ]
         if volumes_extra:
             volumes.extend(volumes_extra)
-        volumes.append(volume_workdir)
 
         if entrypoint is None:
             entrypoint = [
@@ -622,7 +667,7 @@ class Testdrive(Service):
 
         if validate_postgres_stash:
             entrypoint.append(
-                "--validate-postgres-stash=postgres://root@materialized:26257?options=--search_path=adapter"
+                f"--validate-postgres-stash=postgres://root@{validate_postgres_stash}:26257?options=--search_path=adapter"
             )
 
         if no_reset:
@@ -674,6 +719,9 @@ class TestCerts(Service):
         super().__init__(
             name="test-certs",
             config={
+                # Container must stay alive indefinitely to be considered
+                # healthy by `docker compose up --wait`.
+                "command": ["sleep", "infinity"],
                 "mzbuild": "test-certs",
                 "volumes": ["secrets:/secrets"],
             },

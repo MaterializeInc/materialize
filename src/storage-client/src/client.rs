@@ -38,6 +38,7 @@ use mz_timely_util::progress::any_antichain;
 use crate::client::proto_storage_client::ProtoStorageClient;
 use crate::client::proto_storage_server::ProtoStorage;
 use crate::controller::CollectionMetadata;
+use crate::types::parameters::StorageParameters;
 use crate::types::sinks::{MetadataFilled, StorageSinkDesc};
 use crate::types::sources::IngestionDescription;
 
@@ -103,6 +104,8 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Indicates that the controller has sent all commands reflecting its
     /// initial state.
     InitializationComplete,
+    /// Update storage instance configuration.
+    UpdateConfiguration(StorageParameters),
     /// Create the enumerated sources, each associated with its identifier.
     CreateSources(Vec<CreateSourceCommand<T>>),
     /// Enable compaction in storage-managed collections.
@@ -211,6 +214,9 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
         ProtoStorageCommand {
             kind: Some(match self {
                 StorageCommand::InitializationComplete => InitializationComplete(()),
+                StorageCommand::UpdateConfiguration(params) => {
+                    UpdateConfiguration(params.into_proto())
+                }
                 StorageCommand::CreateSources(sources) => CreateSources(ProtoCreateSources {
                     sources: sources.into_proto(),
                 }),
@@ -229,13 +235,16 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
     fn from_proto(proto: ProtoStorageCommand) -> Result<Self, TryFromProtoError> {
         use proto_storage_command::Kind::*;
         match proto.kind {
+            Some(InitializationComplete(())) => Ok(StorageCommand::InitializationComplete),
+            Some(UpdateConfiguration(params)) => {
+                Ok(StorageCommand::UpdateConfiguration(params.into_rust()?))
+            }
             Some(CreateSources(ProtoCreateSources { sources })) => {
                 Ok(StorageCommand::CreateSources(sources.into_rust()?))
             }
             Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
                 Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
             }
-            Some(InitializationComplete(())) => Ok(StorageCommand::InitializationComplete),
             Some(CreateSinks(ProtoCreateSinks { sinks })) => {
                 Ok(StorageCommand::CreateSinks(sinks.into_rust()?))
             }
@@ -278,6 +287,22 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
     }
 }
 
+/// This structure represents a full set up updates for the `mz_source_statistics`
+/// table, for a specific source-worker pair. It is structured like this for simplicity
+/// and efficiency: Each storage worker can individually collect and consolidate metrics,
+/// then control how much `StorageResponse` traffic is produced when sending updates
+/// back to the controller to be written.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SourceStatisticsUpdate {
+    pub id: GlobalId,
+    pub worker_id: usize,
+    pub snapshot_committed: bool,
+    pub messages_received: u64,
+    pub updates_staged: u64,
+    pub updates_committed: u64,
+    pub bytes_received: u64,
+}
+
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageResponse<T = mz_repr::Timestamp> {
@@ -288,16 +313,35 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
     /// Punctuation indicates that no more responses will be transmitted for the specified ids
     DroppedIds(Vec<GlobalId>),
+
+    /// A list of statistics updates, currently only for sources.
+    StatisticsUpdates(Vec<SourceStatisticsUpdate>),
 }
 
 impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageResponse {
-        use proto_storage_response::{Kind::*, ProtoDroppedIds};
+        use proto_storage_response::{
+            Kind::*, ProtoDroppedIds, ProtoSourceStatisticsUpdate, ProtoStatisticsUpdates,
+        };
         ProtoStorageResponse {
             kind: Some(match self {
                 StorageResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
                 StorageResponse::DroppedIds(ids) => DroppedIds(ProtoDroppedIds {
                     ids: ids.into_proto(),
+                }),
+                StorageResponse::StatisticsUpdates(stats) => Stats(ProtoStatisticsUpdates {
+                    source_updates: stats
+                        .iter()
+                        .map(|update| ProtoSourceStatisticsUpdate {
+                            id: Some(update.id.into_proto()),
+                            worker_id: u64::cast_from(update.worker_id),
+                            snapshot_committed: update.snapshot_committed,
+                            messages_received: update.messages_received,
+                            updates_staged: update.updates_staged,
+                            updates_committed: update.updates_committed,
+                            bytes_received: update.bytes_received,
+                        })
+                        .collect(),
                 }),
             }),
         }
@@ -312,6 +356,25 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
             Some(FrontierUppers(traces)) => {
                 Ok(StorageResponse::FrontierUppers(traces.into_rust()?))
             }
+            Some(Stats(stats)) => Ok(StorageResponse::StatisticsUpdates(
+                stats
+                    .source_updates
+                    .into_iter()
+                    .map(|update| {
+                        Ok(SourceStatisticsUpdate {
+                            id: update.id.into_rust_if_some(
+                                "ProtoStorageResponse::stats::source_updates::id",
+                            )?,
+                            worker_id: usize::cast_from(update.worker_id),
+                            snapshot_committed: update.snapshot_committed,
+                            messages_received: update.messages_received,
+                            updates_staged: update.updates_staged,
+                            updates_committed: update.updates_committed,
+                            bytes_received: update.bytes_received,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, TryFromProtoError>>()?,
+            )),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageResponse::kind",
             )),
@@ -324,6 +387,7 @@ impl Arbitrary for StorageResponse<mz_repr::Timestamp> {
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        // TODO(guswynn): test `SourceStatisticsUpdates`
         Union::new(vec![proptest::collection::vec(
             (any::<GlobalId>(), any_antichain()),
             1..4,
@@ -393,7 +457,9 @@ where
                     assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export.id, command);
                 }
             }
-            StorageCommand::AllowCompaction(_) | StorageCommand::InitializationComplete => {
+            StorageCommand::InitializationComplete
+            | StorageCommand::UpdateConfiguration(_)
+            | StorageCommand::AllowCompaction(_) => {
                 // Other commands have no known impact on frontier tracking.
             }
         }
@@ -471,6 +537,12 @@ where
                 } else {
                     Some(Ok(StorageResponse::DroppedIds(new_drops)))
                 }
+            }
+            StorageResponse::StatisticsUpdates(stats) => {
+                // Just forward it along; the `worker_id` should have been set in `storage_state`.
+                // We _could_ consolidate across worker_id's, here, but each worker only produces
+                // responses periodically, so we avoid that complexity.
+                Some(Ok(StorageResponse::StatisticsUpdates(stats)))
             }
         }
     }

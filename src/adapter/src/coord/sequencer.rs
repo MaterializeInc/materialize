@@ -9,19 +9,22 @@
 
 //! Logic for executing a planned SQL query.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::time::Duration;
 
 use anyhow::anyhow;
+use futures::future::BoxFuture;
+
 use maplit::btreeset;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tokio::sync::{mpsc, OwnedMutexGuard};
+use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::{event, warn, Level};
 
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::controller::{
     ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLogging, ReplicaId,
+    DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS,
 };
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDesc, IndexDesc};
 use mz_compute_client::types::sinks::{
@@ -41,19 +44,19 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
-    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
-    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, CreateComputeInstancePlan, CreateComputeReplicaPlan, CreateConnectionPlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan,
-    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
-    CreateTypePlan, CreateViewPlan, DropComputeInstancesPlan, DropComputeReplicasPlan,
-    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
-    FetchPlan, IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan,
-    Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan, ResetVariablePlan, RotateKeysPlan,
-    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SubscribeFrom, SubscribePlan, View,
+    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
+    AlterOptionParameter, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterSystemResetPlan, AlterSystemSetPlan, CopyFormat, CreateComputeInstancePlan,
+    CreateComputeReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DropComputeInstancesPlan,
+    DropComputeReplicasPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    ExecutePlan, ExplainPlan, FetchPlan, IndexOption, InsertPlan, MaterializedView, MutationKind,
+    OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
+    ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
+    StorageHostConfig, SubscribeFrom, SubscribePlan, View,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_stash::Append;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
@@ -66,14 +69,15 @@ use crate::catalog::{
     self, Catalog, CatalogItem, ComputeInstance, Connection, DataSourceDesc, Ingestion,
     SerializedComputeReplicaLocation, StorageSinkConnectionState, SYSTEM_USER,
 };
-use crate::command::{Command, ExecuteResponse};
+use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
+use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
-    peek, Coordinator, Message, PendingReadTxn, PendingTxn, SendDiffs, SinkConnectionReady,
-    DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    peek, Coordinator, Message, PendingReadTxn, PendingTxn, RealTimeRecencyContext, SendDiffs,
+    SinkConnectionReady, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain_new::optimizer_trace::OptimizerTrace;
@@ -81,6 +85,7 @@ use crate::metrics;
 use crate::notice::AdapterNotice;
 use crate::session::vars::{
     IsolationLevel, CLUSTER_VAR_NAME, DATABASE_VAR_NAME, REAL_TIME_RECENCY_VAR_NAME,
+    TRANSACTION_ISOLATION_VAR_NAME,
 };
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
@@ -95,7 +100,18 @@ use super::ReplicaMetadata;
 
 use super::peek::PlannedPeek;
 
-impl<S: Append + 'static> Coordinator<S> {
+/// Attempts to execute an expression. If an error is returned then the error is sent
+/// to the client and the function is exited.
+macro_rules! return_if_err {
+    ($expr:expr, $tx:expr, $session:expr) => {
+        match $expr {
+            Ok(v) => v,
+            Err(e) => return $tx.send(Err(e.into()), $session),
+        }
+    };
+}
+
+impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_plan(
         &mut self,
@@ -117,10 +133,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         match plan {
             Plan::CreateSource(plan) => {
-                let source_id = match self.catalog.allocate_user_id().await {
-                    Ok(id) => id,
-                    Err(e) => return tx.send(Err(e.into()), session),
-                };
+                let source_id = return_if_err!(self.catalog.allocate_user_id().await, tx, session);
                 tx.send(
                     self.sequence_create_source(&mut session, vec![(source_id, plan, depends_on)])
                         .await,
@@ -276,7 +289,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.sequence_end_transaction(tx, session, action);
             }
             Plan::Peek(plan) => {
-                tx.send(self.sequence_peek(&mut session, plan).await, session);
+                self.sequence_peek_begin(tx, session, plan).await;
             }
             Plan::Subscribe(plan) => {
                 tx.send(
@@ -299,7 +312,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 );
             }
             Plan::Explain(plan) => {
-                tx.send(self.sequence_explain(&session, plan).await, session);
+                self.sequence_explain(tx, session, plan);
             }
             Plan::SendDiffs(plan) => {
                 tx.send(self.sequence_send_diffs(&mut session, plan), session);
@@ -489,11 +502,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 create_sql: plan.source.create_sql,
                 data_source: match plan.source.ingestion {
                     Some(ingestion) => {
-                        let host_config = self.catalog.resolve_storage_host_config(
-                            plan.host_config,
-                            // Undefined sizes permitted in unsafe mode
-                            self.catalog.config().unsafe_mode,
-                        )?;
+                        let host_config = self
+                            .catalog
+                            .resolve_storage_host_config(&plan.host_config)?;
                         DataSourceDesc::Ingestion(catalog::Ingestion {
                             desc: ingestion.desc,
                             source_imports: ingestion.source_imports,
@@ -521,6 +532,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 name: plan.name.clone(),
                 item: CatalogItem::Source(source.clone()),
             });
+            if let DataSourceDesc::Ingestion(_) = &source.data_source {
+                ops.extend(
+                    self.create_linked_cluster_ops(source_id, &plan.name, &plan.host_config)
+                        .await?,
+                );
+            }
             sources.push((source_id, source));
         }
         match self.catalog_transact(Some(session), ops).await {
@@ -797,6 +814,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .collect();
         let mut ops = vec![catalog::Op::CreateComputeInstance {
             name: name.clone(),
+            linked_object_id: None,
             arranged_introspection_sources: arranged_introspection_sources.clone(),
         }];
 
@@ -821,26 +839,26 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut persisted_introspection_sources = Vec::new();
 
         for (replica_name, replica_config) in replicas.into_iter() {
+            let introspection = replica_config.get_introspection().cloned();
+            let idle_arrangement_merge_effort = replica_config.get_idle_arrangement_merge_effort();
+
             // If the AZ was not specified, choose one, round-robin, from the ones with
             // the lowest number of configured replicas for this cluster.
-            let (location, introspection) = match replica_config {
+            let location = match replica_config {
                 mz_sql::plan::ComputeReplicaConfig::Remote {
                     addrs,
                     compute_addrs,
                     workers,
-                    introspection,
-                } => {
-                    let location = SerializedComputeReplicaLocation::Remote {
-                        addrs,
-                        compute_addrs,
-                        workers,
-                    };
-                    (location, introspection)
-                }
+                    ..
+                } => SerializedComputeReplicaLocation::Remote {
+                    addrs,
+                    compute_addrs,
+                    workers,
+                },
                 mz_sql::plan::ComputeReplicaConfig::Managed {
                     size,
                     availability_zone,
-                    introspection,
+                    ..
                 } => {
                     let (availability_zone, user_specified) =
                         availability_zone.map(|az| (az, true)).unwrap_or_else(|| {
@@ -848,12 +866,11 @@ impl<S: Append + 'static> Coordinator<S> {
                             *n_replicas_per_az.get_mut(&az).unwrap() += 1;
                             (az, false)
                         });
-                    let location = SerializedComputeReplicaLocation::Managed {
+                    SerializedComputeReplicaLocation::Managed {
                         size,
                         availability_zone,
                         az_user_specified: user_specified,
-                    };
-                    (location, introspection)
+                    }
                 }
             };
 
@@ -883,6 +900,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let config = ComputeReplicaConfig {
                 location: self.catalog.concretize_replica_location(location)?,
                 logging,
+                idle_arrangement_merge_effort,
             };
 
             ops.push(catalog::Op::CreateComputeReplica {
@@ -915,11 +933,9 @@ impl<S: Append + 'static> Coordinator<S> {
             .into_iter()
             .map(|(log, id)| (log.variant.clone(), id))
             .collect();
-        self.controller.compute.create_instance(
-            instance_id,
-            arranged_logs,
-            self.catalog.system_config().max_result_size(),
-        )?;
+        self.controller
+            .compute
+            .create_instance(instance_id, arranged_logs)?;
         for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.controller
                 .active_compute()
@@ -962,25 +978,25 @@ impl<S: Append + 'static> Coordinator<S> {
             config,
         }: CreateComputeReplicaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let introspection = config.get_introspection().cloned();
+        let idle_arrangement_merge_effort = config.get_idle_arrangement_merge_effort();
+
         // Choose default AZ if necessary
-        let (location, introspection) = match config {
+        let location = match config {
             mz_sql::plan::ComputeReplicaConfig::Remote {
                 addrs,
                 compute_addrs,
                 workers,
-                introspection,
-            } => {
-                let location = SerializedComputeReplicaLocation::Remote {
-                    addrs,
-                    compute_addrs,
-                    workers,
-                };
-                (location, introspection)
-            }
+                ..
+            } => SerializedComputeReplicaLocation::Remote {
+                addrs,
+                compute_addrs,
+                workers,
+            },
             mz_sql::plan::ComputeReplicaConfig::Managed {
                 size,
                 availability_zone,
-                introspection,
+                ..
             } => {
                 let (availability_zone, user_specified) = match availability_zone {
                     Some(az) => {
@@ -1013,12 +1029,11 @@ impl<S: Append + 'static> Coordinator<S> {
                         (az, false)
                     }
                 };
-                let location = SerializedComputeReplicaLocation::Managed {
+                SerializedComputeReplicaLocation::Managed {
                     size,
                     availability_zone,
                     az_user_specified: user_specified,
-                };
-                (location, introspection)
+                }
             }
         };
 
@@ -1048,6 +1063,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let config = ComputeReplicaConfig {
             location: self.catalog.concretize_replica_location(location)?,
             logging,
+            idle_arrangement_merge_effort,
         };
 
         let op = catalog::Op::CreateComputeReplica {
@@ -1244,38 +1260,26 @@ impl<S: Append + 'static> Coordinator<S> {
             sink,
             with_snapshot,
             if_not_exists,
-            host_config,
+            host_config: plan_host_config,
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
-        let id = match self.catalog.allocate_user_id().await {
-            Ok(id) => id,
-            Err(e) => {
-                tx.send(Err(e.into()), session);
-                return;
-            }
-        };
-        let oid = match self.catalog.allocate_oid() {
-            Ok(id) => id,
-            Err(e) => {
-                tx.send(Err(e.into()), session);
-                return;
-            }
-        };
+        let id = return_if_err!(self.catalog.allocate_user_id().await, tx, session);
+        let oid = return_if_err!(self.catalog.allocate_oid(), tx, session);
 
-        // Validate the storage host config. The size can only be undefined
-        // in unsafe mode.
-        let allow_undefined_size = self.catalog.config().unsafe_mode;
-        let host_config = match self
-            .catalog
-            .resolve_storage_host_config(host_config, allow_undefined_size)
-        {
-            Ok(host_config) => host_config,
-            Err(e) => {
-                tx.send(Err(e), session);
-                return;
-            }
-        };
+        // Validate the storage host config.
+        let host_config = return_if_err!(
+            self.catalog.resolve_storage_host_config(&plan_host_config),
+            tx,
+            session
+        );
+
+        let linked_cluster_ops = return_if_err!(
+            self.create_linked_cluster_ops(id, &name, &plan_host_config)
+                .await,
+            tx,
+            session
+        );
 
         // Knowing that we're only handling kafka sinks here helps us simplify.
         let StorageSinkConnectionBuilder::Kafka(connection_builder) =
@@ -1300,12 +1304,13 @@ impl<S: Append + 'static> Coordinator<S> {
             host_config,
         };
 
-        let ops = vec![catalog::Op::CreateItem {
+        let mut ops = vec![catalog::Op::CreateItem {
             id,
             oid,
             name: name.clone(),
             item: CatalogItem::Sink(catalog_sink.clone()),
         }];
+        ops.extend(linked_cluster_ops);
 
         let from = self.catalog.get_entry(&catalog_sink.from);
         let from_name = from.name().item.clone();
@@ -1345,17 +1350,13 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        let create_export_token = match self
-            .controller
-            .storage
-            .prepare_export(id, catalog_sink.from)
-        {
-            Ok(t) => t,
-            Err(e) => {
-                tx.send(Err(e.into()), session);
-                return;
-            }
-        };
+        let create_export_token = return_if_err!(
+            self.controller
+                .storage
+                .prepare_export(id, catalog_sink.from),
+            tx,
+            session
+        );
 
         // Now we're ready to create the sink connection. Arrange to notify the
         // main coordinator thread when the future completes.
@@ -1717,65 +1718,19 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn sequence_drop_compute_instances(
         &mut self,
         session: &mut Session,
-        plan: DropComputeInstancesPlan,
+        DropComputeInstancesPlan { names }: DropComputeInstancesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut ops = Vec::new();
-        let mut instance_replica_drop_sets = Vec::with_capacity(plan.names.len());
-        let mut is_active_instance = false;
-        for compute_name in plan.names {
-            let instance = self.catalog.resolve_compute_instance(&compute_name)?;
-            instance_replica_drop_sets.push((
-                instance.id,
-                instance.replicas_by_id.keys().cloned().collect::<Vec<_>>(),
-            ));
-            for replica_name in instance.replica_id_by_name.keys() {
-                ops.push(catalog::Op::DropComputeReplica {
-                    name: replica_name.to_string(),
-                    compute_name: compute_name.clone(),
-                });
-            }
-
-            let mut ids_to_drop: Vec<GlobalId> = instance.exports().iter().cloned().collect();
-
-            // Determine from the replica which additional items to drop. This is the set
-            // of items that depend on the introspection sources. The sources
-            // itself are removed with Op::DropComputeReplica.
-            for replica in instance.replicas_by_id.values() {
-                let logging = &replica.config.logging;
-                let log_and_view_ids = logging.source_and_view_ids();
-                let view_ids: HashSet<_> = logging.view_ids().collect();
-                for log_id in log_and_view_ids {
-                    // We consider the dependencies of both views and logs, but remove the
-                    // views itself. The views are included as they depend on the source,
-                    // but we dont need an explicit Op::DropItem as they are dropped together
-                    // with the replica.
-                    ids_to_drop.extend(
-                        self.catalog
-                            .get_entry(&log_id)
-                            .used_by()
-                            .into_iter()
-                            .filter(|x| !view_ids.contains(x)),
-                    )
-                }
-            }
-
-            if compute_name.as_str() == session.vars().cluster() {
-                is_active_instance = true;
-            }
-
-            ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
-            ops.push(catalog::Op::DropComputeInstance { name: compute_name });
-        }
+        let (ids, ops) = self.catalog.drop_compute_instance_ops(&names);
 
         self.catalog_transact(Some(session), ops).await?;
-        for (instance_id, replicas) in instance_replica_drop_sets {
+        for (instance_id, replicas) in ids {
             for replica_id in replicas {
                 self.drop_replica(instance_id, replica_id).await.unwrap();
             }
             self.controller.compute.drop_instance(instance_id);
         }
 
-        if is_active_instance {
+        if names.iter().any(|n| n == session.vars().cluster()) {
             session.add_notice(AdapterNotice::DroppedActiveCluster {
                 name: session.vars().cluster().to_string(),
             });
@@ -1789,60 +1744,14 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         DropComputeReplicasPlan { names }: DropComputeReplicasPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        if names.is_empty() {
-            return Ok(ExecuteResponse::DroppedComputeReplica);
-        }
-        let mut ops = Vec::with_capacity(names.len());
-        let mut replicas_to_drop = Vec::with_capacity(names.len());
-        let mut ids_to_drop = vec![];
-        for (instance_name, replica_name) in names {
-            let instance = self.catalog.resolve_compute_instance(&instance_name)?;
-            ops.push(catalog::Op::DropComputeReplica {
-                name: replica_name.clone(),
-                compute_name: instance_name.clone(),
-            });
-            let replica_id = instance.replica_id_by_name[&replica_name];
-
-            // Determine from the replica which additional items to drop. This is the set
-            // of items that depend on the introspection sources. The sources
-            // itself are removed with Op::DropComputeReplica.
-            let logging = &instance
-                .replicas_by_id
-                .get(&replica_id)
-                .unwrap()
-                .config
-                .logging;
-
-            let log_and_view_ids = logging.source_and_view_ids();
-            let view_ids: HashSet<_> = logging.view_ids().collect();
-
-            for log_id in log_and_view_ids {
-                // We consider the dependencies of both views and logs, but remove the
-                // views itself. The views are included as they depend on the source,
-                // but we dont need an explicit Op::DropItem as they are dropped together
-                // with the replica.
-                ids_to_drop.extend(
-                    self.catalog
-                        .get_entry(&log_id)
-                        .used_by()
-                        .into_iter()
-                        .filter(|x| !view_ids.contains(x)),
-                )
-            }
-
-            replicas_to_drop.push((instance.id, replica_id));
-        }
-
-        ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
+        let (ids, ops) = self.catalog.drop_compute_instance_replica_ops(&names);
 
         self.catalog_transact(Some(session), ops).await?;
-
         fail::fail_point!("after_catalog_drop_replica");
 
-        for (compute_id, replica_id) in replicas_to_drop {
-            self.drop_replica(compute_id, replica_id).await.unwrap();
+        for (instance_id, replica_id) in ids {
+            self.drop_replica(instance_id, replica_id).await.unwrap();
         }
-
         fail::fail_point!("after_sequencer_drop_replica");
 
         Ok(ExecuteResponse::DroppedComputeReplica)
@@ -1996,6 +1905,16 @@ impl<S: Append + 'static> Coordinator<S> {
                     session.add_notice(AdapterNotice::ClusterDoesNotExist {
                         name: v.to_string(),
                     });
+                } else if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME {
+                    let v = v.to_lowercase();
+                    if v == IsolationLevel::ReadUncommitted.as_str()
+                        || v == IsolationLevel::ReadCommitted.as_str()
+                        || v == IsolationLevel::RepeatableRead.as_str()
+                    {
+                        session.add_notice(AdapterNotice::UnimplementedIsolationLevel {
+                            isolation_level: v,
+                        });
+                    }
                 }
             }
             None => vars.reset(&name, local)?,
@@ -2116,11 +2035,110 @@ impl<S: Append + 'static> Coordinator<S> {
     /// be a simple read out of an existing arrangement, or required a new dataflow to build
     /// the results to return.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn sequence_peek(
+    async fn sequence_peek_begin(
         &mut self,
-        session: &mut Session,
+        tx: ClientTransmitter<ExecuteResponse>,
+        mut session: Session,
         plan: PeekPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) {
+        let (
+            source,
+            finishing,
+            copy_to,
+            view_id,
+            index_id,
+            source_ids,
+            compute_instance,
+            id_bundle,
+            when,
+            target_replica,
+            timeline_context,
+            in_immediate_multi_stmt_txn,
+        ) = return_if_err!(self.sequence_peek_begin_inner(&session, plan), tx, session);
+
+        match self.recent_timestamp(&session, source_ids.iter().cloned()) {
+            Some(fut) => {
+                let transient_revision = self.catalog.transient_revision();
+                let internal_cmd_tx = self.internal_cmd_tx.clone();
+                let conn_id = session.conn_id();
+                self.pending_real_time_recency_timestamp.insert(
+                    conn_id,
+                    RealTimeRecencyContext::Peek {
+                        tx,
+                        finishing,
+                        copy_to,
+                        source,
+                        session,
+                        compute_instance,
+                        when,
+                        target_replica,
+                        view_id,
+                        index_id,
+                        timeline_context,
+                        source_ids,
+                        id_bundle,
+                        in_immediate_multi_stmt_txn,
+                    },
+                );
+                task::spawn(|| "real_time_recency_peek", async move {
+                    let real_time_recency_ts = fut.await;
+                    // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
+                    let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
+                        conn_id,
+                        transient_revision,
+                        real_time_recency_ts,
+                    });
+                    if let Err(e) = result {
+                        warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                    }
+                });
+            }
+            None => {
+                tx.send(
+                    self.sequence_peek_finish(
+                        finishing,
+                        copy_to,
+                        source,
+                        &mut session,
+                        compute_instance,
+                        when,
+                        target_replica,
+                        view_id,
+                        index_id,
+                        timeline_context,
+                        source_ids,
+                        id_bundle,
+                        in_immediate_multi_stmt_txn,
+                        None,
+                    )
+                    .await,
+                    session,
+                );
+            }
+        }
+    }
+
+    fn sequence_peek_begin_inner(
+        &mut self,
+        session: &Session,
+        plan: PeekPlan,
+    ) -> Result<
+        (
+            MirRelationExpr,
+            RowSetFinishing,
+            Option<CopyFormat>,
+            GlobalId,
+            GlobalId,
+            BTreeSet<GlobalId>,
+            ComputeInstanceId,
+            CollectionIdBundle,
+            QueryWhen,
+            Option<ReplicaId>,
+            TimelineContext,
+            bool,
+        ),
+        AdapterError,
+    > {
         event!(Level::TRACE, plan = format!("{:?}", plan));
 
         let PeekPlan {
@@ -2169,22 +2187,64 @@ impl<S: Append + 'static> Coordinator<S> {
         let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
             && when == QueryWhen::Immediately;
 
-        let mut peek_plan = self
-            .plan_peek(
-                source,
-                session,
-                &when,
-                compute_instance,
-                &mut target_replica,
-                view_id,
-                index_id,
-                timeline_context,
-                &source_ids,
-                in_immediate_multi_stmt_txn,
-            )
-            .await?;
+        check_no_invalid_log_reads(
+            &self.catalog,
+            compute_instance,
+            &source_ids,
+            LogReadStyle::Peek(&mut target_replica),
+        )?;
 
-        let compute_instance = compute_instance.id;
+        let id_bundle = self
+            .index_oracle(compute_instance.id)
+            .sufficient_collections(&source_ids);
+
+        Ok((
+            source,
+            finishing,
+            copy_to,
+            view_id,
+            index_id,
+            source_ids,
+            compute_instance.id(),
+            id_bundle,
+            when,
+            target_replica,
+            timeline_context,
+            in_immediate_multi_stmt_txn,
+        ))
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn sequence_peek_finish(
+        &mut self,
+        finishing: RowSetFinishing,
+        copy_to: Option<CopyFormat>,
+        source: MirRelationExpr,
+        session: &mut Session,
+        compute_instance: ComputeInstanceId,
+        when: QueryWhen,
+        target_replica: Option<ReplicaId>,
+        view_id: GlobalId,
+        index_id: GlobalId,
+        timeline_context: TimelineContext,
+        source_ids: BTreeSet<GlobalId>,
+        id_bundle: CollectionIdBundle,
+        in_immediate_multi_stmt_txn: bool,
+        real_time_recency_ts: Option<Timestamp>,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let mut peek_plan = self.plan_peek(
+            source,
+            session,
+            &when,
+            compute_instance,
+            view_id,
+            index_id,
+            timeline_context,
+            &source_ids,
+            id_bundle,
+            in_immediate_multi_stmt_txn,
+            real_time_recency_ts,
+        )?;
 
         if let Some(id_bundle) = peek_plan.read_holds.take() {
             if let TimestampContext::TimelineTimestamp(_, timestamp) = peek_plan.timestamp_context {
@@ -2226,33 +2286,21 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    // TODO(jkosh44) Once RTR is pulled off the main coord loop, we can remove async from this method.
-    async fn plan_peek(
+    fn plan_peek(
         &self,
         source: MirRelationExpr,
         session: &Session,
         when: &QueryWhen,
-        compute_instance: &ComputeInstance,
-        target_replica: &mut Option<u64>,
+        compute_instance: ComputeInstanceId,
         view_id: GlobalId,
         index_id: GlobalId,
         timeline_context: TimelineContext,
         source_ids: &BTreeSet<GlobalId>,
+        id_bundle: CollectionIdBundle,
         in_immediate_multi_stmt_txn: bool,
+        real_time_recency_ts: Option<Timestamp>,
     ) -> Result<PlannedPeek, AdapterError> {
-        check_no_invalid_log_reads(
-            &self.catalog,
-            compute_instance,
-            source_ids,
-            LogReadStyle::Peek(target_replica),
-        )?;
-
-        let compute_instance = compute_instance.id;
         let mut read_holds = None;
-        let id_bundle = self
-            .index_oracle(compute_instance)
-            .sufficient_collections(source_ids);
-
         let conn_id = session.conn_id();
         // For transactions that do not use AS OF, get the timestamp context of the
         // in-progress transaction or create one. If this is an AS OF query, we
@@ -2260,9 +2308,6 @@ impl<S: Append + 'static> Coordinator<S> {
         // single-statement transaction (TransactionStatus::Started), we don't
         // need to worry about preventing compaction or choosing a valid
         // timestamp context for future queries.
-        let real_time_recency_ts = self
-            .recent_timestamp(session, source_ids.iter().cloned())
-            .await?;
         let timestamp_context = if in_immediate_multi_stmt_txn {
             match session.get_transaction_timestamp_context() {
                 Some(ts_context @ TimestampContext::TimelineTimestamp(_, _)) => ts_context,
@@ -2419,31 +2464,25 @@ impl<S: Append + 'static> Coordinator<S> {
         })
     }
 
-    /// Checks to see if the session needs a real time recency timestamp and if so acquires and
-    /// returns one. This may wait for an unbounded amount for the timestamp.
-    async fn recent_timestamp(
+    /// Checks to see if the session needs a real time recency timestamp and if so returns
+    /// a future that will return the timestamp.
+    fn recent_timestamp(
         &self,
         session: &Session,
         source_ids: impl Iterator<Item = GlobalId>,
-    ) -> Result<Option<Timestamp>, AdapterError> {
+    ) -> Option<BoxFuture<'static, Timestamp>> {
         // Ideally this logic belongs inside of
         // `mz-adapter::coord::timestamp_selection::determine_timestamp`. However, including the
         // logic in there would make it extremely difficult and inconvenient to pull the waiting off
         // of the main coord thread.
-        Ok(
-            if session.vars().real_time_recency()
-                && session.vars().transaction_isolation() == &IsolationLevel::StrictSerializable
-                && !session.contains_read_timestamp()
-            {
-                // We should have prevented anyone from turning on rtr outside of unsafe
-                // mode, but just incase check again.
-                // TODO(jkosh44) DO NOT remove unsafe until this waiting is removed from the main Coord loop.
-                self.catalog.require_unsafe_mode("REAL TIME RECENCY")?;
-                Some(self.controller.recent_timestamp(source_ids).await)
-            } else {
-                None
-            },
-        )
+        if session.vars().real_time_recency()
+            && session.vars().transaction_isolation() == &IsolationLevel::StrictSerializable
+            && !session.contains_read_timestamp()
+        {
+            Some(self.controller.recent_timestamp(source_ids))
+        } else {
+            None
+        }
     }
 
     async fn sequence_subscribe(
@@ -2472,7 +2511,7 @@ impl<S: Append + 'static> Coordinator<S> {
             session.add_transaction_ops(TransactionOps::Subscribe)?;
         }
 
-        let make_sink_desc = |coord: &mut Coordinator<S>,
+        let make_sink_desc = |coord: &mut Coordinator,
                               session: &mut Session,
                               from,
                               from_desc,
@@ -2602,14 +2641,15 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    async fn sequence_explain(
+    fn sequence_explain(
         &mut self,
-        session: &Session,
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
         plan: ExplainPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) {
         match plan.stage {
-            ExplainStage::Timestamp => self.sequence_explain_timestamp(session, plan).await,
-            _ => self.sequence_explain_plan(session, plan),
+            ExplainStage::Timestamp => self.sequence_explain_timestamp_begin(tx, session, plan),
+            _ => tx.send(self.sequence_explain_plan(&session, plan), session),
         }
     }
 
@@ -2795,11 +2835,74 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(send_immediate_rows(rows))
     }
 
-    async fn sequence_explain_timestamp(
+    fn sequence_explain_timestamp_begin(
+        &mut self,
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
+        plan: ExplainPlan,
+    ) {
+        let (format, source_ids, optimized_plan, compute_instance, id_bundle) = return_if_err!(
+            self.sequence_explain_timestamp_begin_inner(&session, plan),
+            tx,
+            session
+        );
+        match self.recent_timestamp(&session, source_ids.iter().cloned()) {
+            Some(fut) => {
+                let transient_revision = self.catalog.transient_revision();
+                let internal_cmd_tx = self.internal_cmd_tx.clone();
+                let conn_id = session.conn_id();
+                self.pending_real_time_recency_timestamp.insert(
+                    conn_id,
+                    RealTimeRecencyContext::ExplainTimestamp {
+                        tx,
+                        session,
+                        format,
+                        compute_instance,
+                        optimized_plan,
+                        id_bundle,
+                    },
+                );
+                task::spawn(|| "real_time_recency_explain_timestamp", async move {
+                    let real_time_recency_ts = fut.await;
+                    // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
+                    let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
+                        conn_id,
+                        transient_revision,
+                        real_time_recency_ts,
+                    });
+                    if let Err(e) = result {
+                        warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                    }
+                });
+            }
+            None => tx.send(
+                self.sequence_explain_timestamp_finish(
+                    &session,
+                    format,
+                    compute_instance,
+                    optimized_plan,
+                    id_bundle,
+                    None,
+                ),
+                session,
+            ),
+        }
+    }
+
+    fn sequence_explain_timestamp_begin_inner(
         &mut self,
         session: &Session,
         plan: ExplainPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) -> Result<
+        (
+            ExplainFormat,
+            BTreeSet<GlobalId>,
+            OptimizedMirRelationExpr,
+            ComputeInstanceId,
+            CollectionIdBundle,
+        ),
+        AdapterError,
+    > {
         let ExplainPlan {
             raw_plan,
             explainee,
@@ -2807,14 +2910,6 @@ impl<S: Append + 'static> Coordinator<S> {
             ..
         } = plan;
 
-        let is_json = match format {
-            ExplainFormat::Text => false,
-            ExplainFormat::Json => true,
-            ExplainFormat::Dot => {
-                return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
-            }
-        };
-        let compute_instance = self.catalog.active_compute_instance(session)?.id;
         let window_functions = self.catalog.system_config().window_functions();
 
         let explainee_is_view = matches!(explainee, Explainee::Dataflow(_));
@@ -2823,14 +2918,37 @@ impl<S: Append + 'static> Coordinator<S> {
             window_functions: window_functions || explainee_is_view,
         })?;
         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
-        let timeline_context = self.validate_timeline_context(optimized_plan.depends_on())?;
         let source_ids = optimized_plan.depends_on();
+        let compute_instance = self.catalog.active_compute_instance(session)?;
         let id_bundle = self
-            .index_oracle(compute_instance)
+            .index_oracle(compute_instance.id)
             .sufficient_collections(&source_ids);
-        let real_time_recency_ts = self
-            .recent_timestamp(session, source_ids.iter().cloned())
-            .await?;
+        Ok((
+            format,
+            source_ids,
+            optimized_plan,
+            compute_instance.id(),
+            id_bundle,
+        ))
+    }
+
+    pub(crate) fn sequence_explain_timestamp_finish(
+        &self,
+        session: &Session,
+        format: ExplainFormat,
+        compute_instance: ComputeInstanceId,
+        optimized_plan: OptimizedMirRelationExpr,
+        id_bundle: CollectionIdBundle,
+        real_time_recency_ts: Option<Timestamp>,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let is_json = match format {
+            ExplainFormat::Text => false,
+            ExplainFormat::Json => true,
+            ExplainFormat::Dot => {
+                return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
+            }
+        };
+        let timeline_context = self.validate_timeline_context(optimized_plan.depends_on())?;
         let determination = self.determine_timestamp(
             session,
             &id_bundle,
@@ -2983,13 +3101,7 @@ impl<S: Append + 'static> Coordinator<S> {
             // a constant for writes, as we want to maximize bulk-insert throughput.
             OptimizedMirRelationExpr(plan.values)
         } else {
-            match self.view_optimizer.optimize(plan.values) {
-                Ok(m) => m,
-                Err(e) => {
-                    tx.send(Err(e.into()), session);
-                    return;
-                }
-            }
+            return_if_err!(self.view_optimizer.optimize(plan.values), tx, session)
         };
 
         match optimized_mir.into_inner() {
@@ -3158,10 +3270,7 @@ impl<S: Append + 'static> Coordinator<S> {
         //
         // This limitation is meant to ensure no writes occur between this read
         // and the subsequent write.
-        fn validate_read_dependencies<S>(catalog: &Catalog<S>, id: &GlobalId) -> bool
-        where
-            S: mz_stash::Append,
-        {
+        fn validate_read_dependencies(catalog: &Catalog, id: &GlobalId) -> bool {
             use CatalogItemType::*;
             match catalog.try_get_entry(id) {
                 Some(entry) => match entry.item().typ() {
@@ -3195,30 +3304,36 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        let peek_response = match self
-            .sequence_peek(
-                &mut session,
-                PeekPlan {
-                    source: selection,
-                    when: QueryWhen::Freshest,
-                    finishing,
-                    copy_to: None,
-                },
-            )
-            .await
-        {
-            Ok(resp) => resp,
-            Err(e) => {
-                tx.send(Err(e), session);
-                return;
-            }
-        };
-
-        let timeout_dur = *session.vars().statement_timeout();
+        let (peek_tx, peek_rx) = oneshot::channel();
+        let peek_client_tx = ClientTransmitter::new(peek_tx, self.internal_cmd_tx.clone());
+        self.sequence_peek_begin(
+            peek_client_tx,
+            session,
+            PeekPlan {
+                source: selection,
+                when: QueryWhen::Freshest,
+                finishing,
+                copy_to: None,
+            },
+        )
+        .await;
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let strict_serializable_reads_tx = self.strict_serializable_reads_tx.clone();
         task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
+            let (peek_response, mut session) = match peek_rx.await {
+                Ok(Response {
+                    result: Ok(resp),
+                    session,
+                }) => (resp, session),
+                Ok(Response {
+                    result: Err(e),
+                    session,
+                }) => return tx.send(Err(e), session),
+                // It is not an error for these results to be ready after `peek_client_tx` has been dropped.
+                Err(e) => return warn!("internal_cmd_rx dropped before we could send: {:?}", e),
+            };
+            let timeout_dur = *session.vars().statement_timeout();
             let arena = RowArena::new();
             let diffs = match peek_response {
                 ExecuteResponse::SendingRows {
@@ -3297,7 +3412,10 @@ impl<S: Append + 'static> Coordinator<S> {
                         }
                     }
                 }
-                _ => Err(AdapterError::Unstructured(anyhow!("expected SendingRows"))),
+                resp @ ExecuteResponse::Canceled => return tx.send(Ok(resp), session),
+                resp => Err(AdapterError::Unstructured(anyhow!(
+                    "unexpected peek response: {resp:?}"
+                ))),
             };
             let mut returning_rows = Vec::new();
             let mut diff_err: Option<AdapterError> = None;
@@ -3482,25 +3600,32 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         AlterSinkPlan { id, size, remote }: AlterSinkPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let op = catalog::Op::AlterSink { id, size, remote };
-        self.catalog_transact(Some(session), vec![op]).await?;
+        let host_config = alter_storage_host_config(size, remote)?;
+        if let Some(host_config) = host_config {
+            let mut ops = vec![catalog::Op::AlterSink {
+                id,
+                host_config: host_config.clone(),
+            }];
+            ops.extend(self.alter_linked_cluster_ops(id, &host_config)?);
+            self.catalog_transact(Some(session), ops).await?;
 
-        // Re-fetch the updated item from the catalog
-        let entry = self.catalog.get_entry(&id);
-        let full_name = self
-            .catalog
-            .resolve_full_name(entry.name(), Some(session.conn_id()))
-            .to_string();
-        let updated_sink = entry.sink().ok_or_else(|| CatalogError::UnexpectedType {
-            name: full_name,
-            actual_type: entry.item_type(),
-            expected_type: CatalogItemType::Sink,
-        })?;
+            // Re-fetch the updated item from the catalog
+            let entry = self.catalog.get_entry(&id);
+            let full_name = self
+                .catalog
+                .resolve_full_name(entry.name(), Some(session.conn_id()))
+                .to_string();
+            let updated_sink = entry.sink().ok_or_else(|| CatalogError::UnexpectedType {
+                name: full_name,
+                actual_type: entry.item_type(),
+                expected_type: CatalogItemType::Sink,
+            })?;
 
-        self.controller
-            .storage
-            .alter_collections(vec![(id, updated_sink.host_config.clone())])
-            .await?;
+            self.controller
+                .storage
+                .alter_collections(vec![(id, updated_sink.host_config.clone())])
+                .await?;
+        }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Sink))
     }
@@ -3510,27 +3635,37 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         AlterSourcePlan { id, size, remote }: AlterSourcePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let op = catalog::Op::AlterSource { id, size, remote };
-        self.catalog_transact(Some(session), vec![op]).await?;
-
-        // Re-fetch the updated item from the catalog
-        let entry = self.catalog.get_entry(&id);
-        let full_name = self
+        let source = self
             .catalog
-            .resolve_full_name(entry.name(), Some(session.conn_id()))
-            .to_string();
-        let updated_source = entry.source().ok_or_else(|| CatalogError::UnexpectedType {
-            name: full_name,
-            actual_type: entry.item_type(),
-            expected_type: CatalogItemType::Source,
-        })?;
-        if let DataSourceDesc::Ingestion(Ingestion { host_config, .. }) =
-            &updated_source.data_source
-        {
-            self.controller
-                .storage
-                .alter_collections(vec![(id, host_config.clone())])
-                .await?;
+            .get_entry(&id)
+            .source()
+            .expect("known to be source");
+        match source.data_source {
+            DataSourceDesc::Ingestion(_) => (),
+            DataSourceDesc::Source | DataSourceDesc::Introspection(_) => {
+                coord_bail!("cannot ALTER this type of source");
+            }
+        }
+        let host_config = alter_storage_host_config(size, remote)?;
+        if let Some(host_config) = host_config {
+            let mut ops = vec![catalog::Op::AlterSource {
+                id,
+                host_config: host_config.clone(),
+            }];
+            ops.extend(self.alter_linked_cluster_ops(id, &host_config)?);
+            self.catalog_transact(Some(session), ops).await?;
+
+            // Re-fetch the updated item from the catalog
+            let entry = self.catalog.get_entry(&id);
+            let updated_source = entry.source().expect("known to be source");
+            if let DataSourceDesc::Ingestion(Ingestion { host_config, .. }) =
+                &updated_source.data_source
+            {
+                self.controller
+                    .storage
+                    .alter_collections(vec![(id, host_config.clone())])
+                    .await?;
+            }
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
@@ -3593,7 +3728,8 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
         use mz_sql::ast::{SetVariableValue, Value};
-        let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
+        let update_compute_config = session::vars::is_compute_config_var(&name);
+        let update_storage_config = session::vars::is_storage_config_var(&name);
         let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = match value {
             SetVariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
@@ -3610,8 +3746,11 @@ impl<S: Append + 'static> Coordinator<S> {
             },
         };
         self.catalog_transact(Some(session), vec![op]).await?;
-        if update_max_result_size {
-            self.update_max_result_size();
+        if update_compute_config {
+            self.update_compute_config();
+        }
+        if update_storage_config {
+            self.update_storage_config();
         }
         if update_metrics_retention {
             self.update_metrics_retention();
@@ -3625,12 +3764,16 @@ impl<S: Append + 'static> Coordinator<S> {
         AlterSystemResetPlan { name }: AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
-        let update_max_result_size = name == session::vars::MAX_RESULT_SIZE.name();
+        let update_compute_config = session::vars::is_compute_config_var(&name);
+        let update_storage_config = session::vars::is_storage_config_var(&name);
         let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = catalog::Op::ResetSystemConfiguration { name };
         self.catalog_transact(Some(session), vec![op]).await?;
-        if update_max_result_size {
-            self.update_max_result_size();
+        if update_compute_config {
+            self.update_compute_config();
+        }
+        if update_storage_config {
+            self.update_storage_config();
         }
         if update_metrics_retention {
             self.update_metrics_retention();
@@ -3646,7 +3789,8 @@ impl<S: Append + 'static> Coordinator<S> {
         self.is_user_allowed_to_alter_system(session)?;
         let op = catalog::Op::ResetAllSystemConfiguration {};
         self.catalog_transact(Some(session), vec![op]).await?;
-        self.update_max_result_size();
+        self.update_compute_config();
+        self.update_storage_config();
         self.update_metrics_retention();
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
@@ -3662,16 +3806,14 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    fn update_max_result_size(&mut self) {
-        let mut compute = self.controller.active_compute();
-        for compute_instance in self.catalog.compute_instances() {
-            compute
-                .update_max_result_size(
-                    compute_instance.id,
-                    self.catalog.system_config().max_result_size(),
-                )
-                .unwrap();
-        }
+    fn update_compute_config(&mut self) {
+        let config_params = self.catalog.compute_config();
+        self.controller.compute.update_configuration(config_params);
+    }
+
+    fn update_storage_config(&mut self) {
+        let config_params = self.catalog.storage_config();
+        self.controller.storage.update_configuration(config_params);
     }
 
     fn update_metrics_retention(&mut self) {
@@ -3826,6 +3968,97 @@ impl<S: Append + 'static> Coordinator<S> {
 
         Ok(())
     }
+
+    /// Generates the catalog operations to create a linked cluster for the
+    /// source or sink with the given name.
+    pub(crate) async fn create_linked_cluster_ops(
+        &mut self,
+        linked_object_id: GlobalId,
+        name: &QualifiedObjectName,
+        config: &StorageHostConfig,
+    ) -> Result<Vec<catalog::Op>, AdapterError> {
+        let name = self.catalog.resolve_full_name(name, None);
+        let name = format!("{}_{}_{}", name.database, name.schema, name.item);
+        let name = self.catalog.find_available_cluster_name(&name);
+        let arranged_introspection_sources =
+            self.catalog.allocate_arranged_introspection_sources().await;
+        let mut ops = vec![catalog::Op::CreateComputeInstance {
+            name: name.clone(),
+            linked_object_id: Some(linked_object_id),
+            arranged_introspection_sources,
+        }];
+        ops.extend(self.create_linked_cluster_op(name, config)?);
+        Ok(ops)
+    }
+
+    /// Generates the catalog operation to create a replica of the given linked
+    /// cluster for the given storage host configuration.
+    fn create_linked_cluster_op(
+        &mut self,
+        on_cluster_name: String,
+        config: &StorageHostConfig,
+    ) -> Result<Option<catalog::Op>, AdapterError> {
+        let size = match config {
+            StorageHostConfig::Managed { size } => size.clone(),
+            StorageHostConfig::Undefined => {
+                let (size, _alloc) = self.catalog.default_storage_host_size();
+                size
+            }
+            StorageHostConfig::Remote { .. } => return Ok(None),
+        };
+        let azs = self.catalog.state().availability_zones();
+        let n_replicas_per_az = azs
+            .iter()
+            .map(|az| (az.clone(), 0))
+            .collect::<HashMap<_, _>>();
+        let location = self.catalog.concretize_replica_location(
+            SerializedComputeReplicaLocation::Managed {
+                size,
+                availability_zone: Self::choose_az(&n_replicas_per_az),
+                az_user_specified: false,
+            },
+        )?;
+        let logging = {
+            ComputeReplicaLogging {
+                log_logging: false,
+                interval: Some(Duration::from_micros(
+                    DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS.into(),
+                )),
+                sources: vec![],
+                views: vec![],
+            }
+        };
+        Ok(Some(catalog::Op::CreateComputeReplica {
+            name: "linked".into(),
+            on_cluster_name,
+            config: ComputeReplicaConfig {
+                idle_arrangement_merge_effort: None,
+                location,
+                logging,
+            },
+        }))
+    }
+
+    /// Generates the catalog operations to alter the linked cluster for the
+    /// source or sink with the given ID, if such a cluster exists.
+    fn alter_linked_cluster_ops(
+        &mut self,
+        linked_object_id: GlobalId,
+        config: &StorageHostConfig,
+    ) -> Result<Vec<catalog::Op>, AdapterError> {
+        let mut ops = vec![];
+        if let Some(linked_cluster) = self.catalog.get_linked_cluster(linked_object_id) {
+            let cluster_name = linked_cluster.name.clone();
+            for name in linked_cluster.replica_id_by_name.keys() {
+                let (_ids, drop_ops) = self
+                    .catalog
+                    .drop_compute_instance_replica_ops(&[(cluster_name.clone(), name.into())]);
+                ops.extend(drop_ops);
+            }
+            ops.extend(self.create_linked_cluster_op(cluster_name, config)?)
+        }
+        Ok(ops)
+    }
 }
 
 enum LogReadStyle<'a> {
@@ -3833,14 +4066,13 @@ enum LogReadStyle<'a> {
     Subscribe,
 }
 
-fn check_no_invalid_log_reads<'a, S>(
-    catalog: &Catalog<S>,
+fn check_no_invalid_log_reads<'a>(
+    catalog: &Catalog,
     compute_instance: &ComputeInstance,
     source_ids: &BTreeSet<GlobalId>,
     log_read_style: LogReadStyle<'a>,
 ) -> Result<(), AdapterError>
 where
-    S: Append,
 {
     let log_names = source_ids
         .iter()
@@ -3884,4 +4116,23 @@ where
     }
 
     Ok(())
+}
+
+/// Return a [`StorageHostConfig`] based on the possibly altered parameters.
+fn alter_storage_host_config(
+    size: AlterOptionParameter,
+    remote: AlterOptionParameter,
+) -> Result<Option<StorageHostConfig>, AdapterError> {
+    match (size, remote) {
+        // Should be caught during planning, but it is better to be safe
+        (AlterOptionParameter::Set(_), AlterOptionParameter::Set(_)) => {
+            coord_bail!("only one of REMOTE and SIZE can be set")
+        }
+        (AlterOptionParameter::Set(size), _) => Ok(Some(StorageHostConfig::Managed { size })),
+        (_, AlterOptionParameter::Set(addr)) => Ok(Some(StorageHostConfig::Remote { addr })),
+        (_, AlterOptionParameter::Reset) | (AlterOptionParameter::Reset, _) => {
+            Ok(Some(StorageHostConfig::Undefined))
+        }
+        (_, _) => Ok(None),
+    }
 }

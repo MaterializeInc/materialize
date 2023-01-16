@@ -22,12 +22,12 @@ class PgCdc(Check):
                 > CREATE SECRET pgpass1 AS 'postgres';
 
                 > CREATE CONNECTION pg1 FOR POSTGRES
-                  HOST 'postgres-source',
+                  HOST 'postgres',
                   DATABASE postgres,
                   USER postgres1,
                   PASSWORD SECRET pgpass1
 
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 CREATE USER postgres1 WITH SUPERUSER PASSWORD 'postgres';
                 ALTER USER postgres1 WITH replication;
                 DROP PUBLICATION IF EXISTS postgres_source;
@@ -54,25 +54,25 @@ class PgCdc(Check):
                   (PUBLICATION 'postgres_source')
                   FOR TABLES (postgres_source_table AS postgres_source_tableA);
 
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table SELECT 'B', 1, REPEAT('X', 1024) FROM generate_series(1,100);
                 UPDATE postgres_source_table SET f2 = f2 + 1;
 
                 > CREATE SECRET pgpass2 AS 'postgres';
 
                 > CREATE CONNECTION pg2 FOR POSTGRES
-                  HOST 'postgres-source',
+                  HOST 'postgres',
                   DATABASE postgres,
                   USER postgres1,
                   PASSWORD SECRET pgpass1
 
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table SELECT 'C', 1, REPEAT('X', 1024) FROM generate_series(1,100);
                 UPDATE postgres_source_table SET f2 = f2 + 1;
                 """,
                 """
 
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table SELECT 'D', 1, REPEAT('X', 1024) FROM generate_series(1,100);
                 UPDATE postgres_source_table SET f2 = f2 + 1;
 
@@ -81,18 +81,18 @@ class PgCdc(Check):
                   (PUBLICATION 'postgres_source')
                   FOR TABLES (postgres_source_table AS postgres_source_tableB);
 
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table SELECT 'E', 1, REPEAT('X', 1024) FROM generate_series(1,100);
                 UPDATE postgres_source_table SET f2 = f2 + 1;
 
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table SELECT 'F', 1, REPEAT('X', 1024) FROM generate_series(1,100);
                 UPDATE postgres_source_table SET f2 = f2 + 1;
 
                 > CREATE SECRET pgpass3 AS 'postgres';
 
                 > CREATE CONNECTION pg3 FOR POSTGRES
-                  HOST 'postgres-source',
+                  HOST 'postgres',
                   DATABASE postgres,
                   USER postgres1,
                   PASSWORD SECRET pgpass3
@@ -102,12 +102,12 @@ class PgCdc(Check):
                   (PUBLICATION 'postgres_source')
                   FOR TABLES (postgres_source_table AS postgres_source_tableC);
 
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table SELECT 'G', 1, REPEAT('X', 1024) FROM generate_series(1,100);
                 UPDATE postgres_source_table SET f2 = f2 + 1;
 
 
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table SELECT 'H', 1, REPEAT('X', 1024) FROM generate_series(1,100);
                 UPDATE postgres_source_table SET f2 = f2 + 1;
                 """,
@@ -160,12 +160,12 @@ class PgCdcMzNow(Check):
                 > CREATE SECRET postgres_mz_now_pass AS 'postgres';
 
                 > CREATE CONNECTION postgres_mz_now_conn FOR POSTGRES
-                  HOST 'postgres-source',
+                  HOST 'postgres',
                   DATABASE postgres,
                   USER postgres2,
                   PASSWORD SECRET postgres_mz_now_pass
 
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 CREATE USER postgres2 WITH SUPERUSER PASSWORD 'postgres';
                 ALTER USER postgres2 WITH replication;
                 DROP PUBLICATION IF EXISTS postgres_mz_now_publication;
@@ -201,7 +201,7 @@ class PgCdcMzNow(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'A2');
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'B2');
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'C2');
@@ -211,7 +211,7 @@ class PgCdcMzNow(Check):
                 UPDATE postgres_mz_now_table SET f1 = NOW() WHERE f2 = 'C1';
                 """,
                 """
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'A3');
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'B3');
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'C3');
@@ -230,7 +230,7 @@ class PgCdcMzNow(Check):
                 > SELECT COUNT(*) FROM postgres_mz_now_table;
                 13
 
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'A4');
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'B4');
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'C4');
@@ -250,7 +250,7 @@ class PgCdcMzNow(Check):
                 0
 
                 # Rollback the last INSERTs so that validate() can be called multiple times
-                $ postgres-execute connection=postgres://postgres:postgres@postgres-source
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'B3');
                 DELETE FROM postgres_mz_now_table WHERE f2 LIKE '%4%';
                 """

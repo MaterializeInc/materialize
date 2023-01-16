@@ -26,6 +26,7 @@ kubectl get events > kubectl-get-events.log || true
 kubectl get all > kubectl-get-all.log || true
 kubectl describe all > kubectl-describe-all.log || true
 buildkite-agent artifact upload "kubectl-*.log"
+buildkite-agent artifact upload /var/log/dmesg
 
 ci_unimportant_heading "cloudtest: Resetting..."
 bin/ci-builder run stable test/cloudtest/reset

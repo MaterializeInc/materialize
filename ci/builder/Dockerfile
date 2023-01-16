@@ -112,7 +112,7 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/au
     && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.8.0/shellcheck \
     && rm shellcheck.tar.xz \
     && mkdir -p /usr/local/lib/docker/cli-plugins \
-    && curl -fsSL https://github.com/docker/compose/releases/download/v2.6.0/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
+    && curl -fsSL https://github.com/docker/compose/releases/download/v2.15.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
@@ -146,17 +146,16 @@ RUN mkdir rust \
     && rm -f rust-src.asc rust-src.tar.gz \
     && case $RUST_COMPONENTS in *miri*) \
         PATH=$PATH:/root/.cargo/bin cargo miri setup \
-        && mv /root/.cargo/bin/xargo /usr/local/bin/xargo \
-        && mv /root/.cargo/bin/xargo-check /usr/local/bin/xargo-check \
         ;; \
     esac \
     && rm -rf rust \
     && cargo install --root /usr/local --version "=0.5.2" cargo-about \
     && cargo install --root /usr/local --version "=1.40.5" cargo-deb \
     && cargo install --root /usr/local --version "=0.12.2" cargo-deny \
-    && cargo install --root /usr/local --version ="0.9.17" cargo-hakari \
+    && cargo install --root /usr/local --version ="0.9.18" cargo-hakari \
     && cargo install --root /usr/local --version "=0.9.44" cargo-nextest \
-    && cargo install --root /usr/local --version "=0.1.34" cargo-udeps  --features=vendored-openssl \
+    && `: Until https://github.com/est31/cargo-udeps/pull/147 is released in cargo-udeps` \
+    && cargo install --root /usr/local --git https://github.com/est31/cargo-udeps --rev=b84d478ef3efd7264dba8c15c31a50c6399dc5bb --locked  cargo-udeps --features=vendored-openssl \
     && cargo install --root /usr/local --version "=0.2.15" --no-default-features --features=s3,openssl/vendored sccache
 
 # Link the system lld into the cross-compiling sysroot.
@@ -233,7 +232,7 @@ ENV CC=$ARCH_GCC-unknown-linux-gnu-cc
 ENV CXX=$ARCH_GCC-unknown-linux-gnu-c++
 ENV CXXSTDLIB=static=stdc++
 ENV LDFLAGS="-fuse-ld=lld -static-libstdc++"
-ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zlib -Clink-arg=-fuse-ld=lld -L/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot/lib/"
+ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zlib -Clink-arg=-fuse-ld=lld -L/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot/lib/ -Csymbol-mangling-version=v0"
 ENV TARGET_AR=$AR
 ENV TARGET_CC=$CC
 ENV TARGET_CXX=$CXX
@@ -244,10 +243,6 @@ ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-unknown-linux-gnu-cc
 ENV CARGO_TARGET_DIR=/mnt/build
 ENV CARGO_INCREMENTAL=0
-
-# The kubeconfig file needs to be in the working directory so that it can be shared
-# across invocations of the container
-ENV KUBECONFIG=kubeconfig
 
 # Set a environment variable that tools can check to see if they're in the
 # builder or not.

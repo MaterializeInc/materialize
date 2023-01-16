@@ -12,18 +12,18 @@
 
 use std::sync::Arc;
 
-use mz_ore::tracing::OpenTelemetryContext;
-use rand::Rng;
+use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{oneshot, watch};
 use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use mz_compute_client::response::PeekResponse;
+use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::ScalarType;
 use mz_sql::ast::{InsertSource, Query, Raw, SetExpr, Statement};
 use mz_sql::catalog::SessionCatalog as _;
 use mz_sql::plan::{CreateRolePlan, Params};
-use mz_stash::Append;
 
 use crate::client::ConnectionId;
 use crate::command::{
@@ -34,10 +34,11 @@ use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, CreateSourceStatementReady, Message, PendingTxn};
 use crate::error::AdapterError;
 use crate::metrics;
+use crate::notice::AdapterNotice;
 use crate::session::{PreparedStatement, Session, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     pub(crate) async fn handle_command(&mut self, cmd: Command) {
         match cmd {
             Command::Startup {
@@ -164,14 +165,6 @@ impl<S: Append + 'static> Coordinator<S> {
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
-        if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
-            let _ = tx.send(Response {
-                result: Err(e.into()),
-                session,
-            });
-            return;
-        }
-
         if self
             .catalog
             .for_session(&session)
@@ -197,6 +190,14 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
+        if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
+            let _ = tx.send(Response {
+                result: Err(e.into()),
+                session,
+            });
+            return;
+        }
+
         let mut messages = vec![];
         let catalog = self.catalog.for_session(&session);
         if catalog.active_database().is_none() {
@@ -204,8 +205,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 session.vars().database().into(),
             ));
         }
-
-        let secret_key = rand::thread_rng().gen();
 
         let session_type = metrics::session_type_label_value(&session);
         self.metrics
@@ -216,19 +215,14 @@ impl<S: Append + 'static> Coordinator<S> {
             session.conn_id(),
             ConnMeta {
                 cancel_tx,
-                secret_key,
+                secret_key: session.secret_key(),
                 notice_tx: session.retain_notice_transmitter(),
                 drop_sinks: Vec::new(),
             },
         );
 
-        ClientTransmitter::new(tx, self.internal_cmd_tx.clone()).send(
-            Ok(StartupResponse {
-                messages,
-                secret_key,
-            }),
-            session,
-        )
+        ClientTransmitter::new(tx, self.internal_cmd_tx.clone())
+            .send(Ok(StartupResponse { messages }), session)
     }
 
     /// Handles an execute command.
@@ -239,6 +233,19 @@ impl<S: Append + 'static> Coordinator<S> {
         mut session: Session,
         tx: ClientTransmitter<ExecuteResponse>,
     ) {
+        if session.vars().emit_trace_id_notice() {
+            let span_context = tracing::Span::current()
+                .context()
+                .span()
+                .span_context()
+                .clone();
+            if span_context.is_valid() {
+                session.add_notice(AdapterNotice::QueryTrace {
+                    trace_id: span_context.trace_id(),
+                });
+            }
+        }
+
         if let Err(err) = self.verify_portal(&mut session, &portal_name) {
             return tx.send(Err(err), session);
         }
@@ -522,6 +529,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 if let Deferred::Plan(ready) = ready {
                     ready.tx.send(Ok(ExecuteResponse::Canceled), ready.session);
                 }
+            }
+
+            // Cancel commands waiting on a real time recency timestamp. There is at most one  per session.
+            if let Some(real_time_recency_context) =
+                self.pending_real_time_recency_timestamp.remove(&conn_id)
+            {
+                let (tx, session) = real_time_recency_context.take_tx_and_session();
+                tx.send(Ok(ExecuteResponse::Canceled), session);
             }
 
             // Inform the target session (if it asks) about the cancellation.

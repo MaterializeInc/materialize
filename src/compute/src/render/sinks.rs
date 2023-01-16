@@ -21,6 +21,7 @@ use mz_expr::{permutation_for_arrangement, MapFilterProject};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;
+use mz_timely_util::probe;
 
 use crate::compute_state::SinkToken;
 use crate::render::{context::Context, RenderTimestamp};
@@ -38,6 +39,7 @@ where
         import_ids: BTreeSet<GlobalId>,
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,
+        probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         let sink_render = get_sink_render_for::<G>(&sink.connection);
 
@@ -80,6 +82,7 @@ where
             sink_id,
             ok_collection,
             err_collection,
+            probes,
         );
 
         if let Some(sink_token) = sink_token {
@@ -108,6 +111,7 @@ where
         sink_id: GlobalId,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
+        probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = mz_repr::Timestamp>;

@@ -11,6 +11,7 @@ askama = { version = "0.11.1", default-features = false, features = ["config", "
 anyhow = "1.0.66"
 axum = { version = "0.6.1", features = ["headers"] }
 backtrace = "0.3.66"
+bytesize = "1.1.0"
 cfg-if = "1.0.0"
 headers = "0.3.8"
 http = "0.2.8"
@@ -24,12 +25,10 @@ mz-ore = { path = "../ore" }
 pprof = { git = "https://github.com/MaterializeInc/pprof-rs.git" }
 serde = { version = "1.0.152", features = ["derive"] }
 tempfile = "3.2.0"
+tikv-jemalloc-ctl = { version = "0.5.0", features = ["use_std"], optional = true }
 tracing = "0.1.37"
 tokio = { version = "1.23.0", features = ["time"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
-
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true }
 
 [build-dependencies]
 anyhow = "1.0.66"
@@ -45,3 +44,7 @@ mz-npm = { path = "../npm" }
 dev-web = []
 # Whether to enable profiling features that depend on jemalloc.
 jemalloc = ["tikv-jemalloc-ctl"]
+
+[package.metadata.cargo-udeps.ignore]
+# "bytesize" not used on linux
+normal = ["bytesize", "workspace-hack"]

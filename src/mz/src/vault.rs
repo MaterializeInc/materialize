@@ -117,7 +117,7 @@ mod keychain {
     }
 
     /// The MacOS error codes used here are from:
-    /// https://opensource.apple.com/source/libsecurity_keychain/libsecurity_keychain-78/lib/SecBase.h.auto.html
+    /// <https://opensource.apple.com/source/libsecurity_keychain/libsecurity_keychain-78/lib/SecBase.h.auto.html>
     fn error_handler(error: Error) -> anyhow::Error {
         if error.code() == -25300 {
             anyhow!("no credentials found in local keychain. reauthenticate with mz login.")

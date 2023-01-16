@@ -20,3 +20,9 @@ $ set-regex match=(\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)) rep
 > SET TRANSACTION_ISOLATION = 'SERIALIZABLE';
 > EXPLAIN TIMESTAMP FOR SELECT * FROM t1
 "                query timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: true\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.t1 (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+
+# Real time recency shouldn't break anything
+> SET TRANSACTION_ISOLATION = 'STRICT SERIALIZABLE';
+> SET REAL_TIME_RECENCY TO TRUE
+> EXPLAIN TIMESTAMP FOR SELECT * FROM t1
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: true\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.t1 (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"

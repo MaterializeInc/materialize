@@ -12,6 +12,7 @@ syntax = "proto3";
 import "proto/src/proto.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
+import "storage-client/src/types/parameters.proto";
 import "storage-client/src/types/sources.proto";
 import "storage-client/src/types/sinks.proto";
 
@@ -66,15 +67,30 @@ message ProtoStorageCommand {
         ProtoAllowCompaction allow_compaction = 2;
         google.protobuf.Empty initialization_complete = 3;
         ProtoCreateSinks create_sinks = 4;
+        mz_storage_client.types.parameters.ProtoStorageParameters update_configuration = 5;
     }
 }
 
 message ProtoStorageResponse {
+    message ProtoSourceStatisticsUpdate {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        uint64 worker_id = 2;
+        bool snapshot_committed = 3;
+        uint64 messages_received = 4;
+        uint64 updates_staged = 5;
+        uint64 updates_committed = 6;
+        uint64 bytes_received = 7;
+    }
+    message ProtoStatisticsUpdates {
+        repeated ProtoSourceStatisticsUpdate source_updates = 1;
+    }
+
     message ProtoDroppedIds {
         repeated mz_repr.global_id.ProtoGlobalId ids = 1;
     }
     oneof kind {
         ProtoFrontierUppersKind frontier_uppers = 1;
         ProtoDroppedIds dropped_ids = 2;
+        ProtoStatisticsUpdates stats = 3;
     }
 }

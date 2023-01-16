@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A tokio task (and support machinery) for maintaining storage-managed
-//! collections.
+//! A tokio task (and support machinery) for scraping and writing down
+//! metrics.
 
 use std::any::Any;
 use std::time::Duration;
@@ -45,7 +45,7 @@ pub(super) fn spawn_metrics_scraper(
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
     mz_ore::task::spawn(|| "metrics_scraper", async move {
-        // Keep track of what we think the contents of the output
+        // Keep track of what we think is the contents of the output
         // collection, so that we can emit the required retractions/updates
         // when we learn about new metrics.
         //
@@ -58,6 +58,7 @@ pub(super) fn spawn_metrics_scraper(
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
+            // TODO(guswynn): reduce the amount of un-formattable code here.
             tokio::select! {
                 _msg = &mut shutdown_rx => {
                     break;

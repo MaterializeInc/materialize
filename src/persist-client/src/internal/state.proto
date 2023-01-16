@@ -77,6 +77,7 @@ message ProtoStateRollup {
     string ts_codec = 4;
     string diff_codec = 5;
     uint64 seqno = 6;
+    uint64 walltime_ms = 15;
     string hostname = 14;
     uint64 last_gc_req = 10;
     map<uint64, string> rollups = 12;
@@ -129,6 +130,7 @@ message ProtoStateDiff {
 
     uint64 seqno_from = 2;
     uint64 seqno_to = 3;
+    uint64 walltime_ms = 6;
     string latest_rollup_key = 4;
 
     ProtoStateFieldDiffs field_diffs = 5;

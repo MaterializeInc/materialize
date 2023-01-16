@@ -108,6 +108,8 @@ pub struct RawSourceCreationConfig {
     pub resume_upper: Antichain<Timestamp>,
     /// A handle to the persist client cache
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    /// Place to share statistics updates with storage state.
+    pub source_statistics: crate::source::statistics::SourceStatistics,
 }
 
 /// A batch of messages from a source reader, along with the batch upper, the
@@ -292,6 +294,7 @@ where
         base_metrics: _,
         now: _,
         persist_clients: _,
+        source_statistics,
     } = config;
     Box::pin(async_stream::stream!({
         // Most recent batch upper frontier, does not regress.
@@ -376,7 +379,17 @@ where
                                     if let Some(prev_offset) = prev_offset {
                                         assert!(offset_frontier >= prev_offset, "offset regressed");
                                     }
+
+                                    if let Ok(message) = &message {
+                                        source_statistics.inc_messages_received_by(1);
+                                        source_statistics.inc_bytes_received_by(
+                                            u64::cast_from(message.key.len().unwrap_or(0))
+                                            + u64::cast_from(message.value.len().unwrap_or(0))
+                                        );
+                                    }
+
                                     untimestamped_messages.entry(pid).or_default().push(((message, ts, diff), offset));
+
                                 }
                                 SourceMessageType::SourceStatus(update) => {
                                     status_update = Some(update);
@@ -512,6 +525,7 @@ where
         base_metrics,
         now: now_fn,
         persist_clients: _,
+        source_statistics: _,
     } = config;
 
     let (stream, capability) = async_source(
@@ -1023,6 +1037,7 @@ where
         base_metrics: _,
         now,
         persist_clients,
+        source_statistics: _,
     } = config;
 
     let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
@@ -1250,9 +1265,16 @@ where
         base_metrics,
         now: _,
         persist_clients: _,
+        source_statistics: _,
     } = config;
 
     let bytes_read_counter = base_metrics.bytes_read.clone();
+
+    // TODO(petrosagg): figure out what this operator's read requirements are. The code currently
+    // relies on the other handle that is present in the source operator to not over compact, which
+    // is currently true since it's driven by the resumption frontier. Nevertheless, we should fix
+    // this and reason locally instead of globally.
+    timestamper.compact(Antichain::new());
 
     let operator_name = format!("reclock({})", id);
     let mut reclock_op = OperatorBuilder::new(operator_name, scope.clone());

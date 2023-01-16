@@ -24,7 +24,7 @@
 //! printed in contexts where trailing whitespace is unacceptable, like
 //! sqllogictest files.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::iter;
 
@@ -46,11 +46,11 @@ pub struct ViewExplanation<'a> {
     /// left-to-right post-order.
     nodes: Vec<ExplanationNode<'a>>,
     /// Records the chain ID that was assigned to each expression.
-    expr_chains: HashMap<*const MirRelationExpr, usize>,
+    expr_chains: BTreeMap<*const MirRelationExpr, usize>,
     /// Records the chain ID that was assigned to each let.
-    local_id_chains: HashMap<LocalId, usize>,
+    local_id_chains: BTreeMap<LocalId, usize>,
     /// Records the local ID that corresponds to a chain ID, if any.
-    chain_local_ids: HashMap<usize, LocalId>,
+    chain_local_ids: BTreeMap<usize, LocalId>,
     /// The ID of the current chain. Incremented while constructing the
     /// `Explanation`.
     chain: usize,
@@ -171,9 +171,9 @@ impl<'a> ViewExplanation<'a> {
         let mut explanation = ViewExplanation {
             expr_humanizer,
             nodes: vec![],
-            expr_chains: HashMap::new(),
-            local_id_chains: HashMap::new(),
-            chain_local_ids: HashMap::new(),
+            expr_chains: BTreeMap::new(),
+            local_id_chains: BTreeMap::new(),
+            chain_local_ids: BTreeMap::new(),
             chain: 0,
         };
         walk(expr, &mut explanation);

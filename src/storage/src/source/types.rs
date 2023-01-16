@@ -26,7 +26,6 @@ use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
 use timely::scheduling::activate::SyncActivator;
 use timely::Data;
 
-use mz_avro::types::Value;
 use mz_expr::PartitionId;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
@@ -640,13 +639,6 @@ impl MaybeLength for Vec<u8> {
 impl MaybeLength for mz_repr::Row {
     fn len(&self) -> Option<usize> {
         Some(self.data().len())
-    }
-}
-
-impl MaybeLength for Value {
-    // Not possible to compute a size in bytes without recursively traversing the entire tree.
-    fn len(&self) -> Option<usize> {
-        None
     }
 }
 

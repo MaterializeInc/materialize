@@ -18,8 +18,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
+use futures::Future;
 use itertools::Itertools;
+use mz_compute_client::protocol::command::ComputeParameters;
 use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::types::parameters::{PersistParameters, StorageParameters};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -59,15 +62,14 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    AlterOptionParameter, CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
-    StorageHostConfig as PlanStorageHostConfig,
+    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
+    Plan, PlanContext, StatementDesc, StorageHostConfig as PlanStorageHostConfig,
 };
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_stash::{Append, Memory, Postgres, PostgresFactory};
+use mz_stash::{Stash, StashFactory};
 use mz_storage_client::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
@@ -154,15 +156,15 @@ pub const DEFAULT_CLUSTER_REPLICA_NAME: &str = "r1";
 /// implicitly present in all databases, that house various system views.
 /// The big examples of ambient schemas are `pg_catalog` and `mz_catalog`.
 #[derive(Debug)]
-pub struct Catalog<S> {
+pub struct Catalog {
     state: CatalogState,
-    storage: Arc<Mutex<storage::Connection<S>>>,
+    storage: Arc<Mutex<storage::Connection>>,
     transient_revision: u64,
 }
 
 // Implement our own Clone because derive can't unless S is Clone, which it's
 // not (hence the Arc).
-impl<S> Clone for Catalog<S> {
+impl Clone for Catalog {
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
@@ -182,17 +184,18 @@ pub struct CatalogState {
     temporary_schemas: HashMap<ConnectionId, Schema>,
     compute_instances_by_id: HashMap<ComputeInstanceId, ComputeInstance>,
     compute_instances_by_name: HashMap<String, ComputeInstanceId>,
+    compute_instances_by_linked_object_id: HashMap<GlobalId, ComputeInstanceId>,
     roles: HashMap<String, Role>,
     config: mz_sql::catalog::CatalogConfig,
     oid_counter: u32,
     cluster_replica_sizes: ClusterReplicaSizeMap,
     storage_host_sizes: StorageHostSizeMap,
-    most_recent_storage_usage_collection: EpochMillis,
     default_storage_host_size: Option<String>,
     availability_zones: Vec<String>,
     system_configuration: SystemVars,
     egress_ips: Vec<Ipv4Addr>,
     aws_principal_context: Option<AwsPrincipalContext>,
+    aws_privatelink_availability_zones: Option<HashSet<String>>,
 }
 
 impl CatalogState {
@@ -675,6 +678,7 @@ impl CatalogState {
         &mut self,
         id: ComputeInstanceId,
         name: String,
+        linked_object_id: Option<GlobalId>,
         introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
     ) {
         let mut log_indexes = BTreeMap::new();
@@ -736,6 +740,7 @@ impl CatalogState {
             ComputeInstance {
                 name: name.clone(),
                 id,
+                linked_object_id,
                 exports: HashSet::new(),
                 log_indexes,
                 replica_id_by_name: HashMap::new(),
@@ -743,6 +748,12 @@ impl CatalogState {
             },
         );
         assert!(self.compute_instances_by_name.insert(name, id).is_none());
+        if let Some(linked_object_id) = linked_object_id {
+            assert!(self
+                .compute_instances_by_linked_object_id
+                .insert(linked_object_id, id)
+                .is_none());
+        }
     }
 
     fn insert_compute_replica(
@@ -1160,8 +1171,7 @@ impl CatalogState {
 
     pub fn resolve_storage_host_config(
         &self,
-        storage_host_config: PlanStorageHostConfig,
-        allow_undefined: bool,
+        storage_host_config: &PlanStorageHostConfig,
     ) -> Result<StorageHostConfig, AdapterError> {
         let host_sizes = &self.storage_host_sizes;
         let mut entries = host_sizes.0.iter().collect::<Vec<_>>();
@@ -1176,28 +1186,31 @@ impl CatalogState {
             )| (workers, memory_limit),
         );
         let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-        let storage_host_config = match storage_host_config {
-            PlanStorageHostConfig::Remote { addr } => StorageHostConfig::Remote { addr },
-            PlanStorageHostConfig::Managed { size } => {
-                let allocation = host_sizes.0.get(&size).ok_or_else(|| {
-                    AdapterError::InvalidStorageHostSize {
-                        size: size.clone(),
-                        expected,
+        let storage_host_config =
+            match storage_host_config {
+                PlanStorageHostConfig::Remote { addr } => {
+                    StorageHostConfig::Remote { addr: addr.into() }
+                }
+                PlanStorageHostConfig::Managed { size } => {
+                    let allocation = host_sizes.0.get(size).ok_or_else(|| {
+                        AdapterError::InvalidStorageHostSize {
+                            size: size.clone(),
+                            expected,
+                        }
+                    })?;
+                    StorageHostConfig::Managed {
+                        allocation: allocation.clone(),
+                        size: size.into(),
                     }
-                })?;
-                StorageHostConfig::Managed {
-                    allocation: allocation.clone(),
-                    size,
                 }
-            }
-            PlanStorageHostConfig::Undefined => {
-                if !allow_undefined {
-                    return Err(AdapterError::StorageHostSizeRequired { expected });
+                PlanStorageHostConfig::Undefined => {
+                    if !self.config.unsafe_mode {
+                        return Err(AdapterError::StorageHostSizeRequired { expected });
+                    }
+                    let (size, allocation) = self.default_storage_host_size();
+                    StorageHostConfig::Managed { allocation, size }
                 }
-                let (size, allocation) = self.default_storage_host_size();
-                StorageHostConfig::Managed { allocation, size }
-            }
-        };
+            };
         Ok(storage_host_config)
     }
 
@@ -1219,10 +1232,10 @@ impl CatalogState {
         &self.availability_zones
     }
 
-    /// Returns the default storage host size
+    /// Returns the default storage host size and allocation.
     ///
-    /// If a default size was given as configuration, it is always used, otherwise the
-    /// smallest host size is used instead.
+    /// If a default size was given as configuration, it is always used,
+    /// otherwise the smallest host size is used instead.
     pub fn default_storage_host_size(&self) -> (String, StorageHostResourceAllocation) {
         match &self.default_storage_host_size {
             Some(default_storage_host_size) => {
@@ -1248,10 +1261,11 @@ impl CatalogState {
 
     // TODO(mjibson): Is there a way to make this a closure to avoid explicitly
     // passing tx, session, and builtin_table_updates?
-    fn add_to_audit_log<S: Append>(
+    fn add_to_audit_log(
         &self,
+        oracle_write_ts: mz_repr::Timestamp,
         session: Option<&Session>,
-        tx: &mut storage::Transaction<S>,
+        tx: &mut storage::Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         event_type: EventType,
@@ -1259,7 +1273,7 @@ impl CatalogState {
         details: EventDetails,
     ) -> Result<(), Error> {
         let user = session.map(|session| session.user().name.to_string());
-        let occurred_at = (self.config.now)();
+        let occurred_at = oracle_write_ts.into();
         let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
         let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
         builtin_table_updates.push(self.pack_audit_log_update(&event)?);
@@ -1268,9 +1282,9 @@ impl CatalogState {
         Ok(())
     }
 
-    fn add_to_storage_usage<S: Append>(
+    fn add_to_storage_usage(
         &self,
-        tx: &mut storage::Transaction<S>,
+        tx: &mut storage::Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         shard_id: Option<String>,
         size_bytes: u64,
@@ -1389,6 +1403,7 @@ pub struct ComputeInstance {
     pub name: String,
     pub id: ComputeInstanceId,
     pub log_indexes: BTreeMap<LogVariant, GlobalId>,
+    pub linked_object_id: Option<GlobalId>,
     /// Indexes and materialized views exported by this compute instance.
     /// Does not include introspection source indexes.
     pub exports: HashSet<GlobalId>,
@@ -2101,7 +2116,7 @@ impl CatalogItemRebuilder {
         }
     }
 
-    fn build<S: Append>(self, catalog: &Catalog<S>) -> CatalogItem {
+    fn build(self, catalog: &Catalog) -> CatalogItem {
         match self {
             Self::SystemSource(item) => item,
             Self::Object(create_sql) => catalog
@@ -2146,35 +2161,7 @@ impl BuiltinMigrationMetadata {
     }
 }
 
-impl Catalog<Memory> {
-    /// Opens a debug in-memory catalog.
-    ///
-    /// See [`Catalog::open_debug`].
-    pub async fn open_debug_memory(now: NowFn) -> Result<Catalog<Memory>, anyhow::Error> {
-        let stash = mz_stash::Memory::new();
-        Catalog::open_debug(stash, now).await
-    }
-}
-
-impl Catalog<Postgres> {
-    /// Opens a debug postgres catalog at `url`.
-    ///
-    /// If specified, `schema` will set the connection's `search_path` to `schema`.
-    ///
-    /// See [`Catalog::open_debug`].
-    pub async fn open_debug_postgres(
-        url: String,
-        schema: Option<String>,
-        now: NowFn,
-    ) -> Result<Catalog<Postgres>, anyhow::Error> {
-        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
-        let factory = PostgresFactory::new(&MetricsRegistry::new());
-        let stash = factory.open(url, schema, tls).await?;
-        Catalog::open_debug(stash, now).await
-    }
-}
-
-impl<S: Append> Catalog<S> {
+impl Catalog {
     /// Opens or creates a catalog that stores data at `path`.
     ///
     /// Returns the catalog, metadata about builtin objects that have changed
@@ -2183,10 +2170,10 @@ impl<S: Append> Catalog<S> {
     /// catalog before any migrations were performed.
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn open(
-        config: Config<'_, S>,
+        config: Config<'_>,
     ) -> Result<
         (
-            Catalog<S>,
+            Catalog,
             BuiltinMigrationMetadata,
             Vec<BuiltinTableUpdate>,
             String,
@@ -2203,6 +2190,7 @@ impl<S: Append> Catalog<S> {
                 temporary_schemas: HashMap::new(),
                 compute_instances_by_id: HashMap::new(),
                 compute_instances_by_name: HashMap::new(),
+                compute_instances_by_linked_object_id: HashMap::new(),
                 roles: HashMap::new(),
                 config: mz_sql::catalog::CatalogConfig {
                     start_time: to_datetime((config.now)()),
@@ -2219,12 +2207,12 @@ impl<S: Append> Catalog<S> {
                 oid_counter: FIRST_USER_OID,
                 cluster_replica_sizes: config.cluster_replica_sizes,
                 storage_host_sizes: config.storage_host_sizes,
-                most_recent_storage_usage_collection: EpochMillis::MIN,
                 default_storage_host_size: config.default_storage_host_size,
                 availability_zones: config.availability_zones,
                 system_configuration: SystemVars::default(),
                 egress_ips: config.egress_ips,
                 aws_principal_context: config.aws_principal_context,
+                aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             },
             transient_revision: 0,
             storage: Arc::new(Mutex::new(config.storage)),
@@ -2341,6 +2329,8 @@ impl<S: Append> Catalog<S> {
             .into_iter()
             .partition(|(builtin, _)| matches!(builtin, Builtin::Index(_)));
 
+        let mut mz_object_dependencies_updates = vec![];
+
         for (builtin, id) in builtin_non_indexes {
             let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
             let name = QualifiedObjectName {
@@ -2403,6 +2393,7 @@ impl<S: Append> Catalog<S> {
                             )
                         });
                     let oid = catalog.allocate_oid()?;
+                    mz_object_dependencies_updates.push((id, item.uses().to_owned()));
                     catalog.state.insert_item(id, oid, name, item);
                 }
 
@@ -2446,7 +2437,7 @@ impl<S: Append> Catalog<S> {
         }
 
         let compute_instances = catalog.storage().await.load_compute_instances().await?;
-        for (id, name) in compute_instances {
+        for (id, name, linked_object_id) in compute_instances {
             let introspection_source_index_gids = catalog
                 .storage()
                 .await
@@ -2478,7 +2469,9 @@ impl<S: Append> Catalog<S> {
                 )
                 .await?;
 
-            catalog.state.insert_compute_instance(id, name, all_indexes);
+            catalog
+                .state
+                .insert_compute_instance(id, name, linked_object_id, all_indexes);
         }
 
         let replicas = catalog.storage().await.load_compute_replicas().await?;
@@ -2501,6 +2494,7 @@ impl<S: Append> Catalog<S> {
             let config = ComputeReplicaConfig {
                 location: catalog.concretize_replica_location(serialized_config.location)?,
                 logging,
+                idle_arrangement_merge_effort: serialized_config.idle_arrangement_merge_effort,
             };
 
             // And write the allocated sources back to storage
@@ -2542,6 +2536,7 @@ impl<S: Append> Catalog<S> {
                             )
                         });
                     let oid = catalog.allocate_oid()?;
+                    mz_object_dependencies_updates.push((id, item.uses().to_owned()));
                     catalog.state.insert_item(id, oid, name, item);
                 }
                 Builtin::Log(_)
@@ -2576,7 +2571,6 @@ impl<S: Append> Catalog<S> {
             .await
             .get_catalog_content_version()
             .await?
-            // `new` means that it hasn't been initialized
             .unwrap_or_else(|| "new".to_string());
 
         if !config.skip_migrations {
@@ -2652,9 +2646,25 @@ impl<S: Append> Catalog<S> {
         for (_name, role) in &catalog.state.roles {
             builtin_table_updates.push(catalog.state.pack_role_update(role, 1));
         }
-        for (name, id) in &catalog.state.compute_instances_by_name {
-            builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
-            let instance = &catalog.state.compute_instances_by_id[id];
+        for (depender, dependees) in mz_object_dependencies_updates {
+            dependees.into_iter().for_each(|dependee| {
+                builtin_table_updates
+                    .push(catalog.state.pack_depends_update(depender, dependee, 1));
+            })
+        }
+        for (id, instance) in &catalog.state.compute_instances_by_id {
+            builtin_table_updates.push(
+                catalog
+                    .state
+                    .pack_compute_instance_update(&instance.name, 1),
+            );
+            if let Some(linked_object_id) = instance.linked_object_id {
+                builtin_table_updates.push(catalog.state.pack_cluster_link_update(
+                    &instance.name,
+                    linked_object_id,
+                    1,
+                ));
+            }
             for (replica_name, replica_id) in &instance.replica_id_by_name {
                 builtin_table_updates.push(catalog.state.pack_compute_replica_update(
                     *id,
@@ -2684,10 +2694,6 @@ impl<S: Append> Catalog<S> {
         let storage_usage_events = catalog.storage().await.storage_usage().await?;
         for event in storage_usage_events {
             builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
-            let ts = event.timestamp();
-            if ts > catalog.state.most_recent_storage_usage_collection {
-                catalog.state.most_recent_storage_usage_collection = ts;
-            }
         }
 
         for ip in &catalog.state.egress_ips {
@@ -2725,7 +2731,12 @@ impl<S: Append> Catalog<S> {
         bootstrap_system_parameters: BTreeMap<String, String>,
         system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
     ) -> Result<(), AdapterError> {
-        let system_config = self.storage().await.load_system_configuration().await?;
+        let (system_config, boot_ts) = {
+            let mut storage = self.storage().await;
+            let system_config = storage.load_system_configuration().await?;
+            let boot_ts = storage.boot_ts();
+            (system_config, boot_ts)
+        };
         for (name, value) in &bootstrap_system_parameters {
             if !system_config.contains_key(name) {
                 self.state.insert_system_configuration(name, value)?;
@@ -2796,8 +2807,7 @@ impl<S: Append> Catalog<S> {
                         Op::UpdateSystemConfiguration { name, value }
                     }))
                     .collect::<Vec<_>>();
-
-                self.transact(None, ops, |_| Ok(())).await.unwrap();
+                self.transact(boot_ts, None, ops, |_| Ok(())).await.unwrap();
                 tracing::info!("parameter sync on boot: end sync");
             } else {
                 tracing::info!("parameter sync on boot: skipping sync as config has synced once");
@@ -3220,9 +3230,9 @@ impl<S: Append> Catalog<S> {
     ///
     /// TODO(justin): it might be nice if these were two different types.
     pub fn load_catalog_items<'a>(
-        tx: &mut storage::Transaction<'a, S>,
-        c: &Catalog<S>,
-    ) -> Result<Catalog<S>, Error> {
+        tx: &mut storage::Transaction<'a>,
+        c: &Catalog,
+    ) -> Result<Catalog, Error> {
         let mut c = c.clone();
         let items = tx.loaded_items();
         for (id, name, def) in items {
@@ -3252,25 +3262,56 @@ impl<S: Append> Catalog<S> {
         Ok(c)
     }
 
-    /// Opens the catalog from `stash` with parameters set appropriately for debug
-    /// contexts, like in tests.
+    /// Creates a debug catalog from a debug stash based on the current
+    /// `COCKROACH_URL` with parameters set appropriately for debug contexts,
+    /// like in tests.
     ///
     /// WARNING! This function can arbitrarily fail because it does not make any
     /// effort to adjust the catalog's contents' structure or semantics to the
     /// currently running version, i.e. it does not apply any migrations.
     ///
-    /// This function should not be called in production contexts. Use
+    /// This function must not be called in production contexts. Use
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
-    pub async fn open_debug(stash: S, now: NowFn) -> Result<Catalog<S>, anyhow::Error> {
+    pub async fn with_debug<F, Fut, T>(now: NowFn, f: F) -> T
+    where
+        F: FnOnce(Catalog) -> Fut,
+        Fut: Future<Output = T>,
+    {
+        Stash::with_debug_stash(move |stash| async move {
+            let catalog = Self::open_debug_stash(stash, now).await.unwrap();
+            f(catalog).await
+        })
+        .await
+        .unwrap()
+    }
+
+    /// Opens a debug postgres catalog at `url`.
+    ///
+    /// If specified, `schema` will set the connection's `search_path` to `schema`.
+    ///
+    /// See [`Catalog::with_debug`].
+    pub async fn open_debug_postgres(
+        url: String,
+        schema: Option<String>,
+        now: NowFn,
+    ) -> Result<Catalog, anyhow::Error> {
+        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
+        let factory = StashFactory::new(&MetricsRegistry::new());
+        let stash = factory.open(url, schema, tls).await?;
+        Self::open_debug_stash(stash, now).await
+    }
+
+    /// Opens a debug catalog from a stash.
+    pub async fn open_debug_stash(stash: Stash, now: NowFn) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
         let (consolidations_tx, consolidations_rx) = mpsc::unbounded_channel();
         // Leak the receiver so it's not dropped and send will work.
         std::mem::forget(consolidations_rx);
         let storage = storage::Connection::open(
             stash,
+            now.clone(),
             &BootstrapArgs {
-                now: (now)(),
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
                 default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
@@ -3296,6 +3337,7 @@ impl<S: Append> Catalog<S> {
             secrets_reader,
             egress_ips: vec![],
             aws_principal_context: None,
+            aws_privatelink_availability_zones: None,
             system_parameter_frontend: None,
         })
         .await?;
@@ -3348,7 +3390,7 @@ impl<S: Append> Catalog<S> {
         self.for_sessionless_user(SYSTEM_USER.clone())
     }
 
-    async fn storage<'a>(&'a self) -> MutexGuard<'a, storage::Connection<S>> {
+    async fn storage<'a>(&'a self) -> MutexGuard<'a, storage::Connection> {
         self.storage.lock().await
     }
 
@@ -3428,14 +3470,6 @@ impl<S: Append> Catalog<S> {
         &mut self,
     ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
         self.storage().await.get_all_persisted_timestamps().await
-    }
-
-    /// Get a global timestamp for a timeline that has been persisted to disk.
-    pub async fn get_persisted_timestamp(
-        &mut self,
-        timeline: &Timeline,
-    ) -> Result<mz_repr::Timestamp, Error> {
-        self.storage().await.get_persisted_timestamp(timeline).await
     }
 
     /// Get the next user id without allocating it.
@@ -3547,7 +3581,11 @@ impl<S: Append> Catalog<S> {
                 SYSTEM_USER.name
             );
         }
-        Ok(self.resolve_compute_instance(session.vars().cluster())?)
+        let instance = self.resolve_compute_instance(session.vars().cluster())?;
+        if instance.linked_object_id.is_some() {
+            coord_bail!("cannot execute queries on linked clusters");
+        }
+        Ok(instance)
     }
 
     pub fn state(&self) -> &CatalogState {
@@ -3661,7 +3699,7 @@ impl<S: Append> Catalog<S> {
         if let Some(id) = id {
             let database = self.get_database(&id);
             for (schema_id, schema) in &database.schemas_by_id {
-                Self::drop_schema_items(schema, &self.state.entry_by_id, &mut ops, &mut seen);
+                self.drop_schema_items(schema, &mut ops, &mut seen);
                 ops.push(Op::DropSchema {
                     database_id: id.clone(),
                     schema_id: schema_id.clone(),
@@ -3678,7 +3716,7 @@ impl<S: Append> Catalog<S> {
         if let Some((database_id, schema_id)) = id {
             let database = self.get_database(&database_id);
             let schema = &database.schemas_by_id[&schema_id];
-            Self::drop_schema_items(schema, &self.state.entry_by_id, &mut ops, &mut seen);
+            self.drop_schema_items(schema, &mut ops, &mut seen);
             ops.push(Op::DropSchema {
                 database_id,
                 schema_id,
@@ -3687,39 +3725,117 @@ impl<S: Append> Catalog<S> {
         ops
     }
 
-    pub fn drop_items_ops(&mut self, ids: &[GlobalId]) -> Vec<Op> {
+    pub fn drop_compute_instance_ops(
+        &self,
+        instance_names: &[String],
+    ) -> (HashMap<ComputeInstanceId, Vec<u64>>, Vec<Op>) {
+        let mut names = vec![];
+        let mut instance_ops = vec![];
+        let mut ids_to_drop = vec![];
+        for instance_name in instance_names {
+            let instance = self
+                .resolve_compute_instance(instance_name)
+                .expect("instance name already validated");
+            for replica_name in instance.replica_id_by_name.keys() {
+                names.push((instance_name.clone(), replica_name.clone()));
+            }
+            instance_ops.push(Op::DropComputeInstance {
+                name: instance_name.into(),
+            });
+            ids_to_drop.extend(instance.exports().iter().copied());
+        }
+        let (ids, replica_ops) = self.drop_compute_instance_replica_ops(&names);
+        let mut ops = self.drop_items_ops(&ids_to_drop);
+        ops.extend(replica_ops);
+        ops.extend(instance_ops);
+        (ids.into_iter().into_group_map(), ops)
+    }
+
+    /// Creates the catalog operations to drop the given compute instance
+    /// replicas.
+    ///
+    /// Returns the (instance ID, replica ID) pairs to drop, and the catalog
+    /// operations to do so.
+    pub fn drop_compute_instance_replica_ops(
+        &self,
+        names: &[(String, String)],
+    ) -> (Vec<(ComputeInstanceId, u64)>, Vec<Op>) {
+        let mut ops = vec![];
+        let mut replicas_to_drop = vec![];
+        let mut ids_to_drop = vec![];
+        for (instance_name, replica_name) in names {
+            let instance = self
+                .resolve_compute_instance(instance_name)
+                .expect("instance name already validated");
+            ops.push(Op::DropComputeReplica {
+                name: replica_name.clone(),
+                compute_name: instance_name.clone(),
+            });
+            let replica_id = instance.replica_id_by_name[replica_name];
+
+            // Determine from the replica which additional items to drop. This is the set
+            // of items that depend on the introspection sources. The sources
+            // itself are removed with Op::DropComputeReplica.
+            let logging = &instance
+                .replicas_by_id
+                .get(&replica_id)
+                .unwrap()
+                .config
+                .logging;
+
+            let log_and_view_ids = logging.source_and_view_ids();
+            let view_ids: HashSet<_> = logging.view_ids().collect();
+
+            for log_id in log_and_view_ids {
+                // We consider the dependencies of both views and logs, but remove the
+                // views itself. The views are included as they depend on the source,
+                // but we dont need an explicit Op::DropItem as they are dropped together
+                // with the replica.
+                ids_to_drop.extend(
+                    self.get_entry(&log_id)
+                        .used_by()
+                        .into_iter()
+                        .filter(|x| !view_ids.contains(x)),
+                )
+            }
+
+            replicas_to_drop.push((instance.id, replica_id));
+        }
+
+        ops.extend(self.drop_items_ops(&ids_to_drop));
+        (replicas_to_drop, ops)
+    }
+
+    pub fn drop_items_ops(&self, ids: &[GlobalId]) -> Vec<Op> {
         let mut ops = vec![];
         let mut seen = HashSet::new();
         for &id in ids {
-            Self::drop_item_cascade(id, &self.state.entry_by_id, &mut ops, &mut seen);
+            self.drop_item_cascade(id, &mut ops, &mut seen);
         }
         ops
     }
 
-    fn drop_schema_items(
-        schema: &Schema,
-        by_id: &BTreeMap<GlobalId, CatalogEntry>,
-        ops: &mut Vec<Op>,
-        seen: &mut HashSet<GlobalId>,
-    ) {
+    fn drop_schema_items(&self, schema: &Schema, ops: &mut Vec<Op>, seen: &mut HashSet<GlobalId>) {
         for &id in schema.items.values() {
-            Self::drop_item_cascade(id, by_id, ops, seen)
+            self.drop_item_cascade(id, ops, seen);
         }
     }
 
-    fn drop_item_cascade(
-        id: GlobalId,
-        by_id: &BTreeMap<GlobalId, CatalogEntry>,
-        ops: &mut Vec<Op>,
-        seen: &mut HashSet<GlobalId>,
-    ) {
+    fn drop_item_cascade(&self, id: GlobalId, ops: &mut Vec<Op>, seen: &mut HashSet<GlobalId>) {
         if !seen.contains(&id) {
             seen.insert(id);
-            for &u in &by_id[&id].used_by {
-                Self::drop_item_cascade(u, by_id, ops, seen)
+            for u in &self.state.entry_by_id[&id].used_by {
+                self.drop_item_cascade(*u, ops, seen);
             }
-            for subsource in by_id[&id].subsources() {
-                Self::drop_item_cascade(subsource, by_id, ops, seen)
+            for subsource in self.state.entry_by_id[&id].subsources() {
+                self.drop_item_cascade(subsource, ops, seen);
+            }
+            if let Some(linked_cluster_id) =
+                self.state.compute_instances_by_linked_object_id.get(&id)
+            {
+                let name = &self.state.compute_instances_by_id[linked_cluster_id].name;
+                let (_ids, cluster_ops) = self.drop_compute_instance_ops(&[name.clone()]);
+                ops.extend(cluster_ops);
             }
             ops.push(Op::DropItem(id));
         }
@@ -3771,6 +3887,29 @@ impl<S: Append> Catalog<S> {
             schema: name.schema.clone(),
             item: name.item.clone(),
         }
+    }
+
+    pub fn find_available_cluster_name(&self, name: &str) -> String {
+        let mut i = 0;
+        let mut candidate = name.to_string();
+        while self
+            .state
+            .compute_instances_by_name
+            .contains_key(&candidate)
+        {
+            i += 1;
+            candidate = format!("{}{}", name, i);
+        }
+        candidate
+    }
+
+    /// Gets the linked cluster associated with the provided object ID, if it
+    /// exists.
+    pub fn get_linked_cluster(&self, object_id: GlobalId) -> Option<&ComputeInstance> {
+        self.state
+            .compute_instances_by_linked_object_id
+            .get(&object_id)
+            .map(|id| &self.state.compute_instances_by_id[id])
     }
 
     pub fn concretize_replica_location(
@@ -3831,18 +3970,25 @@ impl<S: Append> Catalog<S> {
         Ok(location)
     }
 
+    /// Returns the default storage host size and allocation.
+    ///
+    /// If a default size was given as configuration, it is always used,
+    /// otherwise the smallest host size is used instead.
+    pub fn default_storage_host_size(&self) -> (String, StorageHostResourceAllocation) {
+        self.state.default_storage_host_size()
+    }
+
     pub fn resolve_storage_host_config(
         &self,
-        storage_host_config: PlanStorageHostConfig,
-        allow_undefined: bool,
+        storage_host_config: &PlanStorageHostConfig,
     ) -> Result<StorageHostConfig, AdapterError> {
-        self.state
-            .resolve_storage_host_config(storage_host_config, allow_undefined)
+        self.state.resolve_storage_host_config(storage_host_config)
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn transact<F, R>(
         &mut self,
+        oracle_write_ts: mz_repr::Timestamp,
         session: Option<&Session>,
         ops: Vec<Op>,
         f: F,
@@ -3878,6 +4024,7 @@ impl<S: Append> Catalog<S> {
         let mut state = self.state.clone();
 
         Self::transact_inner(
+            oracle_write_ts,
             session,
             ops,
             temporary_ids,
@@ -3906,12 +4053,13 @@ impl<S: Append> Catalog<S> {
     }
 
     fn transact_inner(
+        oracle_write_ts: mz_repr::Timestamp,
         session: Option<&Session>,
         ops: Vec<Op>,
         temporary_ids: Vec<GlobalId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
-        tx: &mut Transaction<'_, S>,
+        tx: &mut Transaction<'_>,
         state: &mut CatalogState,
     ) -> Result<(), AdapterError> {
         #[derive(Debug, Clone)]
@@ -3935,6 +4083,7 @@ impl<S: Append> Catalog<S> {
             CreateComputeInstance {
                 id: ComputeInstanceId,
                 name: String,
+                linked_object_id: Option<GlobalId>,
                 // These are the legacy, active logs of this compute instance
                 arranged_introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
             },
@@ -4008,7 +4157,7 @@ impl<S: Append> Catalog<S> {
 
         for op in ops {
             match op {
-                Op::AlterSink { id, size, remote } => {
+                Op::AlterSink { id, host_config } => {
                     use mz_sql::ast::Value;
                     use mz_sql_parser::ast::CreateSinkOptionName::*;
 
@@ -4043,77 +4192,68 @@ impl<S: Append> Catalog<S> {
                         _ => coord_bail!("sink {id} was not created with a CREATE SINK statement"),
                     };
 
-                    let new_config = alter_host_config(&old_sink.host_config, size, remote)?;
+                    create_stmt
+                        .with_options
+                        .retain(|x| ![Remote, Size].contains(&x.name));
 
-                    if let Some(config) = new_config {
-                        create_stmt
-                            .with_options
-                            .retain(|x| ![Remote, Size].contains(&x.name));
+                    let new_host_option = match &host_config {
+                        plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
+                        plan::StorageHostConfig::Remote { addr } => Some((Remote, addr.clone())),
+                        plan::StorageHostConfig::Undefined => None,
+                    };
 
-                        let new_host_option = match &config {
-                            plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
-                            plan::StorageHostConfig::Remote { addr } => {
-                                Some((Remote, addr.clone()))
-                            }
-                            plan::StorageHostConfig::Undefined => None,
-                        };
-
-                        if let Some((name, value)) = new_host_option {
-                            create_stmt.with_options.push(CreateSinkOption {
-                                name,
-                                value: Some(WithOptionValue::Value(Value::String(value))),
-                            });
-                        }
-
-                        // Undefined size sinks only allowed in unsafe mode.
-                        let allow_undefined_size = state.config().unsafe_mode;
-
-                        let host_config =
-                            state.resolve_storage_host_config(config, allow_undefined_size)?;
-                        let create_sql = stmt.to_ast_string_stable();
-                        let sink = CatalogItem::Sink(Sink {
-                            create_sql,
-                            host_config: host_config.clone(),
-                            ..old_sink
+                    if let Some((name, value)) = new_host_option {
+                        create_stmt.with_options.push(CreateSinkOption {
+                            name,
+                            value: Some(WithOptionValue::Value(Value::String(value))),
                         });
-
-                        let ser = Self::serialize_item(&sink);
-                        tx.update_item(id, &name.item, &ser)?;
-
-                        // NB: this will be re-incremented by the action below.
-                        builtin_table_updates.extend(state.pack_item_update(id, -1));
-
-                        state.add_to_audit_log(
-                            session,
-                            tx,
-                            builtin_table_updates,
-                            audit_events,
-                            EventType::Alter,
-                            ObjectType::Sink,
-                            EventDetails::AlterSourceSinkV1(mz_audit_log::AlterSourceSinkV1 {
-                                id: id.to_string(),
-                                name: Self::full_name_detail(&state.resolve_full_name(
-                                    &name,
-                                    session.map(|session| session.conn_id()),
-                                )),
-                                old_size: old_sink.host_config.size().map(|x| x.to_string()),
-                                new_size: host_config.size().map(|x| x.to_string()),
-                            }),
-                        )?;
-
-                        let to_name = entry.name().clone();
-                        catalog_action(
-                            state,
-                            builtin_table_updates,
-                            Action::UpdateItem {
-                                id,
-                                to_name,
-                                to_item: sink,
-                            },
-                        )?;
                     }
+
+                    let host_config = state.resolve_storage_host_config(&host_config)?;
+                    let create_sql = stmt.to_ast_string_stable();
+                    let sink = CatalogItem::Sink(Sink {
+                        create_sql,
+                        host_config: host_config.clone(),
+                        ..old_sink
+                    });
+
+                    let ser = Self::serialize_item(&sink);
+                    tx.update_item(id, &name.item, &ser)?;
+
+                    // NB: this will be re-incremented by the action below.
+                    builtin_table_updates.extend(state.pack_item_update(id, -1));
+
+                    state.add_to_audit_log(
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Sink,
+                        EventDetails::AlterSourceSinkV1(mz_audit_log::AlterSourceSinkV1 {
+                            id: id.to_string(),
+                            name: Self::full_name_detail(&state.resolve_full_name(
+                                &name,
+                                session.map(|session| session.conn_id()),
+                            )),
+                            old_size: old_sink.host_config.size().map(|x| x.to_string()),
+                            new_size: host_config.size().map(|x| x.to_string()),
+                        }),
+                    )?;
+
+                    let to_name = entry.name().clone();
+                    catalog_action(
+                        state,
+                        builtin_table_updates,
+                        Action::UpdateItem {
+                            id,
+                            to_name,
+                            to_item: sink,
+                        },
+                    )?;
                 }
-                Op::AlterSource { id, size, remote } => {
+                Op::AlterSource { id, host_config } => {
                     use mz_sql::ast::Value;
                     use mz_sql_parser::ast::CreateSourceOptionName::*;
 
@@ -4150,97 +4290,78 @@ impl<S: Append> Catalog<S> {
                         ),
                     };
 
-                    let new_config = match &old_source.data_source {
-                        DataSourceDesc::Ingestion(ingestion) => {
-                            alter_host_config(&ingestion.host_config, size, remote)?
-                        }
-                        DataSourceDesc::Introspection(_) | DataSourceDesc::Source => None,
+                    create_stmt
+                        .with_options
+                        .retain(|x| ![Size, Remote].contains(&x.name));
+
+                    let new_host_option = match &host_config {
+                        plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
+                        plan::StorageHostConfig::Remote { addr } => Some((Remote, addr.clone())),
+                        plan::StorageHostConfig::Undefined => None,
                     };
 
-                    if let Some(config) = new_config {
-                        create_stmt
-                            .with_options
-                            .retain(|x| ![Size, Remote].contains(&x.name));
-
-                        let new_host_option = match &config {
-                            plan::StorageHostConfig::Managed { size } => Some((Size, size.clone())),
-                            plan::StorageHostConfig::Remote { addr } => {
-                                Some((Remote, addr.clone()))
-                            }
-                            plan::StorageHostConfig::Undefined => None,
-                        };
-
-                        if let Some((name, value)) = new_host_option {
-                            create_stmt.with_options.push(CreateSourceOption {
-                                name,
-                                value: Some(WithOptionValue::Value(Value::String(value))),
-                            });
-                        }
-
-                        // Only introspection + subsources can have an undefined size outside of
-                        // unsafe mode.
-                        let allow_undefined_size = state.config().unsafe_mode
-                            || match old_source.data_source {
-                                DataSourceDesc::Introspection(_) | DataSourceDesc::Source => true,
-                                DataSourceDesc::Ingestion(_) => false,
-                            };
-
-                        let old_size = old_source.size().map(|s| s.to_string());
-                        let host_config =
-                            state.resolve_storage_host_config(config, allow_undefined_size)?;
-                        let new_size = host_config.size().map(|s| s.to_string());
-                        let data_source = match old_source.data_source {
-                            DataSourceDesc::Ingestion(ingestion) => {
-                                    DataSourceDesc::Ingestion(Ingestion {
-                                    host_config,
-                                    ..ingestion
-                                })
-                            }
-                            _ => unreachable!("already guaranteed that we do not permit modifying either SIZE or REMOTE of subsource or introspection source"),
-                        };
-
-                        let create_sql = stmt.to_ast_string_stable();
-                        let source = CatalogItem::Source(Source {
-                            create_sql,
-                            data_source,
-                            ..old_source
+                    if let Some((name, value)) = new_host_option {
+                        create_stmt.with_options.push(CreateSourceOption {
+                            name,
+                            value: Some(WithOptionValue::Value(Value::String(value))),
                         });
-
-                        let ser = Self::serialize_item(&source);
-                        tx.update_item(id, &name.item, &ser)?;
-
-                        // NB: this will be re-incremented by the action below.
-                        builtin_table_updates.extend(state.pack_item_update(id, -1));
-
-                        state.add_to_audit_log(
-                            session,
-                            tx,
-                            builtin_table_updates,
-                            audit_events,
-                            EventType::Alter,
-                            ObjectType::Source,
-                            EventDetails::AlterSourceSinkV1(mz_audit_log::AlterSourceSinkV1 {
-                                id: id.to_string(),
-                                name: Self::full_name_detail(&state.resolve_full_name(
-                                    &name,
-                                    session.map(|session| session.conn_id()),
-                                )),
-                                old_size,
-                                new_size,
-                            }),
-                        )?;
-
-                        let to_name = entry.name().clone();
-                        catalog_action(
-                            state,
-                            builtin_table_updates,
-                            Action::UpdateItem {
-                                id,
-                                to_name,
-                                to_item: source,
-                            },
-                        )?;
                     }
+
+                    let old_size = old_source.size().map(|s| s.to_string());
+                    let host_config = state.resolve_storage_host_config(&host_config)?;
+                    let new_size = host_config.size().map(|s| s.to_string());
+                    let data_source = match old_source.data_source {
+                        DataSourceDesc::Ingestion(ingestion) => {
+                                DataSourceDesc::Ingestion(Ingestion {
+                                host_config,
+                                ..ingestion
+                            })
+                        }
+                        _ => unreachable!("already guaranteed that we do not permit modifying either SIZE or REMOTE of subsource or introspection source"),
+                    };
+
+                    let create_sql = stmt.to_ast_string_stable();
+                    let source = CatalogItem::Source(Source {
+                        create_sql,
+                        data_source,
+                        ..old_source
+                    });
+
+                    let ser = Self::serialize_item(&source);
+                    tx.update_item(id, &name.item, &ser)?;
+
+                    // NB: this will be re-incremented by the action below.
+                    builtin_table_updates.extend(state.pack_item_update(id, -1));
+
+                    state.add_to_audit_log(
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Source,
+                        EventDetails::AlterSourceSinkV1(mz_audit_log::AlterSourceSinkV1 {
+                            id: id.to_string(),
+                            name: Self::full_name_detail(&state.resolve_full_name(
+                                &name,
+                                session.map(|session| session.conn_id()),
+                            )),
+                            old_size,
+                            new_size,
+                        }),
+                    )?;
+
+                    let to_name = entry.name().clone();
+                    catalog_action(
+                        state,
+                        builtin_table_updates,
+                        Action::UpdateItem {
+                            id,
+                            to_name,
+                            to_item: source,
+                        },
+                    )?;
                 }
                 Op::CreateDatabase {
                     name,
@@ -4250,6 +4371,7 @@ impl<S: Append> Catalog<S> {
                     let database_id = tx.insert_database(&name)?;
                     let schema_id = tx.insert_schema(database_id, DEFAULT_SCHEMA)?;
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4271,6 +4393,7 @@ impl<S: Append> Catalog<S> {
                         },
                     )?;
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4314,6 +4437,7 @@ impl<S: Append> Catalog<S> {
                     };
                     let schema_id = tx.insert_schema(database_id, &schema_name)?;
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4345,6 +4469,7 @@ impl<S: Append> Catalog<S> {
                     }
                     let role_id = tx.insert_user_role(&name)?;
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4368,6 +4493,7 @@ impl<S: Append> Catalog<S> {
                 }
                 Op::CreateComputeInstance {
                     name,
+                    linked_object_id,
                     arranged_introspection_sources,
                 } => {
                     if is_reserved_name(&name) {
@@ -4375,9 +4501,13 @@ impl<S: Append> Catalog<S> {
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
-                    let id =
-                        tx.insert_user_compute_instance(&name, &arranged_introspection_sources)?;
+                    let id = tx.insert_user_compute_instance(
+                        &name,
+                        linked_object_id,
+                        &arranged_introspection_sources,
+                    )?;
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4395,6 +4525,7 @@ impl<S: Append> Catalog<S> {
                         Action::CreateComputeInstance {
                             id,
                             name,
+                            linked_object_id,
                             arranged_introspection_sources,
                         },
                     )?;
@@ -4432,6 +4563,7 @@ impl<S: Append> Catalog<S> {
                             },
                         );
                         state.add_to_audit_log(
+                            oracle_write_ts,
                             session,
                             tx,
                             builtin_table_updates,
@@ -4509,6 +4641,11 @@ impl<S: Append> Catalog<S> {
                         let schema_id = name.qualifiers.schema_spec.clone().into();
                         let serialized_item = Self::serialize_item(&item);
                         tx.insert_item(id, schema_id, &name.item, serialized_item)?;
+
+                        // Fill the `mz_object_dependencies` table.
+                        for dependee in item.uses() {
+                            builtin_table_updates.push(state.pack_depends_update(id, *dependee, 1))
+                        }
                     }
 
                     if Self::should_audit_log_item(&item) {
@@ -4537,6 +4674,7 @@ impl<S: Append> Catalog<S> {
                             _ => EventDetails::IdFullNameV1(IdFullNameV1 { id, name }),
                         };
                         state.add_to_audit_log(
+                            oracle_write_ts,
                             session,
                             tx,
                             builtin_table_updates,
@@ -4563,6 +4701,7 @@ impl<S: Append> Catalog<S> {
                     tx.remove_database(&id)?;
                     builtin_table_updates.push(state.pack_database_update(database, -1));
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4588,6 +4727,7 @@ impl<S: Append> Catalog<S> {
                         -1,
                     ));
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4619,6 +4759,7 @@ impl<S: Append> Catalog<S> {
                     let role = &state.roles[&name];
                     builtin_table_updates.push(state.pack_role_update(role, -1));
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4638,13 +4779,21 @@ impl<S: Append> Catalog<S> {
                             ErrorKind::ReadOnlyComputeInstance(name),
                         )));
                     }
-                    let (instance_id, introspection_source_index_ids) =
+                    let (instance_id, linked_object_id, introspection_source_index_ids) =
                         tx.remove_compute_instance(&name)?;
                     builtin_table_updates.push(state.pack_compute_instance_update(&name, -1));
+                    if let Some(linked_object_id) = linked_object_id {
+                        builtin_table_updates.push(state.pack_cluster_link_update(
+                            &name,
+                            linked_object_id,
+                            -1,
+                        ));
+                    }
                     for id in &introspection_source_index_ids {
                         builtin_table_updates.extend(state.pack_item_update(*id, -1));
                     }
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4709,6 +4858,7 @@ impl<S: Append> Catalog<S> {
                             replica_name: name.clone(),
                         });
                     state.add_to_audit_log(
+                        oracle_write_ts,
                         session,
                         tx,
                         builtin_table_updates,
@@ -4729,10 +4879,17 @@ impl<S: Append> Catalog<S> {
                     let entry = state.get_entry(&id);
                     if !entry.item().is_temporary() {
                         tx.remove_item(id)?;
+
+                        // Clean up the `mz_object_dependencies` table.
+                        for dependee in entry.item().uses() {
+                            builtin_table_updates.push(state.pack_depends_update(id, *dependee, -1))
+                        }
                     }
+
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
                     if Self::should_audit_log_item(&entry.item) {
                         state.add_to_audit_log(
+                            oracle_write_ts,
                             session,
                             tx,
                             builtin_table_updates,
@@ -4792,6 +4949,7 @@ impl<S: Append> Catalog<S> {
                     });
                     if Self::should_audit_log_item(&entry.item) {
                         state.add_to_audit_log(
+                            oracle_write_ts,
                             session,
                             tx,
                             builtin_table_updates,
@@ -5039,6 +5197,7 @@ impl<S: Append> Catalog<S> {
                 Action::CreateComputeInstance {
                     id,
                     name,
+                    linked_object_id,
                     arranged_introspection_sources,
                 } => {
                     info!("create cluster {}", name);
@@ -5047,8 +5206,20 @@ impl<S: Append> Catalog<S> {
                             .iter()
                             .map(|(_, id)| *id)
                             .collect();
-                    state.insert_compute_instance(id, name.clone(), arranged_introspection_sources);
+                    state.insert_compute_instance(
+                        id,
+                        name.clone(),
+                        linked_object_id,
+                        arranged_introspection_sources,
+                    );
                     builtin_table_updates.push(state.pack_compute_instance_update(&name, 1));
+                    if let Some(linked_object_id) = linked_object_id {
+                        builtin_table_updates.push(state.pack_cluster_link_update(
+                            &name,
+                            linked_object_id,
+                            1,
+                        ));
+                    }
                     for id in arranged_introspection_source_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
@@ -5131,6 +5302,13 @@ impl<S: Append> Catalog<S> {
                         .compute_instances_by_id
                         .remove(&id)
                         .expect("can only drop known instances");
+
+                    if let Some(linked_object_id) = instance.linked_object_id {
+                        state
+                            .compute_instances_by_linked_object_id
+                            .remove(&linked_object_id)
+                            .expect("can only drop known instances");
+                    }
 
                     assert!(
                         instance.exports.is_empty() && instance.replicas_by_id.is_empty(),
@@ -5321,27 +5499,23 @@ impl<S: Append> Catalog<S> {
                 timeline,
                 host_config,
                 ..
-            }) => {
-                let allow_undefined_size = true;
-                CatalogItem::Source(Source {
-                    create_sql: source.create_sql,
-                    data_source: match source.ingestion {
-                        Some(ingestion) => DataSourceDesc::Ingestion(Ingestion {
-                            desc: ingestion.desc,
-                            source_imports: ingestion.source_imports,
-                            subsource_exports: ingestion.subsource_exports,
-                            host_config: self
-                                .resolve_storage_host_config(host_config, allow_undefined_size)?,
-                        }),
-                        None => DataSourceDesc::Source,
-                    },
-                    desc: source.desc,
-                    timeline,
-                    depends_on,
-                    custom_logical_compaction_window: None,
-                    is_retained_metrics_relation: false,
-                })
-            }
+            }) => CatalogItem::Source(Source {
+                create_sql: source.create_sql,
+                data_source: match source.ingestion {
+                    Some(ingestion) => DataSourceDesc::Ingestion(Ingestion {
+                        desc: ingestion.desc,
+                        source_imports: ingestion.source_imports,
+                        subsource_exports: ingestion.subsource_exports,
+                        host_config: self.resolve_storage_host_config(&host_config)?,
+                    }),
+                    None => DataSourceDesc::Source,
+                },
+                desc: source.desc,
+                timeline,
+                depends_on,
+                custom_logical_compaction_window: None,
+                is_retained_metrics_relation: false,
+            }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(view.expr)?;
@@ -5381,19 +5555,15 @@ impl<S: Append> Catalog<S> {
                 with_snapshot,
                 host_config,
                 ..
-            }) => {
-                let allow_undefined_size = true;
-                CatalogItem::Sink(Sink {
-                    create_sql: sink.create_sql,
-                    from: sink.from,
-                    connection: StorageSinkConnectionState::Pending(sink.connection_builder),
-                    envelope: sink.envelope,
-                    with_snapshot,
-                    depends_on,
-                    host_config: self
-                        .resolve_storage_host_config(host_config, allow_undefined_size)?,
-                })
-            }
+            }) => CatalogItem::Sink(Sink {
+                create_sql: sink.create_sql,
+                from: sink.from,
+                connection: StorageSinkConnectionState::Pending(sink.connection_builder),
+                envelope: sink.envelope,
+                with_snapshot,
+                depends_on,
+                host_config: self.resolve_storage_host_config(&host_config)?,
+            }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
                 details: CatalogTypeDetails {
@@ -5573,14 +5743,6 @@ impl<S: Append> Catalog<S> {
         self.state.system_config()
     }
 
-    pub fn most_recent_storage_usage_collection(&self) -> EpochMillis {
-        self.state.most_recent_storage_usage_collection
-    }
-
-    pub fn set_most_recent_storage_usage_collection(&mut self, ts: EpochMillis) {
-        self.state.most_recent_storage_usage_collection = ts;
-    }
-
     pub fn unsafe_mode(&self) -> bool {
         self.config().unsafe_mode
     }
@@ -5592,6 +5754,30 @@ impl<S: Append> Catalog<S> {
             Ok(())
         }
     }
+
+    /// Return the current compute configuration, derived from the system configuration.
+    pub fn compute_config(&self) -> ComputeParameters {
+        let config = self.system_config();
+        ComputeParameters {
+            max_result_size: Some(config.max_result_size()),
+            persist: self.persist_config(),
+        }
+    }
+
+    /// Return the current storage configuration, derived from the system configuration.
+    pub fn storage_config(&self) -> StorageParameters {
+        StorageParameters {
+            persist: self.persist_config(),
+        }
+    }
+
+    fn persist_config(&self) -> PersistParameters {
+        let config = self.system_config();
+        PersistParameters {
+            blob_target_size: Some(config.persist_blob_target_size()),
+            compaction_minimum_timeout: Some(config.persist_compaction_minimum_timeout()),
+        }
+    }
 }
 
 pub fn is_reserved_name(name: &str) -> bool {
@@ -5600,42 +5786,15 @@ pub fn is_reserved_name(name: &str) -> bool {
         .any(|prefix| name.starts_with(prefix))
 }
 
-/// Return a [`plan::StorageHostConfig`] based on an existing [`StorageHostConfig`] and a set of potentially altered parameters.
-///
-/// If a [`None`] is returned, it means the existing config does not need to be updated.
-fn alter_host_config(
-    old_config: &StorageHostConfig,
-    size: AlterOptionParameter,
-    remote: AlterOptionParameter,
-) -> Result<Option<plan::StorageHostConfig>, AdapterError> {
-    use plan::AlterOptionParameter::*;
-
-    match (old_config, size, remote) {
-        // Should be caught during planning, but it is better to be safe
-        (_, Set(_), Set(_)) => {
-            coord_bail!("only one of REMOTE and SIZE can be set")
-        }
-        (_, Set(size), _) => Ok(Some(plan::StorageHostConfig::Managed { size })),
-        (_, _, Set(addr)) => Ok(Some(plan::StorageHostConfig::Remote { addr })),
-        (StorageHostConfig::Remote { .. }, _, Reset)
-        | (StorageHostConfig::Managed { .. }, Reset, _) => {
-            Ok(Some(plan::StorageHostConfig::Undefined))
-        }
-        (_, _, _) => Ok(None),
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum Op {
     AlterSink {
         id: GlobalId,
-        size: AlterOptionParameter,
-        remote: AlterOptionParameter,
+        host_config: plan::StorageHostConfig,
     },
     AlterSource {
         id: GlobalId,
-        size: AlterOptionParameter,
-        remote: AlterOptionParameter,
+        host_config: plan::StorageHostConfig,
     },
     CreateDatabase {
         name: String,
@@ -5653,6 +5812,7 @@ pub enum Op {
     },
     CreateComputeInstance {
         name: String,
+        linked_object_id: Option<GlobalId>,
         arranged_introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
     },
     CreateComputeReplica {
@@ -5766,13 +5926,15 @@ impl From<ComputeReplicaLogging> for SerializedComputeReplicaLogging {
 pub struct SerializedComputeReplicaConfig {
     pub location: SerializedComputeReplicaLocation,
     pub logging: SerializedComputeReplicaLogging,
+    pub idle_arrangement_merge_effort: Option<u32>,
 }
 
 impl From<ComputeReplicaConfig> for SerializedComputeReplicaConfig {
-    fn from(ComputeReplicaConfig { location, logging }: ComputeReplicaConfig) -> Self {
+    fn from(config: ComputeReplicaConfig) -> Self {
         SerializedComputeReplicaConfig {
-            location: location.into(),
-            logging: logging.into(),
+            location: config.location.into(),
+            logging: config.logging.into(),
+            idle_arrangement_merge_effort: config.idle_arrangement_merge_effort,
         }
     }
 }
@@ -6110,6 +6272,10 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn now(&self) -> EpochMillis {
         (self.state.config().now)()
     }
+
+    fn aws_privatelink_availability_zones(&self) -> Option<HashSet<String>> {
+        self.state.aws_privatelink_availability_zones.clone()
+    }
 }
 
 impl mz_sql::catalog::CatalogDatabase for Database {
@@ -6161,6 +6327,10 @@ impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
 
     fn id(&self) -> ComputeInstanceId {
         self.id
+    }
+
+    fn linked_object_id(&self) -> Option<GlobalId> {
+        self.linked_object_id
     }
 
     fn exports(&self) -> &HashSet<GlobalId> {
@@ -6280,11 +6450,9 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
-    use mz_compute_client::controller::ComputeInstanceId;
-    use mz_stash::Memory;
     use std::collections::{HashMap, HashSet};
-    use std::error::Error;
 
+    use mz_compute_client::controller::ComputeInstanceId;
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_ore::now::NOW_ZERO;
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
@@ -6295,6 +6463,7 @@ mod tests {
     };
     use mz_sql::DEFAULT_SCHEMA;
     use mz_sql_parser::ast::Expr;
+    use mz_stash::Stash;
 
     use crate::catalog::{
         Catalog, CatalogItem, Index, MaterializedView, Op, Table, SYSTEM_CONN_ID,
@@ -6308,225 +6477,247 @@ mod tests {
     /// search paths, so do not require schema qualification on system objects such
     /// as types.
     #[tokio::test]
-    async fn test_minimal_qualification() -> Result<(), anyhow::Error> {
-        struct TestCase {
-            input: QualifiedObjectName,
-            system_output: PartialObjectName,
-            normal_output: PartialObjectName,
-        }
+    async fn test_minimal_qualification() {
+        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+            struct TestCase {
+                input: QualifiedObjectName,
+                system_output: PartialObjectName,
+                normal_output: PartialObjectName,
+            }
 
-        let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
-
-        let test_cases = vec![
-            TestCase {
-                input: QualifiedObjectName {
-                    qualifiers: ObjectQualifiers {
-                        database_spec: ResolvedDatabaseSpecifier::Ambient,
-                        schema_spec: SchemaSpecifier::Id(
-                            catalog.get_pg_catalog_schema_id().clone(),
-                        ),
+            let test_cases = vec![
+                TestCase {
+                    input: QualifiedObjectName {
+                        qualifiers: ObjectQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Ambient,
+                            schema_spec: SchemaSpecifier::Id(
+                                catalog.get_pg_catalog_schema_id().clone(),
+                            ),
+                        },
+                        item: "numeric".to_string(),
                     },
-                    item: "numeric".to_string(),
-                },
-                system_output: PartialObjectName {
-                    database: None,
-                    schema: None,
-                    item: "numeric".to_string(),
-                },
-                normal_output: PartialObjectName {
-                    database: None,
-                    schema: None,
-                    item: "numeric".to_string(),
-                },
-            },
-            TestCase {
-                input: QualifiedObjectName {
-                    qualifiers: ObjectQualifiers {
-                        database_spec: ResolvedDatabaseSpecifier::Ambient,
-                        schema_spec: SchemaSpecifier::Id(
-                            catalog.get_mz_catalog_schema_id().clone(),
-                        ),
+                    system_output: PartialObjectName {
+                        database: None,
+                        schema: None,
+                        item: "numeric".to_string(),
                     },
-                    item: "mz_array_types".to_string(),
+                    normal_output: PartialObjectName {
+                        database: None,
+                        schema: None,
+                        item: "numeric".to_string(),
+                    },
                 },
-                system_output: PartialObjectName {
-                    database: None,
-                    schema: None,
-                    item: "mz_array_types".to_string(),
+                TestCase {
+                    input: QualifiedObjectName {
+                        qualifiers: ObjectQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Ambient,
+                            schema_spec: SchemaSpecifier::Id(
+                                catalog.get_mz_catalog_schema_id().clone(),
+                            ),
+                        },
+                        item: "mz_array_types".to_string(),
+                    },
+                    system_output: PartialObjectName {
+                        database: None,
+                        schema: None,
+                        item: "mz_array_types".to_string(),
+                    },
+                    normal_output: PartialObjectName {
+                        database: None,
+                        schema: None,
+                        item: "mz_array_types".to_string(),
+                    },
                 },
-                normal_output: PartialObjectName {
-                    database: None,
-                    schema: None,
-                    item: "mz_array_types".to_string(),
-                },
-            },
-        ];
+            ];
 
-        for tc in test_cases {
-            assert_eq!(
-                catalog
-                    .for_system_session()
-                    .minimal_qualification(&tc.input),
-                tc.system_output
+            for tc in test_cases {
+                assert_eq!(
+                    catalog
+                        .for_system_session()
+                        .minimal_qualification(&tc.input),
+                    tc.system_output
+                );
+                assert_eq!(
+                    catalog
+                        .for_session(&Session::dummy())
+                        .minimal_qualification(&tc.input),
+                    tc.normal_output
+                );
+            }
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_catalog_revision() {
+        Stash::with_debug_stash(move |stash| async move {
+            let mut catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
+                .await
+                .unwrap();
+            assert_eq!(catalog.transient_revision(), 1);
+            catalog
+                .transact(
+                    mz_repr::Timestamp::MIN,
+                    None,
+                    vec![Op::CreateDatabase {
+                        name: "test".to_string(),
+                        oid: 1,
+                        public_schema_oid: 2,
+                    }],
+                    |_catalog| Ok(()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(catalog.transient_revision(), 2);
+            drop(catalog);
+
+            // TODO: Test that re-opening the same stash resets the
+            // transient_revision to 1. The current debug stash implementation
+            // doesn't allow for stash reuse.
+
+            /*
+            let catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
+                .await
+                .unwrap();
+            assert_eq!(catalog.transient_revision(), 1);
+            */
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_effective_search_path() {
+        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+            let mz_catalog_schema = (
+                ResolvedDatabaseSpecifier::Ambient,
+                SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id().clone()),
+            );
+            let pg_catalog_schema = (
+                ResolvedDatabaseSpecifier::Ambient,
+                SchemaSpecifier::Id(catalog.state().get_pg_catalog_schema_id().clone()),
+            );
+            let mz_temp_schema = (
+                ResolvedDatabaseSpecifier::Ambient,
+                SchemaSpecifier::Temporary,
+            );
+
+            // Behavior with the default search_schema (public)
+            let session = Session::dummy();
+            let conn_catalog = catalog.for_session(&session);
+            assert_ne!(
+                conn_catalog.effective_search_path(false),
+                conn_catalog.search_path
+            );
+            assert_ne!(
+                conn_catalog.effective_search_path(true),
+                conn_catalog.search_path
             );
             assert_eq!(
-                catalog
-                    .for_session(&Session::dummy())
-                    .minimal_qualification(&tc.input),
-                tc.normal_output
+                conn_catalog.effective_search_path(false),
+                vec![
+                    mz_catalog_schema.clone(),
+                    pg_catalog_schema.clone(),
+                    conn_catalog.search_path[0].clone()
+                ]
             );
-        }
-        Ok(())
+            assert_eq!(
+                conn_catalog.effective_search_path(true),
+                vec![
+                    mz_temp_schema.clone(),
+                    mz_catalog_schema.clone(),
+                    pg_catalog_schema.clone(),
+                    conn_catalog.search_path[0].clone()
+                ]
+            );
+
+            // missing schemas are added when missing
+            let mut session = Session::dummy();
+            session
+                .vars_mut()
+                .set("search_path", "pg_catalog", false)
+                .unwrap();
+            let conn_catalog = catalog.for_session(&session);
+            assert_ne!(
+                conn_catalog.effective_search_path(false),
+                conn_catalog.search_path
+            );
+            assert_ne!(
+                conn_catalog.effective_search_path(true),
+                conn_catalog.search_path
+            );
+            assert_eq!(
+                conn_catalog.effective_search_path(false),
+                vec![mz_catalog_schema.clone(), pg_catalog_schema.clone()]
+            );
+            assert_eq!(
+                conn_catalog.effective_search_path(true),
+                vec![
+                    mz_temp_schema.clone(),
+                    mz_catalog_schema.clone(),
+                    pg_catalog_schema.clone()
+                ]
+            );
+
+            let mut session = Session::dummy();
+            session
+                .vars_mut()
+                .set("search_path", "mz_catalog", false)
+                .unwrap();
+            let conn_catalog = catalog.for_session(&session);
+            assert_ne!(
+                conn_catalog.effective_search_path(false),
+                conn_catalog.search_path
+            );
+            assert_ne!(
+                conn_catalog.effective_search_path(true),
+                conn_catalog.search_path
+            );
+            assert_eq!(
+                conn_catalog.effective_search_path(false),
+                vec![pg_catalog_schema.clone(), mz_catalog_schema.clone()]
+            );
+            assert_eq!(
+                conn_catalog.effective_search_path(true),
+                vec![
+                    mz_temp_schema.clone(),
+                    pg_catalog_schema.clone(),
+                    mz_catalog_schema.clone()
+                ]
+            );
+
+            let mut session = Session::dummy();
+            session
+                .vars_mut()
+                .set("search_path", "mz_temp", false)
+                .unwrap();
+            let conn_catalog = catalog.for_session(&session);
+            assert_ne!(
+                conn_catalog.effective_search_path(false),
+                conn_catalog.search_path
+            );
+            assert_ne!(
+                conn_catalog.effective_search_path(true),
+                conn_catalog.search_path
+            );
+            assert_eq!(
+                conn_catalog.effective_search_path(false),
+                vec![
+                    mz_catalog_schema.clone(),
+                    pg_catalog_schema.clone(),
+                    mz_temp_schema.clone()
+                ]
+            );
+            assert_eq!(
+                conn_catalog.effective_search_path(true),
+                vec![mz_catalog_schema, pg_catalog_schema, mz_temp_schema]
+            );
+        })
+        .await
     }
 
     #[tokio::test]
-    async fn test_catalog_revision() -> Result<(), anyhow::Error> {
-        let mut catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
-        assert_eq!(catalog.transient_revision(), 1);
-        catalog
-            .transact(
-                None,
-                vec![Op::CreateDatabase {
-                    name: "test".to_string(),
-                    oid: 1,
-                    public_schema_oid: 2,
-                }],
-                |_catalog| Ok(()),
-            )
-            .await
-            .unwrap();
-        assert_eq!(catalog.transient_revision(), 2);
-        drop(catalog);
-
-        let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
-        assert_eq!(catalog.transient_revision(), 1);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_effective_search_path() -> Result<(), anyhow::Error> {
-        let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
-        let mz_catalog_schema = (
-            ResolvedDatabaseSpecifier::Ambient,
-            SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id().clone()),
-        );
-        let pg_catalog_schema = (
-            ResolvedDatabaseSpecifier::Ambient,
-            SchemaSpecifier::Id(catalog.state().get_pg_catalog_schema_id().clone()),
-        );
-        let mz_temp_schema = (
-            ResolvedDatabaseSpecifier::Ambient,
-            SchemaSpecifier::Temporary,
-        );
-
-        // Behavior with the default search_schema (public)
-        let session = Session::dummy();
-        let conn_catalog = catalog.for_session(&session);
-        assert_ne!(
-            conn_catalog.effective_search_path(false),
-            conn_catalog.search_path
-        );
-        assert_ne!(
-            conn_catalog.effective_search_path(true),
-            conn_catalog.search_path
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(false),
-            vec![
-                mz_catalog_schema.clone(),
-                pg_catalog_schema.clone(),
-                conn_catalog.search_path[0].clone()
-            ]
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(true),
-            vec![
-                mz_temp_schema.clone(),
-                mz_catalog_schema.clone(),
-                pg_catalog_schema.clone(),
-                conn_catalog.search_path[0].clone()
-            ]
-        );
-
-        // missing schemas are added when missing
-        let mut session = Session::dummy();
-        session.vars_mut().set("search_path", "pg_catalog", false)?;
-        let conn_catalog = catalog.for_session(&session);
-        assert_ne!(
-            conn_catalog.effective_search_path(false),
-            conn_catalog.search_path
-        );
-        assert_ne!(
-            conn_catalog.effective_search_path(true),
-            conn_catalog.search_path
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(false),
-            vec![mz_catalog_schema.clone(), pg_catalog_schema.clone()]
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(true),
-            vec![
-                mz_temp_schema.clone(),
-                mz_catalog_schema.clone(),
-                pg_catalog_schema.clone()
-            ]
-        );
-
-        let mut session = Session::dummy();
-        session.vars_mut().set("search_path", "mz_catalog", false)?;
-        let conn_catalog = catalog.for_session(&session);
-        assert_ne!(
-            conn_catalog.effective_search_path(false),
-            conn_catalog.search_path
-        );
-        assert_ne!(
-            conn_catalog.effective_search_path(true),
-            conn_catalog.search_path
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(false),
-            vec![pg_catalog_schema.clone(), mz_catalog_schema.clone()]
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(true),
-            vec![
-                mz_temp_schema.clone(),
-                pg_catalog_schema.clone(),
-                mz_catalog_schema.clone()
-            ]
-        );
-
-        let mut session = Session::dummy();
-        session.vars_mut().set("search_path", "mz_temp", false)?;
-        let conn_catalog = catalog.for_session(&session);
-        assert_ne!(
-            conn_catalog.effective_search_path(false),
-            conn_catalog.search_path
-        );
-        assert_ne!(
-            conn_catalog.effective_search_path(true),
-            conn_catalog.search_path
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(false),
-            vec![
-                mz_catalog_schema.clone(),
-                pg_catalog_schema.clone(),
-                mz_temp_schema.clone()
-            ]
-        );
-        assert_eq!(
-            conn_catalog.effective_search_path(true),
-            vec![mz_catalog_schema, pg_catalog_schema, mz_temp_schema]
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_builtin_migration() -> Result<(), Box<dyn Error>> {
+    async fn test_builtin_migration() {
         enum ItemNamespace {
             System,
             User,
@@ -6615,7 +6806,7 @@ mod tests {
         }
 
         async fn add_item(
-            catalog: &mut Catalog<Memory>,
+            catalog: &mut Catalog,
             name: String,
             item: CatalogItem,
             item_namespace: ItemNamespace,
@@ -6637,6 +6828,7 @@ mod tests {
                 .clone();
             catalog
                 .transact(
+                    mz_repr::Timestamp::MIN,
                     None,
                     vec![Op::CreateItem {
                         id,
@@ -7067,100 +7259,103 @@ mod tests {
         ];
 
         for test_case in test_cases {
-            let mut catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
+            Catalog::with_debug(NOW_ZERO.clone(), |mut catalog| async move {
+                let mut id_mapping = HashMap::new();
+                let mut name_mapping = HashMap::new();
+                for entry in test_case.initial_state {
+                    let (name, namespace, item) = entry.to_catalog_item(&id_mapping);
+                    let id = add_item(&mut catalog, name.clone(), item, namespace).await;
+                    id_mapping.insert(name.clone(), id);
+                    name_mapping.insert(id, name);
+                }
 
-            let mut id_mapping = HashMap::new();
-            let mut name_mapping = HashMap::new();
-            for entry in test_case.initial_state {
-                let (name, namespace, item) = entry.to_catalog_item(&id_mapping);
-                let id = add_item(&mut catalog, name.clone(), item, namespace).await;
-                id_mapping.insert(name.clone(), id);
-                name_mapping.insert(id, name);
-            }
+                let migrated_ids = test_case
+                    .migrated_names
+                    .into_iter()
+                    .map(|name| id_mapping[&name])
+                    .collect();
+                let id_fingerprint_map: HashMap<GlobalId, String> = id_mapping
+                    .iter()
+                    .filter(|(_name, id)| id.is_system())
+                    // We don't use the new fingerprint in this test, so we can just hard code it
+                    .map(|(_name, id)| (*id, "".to_string()))
+                    .collect();
+                let migration_metadata = catalog
+                    .generate_builtin_migration_metadata(migrated_ids, id_fingerprint_map)
+                    .await
+                    .unwrap();
 
-            let migrated_ids = test_case
-                .migrated_names
-                .into_iter()
-                .map(|name| id_mapping[&name])
-                .collect();
-            let id_fingerprint_map: HashMap<GlobalId, String> = id_mapping
-                .iter()
-                .filter(|(_name, id)| id.is_system())
-                // We don't use the new fingerprint in this test, so we can just hard code it
-                .map(|(_name, id)| (*id, "".to_string()))
-                .collect();
-            let migration_metadata = catalog
-                .generate_builtin_migration_metadata(migrated_ids, id_fingerprint_map)
-                .await?;
-
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.previous_sink_ids, &name_mapping),
-                test_case.expected_previous_sink_names,
-                "{} test failed with wrong previous sink ids",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(
-                    migration_metadata.previous_materialized_view_ids,
-                    &name_mapping
-                ),
-                test_case.expected_previous_materialized_view_names,
-                "{} test failed with wrong previous materialized view ids",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.previous_source_ids, &name_mapping),
-                test_case.expected_previous_source_names,
-                "{} test failed with wrong previous source ids",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.all_drop_ops, &name_mapping),
-                test_case.expected_all_drop_ops,
-                "{} test failed with wrong all drop ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.user_drop_ops, &name_mapping),
-                test_case.expected_user_drop_ops,
-                "{} test failed with wrong user drop ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                migration_metadata
-                    .all_create_ops
-                    .into_iter()
-                    .map(|(_, _, name, _)| name.item)
-                    .collect::<Vec<_>>(),
-                test_case.expected_all_create_ops,
-                "{} test failed with wrong all create ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                migration_metadata
-                    .user_create_ops
-                    .into_iter()
-                    .map(|(_, _, name)| name)
-                    .collect::<Vec<_>>(),
-                test_case.expected_user_create_ops,
-                "{} test failed with wrong user create ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                migration_metadata
-                    .migrated_system_object_mappings
-                    .values()
-                    .map(|mapping| mapping.object_name.clone())
-                    .collect::<HashSet<_>>(),
-                test_case
-                    .expected_migrated_system_object_mappings
-                    .into_iter()
-                    .collect::<HashSet<_>>(),
-                "{} test failed with wrong migrated system object mappings",
-                test_case.test_name
-            );
+                assert_eq!(
+                    convert_id_vec_to_name_vec(migration_metadata.previous_sink_ids, &name_mapping),
+                    test_case.expected_previous_sink_names,
+                    "{} test failed with wrong previous sink ids",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    convert_id_vec_to_name_vec(
+                        migration_metadata.previous_materialized_view_ids,
+                        &name_mapping
+                    ),
+                    test_case.expected_previous_materialized_view_names,
+                    "{} test failed with wrong previous materialized view ids",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    convert_id_vec_to_name_vec(
+                        migration_metadata.previous_source_ids,
+                        &name_mapping
+                    ),
+                    test_case.expected_previous_source_names,
+                    "{} test failed with wrong previous source ids",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    convert_id_vec_to_name_vec(migration_metadata.all_drop_ops, &name_mapping),
+                    test_case.expected_all_drop_ops,
+                    "{} test failed with wrong all drop ops",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    convert_id_vec_to_name_vec(migration_metadata.user_drop_ops, &name_mapping),
+                    test_case.expected_user_drop_ops,
+                    "{} test failed with wrong user drop ops",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    migration_metadata
+                        .all_create_ops
+                        .into_iter()
+                        .map(|(_, _, name, _)| name.item)
+                        .collect::<Vec<_>>(),
+                    test_case.expected_all_create_ops,
+                    "{} test failed with wrong all create ops",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    migration_metadata
+                        .user_create_ops
+                        .into_iter()
+                        .map(|(_, _, name)| name)
+                        .collect::<Vec<_>>(),
+                    test_case.expected_user_create_ops,
+                    "{} test failed with wrong user create ops",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    migration_metadata
+                        .migrated_system_object_mappings
+                        .values()
+                        .map(|mapping| mapping.object_name.clone())
+                        .collect::<HashSet<_>>(),
+                    test_case
+                        .expected_migrated_system_object_mappings
+                        .into_iter()
+                        .collect::<HashSet<_>>(),
+                    "{} test failed with wrong migrated system object mappings",
+                    test_case.test_name
+                );
+            })
+            .await
         }
-
-        Ok(())
     }
 }

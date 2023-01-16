@@ -16,10 +16,11 @@
 //! Traits and types for partially ordered sets.
 
 use std::cmp::Ordering;
+use std::fmt;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use timely::order::Product;
-use timely::progress::{PathSummary, Timestamp};
+use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use timely::PartialOrder;
 
 /// A partially ordered timestamp that is partitioned by an arbitrary number of partitions
@@ -81,6 +82,32 @@ use timely::PartialOrder;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Partitioned<P, T>(Product<Interval<P>, T>);
 
+impl<P: fmt::Display, T: fmt::Display> fmt::Display for Partitioned<P, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        f.write_str("(")?;
+        match self.interval() {
+            Interval::Range(lower, upper) => {
+                match lower {
+                    RangeBound::Elem(p) => p.fmt(f)?,
+                    RangeBound::Bottom => f.write_str("-inf")?,
+                    RangeBound::Top => unreachable!(),
+                }
+                f.write_str("..")?;
+                match upper {
+                    RangeBound::Elem(p) => p.fmt(f)?,
+                    RangeBound::Top => f.write_str("+inf")?,
+                    RangeBound::Bottom => unreachable!(),
+                }
+            }
+            Interval::Point(p) => p.fmt(f)?,
+        }
+        f.write_str(", ")?;
+        self.timestamp().fmt(f)?;
+        f.write_str(")")?;
+        Ok(())
+    }
+}
+
 impl<P, T> Partitioned<P, T> {
     /// Construct a new timestamp for a specific partition
     pub fn with_partition(partition: P, timestamp: T) -> Self {
@@ -118,6 +145,16 @@ impl<P: Partition, T: Timestamp> Timestamp for Partitioned<P, T> {
     fn minimum() -> Self {
         Self(Timestamp::minimum())
     }
+}
+
+impl<P: Partition, T: Timestamp> Refines<()> for Partitioned<P, T> {
+    fn to_inner(_other: ()) -> Self {
+        Self::minimum()
+    }
+
+    fn to_outer(self) {}
+
+    fn summarize(_path: Self::Summary) {}
 }
 
 impl<P: Eq, T: PartialOrder> PartialOrder for Partitioned<P, T>

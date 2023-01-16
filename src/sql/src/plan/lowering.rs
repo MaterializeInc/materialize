@@ -1744,15 +1744,8 @@ fn apply_existential_subquery(
                 .applied_to(id_gen, get_inner.clone(), col_map, cte_map)
                 // throw away actual values and just remember whether or not there were __any__ rows
                 .distinct_by((0..get_inner.arity()).collect())
-                // Append true to anything that returned any rows. This
-                // join is logically equivalent to
-                // `.map(vec![Datum::True])`, but using a join allows
-                // for potential predicate pushdown and elision in the
-                // optimizer.
-                .product(mz_expr::MirRelationExpr::constant(
-                    vec![vec![Datum::True]],
-                    RelationType::new(vec![ScalarType::Bool.nullable(false)]),
-                ));
+                // Append true to anything that returned any rows.
+                .map(vec![mz_expr::MirScalarExpr::literal_true()]);
             // append False to anything that didn't return any rows
             get_inner.lookup(id_gen, exists, vec![(Datum::False, ScalarType::Bool)])
         },

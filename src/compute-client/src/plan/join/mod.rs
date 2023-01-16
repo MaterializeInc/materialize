@@ -30,7 +30,7 @@
 pub mod delta_join;
 pub mod linear_join;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
@@ -156,10 +156,10 @@ impl JoinClosure {
     /// and `mfp` is left as an identity transform (which can then
     /// be ignored).
     fn build(
-        columns: &mut HashMap<usize, usize>,
+        columns: &mut BTreeMap<usize, usize>,
         equivalences: &mut Vec<Vec<MirScalarExpr>>,
         mfp: &mut MapFilterProject,
-        permutation: HashMap<usize, usize>,
+        permutation: BTreeMap<usize, usize>,
         thinned_arity_with_key: usize,
     ) -> Self {
         // First, determine which columns should be compared due to `equivalences`.
@@ -298,7 +298,7 @@ impl JoinClosure {
 #[derive(Debug)]
 pub struct JoinBuildState {
     /// Map from expected locations in extended output column reckoning to physical locations.
-    column_map: HashMap<usize, usize>,
+    column_map: BTreeMap<usize, usize>,
     /// A list of equivalence classes of expressions.
     ///
     /// Within each equivalence class, expressions must evaluate to the same result to pass
@@ -323,7 +323,7 @@ impl JoinBuildState {
         equivalences: &[Vec<MirScalarExpr>],
         mfp: &MapFilterProject,
     ) -> Self {
-        let mut column_map = HashMap::new();
+        let mut column_map = BTreeMap::new();
         for column in columns {
             column_map.insert(column, column_map.len());
         }
@@ -343,7 +343,7 @@ impl JoinBuildState {
         bound_expressions: &[MirScalarExpr],
         thinned_arity_with_key: usize,
         // The permutation to run on the join of the thinned collections
-        permutation: HashMap<usize, usize>,
+        permutation: BTreeMap<usize, usize>,
     ) -> JoinClosure {
         // Remove each element of `bound_expressions` from `equivalences`, so that we
         // avoid redundant predicate work. This removal also paves the way for
@@ -399,7 +399,7 @@ impl JoinBuildState {
     /// consider using the `.is_identity()` method to determine non-triviality.
     fn extract_closure(
         &mut self,
-        permutation: HashMap<usize, usize>,
+        permutation: BTreeMap<usize, usize>,
         thinned_arity_with_key: usize,
     ) -> JoinClosure {
         JoinClosure::build(

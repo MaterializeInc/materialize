@@ -555,8 +555,9 @@ impl StateVersions {
     {
         let empty_state = State::new(
             self.cfg.build_version.clone(),
-            self.cfg.hostname.clone(),
             shard_metrics.shard_id,
+            self.cfg.hostname.clone(),
+            (self.cfg.now)(),
         );
         let rollup_seqno = empty_state.seqno.next();
         let rollup_key = PartialRollupKey::new(rollup_seqno, &RollupId::new());
@@ -780,7 +781,7 @@ impl<K, V, T: Timestamp + Lattice + Codec64, D> StateVersionsIter<K, V, T, D> {
         Some(&self.state)
     }
 
-    pub fn into_inner(self) -> State<K, V, T, D> {
-        self.state
+    pub fn state(&self) -> &State<K, V, T, D> {
+        &self.state
     }
 }

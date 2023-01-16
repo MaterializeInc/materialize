@@ -14,14 +14,17 @@
 // limitations under the License.
 
 use std::cell::RefCell;
+use std::convert::Infallible;
 use std::rc::Rc;
 
-use timely::dataflow::operators::InspectCore;
+use timely::dataflow::operators::{CapabilitySet, InspectCore};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp;
-use timely::Data;
+use timely::{Data, PartialOrder};
 use tokio::sync::Notify;
+
+use crate::builder_async::OperatorBuilder as AsyncOperatorBuilder;
 
 /// Monitors progress at a `Stream`.
 pub trait ProbeNotify<G: Scope, D: Data> {
@@ -149,4 +152,36 @@ impl<T: Timestamp> Clone for Handle<T> {
             notify: Rc::clone(&self.notify),
         }
     }
+}
+
+/// Creates a stream that flows progress updates from a probe.
+///
+/// The returned stream is guaranteed to never yield any data updates, as is reflected by its type.
+// TODO: Replace `Infallible` with `!` once the latter stabilizes.
+pub fn source<G, T>(scope: G, name: String, handle: Handle<T>) -> Stream<G, Infallible>
+where
+    G: Scope<Timestamp = T>,
+    T: Timestamp,
+{
+    let mut builder = AsyncOperatorBuilder::new(name, scope);
+    let (_output, output_stream) = builder.new_output();
+
+    builder.build(move |capabilities| async move {
+        let mut cap_set = CapabilitySet::from(capabilities);
+        let mut frontier = Antichain::from_elem(T::minimum());
+
+        let mut downgrade_capability = |f: AntichainRef<T>| {
+            if PartialOrder::less_than(&frontier.borrow(), &f) {
+                frontier = f.to_owned();
+                cap_set.downgrade(&f);
+            }
+            !frontier.is_empty()
+        };
+
+        while handle.with_frontier(&mut downgrade_capability) {
+            handle.progressed().await;
+        }
+    });
+
+    output_stream
 }

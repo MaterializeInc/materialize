@@ -35,10 +35,10 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::source::persist_source::NO_FLOW_CONTROL;
 use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sources::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::probe::{self, ProbeNotify};
 
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
@@ -54,6 +54,7 @@ where
         sink_id: GlobalId,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
+        probes: Vec<probe::Handle<Timestamp>>,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
@@ -66,23 +67,23 @@ where
         }
 
         persist_sink(
-            &sinked_collection.scope(),
             sink_id,
             &self.storage_metadata,
             desired_collection,
             sink.as_of.frontier.clone(),
             compute_state,
+            probes,
         )
     }
 }
 
 pub(crate) fn persist_sink<G>(
-    scope: &G,
     sink_id: GlobalId,
     target: &CollectionMetadata,
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut ComputeState,
+    probes: Vec<probe::Handle<Timestamp>>,
 ) -> Option<Rc<dyn Any>>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -100,9 +101,7 @@ where
         source_as_of,
         Antichain::new(), // we want all updates
         None,             // no MFP
-        // TODO: provide a more meaningful flow control input
-        &timely::dataflow::operators::generic::operator::empty(scope),
-        NO_FLOW_CONTROL,
+        None,             // no flow control
         // Copy the logic in DeltaJoin/Get/Join to start.
         |_timer, count| count > 1_000_000,
     );
@@ -120,6 +119,7 @@ where
             persist_collection,
             as_of,
             compute_state,
+            probes,
         ),
         token,
     )))
@@ -153,6 +153,7 @@ fn install_desired_into_persist<G>(
     persist_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut crate::compute_state::ComputeState,
+    mut probes: Vec<probe::Handle<Timestamp>>,
 ) -> Option<Rc<dyn Any>>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -213,6 +214,10 @@ where
     );
 
     append_frontier_stream.connect_loop(persist_feedback_handle);
+
+    for handle in &mut probes {
+        append_frontier_stream.probe_notify_with(handle);
+    }
 
     let token = Rc::new((mint_token, write_token, append_token));
 

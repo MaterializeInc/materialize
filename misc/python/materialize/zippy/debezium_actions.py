@@ -21,6 +21,7 @@ from materialize.zippy.debezium_capabilities import (
 from materialize.zippy.framework import Action, Capabilities, Capability
 from materialize.zippy.kafka_capabilities import KafkaRunning
 from materialize.zippy.mz_capabilities import MzIsRunning
+from materialize.zippy.storaged_capabilities import StoragedRunning
 
 
 class DebeziumStart(Action):
@@ -52,7 +53,7 @@ class CreateDebeziumSource(Action):
 
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
-        return {MzIsRunning, KafkaRunning, PostgresTableExists}
+        return {MzIsRunning, StoragedRunning, KafkaRunning, PostgresTableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
         # To avoid conflicts, we make sure the postgres table and the debezium source have matching names
@@ -122,6 +123,9 @@ class CreateDebeziumSource(Action):
                       FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.{self.postgres_table.name}')
                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                       ENVELOPE DEBEZIUM
+                      WITH (
+                        REMOTE 'storaged:2100'
+                      )
                     """
                 )
             )

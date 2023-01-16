@@ -10,7 +10,6 @@
 //! A source that reads from an a persist shard.
 
 use std::any::Any;
-use std::convert::Infallible;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -31,6 +30,8 @@ use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuild
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
 use crate::types::sources::SourceData;
+
+pub use mz_persist_client::operators::shard_source::FlowControl;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -62,10 +63,7 @@ pub fn persist_source<G, YFn>(
     as_of: Option<Antichain<Timestamp>>,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
-    // Use Infallible to statically ensure that no data can ever be sent. TODO:
-    // Replace Infallible with `!` once the latter is stabilized.
-    flow_control_input: &Stream<G, Infallible>,
-    flow_control_max_inflight_bytes: usize,
+    flow_control: Option<FlowControl<G>>,
     yield_fn: YFn,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
@@ -84,8 +82,7 @@ where
         as_of,
         until,
         map_filter_project,
-        flow_control_input,
-        flow_control_max_inflight_bytes,
+        flow_control,
         yield_fn,
     );
     let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
@@ -94,9 +91,6 @@ where
     });
     (ok_stream, err_stream, token)
 }
-
-/// Informs a `persist_source` to skip flow control on its output
-pub const NO_FLOW_CONTROL: usize = mz_persist_client::operators::shard_source::NO_FLOW_CONTROL;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -113,10 +107,7 @@ pub fn persist_source_core<G, YFn>(
     as_of: Option<Antichain<Timestamp>>,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
-    // Use Infallible to statically ensure that no data can ever be sent. TODO:
-    // Replace Infallible with `!` once the latter is stabilized.
-    flow_control_input: &Stream<G, Infallible>,
-    flow_control_max_inflight_bytes: usize,
+    flow_control: Option<FlowControl<G>>,
     yield_fn: YFn,
 ) -> (
     Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
@@ -135,8 +126,7 @@ where
         metadata.data_shard,
         as_of,
         until.clone(),
-        flow_control_input,
-        flow_control_max_inflight_bytes,
+        flow_control,
     );
     let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
     (rows, token)

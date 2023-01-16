@@ -3,11 +3,12 @@ title: "Get started with Materialize"
 description: "Get started with Materialize"
 menu:
   main:
-    parent: 'quickstarts'
+    parent: "quickstarts"
     weight: 20
-    name: 'Get started with Materialize'
+    name: "Get started with Materialize"
 aliases:
   - /katacoda/
+  - /quickstarts/
 ---
 
 [//]: # "TODO(morsapaes) Once we're GA, add details about signing up and logging into a Materialize account"
@@ -92,7 +93,7 @@ We'll start with some real-time data produced by Materialize's built-in [load ge
      bids          | subsource      | 3xsmall
      organizations | subsource      | 3xsmall
      users         | subsource      | 3xsmall
-     ```
+    ```
 
 1. Now that we have some data to play around with, let's set up a [cluster](/sql/create-cluster) (logical compute) with one `xsmall` [replica](/sql/create-cluster-replica) (physical compute) so we can start running some queries:
 
@@ -147,24 +148,23 @@ The first thing we might want to do with our data is find all the _on-time bids_
 
 1. Create a view `avg_bids` that keeps track of the average bid price for _on-time bids_:
 
-    ```sql
-    CREATE VIEW avg_bids AS
+   ```sql
+   CREATE VIEW avg_bids AS
         SELECT auction_id,
                avg(amount) AS amount
         FROM on_time_bids
         GROUP BY auction_id;
     ```
 
-    One thing to note here is that we created a [non-materialized view](/overview/key-concepts/#non-materialized-views), which doesn't store the results of the query but simply provides an alias for the embedded `SELECT` statement. The results of a view can be incrementally maintained **in memory** within a
-[cluster](/overview/key-concepts/#clusters) by creating an [index](/sql/create-index).
+    One thing to note here is that we created a [non-materialized view](/overview/key-concepts/#non-materialized-views), which doesn't store the results of the query but simply provides an alias for the embedded `SELECT` statement. The results of a view can be incrementally maintained **in memory** within a [cluster](/overview/key-concepts/#clusters) by creating an [index](/sql/create-index).
 
 1. Create an index `avg_bids_idx`;
 
-    ```sql
-    CREATE INDEX avg_bids_idx ON avg_bids (auction_id);
-    ```
+   ```sql
+   CREATE INDEX avg_bids_idx ON avg_bids (auction_id);
+   ```
 
-    Indexes assemble and incrementally maintain a query’s results updated **in memory** within a cluster, which speeds up query time.
+   Indexes assemble and incrementally maintain a query’s results updated **in memory** within a cluster, which speeds up query time.
 
 1. To see the results:
 

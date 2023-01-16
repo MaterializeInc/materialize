@@ -277,28 +277,43 @@ pub enum ComputeReplicaConfig {
         compute_addrs: BTreeSet<String>,
         workers: NonZeroUsize,
         introspection: Option<ComputeReplicaIntrospectionConfig>,
+        idle_arrangement_merge_effort: Option<u32>,
     },
     Managed {
         size: String,
         availability_zone: Option<String>,
         introspection: Option<ComputeReplicaIntrospectionConfig>,
+        idle_arrangement_merge_effort: Option<u32>,
     },
 }
 
 impl ComputeReplicaConfig {
     pub fn get_az(&self) -> Option<&str> {
         match self {
-            ComputeReplicaConfig::Remote {
-                addrs: _,
-                compute_addrs: _,
-                workers: _,
-                introspection: _,
-            } => None,
+            ComputeReplicaConfig::Remote { .. } => None,
             ComputeReplicaConfig::Managed {
-                size: _,
-                availability_zone,
-                introspection: _,
+                availability_zone, ..
             } => availability_zone.as_deref(),
+        }
+    }
+
+    pub fn get_introspection(&self) -> Option<&ComputeReplicaIntrospectionConfig> {
+        match self {
+            ComputeReplicaConfig::Remote { introspection, .. } => introspection.as_ref(),
+            ComputeReplicaConfig::Managed { introspection, .. } => introspection.as_ref(),
+        }
+    }
+
+    pub fn get_idle_arrangement_merge_effort(&self) -> Option<u32> {
+        match self {
+            ComputeReplicaConfig::Remote {
+                idle_arrangement_merge_effort,
+                ..
+            } => *idle_arrangement_merge_effort,
+            ComputeReplicaConfig::Managed {
+                idle_arrangement_merge_effort,
+                ..
+            } => *idle_arrangement_merge_effort,
         }
     }
 }

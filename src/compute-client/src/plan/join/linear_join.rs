@@ -9,7 +9,7 @@
 
 //! Planning of linear joins.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::plan::join::JoinBuildState;
 use crate::plan::join::JoinClosure;
@@ -163,7 +163,7 @@ impl LinearJoinPlan {
     pub fn create_from(
         source_relation: usize,
         // When specified, a key and its corresponding permutation and thinning.
-        source_arrangement: Option<&(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)>,
+        source_arrangement: Option<&(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)>,
         equivalences: &[Vec<MirScalarExpr>],
         join_order: &[(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)],
         input_mapper: mz_expr::JoinInputMapper,
@@ -220,7 +220,7 @@ impl LinearJoinPlan {
                     }
                 })
                 .unwrap_or_else(|| {
-                    let (permutation, thinning) = permutation_for_arrangement::<HashMap<_, _>>(
+                    let (permutation, thinning) = permutation_for_arrangement(
                         lookup_key,
                         input_mapper.input_arity(*lookup_relation),
                     );
@@ -261,10 +261,7 @@ impl LinearJoinPlan {
                         })
                         .collect::<Vec<_>>();
                     let (stream_permutation, stream_thinning) =
-                        permutation_for_arrangement::<HashMap<_, _>>(
-                            &stream_key,
-                            unthinned_stream_arity,
-                        );
+                        permutation_for_arrangement(&stream_key, unthinned_stream_arity);
 
                     (stream_key, stream_permutation, stream_thinning)
                 });

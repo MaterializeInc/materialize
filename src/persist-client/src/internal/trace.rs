@@ -684,6 +684,8 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// The units of effort are updates, and the method should be thought of as
     /// analogous to inserting as many empty updates, where the trace is
     /// permitted to perform proportionate work.
+    ///
+    /// When this function is called, `effort` must be non-negative
     #[allow(dead_code)]
     pub fn exert(&mut self, effort: &mut isize, merge_reqs: &mut Vec<FueledMergeReq<T>>) {
         // If there is work to be done, ...
@@ -698,10 +700,11 @@ impl<T: Timestamp + Lattice> Spine<T> {
             else {
                 // Introduce an empty batch with roughly *effort number of
                 // virtual updates.
-                // TODO(benesch): rewrite to avoid `as`.
-                #[allow(clippy::as_conversions)]
-                let level =
-                    usize::cast_from((*effort as usize).next_power_of_two().trailing_zeros());
+                let level = usize::cast_from(
+                    (usize::try_from(*effort).expect("`exert` called with negative effort"))
+                        .next_power_of_two()
+                        .trailing_zeros(),
+                );
                 self.introduce_batch(None, level, merge_reqs);
             }
         }

@@ -11,10 +11,10 @@ name = "postgres"
 harness = false
 
 [dependencies]
-async-trait = "0.1.59"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.25"
 mz-ore = { path = "../ore", features = ["metrics", "network", "async", "test"] }
+mz-postgres-util = { path = "../postgres-util" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prometheus = { version = "0.13.3", default-features = false }
 rand = "0.8.5"
@@ -32,3 +32,6 @@ criterion = { version = "0.4.0", features = ["async_tokio"] }
 mz-postgres-util = { path = "../postgres-util" }
 once_cell = "1.16.0"
 tokio = { version = "1.23.0", features = ["macros"] }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

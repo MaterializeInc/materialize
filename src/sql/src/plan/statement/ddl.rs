@@ -24,9 +24,10 @@ use prost::Message;
 use regex::Regex;
 use tracing::warn;
 
+use mz_compute_client::controller::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS;
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
-use mz_ore::cast::TryCastFrom;
+use mz_ore::cast::{self, TryCastFrom};
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
@@ -89,7 +90,9 @@ use crate::ast::{
     SourceIncludeMetadataType, SshConnectionOptionName, Statement, TableConstraint,
     UnresolvedDatabaseName, Value, ViewDefinition,
 };
-use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
+use crate::catalog::{
+    CatalogComputeInstance, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
+};
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
     Aug, FullSchemaName, QualifiedObjectName, RawDatabaseSpecifier, ResolvedClusterName,
@@ -1689,6 +1692,7 @@ pub fn plan_create_materialized_view(
         None => scx.resolve_compute_instance(None)?.id(),
         Some(in_cluster) => in_cluster.id,
     };
+    ensure_cluster_is_not_linked(scx, scx.catalog.get_compute_instance(compute_instance))?;
     stmt.in_cluster = Some(ResolvedClusterName {
         id: compute_instance,
         print_name: None,
@@ -2233,6 +2237,7 @@ pub fn plan_create_index(
         None => scx.resolve_compute_instance(None)?.id(),
         Some(in_cluster) => in_cluster.id,
     };
+    ensure_cluster_is_not_linked(scx, scx.catalog.get_compute_instance(compute_instance))?;
     *in_cluster = Some(ResolvedClusterName {
         id: compute_instance,
         print_name: None,
@@ -2456,8 +2461,8 @@ pub fn plan_create_cluster(
     }))
 }
 
-const DEFAULT_INTROSPECTION_INTERVAL: Interval = Interval {
-    micros: 1_000_000,
+const DEFAULT_COMPUTE_REPLICA_INTROSPECTION_INTERVAL: Interval = Interval {
+    micros: cast::u32_to_i64(DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS),
     months: 0,
     days: 0,
 };
@@ -2470,7 +2475,8 @@ generate_extracted_config!(
     (Compute, Vec<String>),
     (Workers, u16),
     (IntrospectionInterval, OptionalInterval),
-    (IntrospectionDebugging, bool, Default(false))
+    (IntrospectionDebugging, bool, Default(false)),
+    (IdleArrangementMergeEffort, u32)
 );
 
 fn plan_replica_config(
@@ -2485,6 +2491,7 @@ fn plan_replica_config(
         compute,
         introspection_interval,
         introspection_debugging,
+        idle_arrangement_merge_effort,
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
@@ -2500,7 +2507,7 @@ fn plan_replica_config(
 
     let introspection_interval = introspection_interval
         .map(|OptionalInterval(i)| i)
-        .unwrap_or(Some(DEFAULT_INTROSPECTION_INTERVAL));
+        .unwrap_or(Some(DEFAULT_COMPUTE_REPLICA_INTROSPECTION_INTERVAL));
     let introspection = match introspection_interval {
         Some(interval) => Some(ComputeReplicaIntrospectionConfig {
             interval: interval.duration()?,
@@ -2537,6 +2544,7 @@ fn plan_replica_config(
                 compute_addrs,
                 workers,
                 introspection,
+                idle_arrangement_merge_effort,
             })
         }
         (Some(size), None) => {
@@ -2551,6 +2559,7 @@ fn plan_replica_config(
                 size,
                 availability_zone,
                 introspection,
+                idle_arrangement_merge_effort,
             })
         }
         (_, _) => {
@@ -2574,9 +2583,10 @@ pub fn plan_create_cluster_replica(
         of_cluster,
     }: CreateClusterReplicaStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let _ = scx
+    let instance = scx
         .catalog
         .resolve_compute_instance(Some(&of_cluster.to_string()))?;
+    ensure_cluster_is_not_linked(scx, instance)?;
     Ok(Plan::CreateComputeReplica(CreateComputeReplicaPlan {
         name: normalize::ident(name),
         of_cluster: of_cluster.to_string(),
@@ -2666,10 +2676,13 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
             let tunnel = match &broker.tunnel {
                 KafkaBrokerTunnel::Direct => Tunnel::Direct,
                 KafkaBrokerTunnel::AwsPrivatelink(aws_privatelink) => {
-                    let KafkaBrokerAwsPrivatelinkOptionExtracted { port, seen: _ } =
-                        KafkaBrokerAwsPrivatelinkOptionExtracted::try_from(
-                            aws_privatelink.options.clone(),
-                        )?;
+                    let KafkaBrokerAwsPrivatelinkOptionExtracted {
+                        availability_zone,
+                        port,
+                        seen: _,
+                    } = KafkaBrokerAwsPrivatelinkOptionExtracted::try_from(
+                        aws_privatelink.options.clone(),
+                    )?;
 
                     let id = match &aws_privatelink.connection {
                         ResolvedObjectName::Object { id, .. } => id,
@@ -2679,10 +2692,21 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                     };
                     let entry = scx.catalog.get_item(id);
                     match entry.connection()? {
-                        Connection::AwsPrivatelink(_) => Tunnel::AwsPrivatelink(AwsPrivatelink {
-                            connection_id: *id,
-                            port,
-                        }),
+                        Connection::AwsPrivatelink(connection) => {
+                            if let Some(az) = &availability_zone {
+                                if !connection.availability_zones.contains(az) {
+                                    sql_bail!("AWS PrivateLink availability zone {} does not match any of the \
+                                      availability zones on the AWS PrivateLink connection {}",
+                                      az.quoted(),
+                                      entry.name().to_string().quoted())
+                                }
+                            }
+                            Tunnel::AwsPrivatelink(AwsPrivatelink {
+                                connection_id: *id,
+                                availability_zone,
+                                port,
+                            })
+                        }
                         _ => {
                             sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item)
                         }
@@ -2813,7 +2837,11 @@ impl KafkaConnectionOptionExtracted {
     }
 }
 
-generate_extracted_config!(KafkaBrokerAwsPrivatelinkOption, (Port, u16));
+generate_extracted_config!(
+    KafkaBrokerAwsPrivatelinkOption,
+    (AvailabilityZone, String),
+    (Port, u16)
+);
 
 generate_extracted_config!(
     CsrConnectionOption,
@@ -3050,6 +3078,16 @@ pub fn plan_create_connection(
         CreateConnection::AwsPrivatelink { with_options } => {
             let c = AwsPrivatelinkConnectionOptionExtracted::try_from(with_options)?;
             let connection = AwsPrivatelinkConnection::try_from(c)?;
+            if let Some(supported_azs) = scx.catalog.aws_privatelink_availability_zones() {
+                for connection_az in &connection.availability_zones {
+                    if !supported_azs.contains(connection_az) {
+                        return Err(PlanError::InvalidPrivatelinkAvailabilityZone {
+                            name: connection_az.to_string(),
+                            supported_azs,
+                        });
+                    }
+                }
+            }
             Connection::AwsPrivatelink(connection)
         }
         CreateConnection::Ssh { with_options } => {
@@ -3265,6 +3303,7 @@ pub fn plan_drop_cluster(
         };
         match scx.catalog.resolve_compute_instance(Some(name.as_str())) {
             Ok(instance) => {
+                ensure_cluster_is_not_linked(scx, instance)?;
                 if !cascade && !instance.exports().is_empty() {
                     sql_bail!("cannot drop cluster with active indexes or materialized views");
                 }
@@ -3280,6 +3319,22 @@ pub fn plan_drop_cluster(
     Ok(Plan::DropComputeInstances(DropComputeInstancesPlan {
         names: out,
     }))
+}
+
+fn ensure_cluster_is_not_linked(
+    scx: &StatementContext,
+    instance: &dyn CatalogComputeInstance,
+) -> Result<(), PlanError> {
+    if let Some(linked_object_id) = instance.linked_object_id() {
+        let linked_item = scx.catalog.get_item(&linked_object_id);
+        let linked_item_name = scx.catalog.resolve_full_name(linked_item.name());
+        Err(PlanError::CannotModifyLinkedCluster {
+            cluster_name: instance.name().into(),
+            linked_object_name: linked_item_name.to_string(),
+        })
+    } else {
+        Ok(())
+    }
 }
 
 pub fn describe_drop_cluster_replica(
@@ -3300,6 +3355,7 @@ pub fn plan_drop_cluster_replica(
             Err(_) if if_exists => continue,
             Err(e) => return Err(e.into()),
         };
+        ensure_cluster_is_not_linked(scx, instance)?;
         let replica_name = replica.into_string();
         // Check to see if name exists
         if instance.replica_names().contains(&replica_name) {

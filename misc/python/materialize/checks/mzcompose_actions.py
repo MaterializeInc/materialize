@@ -27,14 +27,6 @@ class MzcomposeAction(Action):
 
 
 class StartMz(MzcomposeAction):
-    DEFAULT_MZ_OPTIONS = " ".join(
-        [
-            "--persist-consensus-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=consensus",
-            "--storage-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=storage",
-            "--adapter-stash-url=postgresql://postgres:postgres@postgres-backend:5432?options=--search_path=adapter",
-        ]
-    )
-
     def __init__(
         self, tag: Optional[str] = None, environment_extra: List[str] = []
     ) -> None:
@@ -48,7 +40,7 @@ class StartMz(MzcomposeAction):
         print(f"Starting Mz using image {image}")
         mz = Materialized(
             image=image,
-            options=StartMz.DEFAULT_MZ_OPTIONS,
+            external_cockroach=True,
             environment_extra=self.environment_extra,
         )
 
@@ -102,23 +94,27 @@ class StartClusterdCompute(MzcomposeAction):
 
         clusterd = Clusterd(name="clusterd_compute_1")
         if self.tag:
-            # TODO(benesch): remove this conditional once v0.38 ships.
-            if self.tag.startswith("v0.37"):
+            # TODO(benesch): remove this conditional once v0.39 ships.
+            if any(self.tag.startswith(version) for version in ["v0.37", "v0.38"]):
                 clusterd = Clusterd(
                     name="clusterd_compute_1",
-                    image=f"materialize/computed:{self.tag}",
-                    options=["--controller-listen-addr=0.0.0.0:2101"],
+                    image=f"materialize/clusterd:{self.tag}",
+                    options=[
+                        "--compute-controller-listen-addr=0.0.0.0:2101",
+                        "--secrets-reader=process",
+                        "--secrets-reader-process-dir=/mzdata/secrets",
+                    ],
                     storage_workers=None,
                 )
             else:
                 clusterd = Clusterd(
                     name="clusterd_compute_1",
-                    image=f"materialize/computed:{self.tag}",
+                    image=f"materialize/clusterd:{self.tag}",
                 )
         print(f"Starting Compute using image {clusterd.config.get('image')}")
 
         with c.override(clusterd):
-            c.up("clusterd_compute_1")
+            c.start_and_wait_for_tcp(services=["clusterd_compute_1"])
 
 
 class RestartRedpandaDebezium(MzcomposeAction):
@@ -132,22 +128,21 @@ class RestartRedpandaDebezium(MzcomposeAction):
             c.start_and_wait_for_tcp(services=[service])
 
 
-class RestartPostgresBackend(MzcomposeAction):
+class RestartCockroach(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        c.kill("postgres-backend")
-        c.up("postgres-backend")
-        c.wait_for_postgres(service="postgres-backend")
+        c.kill("cockroach")
+        c.up("cockroach")
 
 
 class RestartSourcePostgres(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        c.kill("postgres-source")
-        c.up("postgres-source")
-        c.wait_for_postgres(service="postgres-source")
+        c.kill("postgres")
+        c.up("postgres")
+        c.wait_for_postgres(service="postgres")
 
 
 class KillClusterdStorage(MzcomposeAction):

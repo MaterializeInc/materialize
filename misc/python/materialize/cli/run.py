@@ -164,6 +164,8 @@ def main() -> int:
                 *args.args,
             ]
         elif args.program == "sqllogictest":
+            db = urlparse(args.postgres).path.removeprefix("/")
+            _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
             command += [f"--postgres-url={args.postgres}", *args.args]
     elif args.program == "test":
         build_retcode = _build(args)

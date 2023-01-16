@@ -26,11 +26,10 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
-use crate::command::{
-    ComputeCommand, ComputeCommandHistory, ComputeStartupEpoch, InstanceConfig, Peek,
-};
-use crate::logging::{LogVariant, LoggingConfig};
-use crate::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
+use crate::logging::LogVariant;
+use crate::protocol::command::{ComputeCommand, ComputeParameters, ComputeStartupEpoch, Peek};
+use crate::protocol::history::ComputeCommandHistory;
+use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::types::dataflows::DataflowDescription;
 use crate::types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
@@ -38,7 +37,7 @@ use crate::types::sources::SourceInstanceDesc;
 
 use super::error::CollectionMissing;
 use super::orchestrator::ComputeOrchestrator;
-use super::replica::{Replica, ReplicaResponse};
+use super::replica::{Replica, ReplicaConfig, ReplicaResponse};
 use super::{
     CollectionState, ComputeControllerResponse, ComputeInstanceId, ComputeReplicaLocation,
     ReplicaId,
@@ -165,7 +164,6 @@ where
         instance_id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
-        max_result_size: u32,
         orchestrator: ComputeOrchestrator,
         envd_epoch: NonZeroI64,
     ) -> Self {
@@ -194,15 +192,19 @@ where
         };
 
         instance.send(ComputeCommand::CreateTimely {
-            comm_config: Default::default(),
+            config: Default::default(),
             epoch: ComputeStartupEpoch::new(envd_epoch, 0),
         });
-        instance.send(ComputeCommand::CreateInstance(InstanceConfig {
-            logging: Default::default(),
-            max_result_size,
-        }));
+
+        let dummy_logging_config = Default::default();
+        instance.send(ComputeCommand::CreateInstance(dummy_logging_config));
 
         instance
+    }
+
+    /// Update instance configuration.
+    pub fn update_configuration(&mut self, config_params: ComputeParameters) {
+        self.send(ComputeCommand::UpdateConfiguration(config_params));
     }
 
     /// Marks the end of any initialization commands.
@@ -291,22 +293,21 @@ where
     pub fn add_replica(
         &mut self,
         id: ReplicaId,
-        location: ComputeReplicaLocation,
-        mut logging_config: LoggingConfig,
+        mut config: ReplicaConfig,
     ) -> Result<(), ReplicaExists> {
         if self.compute.replicas.contains_key(&id) {
             return Err(ReplicaExists(id));
         }
 
         // Initialize state for per-replica log collections.
-        for (log_id, _) in logging_config.sink_logs.values() {
+        for (log_id, _) in config.logging.sink_logs.values() {
             self.compute
                 .collections
                 .insert(*log_id, CollectionState::new_log_collection());
         }
 
-        logging_config.index_logs = self.compute.arranged_logs.clone();
-        let maintained_logs: BTreeSet<_> = logging_config.log_identifiers().collect();
+        config.logging.index_logs = self.compute.arranged_logs.clone();
+        let maintained_logs: BTreeSet<_> = config.logging.log_identifiers().collect();
 
         // Initialize frontier tracking for the new replica
         // and clean up any dropped collections that we can
@@ -328,8 +329,7 @@ where
             id,
             self.compute.instance_id,
             self.compute.build_info,
-            location,
-            logging_config,
+            config,
             self.compute.orchestrator.clone(),
             ComputeStartupEpoch::new(self.compute.envd_epoch, *replica_epoch),
         );
@@ -370,7 +370,10 @@ where
         // If the replica is managed we have to remove it from the orchestrator. We spawn
         // a background task that waits until the termination of the message handler task and
         // then removes it from the orchestrator.
-        if matches!(replica.location, ComputeReplicaLocation::Managed { .. }) {
+        if matches!(
+            replica.config.location,
+            ComputeReplicaLocation::Managed { .. }
+        ) {
             let replica_task = replica.replica_task.take().unwrap();
             let instance_id = self.compute.instance_id;
             let orchestrator = self.compute.orchestrator.clone();
@@ -431,10 +434,9 @@ where
     }
 
     fn rehydrate_replica(&mut self, id: ReplicaId) {
-        let location = self.compute.replicas[&id].location.clone();
-        let logging_config = self.compute.replicas[&id].logging_config.clone();
+        let config = self.compute.replicas[&id].config.clone();
         self.remove_replica_state(id);
-        let result = self.add_replica(id, location, logging_config);
+        let result = self.add_replica(id, config);
 
         match result {
             Ok(()) => (),
@@ -747,12 +749,6 @@ where
             self.update_read_capabilities(&mut read_capability_changes);
         }
         Ok(())
-    }
-
-    /// Update the max size in bytes of any result.
-    pub fn update_max_result_size(&mut self, max_result_size: u32) {
-        self.compute
-            .send(ComputeCommand::UpdateMaxResultSize(max_result_size))
     }
 
     /// Validate that a collection exists for all identifiers, and error if any do not.

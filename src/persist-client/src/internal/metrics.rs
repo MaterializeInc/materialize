@@ -461,7 +461,11 @@ pub struct CmdMetrics {
 }
 
 impl CmdMetrics {
-    pub async fn run_cmd<R, E, F, CmdFn>(&self, cmd_fn: CmdFn) -> Result<R, E>
+    pub async fn run_cmd<R, E, F, CmdFn>(
+        &self,
+        shard_metrics: &ShardMetrics,
+        cmd_fn: CmdFn,
+    ) -> Result<R, E>
     where
         F: std::future::Future<Output = Result<R, E>>,
         CmdFn: FnOnce(CmdCasMismatchMetric) -> F,
@@ -471,7 +475,10 @@ impl CmdMetrics {
         let res = cmd_fn(CmdCasMismatchMetric(self.cas_mismatch.clone())).await;
         self.seconds.inc_by(start.elapsed().as_secs_f64());
         match res.as_ref() {
-            Ok(_) => self.succeeded.inc(),
+            Ok(_) => {
+                self.succeeded.inc();
+                shard_metrics.cmd_succeeded.inc();
+            }
             Err(_) => self.failed.inc(),
         };
         res
@@ -969,8 +976,11 @@ pub struct ShardsMetrics {
     encoded_batch_size: mz_ore::metrics::UIntGaugeVec,
     largest_batch_size: mz_ore::metrics::UIntGaugeVec,
     seqnos_held: mz_ore::metrics::UIntGaugeVec,
+    gc_seqno_held_parts: mz_ore::metrics::UIntGaugeVec,
+    gc_live_diffs: mz_ore::metrics::UIntGaugeVec,
     gc_finished: mz_ore::metrics::IntCounterVec,
     compaction_applied: mz_ore::metrics::IntCounterVec,
+    cmd_succeeded: mz_ore::metrics::IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1038,6 +1048,16 @@ impl ShardsMetrics {
                 help: "maximum count of gc-ineligible states by shard",
                 var_labels: ["shard"],
             )),
+            gc_seqno_held_parts: registry.register(metric!(
+                name: "mz_persist_shard_gc_seqno_held_parts",
+                help: "count of parts referenced by some live state but not the current state (ie. parts kept only to satisfy seqno holds) at GC time",
+                var_labels: ["shard"],
+            )),
+            gc_live_diffs: registry.register(metric!(
+                name: "mz_persist_shard_gc_live_diffs",
+                help: "the number of diffs (or, alternatively, the number of seqnos) present in consensus state at GC time",
+                var_labels: ["shard"],
+            )),
             gc_finished: registry.register(metric!(
                 name: "mz_persist_shard_gc_finished",
                 help: "count of garbage collections finished by shard",
@@ -1046,6 +1066,11 @@ impl ShardsMetrics {
             compaction_applied: registry.register(metric!(
                 name: "mz_persist_shard_compaction_applied",
                 help: "count of compactions applied to state by shard",
+                var_labels: ["shard"],
+            )),
+            cmd_succeeded: registry.register(metric!(
+                name: "mz_persist_shard_cmd_succeeded",
+                help: "count of commands succeeded by shard",
                 var_labels: ["shard"],
             )),
             shards,
@@ -1099,10 +1124,13 @@ pub struct ShardMetrics {
     encoded_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     largest_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) gc_seqno_held_parts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) gc_live_diffs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     // These are already counted elsewhere in aggregate, so delete them if we
     // remove per-shard labels.
     pub gc_finished: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub compaction_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub cmd_succeeded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
@@ -1137,11 +1165,20 @@ impl ShardMetrics {
             seqnos_held: shards_metrics
                 .seqnos_held
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
+            gc_seqno_held_parts: shards_metrics
+                .gc_seqno_held_parts
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            gc_live_diffs: shards_metrics
+                .gc_live_diffs
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
             gc_finished: shards_metrics
                 .gc_finished
                 .get_delete_on_drop_counter(vec![shard.clone()]),
             compaction_applied: shards_metrics
                 .compaction_applied
+                .get_delete_on_drop_counter(vec![shard.clone()]),
+            cmd_succeeded: shards_metrics
+                .cmd_succeeded
                 .get_delete_on_drop_counter(vec![shard]),
         }
     }
@@ -1166,6 +1203,10 @@ impl ShardMetrics {
 
     pub fn set_batch_part_count(&self, batch_count: usize) {
         self.batch_part_count.set(u64::cast_from(batch_count))
+    }
+
+    pub fn set_gc_seqno_held_parts(&self, parts: usize) {
+        self.gc_seqno_held_parts.set(u64::cast_from(parts))
     }
 
     pub fn set_update_count(&self, update_count: usize) {

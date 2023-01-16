@@ -11,7 +11,7 @@
 //! into canonical form.
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 use mz_repr::{ColumnType, Datum, ScalarType};
 
@@ -224,7 +224,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types
     // 3) Make non-null requirements explicit as predicates in order for
     // step 4) to be able to simplify AND/OR expressions with IS NULL
     // sub-predicates. This redundancy is removed later by step 5).
-    let mut non_null_columns = HashSet::new();
+    let mut non_null_columns = BTreeSet::new();
     for p in predicates.iter() {
         p.non_null_requirements(&mut non_null_columns);
     }

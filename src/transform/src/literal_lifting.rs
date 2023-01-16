@@ -20,7 +20,7 @@
 //! This type of transformation is difficult to make otherwise, as it
 //! is not easy to locally change the shape of relations.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use itertools::Itertools;
 
@@ -64,7 +64,7 @@ impl crate::Transform for LiteralLifting {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let literals = self.action(relation, &mut HashMap::new())?;
+        let literals = self.action(relation, &mut BTreeMap::new())?;
         if !literals.is_empty() {
             // Literals return up the root should be re-installed.
             *relation = relation.take_dangerous().map(literals);
@@ -132,7 +132,7 @@ impl LiteralLifting {
         &self,
         relation: &mut MirRelationExpr,
         // Map from names to literals required for appending.
-        gets: &mut HashMap<Id, Vec<MirScalarExpr>>,
+        gets: &mut BTreeMap<Id, Vec<MirScalarExpr>>,
     ) -> Result<Vec<MirScalarExpr>, crate::TransformError> {
         self.checked_recur(|_| {
             match relation {

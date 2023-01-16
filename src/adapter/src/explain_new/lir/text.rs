@@ -20,11 +20,7 @@
 //!    pairs on the same line or as lowercase `$key` fields on indented lines.
 //! 5. A single non-recursive parameter can be written just as `$val`.
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    fmt,
-    ops::Deref,
-};
+use std::{collections::BTreeMap, fmt, ops::Deref};
 
 use mz_compute_client::plan::{
     join::{
@@ -715,9 +711,9 @@ struct Arrangement<'a> {
     thinning: &'a Vec<usize>,
 }
 
-impl<'a> From<&'a (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)> for Arrangement<'a> {
+impl<'a> From<&'a (Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)> for Arrangement<'a> {
     fn from(
-        (key, permutation, thinning): &'a (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>),
+        (key, permutation, thinning): &'a (Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>),
     ) -> Self {
         Arrangement {
             key,
@@ -746,14 +742,12 @@ impl<'a> fmt::Display for Arrangement<'a> {
 }
 
 /// Helper struct for rendering a permutation.
-struct Permutation<'a>(&'a HashMap<usize, usize>);
+struct Permutation<'a>(&'a BTreeMap<usize, usize>);
 
 impl<'a> fmt::Display for Permutation<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut pairs = vec![];
-        // convert the wrapped `HashMap` to a `BTreeMap` first and then iterate
-        // over the individual pairs for deterministic output
-        for (x, y) in BTreeMap::from_iter(self.0.iter().filter(|(x, y)| x != y)) {
+        for (x, y) in self.0.iter().filter(|(x, y)| x != y) {
             pairs.push(format!("#{}: #{}", x, y));
         }
 

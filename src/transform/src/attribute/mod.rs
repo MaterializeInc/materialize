@@ -9,7 +9,7 @@
 
 //! Derived attributes framework and definitions.
 
-use std::{collections::HashMap, marker::PhantomData};
+use std::{collections::BTreeMap, marker::PhantomData};
 
 use mz_repr::explain_new::ExplainConfig;
 use num_traits::FromPrimitive;
@@ -75,8 +75,8 @@ impl<A: Attribute + 'static> TypeMapKey for AsKey<A> {
 #[derive(Default)]
 #[allow(missing_debug_implementations)]
 pub struct Env<A: Attribute> {
-    /// The [`HashMap`] backing this environment.
-    env: HashMap<LocalId, A::Value>,
+    /// The [`BTreeMap`] backing this environment.
+    env: BTreeMap<LocalId, A::Value>,
     // A stack of tasks to maintain the `env` map.
     env_tasks: Vec<EnvTask<A::Value>>,
 }

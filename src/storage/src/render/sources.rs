@@ -25,7 +25,6 @@ use tokio::runtime::Handle as TokioHandle;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
-use mz_storage_client::source::persist_source::NO_FLOW_CONTROL;
 use mz_storage_client::types::errors::{DataflowError, DecodeError, EnvelopeError};
 use mz_storage_client::types::sources::{encoding::*, *};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
@@ -100,6 +99,11 @@ where
         resume_upper: resume_upper.clone(),
         storage_metadata: description.ingestion_metadata.clone(),
         persist_clients: Arc::clone(&storage_state.persist_clients),
+        source_statistics: storage_state
+            .source_statistics
+            .get(&id)
+            .expect("statistics initialized")
+            .clone(),
     };
 
     // TODO(petrosagg): put the description as-is in the RawSourceCreationConfig instead of cloning
@@ -343,8 +347,7 @@ where
                                     Some(as_of),
                                     Antichain::new(),
                                     None,
-                                    &timely::dataflow::operators::generic::operator::empty(scope),
-                                    NO_FLOW_CONTROL,
+                                    None,
                                     // Copy the logic in DeltaJoin/Get/Join to start.
                                     |_timer, count| count > 1_000_000,
                                 );
@@ -403,8 +406,7 @@ where
                                 Some(Antichain::from_elem(previous_as_of)),
                                 Antichain::new(),
                                 None,
-                                &timely::dataflow::operators::generic::operator::empty(scope),
-                                NO_FLOW_CONTROL,
+                                None,
                                 // Copy the logic in DeltaJoin/Get/Join to start.
                                 |_timer, count| count > 1_000_000,
                             );

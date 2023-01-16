@@ -374,7 +374,7 @@ impl Transactor {
     > {
         let mut ret = Vec::new();
         loop {
-            for event in listen.next().await {
+            for event in listen.fetch_next().await {
                 match event {
                     ListenEvent::Progress(x) => {
                         // NB: Unlike the snapshot as_of, a listener frontier is
@@ -403,7 +403,7 @@ impl Transactor {
         i64,
     )> {
         while PartialOrder::less_equal(self.long_lived_listen.frontier(), as_of) {
-            for event in self.long_lived_listen.next().await {
+            for event in self.long_lived_listen.fetch_next().await {
                 match event {
                     ListenEvent::Updates(mut updates) => {
                         self.long_lived_updates.append(&mut updates)
@@ -596,7 +596,19 @@ impl Service for TransactorService {
 
         // Construct requested Blob.
         let blob = match &args.blob_uri {
-            Some(blob_uri) => BlobConfig::try_from(blob_uri).await?.open().await?,
+            Some(blob_uri) => {
+                let cfg = BlobConfig::try_from(blob_uri)
+                    .await
+                    .expect("blob_uri should be valid");
+                loop {
+                    match cfg.clone().open().await {
+                        Ok(x) => break x,
+                        Err(err) => {
+                            info!("failed to open blob, trying again: {}", err);
+                        }
+                    }
+                }
+            }
             None => MaelstromBlob::new(handle.clone()),
         };
         let blob: Arc<dyn Blob + Send + Sync> =
@@ -620,13 +632,20 @@ impl Service for TransactorService {
         let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
         let consensus = match &args.consensus_uri {
             Some(consensus_uri) => {
-                ConsensusConfig::try_from(
+                let cfg = ConsensusConfig::try_from(
                     consensus_uri,
                     Box::new(config.clone()),
                     metrics.postgres_consensus.clone(),
-                )?
-                .open()
-                .await?
+                )
+                .expect("consensus_uri should be valid");
+                loop {
+                    match cfg.clone().open().await {
+                        Ok(x) => break x,
+                        Err(err) => {
+                            info!("failed to open consensus, trying again: {}", err);
+                        }
+                    }
+                }
             }
             None => MaelstromConsensus::new(handle.clone()),
         };

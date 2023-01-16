@@ -14,6 +14,7 @@
 
 use std::os::unix::ffi::OsStrExt;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{ffi::CString, io::BufRead, time::Instant};
 use tokio::sync::Mutex;
 
@@ -21,6 +22,10 @@ use anyhow::bail;
 use once_cell::sync::Lazy;
 use tempfile::NamedTempFile;
 use tikv_jemalloc_ctl::{epoch, raw, stats};
+
+use mz_ore::cast::CastFrom;
+use mz_ore::metric;
+use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 
 use super::{ProfStartTime, StackProfile, WeightedStack};
 
@@ -133,6 +138,19 @@ pub struct JemallocStats {
     pub retained: usize,
 }
 
+impl JemallocStats {
+    pub fn get() -> anyhow::Result<JemallocStats> {
+        epoch::advance()?;
+        Ok(JemallocStats {
+            active: stats::active::read()?,
+            allocated: stats::allocated::read()?,
+            metadata: stats::metadata::read()?,
+            resident: stats::resident::read()?,
+            retained: stats::retained::read()?,
+        })
+    }
+}
+
 impl JemallocProfCtl {
     // Creates and returns the global singleton.
     fn get() -> Option<Self> {
@@ -197,13 +215,67 @@ impl JemallocProfCtl {
     }
 
     pub fn stats(&self) -> anyhow::Result<JemallocStats> {
-        epoch::advance()?;
-        Ok(JemallocStats {
-            active: stats::active::read()?,
-            allocated: stats::allocated::read()?,
-            metadata: stats::metadata::read()?,
-            resident: stats::resident::read()?,
-            retained: stats::retained::read()?,
-        })
+        JemallocStats::get()
+    }
+}
+
+/// Metrics for jemalloc.
+pub struct JemallocMetrics {
+    pub active: UIntGauge,
+    pub allocated: UIntGauge,
+    pub metadata: UIntGauge,
+    pub resident: UIntGauge,
+    pub retained: UIntGauge,
+}
+
+impl JemallocMetrics {
+    /// Registers the metrics into the provided metrics registry, and spawns
+    /// a task to keep the metrics up to date.
+    // `async` indicates that the Tokio runtime context is required.
+    #[allow(clippy::unused_async)]
+    pub async fn register_into(registry: &MetricsRegistry) {
+        let m = JemallocMetrics {
+            active: registry.register(metric!(
+                name: "jemalloc_active",
+                help: "Total number of bytes in active pages allocated by the application",
+            )),
+            allocated: registry.register(metric!(
+                name: "jemalloc_allocated",
+                help: "Total number of bytes allocated by the application",
+            )),
+            metadata: registry.register(metric!(
+                name: "jemalloc_metadata",
+                help: "Total number of bytes dedicated to metadata.",
+            )),
+            resident: registry.register(metric!(
+                name: "jemalloc_resident",
+                help: "Maximum number of bytes in physically resident data pages mapped",
+            )),
+            retained: registry.register(metric!(
+                name: "jemalloc_retained",
+                help: "Total number of bytes in virtual memory mappings",
+            )),
+        };
+
+        mz_ore::task::spawn(|| "jemalloc_stats_update", async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(10));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                if let Err(e) = m.update() {
+                    tracing::warn!("Error while updating jemalloc stats: {}", e);
+                }
+            }
+        });
+    }
+
+    fn update(&self) -> anyhow::Result<()> {
+        let s = JemallocStats::get()?;
+        self.active.set(u64::cast_from(s.active));
+        self.allocated.set(u64::cast_from(s.allocated));
+        self.metadata.set(u64::cast_from(s.metadata));
+        self.resident.set(u64::cast_from(s.resident));
+        self.retained.set(u64::cast_from(s.retained));
+        Ok(())
     }
 }

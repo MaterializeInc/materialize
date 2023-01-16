@@ -10,7 +10,7 @@
 //! Replace operators on constants collections with constant collections.
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::TryInto;
 use std::iter;
 
@@ -502,7 +502,7 @@ impl FoldConstants {
                                 agg.func.eval(
                                     vals.iter()
                                         .map(|val| val[i].unpack_first())
-                                        .collect::<HashSet<_>>()
+                                        .collect::<BTreeSet<_>>()
                                         .into_iter(),
                                     &temp_storage,
                                 )

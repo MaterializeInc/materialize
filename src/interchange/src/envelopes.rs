@@ -160,10 +160,12 @@ pub fn dbz_format(rp: &mut RowPacker, dp: DiffPair<Row>) {
 }
 
 pub fn upsert_format(dps: Vec<DiffPair<Row>>, sink_id: GlobalId, from: GlobalId) -> Option<Row> {
-    let dp = dps.expect_element(format!(
-        "primary key error: expected at most one update per key and timestamp \
+    let dp = dps.expect_element(|| {
+        format!(
+            "primary key error: expected at most one update per key and timestamp \
           This can happen when the configured sink key is not a primary key of \
           the sinked relation: sink {sink_id} created from {from}."
-    ));
+        )
+    });
     dp.after
 }

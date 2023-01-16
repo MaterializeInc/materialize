@@ -244,18 +244,6 @@ steps:
     agents:
       queue: linux-x86_64
 
-  - id: billing-demo
-    label: Billing demo smoke test
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: billing-demo
-          args: [--message-count=100, --partitions=10]
-    agents:
-      queue: linux-x86_64
-
   - id: perf-kinesis
     label: Kinesis performance smoke test
     depends_on: build-x86_64
@@ -298,6 +286,7 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 60
     artifact_paths: junit_mzcompose_*.xml
+    inputs: [doc/user/content/releases]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: upgrade
@@ -519,8 +508,8 @@ steps:
           composition: platform-checks
           args: [--scenario=KillClusterdStorage]
 
-  - id: checks-restart-postgres-backend
-    label: "Checks + restart Postgres backend"
+  - id: checks-restart-cockroach
+    label: "Checks + restart Cockroach"
     depends_on: build-x86_64
     inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
@@ -529,7 +518,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
-          args: [--scenario=RestartPostgresBackend]
+          args: [--scenario=RestartCockroach]
 
   - id: checks-restart-source-postgres
     label: "Checks + restart source Postgres"

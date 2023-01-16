@@ -22,19 +22,21 @@
 /// evolves in `IntoTime` according to the reclock decisions that have been taken by the
 /// `ReclockOperator`.
 use std::cell::RefCell;
+use std::fmt::Display;
 use std::rc::Rc;
 
 use differential_dataflow::consolidation;
 use differential_dataflow::difference::Abelian;
 use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
-use mz_persist_client::error::UpperMismatch;
-use mz_storage_client::util::remap_handle::RemapHandle;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp;
 
+use mz_persist_client::error::UpperMismatch;
 use mz_repr::Diff;
+use mz_storage_client::util::remap_handle::RemapHandle;
+use mz_timely_util::antichain::AntichainExt;
 
 pub mod compat;
 
@@ -44,23 +46,21 @@ pub mod compat;
 ///
 /// Shareable with `.share()`
 pub struct ReclockFollower<FromTime: Timestamp, IntoTime: Timestamp> {
-    inner: Rc<RefCell<ReclockFollowerInner<FromTime, IntoTime>>>,
+    /// The `since` maintained by the local handle. This may be beyond the shared `since`
+    since: Antichain<IntoTime>,
+    pub inner: Rc<RefCell<ReclockFollowerInner<FromTime, IntoTime>>>,
 }
 
-struct ReclockFollowerInner<FromTime: Timestamp, IntoTime: Timestamp> {
+#[derive(Debug)]
+pub struct ReclockFollowerInner<FromTime: Timestamp, IntoTime: Timestamp> {
     /// A dTVC trace of the remap collection containing all updates at `t: since <= t < upper`.
     // NOTE(petrosagg): Once we write this as a timely operator this should just be an arranged
     // trace of the remap collection
     remap_trace: Vec<(FromTime, IntoTime, Diff)>,
-    /// The frontier after which this operator must take correct reclock decisions
-    as_of: Antichain<IntoTime>,
     /// Since frontier of the partial remap trace
-    since: Antichain<IntoTime>,
+    since: MutableAntichain<IntoTime>,
     /// Upper frontier of the partial remap trace
     upper: Antichain<IntoTime>,
-    /// The since frontier in terms of `FromTime`. Any attempt to reclock messages stricly less
-    /// than this frontier will result in an error.
-    source_since: Antichain<FromTime>,
     /// The upper frontier in terms of `FromTime`. Any attempt to reclock messages beyond this
     /// frontier will result in an error.
     source_upper: MutableAntichain<FromTime>,
@@ -69,17 +69,19 @@ struct ReclockFollowerInner<FromTime: Timestamp, IntoTime: Timestamp> {
 impl<FromTime, IntoTime> ReclockFollower<FromTime, IntoTime>
 where
     FromTime: Timestamp,
-    IntoTime: Timestamp + Lattice,
+    IntoTime: Timestamp + Lattice + Display,
 {
     /// Constructs a new [ReclockFollower]
     pub fn new(as_of: Antichain<IntoTime>) -> Self {
+        let mut since = MutableAntichain::new();
+        since.update_iter(as_of.iter().map(|t| (t.clone(), 1)));
+
         Self {
+            since: as_of,
             inner: Rc::new(RefCell::new(ReclockFollowerInner {
                 remap_trace: Vec::new(),
-                as_of,
-                since: Antichain::from_elem(IntoTime::minimum()),
+                since,
                 upper: Antichain::from_elem(IntoTime::minimum()),
-                source_since: Antichain::from_elem(FromTime::minimum()),
                 source_upper: MutableAntichain::new(),
             })),
         }
@@ -89,10 +91,14 @@ where
         self.inner.borrow().source_upper.frontier().to_owned()
     }
 
+    pub fn initialized(&self) -> bool {
+        let inner = self.inner.borrow();
+        PartialOrder::less_than(&inner.since.frontier(), &inner.upper.borrow())
+    }
+
     /// Pushes a new trace batch into this [`ReclockFollower`].
     pub fn push_trace_batch(&mut self, mut batch: ReclockBatch<FromTime, IntoTime>) {
         let mut inner = self.inner.borrow_mut();
-        let was_initialized = PartialOrder::less_than(&inner.as_of, &inner.upper);
         // Ensure we only add consolidated batches to our trace
         consolidation::consolidate_updates(&mut batch.updates);
         inner.remap_trace.extend(batch.updates.iter().cloned());
@@ -103,11 +109,6 @@ where
                 .map(|(src_ts, _ts, diff)| (src_ts, diff)),
         );
         inner.upper = batch.upper;
-        if !was_initialized && PartialOrder::less_than(&inner.as_of, &inner.upper) {
-            let as_of = inner.as_of.clone();
-            drop(inner);
-            self.compact(as_of);
-        }
     }
 
     /// Reclocks a batch of messages timestamped with `FromTime` and returns an iterator of
@@ -146,15 +147,12 @@ where
         &self,
         src_ts: &FromTime,
     ) -> Result<Antichain<IntoTime>, ReclockError<FromTime>> {
-        let inner = self.inner.borrow();
-        if !PartialOrder::less_than(&inner.as_of, &inner.upper) {
+        if !self.initialized() {
             return Err(ReclockError::Uninitialized);
         }
+        let inner = self.inner.borrow();
         if inner.source_upper.less_equal(src_ts) {
             return Err(ReclockError::BeyondUpper(src_ts.clone()));
-        }
-        if !inner.source_since.less_equal(src_ts) {
-            return Err(ReclockError::NotBeyondSince(src_ts.clone()));
         }
 
         // In order to understand the logic of the following section let's first consider an
@@ -254,6 +252,10 @@ where
         // the reclock operators fully general.
         let mut into_times = MutableAntichain::new();
 
+        let mut minimum = IntoTime::minimum();
+        minimum.advance_by(inner.since.frontier());
+        into_times.update_iter([(minimum, 1)]);
+
         into_times.update_iter(
             inner
                 .remap_trace
@@ -321,7 +323,7 @@ where
                 return Err(ReclockError::BeyondUpper(frontier));
             }
         }
-        if !PartialOrder::less_than(&inner.since.borrow(), &frontier) {
+        if !PartialOrder::less_than(&inner.since.frontier(), &frontier) {
             return Err(ReclockError::NotBeyondSince(frontier));
         }
         let mut source_upper = MutableAntichain::new();
@@ -339,48 +341,61 @@ where
         Ok(source_upper.frontier().to_owned())
     }
 
+    /// Compacts the trace held by this reclock follower to the specified frontier.
+    ///
+    /// Reclocking has the property that it commutes with compaction. What this means is that
+    /// reclocking a collection and then compacting the result to some frontier F will produce
+    /// exactly the same result with first compacting the remap trace to frontier F and then
+    /// reclocking the collection.
     pub fn compact(&mut self, new_since: Antichain<IntoTime>) {
-        let mut inner = &mut *self.inner.borrow_mut();
         // Ignore compaction requests while we initialize
-        if !PartialOrder::less_than(&inner.as_of, &inner.upper) {
+        if !self.initialized() {
             return;
         }
-        if !PartialOrder::less_equal(&inner.since, &new_since) {
+        let inner = &mut *self.inner.borrow_mut();
+        if !PartialOrder::less_equal(&self.since, &new_since) {
             panic!(
-                "ReclockFollower: `new_since` ({:?}) is not beyond \
-                `self.since` ({:?}).",
-                new_since, inner.since,
+                "ReclockFollower: new_since={} is not beyond self.since={}. inner.since={}",
+                new_since.pretty(),
+                self.since.pretty(),
+                inner.since.pretty(),
             );
         }
+        inner.since.update_iter(
+            self.since
+                .iter()
+                .map(|t| (t.clone(), -1))
+                .chain(new_since.iter().map(|t| (t.clone(), 1))),
+        );
+        self.since = new_since;
+
         // Compact the remap trace according to the computed frontier
         for (_src_ts, ts, _diff) in inner.remap_trace.iter_mut() {
-            ts.advance_by(new_since.borrow());
+            ts.advance_by(inner.since.frontier());
         }
         // And then consolidate
         consolidation::consolidate_updates(&mut inner.remap_trace);
-        assert_eq!(new_since.len(), 1);
-        inner.source_since = Antichain::from_iter(
-            new_since
-                .get(0)
-                .map(|since_ts| {
-                    inner.remap_trace.iter().filter_map(|(src_ts, ts, _diff)| {
-                        if PartialOrder::less_equal(ts, since_ts) {
-                            Some(src_ts.clone())
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .into_iter()
-                .flatten(),
-        );
-        inner.since = new_since;
     }
 
     pub fn share(&self) -> Self {
+        self.inner
+            .borrow_mut()
+            .since
+            .update_iter(self.since.iter().map(|t| (t.clone(), 1)));
         Self {
+            since: self.since.clone(),
             inner: Rc::clone(&self.inner),
         }
+    }
+}
+
+impl<FromTime: Timestamp, IntoTime: Timestamp> Drop for ReclockFollower<FromTime, IntoTime> {
+    fn drop(&mut self) {
+        // Release read hold
+        let mut inner = self.inner.borrow_mut();
+        inner
+            .since
+            .update_iter(self.since.iter().map(|t| (t.clone(), -1)));
     }
 }
 
@@ -523,12 +538,6 @@ where
             updates: vec![],
             upper: self.upper.clone(),
         };
-
-        // Ensure frontiers march forwards
-        assert!(PartialOrder::less_equal(
-            &self.source_upper.frontier(),
-            &new_source_upper
-        ));
 
         while PartialOrder::less_than(&self.source_upper.frontier(), &new_source_upper) {
             let (ts, upper) = self
@@ -882,11 +891,10 @@ mod tests {
         operator.compact(Antichain::from_elem(1500.into())).await;
         follower.compact(Antichain::from_elem(1500.into()));
         let query = partitioned_frontier([(1, MzOffset::from(9))]);
+        // Now reclocking the same offset maps to the compacted binding, which is the same result
+        // as if we had reclocked offset 9 with the uncompacted bindings and then compacted that.
         assert_eq!(
-            Err(ReclockError::NotBeyondSince(Partitioned::with_partition(
-                1,
-                MzOffset::from(9)
-            ))),
+            Ok(Antichain::from_elem(1500.into())),
             follower.reclock_frontier(query.borrow())
         );
         let query = partitioned_frontier([(1, MzOffset::from(10))]);
@@ -1047,11 +1055,11 @@ mod tests {
             .collect_vec();
         assert_eq!(reclocked_msgs, &[(3, 2000.into()), (4, 2000.into())]);
 
-        // Compact enough so that we can correctly timestamp only offsets >= 3
+        // Compact enough so that offsets >= 3 remain uncompacted
         operator.compact(Antichain::from_elem(1000.into())).await;
         follower.compact(Antichain::from_elem(1000.into()));
 
-        // Reclock offsets 3 and 4 again to see we haven't lost the ability
+        // Reclock offsets 3 and 4 again to see we get the uncompacted result
         let batch = vec![
             (3, Partitioned::with_partition(0, MzOffset::from(3))),
             (4, Partitioned::with_partition(0, MzOffset::from(4))),
@@ -1063,15 +1071,15 @@ mod tests {
             .collect_vec();
         assert_eq!(reclocked_msgs, &[(3, 2000.into()), (4, 2000.into())]);
 
-        // Attempting to reclock offset 2 should return an error
+        // Attempting to reclock offset 2 should return compacted bindings
         let src_ts = Partitioned::with_partition(0, MzOffset::from(2));
         let batch = vec![(2, src_ts.clone())];
 
-        let reclocked_msgs = follower.reclock(batch).collect_vec();
-        assert_eq!(
-            reclocked_msgs,
-            &[(2, Err(ReclockError::NotBeyondSince(src_ts)))]
-        );
+        let reclocked_msgs = follower
+            .reclock(batch)
+            .map(|(m, ts)| (m, ts.unwrap()))
+            .collect_vec();
+        assert_eq!(reclocked_msgs, &[(2, 1000.into())]);
 
         // Starting a new operator with an `as_of` is the same as having compacted
         let (_operator, follower) =
@@ -1090,14 +1098,13 @@ mod tests {
         assert_eq!(reclocked_msgs, &[(3, 2000.into()), (4, 2000.into())]);
 
         // But attempting to reclock offset 2 should return an error
-        let src_ts = Partitioned::with_partition(0, MzOffset::from(2));
-        let batch = vec![(2, src_ts.clone())];
+        let batch = vec![(2, Partitioned::with_partition(0, MzOffset::from(2)))];
 
-        let reclocked_msgs = follower.reclock(batch).collect_vec();
-        assert_eq!(
-            reclocked_msgs,
-            &[(2, Err(ReclockError::NotBeyondSince(src_ts)))]
-        );
+        let reclocked_msgs = follower
+            .reclock(batch)
+            .map(|(m, ts)| (m, ts.unwrap()))
+            .collect_vec();
+        assert_eq!(reclocked_msgs, &[(2, 1000.into())]);
     }
 
     #[tokio::test]

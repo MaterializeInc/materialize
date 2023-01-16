@@ -13,7 +13,7 @@
 //! `INSERT`, `SELECT`, `SUBSCRIBE`, and `COPY`.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
@@ -336,7 +336,7 @@ pub fn plan_explain(
     let config_flags = config_flags
         .iter()
         .map(|ident| ident.to_string().to_lowercase())
-        .collect::<HashSet<_>>();
+        .collect::<BTreeSet<_>>();
     let config = ExplainConfig::try_from(config_flags)?;
 
     let format = match format {

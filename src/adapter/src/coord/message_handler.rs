@@ -10,10 +10,12 @@
 //! Logic for processing [`Coordinator`] messages. The [`Coordinator`] receives
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
-use std::collections::HashMap;
+use anyhow::anyhow;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use chrono::DurationRound;
+use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Level};
 
 use mz_compute_client::controller::ComputeInstanceEvent;
@@ -23,20 +25,20 @@ use mz_ore::task;
 use mz_persist_client::ShardId;
 use mz_sql::ast::Statement;
 use mz_sql::plan::{Plan, SendDiffsPlan};
-use mz_stash::Append;
+use mz_storage_client::controller::CollectionMetadata;
 
+use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
-use crate::util::ResultExt;
-use crate::{catalog, AdapterNotice};
-
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
-    Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, SendDiffs,
-    SinkConnectionReady,
+    Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, RealTimeRecencyContext,
+    SendDiffs, SinkConnectionReady,
 };
+use crate::util::ResultExt;
+use crate::{catalog, AdapterError, AdapterNotice};
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
         match msg {
             Message::Command(cmd) => self.message_command(cmd).await,
@@ -75,14 +77,26 @@ impl<S: Append + 'static> Coordinator<S> {
             Message::LinearizeReads(pending_read_txns) => {
                 self.message_linearize_reads(pending_read_txns).await;
             }
-            Message::StorageUsageFetch(collection_timestamp) => {
-                self.storage_usage_fetch(collection_timestamp).await;
+            Message::StorageUsageFetch => {
+                self.storage_usage_fetch().await;
             }
-            Message::StorageUsageUpdate(sizes, collection_timestamp) => {
-                self.storage_usage_update(sizes, collection_timestamp).await;
+            Message::StorageUsageUpdate(sizes) => {
+                self.storage_usage_update(sizes).await;
             }
             Message::Consolidate(collections) => {
                 self.consolidate(&collections).await;
+            }
+            Message::RealTimeRecencyTimestamp {
+                conn_id,
+                transient_revision,
+                real_time_recency_ts,
+            } => {
+                self.message_real_time_recency_timestamp(
+                    conn_id,
+                    transient_revision,
+                    real_time_recency_ts,
+                )
+                .await;
             }
         }
     }
@@ -95,29 +109,74 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_fetch(&self, collection_timestamp: EpochMillis) {
+    pub async fn storage_usage_fetch(&mut self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
+
+        // Record the currently live shards.
+        let live_shards: HashSet<_> = self
+            .controller
+            .storage
+            .collections()
+            // A collection is dropped if its read capability has been advanced
+            // to the empty antichain.
+            .filter(|(_id, collection)| !collection.read_capabilities.is_empty())
+            .flat_map(|(_id, collection)| {
+                let CollectionMetadata {
+                    data_shard,
+                    remap_shard,
+                    status_shard,
+                    // No wildcards, to improve the odds that the addition of a
+                    // new shard type results in a compiler error here.
+                    //
+                    // ATTENTION: If you add a new type of shard that is
+                    // associated with a collection, almost surely you should
+                    // return it below, so that its usage is recorded in the
+                    // `mz_storage_usage_by_shard` table.
+                    persist_location: _,
+                } = &collection.collection_metadata;
+                [*data_shard, *remap_shard].into_iter().chain(*status_shard)
+            })
+            .collect();
+
+        let collection_metric = self
+            .metrics
+            .storage_usage_collection_time_seconds
+            .with_label_values(&[]);
+
+        // Spawn an asynchronous task to compute the storage usage, which
+        // requires a slow scan of the underlying storage engine.
         task::spawn(|| "storage_usage_fetch", async move {
-            let shard_sizes = client.shard_sizes().await;
-            // It is not an error for shard sizes to become ready after `internal_cmd_rx`
-            // is dropped.
-            let result = internal_cmd_tx.send(Message::StorageUsageUpdate(
-                shard_sizes,
-                collection_timestamp,
-            ));
-            if let Err(e) = result {
+            let collection_metric_timer = collection_metric.start_timer();
+            let mut shard_sizes = client.shard_sizes().await;
+
+            // Don't record usage for shards that are no longer live.
+            // Technically the storage is in use, but we never free it, and
+            // we don't want to bill the customer for it.
+            //
+            // See: https://github.com/MaterializeInc/materialize/issues/8185
+            shard_sizes.retain(|shard_id, _| match shard_id {
+                None => true,
+                Some(shard_id) => live_shards.contains(shard_id),
+            });
+            collection_metric_timer.observe_duration();
+
+            // It is not an error for shard sizes to become ready after
+            // `internal_cmd_rx` is dropped.
+            if let Err(e) = internal_cmd_tx.send(Message::StorageUsageUpdate(shard_sizes)) {
                 warn!("internal_cmd_rx dropped before we could send: {:?}", e);
             }
         });
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_update(
-        &mut self,
-        shard_sizes: HashMap<Option<ShardId>, u64>,
-        collection_timestamp: EpochMillis,
-    ) {
+    async fn storage_usage_update(&mut self, shard_sizes: HashMap<Option<ShardId>, u64>) {
+        // Similar to audit events, use the oracle ts so this is guaranteed to
+        // increase. This is intentionally the timestamp of when collection
+        // finished, not when it started, so that we don't write data with a
+        // timestamp in the past.
+        let collection_timestamp: EpochMillis = self.get_local_write_ts().await.timestamp.into();
+
         let mut ops = vec![];
         for (shard_id, size_bytes) in shard_sizes {
             ops.push(catalog::Op::UpdateStorageUsage {
@@ -130,29 +189,54 @@ impl<S: Append + 'static> Coordinator<S> {
         if let Err(err) = self.catalog_transact(None, ops).await {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
-        self.catalog
-            .set_most_recent_storage_usage_collection(collection_timestamp);
         self.schedule_storage_usage_collection();
     }
 
     pub fn schedule_storage_usage_collection(&self) {
-        // Instead of using an `tokio::timer::Interval`, we calculate the time since the last
-        // collection and wait for however much time is left. This is so we can keep the intervals
-        // consistent even across restarts.
-        let time_since_previous_collection = self
-            .now()
-            .saturating_sub(self.catalog.most_recent_storage_usage_collection());
-        let next_collection_interval = self
-            .storage_usage_collection_interval
-            .saturating_sub(Duration::from_millis(time_since_previous_collection));
+        // Instead of using an `tokio::timer::Interval`, we calculate the time until the next
+        // usage collection and wait for that amount of time. This is so we can keep the intervals
+        // consistent even across restarts. If collection takes too long, it is possible that
+        // we miss an interval.
+
+        // 1) Deterministically pick some offset within the collection interval to prevent
+        // thundering herds across environments.
+        const SEED_LEN: usize = 32;
+        let mut seed = [0; SEED_LEN];
+        for (i, byte) in self
+            .catalog
+            .state()
+            .config()
+            .environment_id
+            .organization_id()
+            .as_bytes()
+            .into_iter()
+            .take(SEED_LEN)
+            .enumerate()
+        {
+            seed[i] = *byte;
+        }
+        let storage_usage_collection_interval_ms: EpochMillis =
+            EpochMillis::try_from(self.storage_usage_collection_interval.as_millis())
+                .expect("storage usage collection interval must fit into u64");
+        let offset =
+            rngs::SmallRng::from_seed(seed).gen_range(0..storage_usage_collection_interval_ms);
+        let now_ts: EpochMillis = self.peek_local_write_ts().into();
+
+        // 2) Determine the amount of ms between now and the next collection time.
+        let previous_collection_ts =
+            (now_ts - (now_ts % storage_usage_collection_interval_ms)) + offset;
+        let next_collection_ts = if previous_collection_ts > now_ts {
+            previous_collection_ts
+        } else {
+            previous_collection_ts + storage_usage_collection_interval_ms
+        };
+        let next_collection_interval = Duration::from_millis(next_collection_ts - now_ts);
+
+        // 3) Sleep for that amount of time, then initiate another storage usage collection.
         let internal_cmd_tx = self.internal_cmd_tx.clone();
-        let now_fn = self.now_fn();
         task::spawn(|| "storage_usage_collection", async move {
             tokio::time::sleep(next_collection_interval).await;
-            if internal_cmd_tx
-                .send(Message::StorageUsageFetch(now_fn()))
-                .is_err()
-            {
+            if internal_cmd_tx.send(Message::StorageUsageFetch).is_err() {
                 // If sending fails, the main thread has shutdown.
             }
         });
@@ -425,9 +509,10 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(e) => {
                 // Drop the placeholder sink if still present.
                 if self.catalog.try_get_entry(&id).is_some() {
+                    let ops = self.catalog.drop_items_ops(&[id]);
                     self.catalog_transact(
                         session_and_tx.as_ref().map(|(ref session, _tx)| session),
-                        vec![catalog::Op::DropItem(id)],
+                        ops,
                     )
                     .await
                     .expect("deleting placeholder sink cannot fail");
@@ -601,6 +686,87 @@ impl<S: Append + 'static> Coordinator<S> {
                     warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                 }
             });
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    /// Finishes sequencing a command that was waiting on a real time recency timestamp.
+    async fn message_real_time_recency_timestamp(
+        &mut self,
+        conn_id: ConnectionId,
+        transient_revision: u64,
+        real_time_recency_ts: mz_repr::Timestamp,
+    ) {
+        let real_time_recency_context =
+            match self.pending_real_time_recency_timestamp.remove(&conn_id) {
+                Some(real_time_recency_context) => real_time_recency_context,
+                // Query was cancelled while waiting.
+                None => return,
+            };
+
+        // Re-validate that the catalog hasn't changed.
+        if transient_revision != self.catalog.transient_revision() {
+            // TODO(jkosh44) It would be preferable to re-validate the query instead of blindly failing.
+            let (tx, session) = real_time_recency_context.take_tx_and_session();
+            return tx.send(Err(AdapterError::Unstructured(anyhow!("Catalog contents have changed mid-query due to concurrent DDL, please re-try query"))), session);
+        }
+
+        match real_time_recency_context {
+            RealTimeRecencyContext::ExplainTimestamp {
+                tx,
+                session,
+                format,
+                compute_instance,
+                optimized_plan,
+                id_bundle,
+            } => tx.send(
+                self.sequence_explain_timestamp_finish(
+                    &session,
+                    format,
+                    compute_instance,
+                    optimized_plan,
+                    id_bundle,
+                    Some(real_time_recency_ts),
+                ),
+                session,
+            ),
+            RealTimeRecencyContext::Peek {
+                tx,
+                finishing,
+                copy_to,
+                source,
+                mut session,
+                compute_instance,
+                when,
+                target_replica,
+                view_id,
+                index_id,
+                timeline_context,
+                source_ids,
+                id_bundle,
+                in_immediate_multi_stmt_txn,
+            } => {
+                tx.send(
+                    self.sequence_peek_finish(
+                        finishing,
+                        copy_to,
+                        source,
+                        &mut session,
+                        compute_instance,
+                        when,
+                        target_replica,
+                        view_id,
+                        index_id,
+                        timeline_context,
+                        source_ids,
+                        id_bundle,
+                        in_immediate_multi_stmt_txn,
+                        Some(real_time_recency_ts),
+                    )
+                    .await,
+                    session,
+                );
+            }
         }
     }
 }

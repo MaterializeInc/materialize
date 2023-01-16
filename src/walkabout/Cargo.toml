@@ -17,3 +17,6 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 [dev-dependencies]
 datadriven = "0.6.0"
 tempfile = "3.2.0"
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

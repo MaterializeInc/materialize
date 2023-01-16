@@ -16,7 +16,9 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use uncased::UncasedStr;
 
+use mz_build_info::BuildInfo;
 use mz_ore::cast;
+use mz_persist_client::PersistConfig;
 use mz_sql::ast::{Ident, SetVariableValue, Value as AstValue};
 use mz_sql::DEFAULT_SCHEMA;
 use mz_sql_parser::ast::TransactionIsolationLevel;
@@ -125,6 +127,8 @@ const INTERVAL_STYLE: ServerVar<str> = ServerVar {
     internal: false,
 };
 
+const MZ_VERSION_NAME: &UncasedStr = UncasedStr::new("mz_version");
+
 const QGM_OPTIMIZATIONS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("qgm_optimizations_experimental"),
     value: &false,
@@ -202,8 +206,9 @@ const TIMEZONE: ServerVar<TimeZone> = ServerVar {
     internal: false,
 };
 
+pub const TRANSACTION_ISOLATION_VAR_NAME: &UncasedStr = UncasedStr::new("transaction_isolation");
 const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
-    name: UncasedStr::new("transaction_isolation"),
+    name: TRANSACTION_ISOLATION_VAR_NAME,
     value: &IsolationLevel::StrictSerializable,
     description: "Sets the current transaction's isolation level (PostgreSQL).",
     internal: false,
@@ -334,6 +339,23 @@ static WINDOW_FUNCTIONS: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+/// Controls [`PersistConfig::blob_target_size`].
+const PERSIST_BLOB_TARGET_SIZE: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_blob_target_size"),
+    value: &PersistConfig::DEFAULT_BLOB_TARGET_SIZE,
+    description: "A target maximum size of persist blob payloads in bytes (Materialize).",
+    internal: true,
+};
+
+/// Controls [`PersistConfig::compaction_minimum_timeout`].
+const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_compaction_minimum_timeout"),
+    value: &PersistConfig::DEFAULT_COMPACTION_MINIMUM_TIMEOUT,
+    description: "The minimum amount of time to allow a persist compaction request to run before \
+                  timing it out (Materialize).",
+    internal: true,
+};
+
 /// Boolean flag indicating that the remote configuration was synchronized at
 /// least once with the persistent [SessionVars].
 pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
@@ -357,6 +379,14 @@ static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
     value: &false,
     description:
         "Boolean flag indicating whether to send a NOTICE specifying query timestamps (Materialize).",
+    internal: false,
+};
+
+static EMIT_TRACE_ID_NOTICE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("emit_trace_id_notice"),
+    value: &false,
+    description:
+        "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize).",
     internal: false,
 };
 
@@ -391,6 +421,7 @@ static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
 #[derive(Debug)]
 pub struct SessionVars {
     application_name: SessionVar<str>,
+    build_info: &'static BuildInfo,
     client_encoding: ServerVar<str>,
     client_min_messages: SessionVar<ClientSeverity>,
     cluster: SessionVar<str>,
@@ -413,12 +444,15 @@ pub struct SessionVars {
     transaction_isolation: SessionVar<IsolationLevel>,
     real_time_recency: SessionVar<bool>,
     emit_timestamp_notice: SessionVar<bool>,
+    emit_trace_id_notice: SessionVar<bool>,
 }
 
-impl Default for SessionVars {
-    fn default() -> SessionVars {
+impl SessionVars {
+    /// Creates a new [`SessionVars`].
+    pub fn new(build_info: &'static BuildInfo) -> SessionVars {
         SessionVars {
             application_name: SessionVar::new(&APPLICATION_NAME),
+            build_info,
             client_encoding: CLIENT_ENCODING,
             client_min_messages: SessionVar::new(&CLIENT_MIN_MESSAGES),
             cluster: SessionVar::new(&CLUSTER),
@@ -443,26 +477,23 @@ impl Default for SessionVars {
             transaction_isolation: SessionVar::new(&TRANSACTION_ISOLATION),
             real_time_recency: SessionVar::new(&REAL_TIME_RECENCY),
             emit_timestamp_notice: SessionVar::new(&EMIT_TIMESTAMP_NOTICE),
+            emit_trace_id_notice: SessionVar::new(&EMIT_TRACE_ID_NOTICE),
         }
     }
-}
 
-impl SessionVars {
     /// Returns a new SessionVars with the cluster variable set to `cluster`.
-    pub fn for_cluster(cluster_name: &str) -> Self {
-        let mut cluster = SessionVar::new(&CLUSTER);
-        cluster.session_value = Some(cluster_name.into());
-        Self {
-            cluster,
-            ..Default::default()
-        }
+    pub fn for_cluster(build_info: &'static BuildInfo, cluster_name: &str) -> Self {
+        let mut vars = SessionVars::new(build_info);
+        vars.cluster.session_value = Some(cluster_name.into());
+        vars
     }
 
     /// Returns an iterator over the configuration parameters and their current
     /// values for this session.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 23] = [
+        let vars: [&dyn Var; 25] = [
             &self.application_name,
+            self.build_info,
             &self.client_encoding,
             &self.client_min_messages,
             &self.cluster,
@@ -485,6 +516,7 @@ impl SessionVars {
             &self.transaction_isolation,
             &self.real_time_recency,
             &self.emit_timestamp_notice,
+            &self.emit_trace_id_notice,
         ];
         vars.into_iter()
     }
@@ -493,7 +525,7 @@ impl SessionVars {
     /// values for this session) that are expected to be sent to the client when
     /// a new connection is established or when their value changes.
     pub fn notify_set(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 8] = [
+        let vars: [&dyn Var; 9] = [
             &self.application_name,
             &self.client_encoding,
             &self.date_style,
@@ -502,6 +534,13 @@ impl SessionVars {
             &self.standard_conforming_strings,
             &self.timezone,
             &self.interval_style,
+            // Including `mz_version` in the notify set is a Materialize
+            // extension. Doing so allows applications to detect whether they
+            // are talking to Materialize or PostgreSQL without an additional
+            // network roundtrip. This is known to be safe because CockroachDB
+            // has an analogous extension [0].
+            // [0]: https://github.com/cockroachdb/cockroach/blob/369c4057a/pkg/sql/pgwire/conn.go#L1840
+            self.build_info,
         ];
         vars.into_iter()
     }
@@ -539,6 +578,8 @@ impl SessionVars {
             Ok(&self.integer_datetimes)
         } else if name == INTERVAL_STYLE.name {
             Ok(&self.interval_style)
+        } else if name == MZ_VERSION_NAME {
+            Ok(self.build_info)
         } else if name == QGM_OPTIMIZATIONS.name {
             Ok(&self.qgm_optimizations)
         } else if name == SEARCH_PATH.name {
@@ -563,6 +604,8 @@ impl SessionVars {
             Ok(&self.real_time_recency)
         } else if name == EMIT_TIMESTAMP_NOTICE.name {
             Ok(&self.emit_timestamp_notice)
+        } else if name == EMIT_TRACE_ID_NOTICE.name {
+            Ok(&self.emit_trace_id_notice)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -703,6 +746,8 @@ impl SessionVars {
             self.real_time_recency.set(value, local)
         } else if name == EMIT_TIMESTAMP_NOTICE.name {
             self.emit_timestamp_notice.set(value, local)
+        } else if name == EMIT_TRACE_ID_NOTICE.name {
+            self.emit_trace_id_notice.set(value, local)
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
@@ -749,6 +794,8 @@ impl SessionVars {
             self.real_time_recency.reset(local);
         } else if name == EMIT_TIMESTAMP_NOTICE.name {
             self.emit_timestamp_notice.reset(local);
+        } else if name == EMIT_TRACE_ID_NOTICE.name {
+            self.emit_trace_id_notice.reset(local);
         } else if name == CLIENT_ENCODING.name
             || name == DATE_STYLE.name
             || name == FAILPOINTS.name
@@ -772,6 +819,7 @@ impl SessionVars {
         // call to `end_transaction` below.
         let SessionVars {
             application_name,
+            build_info: _,
             client_encoding: _,
             client_min_messages,
             cluster,
@@ -794,6 +842,7 @@ impl SessionVars {
             transaction_isolation,
             real_time_recency,
             emit_timestamp_notice,
+            emit_trace_id_notice,
         } = self;
         application_name.end_transaction(action);
         client_min_messages.end_transaction(action);
@@ -810,11 +859,17 @@ impl SessionVars {
         transaction_isolation.end_transaction(action);
         real_time_recency.end_transaction(action);
         emit_timestamp_notice.end_transaction(action);
+        emit_trace_id_notice.end_transaction(action);
     }
 
     /// Returns the value of the `application_name` configuration parameter.
     pub fn application_name(&self) -> &str {
         self.application_name.value()
+    }
+
+    /// Returns the build info.
+    pub fn build_info(&self) -> &'static BuildInfo {
+        self.build_info
     }
 
     /// Returns the value of the `client_encoding` configuration parameter.
@@ -860,6 +915,11 @@ impl SessionVars {
     /// Returns the value of the `intervalstyle` configuration parameter.
     pub fn intervalstyle(&self) -> &'static str {
         self.interval_style.value
+    }
+
+    /// Returns the value of the `mz_version` configuration parameter.
+    pub fn mz_version(&self) -> String {
+        self.build_info.value()
     }
 
     /// Returns the value of the `qgm_optimizations` configuration parameter.
@@ -927,6 +987,11 @@ impl SessionVars {
     pub fn emit_timestamp_notice(&self) -> bool {
         *self.emit_timestamp_notice.value()
     }
+
+    /// Returns the value of `emit_trace_id_notice` configuration parameter.
+    pub fn emit_trace_id_notice(&self) -> bool {
+        *self.emit_trace_id_notice.value()
+    }
 }
 
 /// On disk variables.
@@ -934,6 +999,10 @@ impl SessionVars {
 /// See [`SessionVars`] for more details on the Materialize configuration model.
 #[derive(Debug, Clone)]
 pub struct SystemVars {
+    // internal bookkeeping
+    config_has_synced_once: SystemVar<bool>,
+
+    // limits
     max_aws_privatelink_connections: SystemVar<u32>,
     max_tables: SystemVar<u32>,
     max_sources: SystemVar<u32>,
@@ -948,14 +1017,22 @@ pub struct SystemVars {
     max_roles: SystemVar<u32>,
     max_result_size: SystemVar<u32>,
     allowed_cluster_replica_sizes: SystemVar<Vec<String>>, // TODO: BTreeSet<String> will be better
+
+    // features
     window_functions: SystemVar<bool>,
-    config_has_synced_once: SystemVar<bool>,
+
+    // persist configuration
+    persist_blob_target_size: SystemVar<usize>,
+    persist_compaction_minimum_timeout: SystemVar<Duration>,
+
+    // misc
     metrics_retention: SystemVar<Duration>,
 }
 
 impl Default for SystemVars {
     fn default() -> Self {
         SystemVars {
+            config_has_synced_once: SystemVar::new(&CONFIG_HAS_SYNCED_ONCE),
             max_aws_privatelink_connections: SystemVar::new(&MAX_AWS_PRIVATELINK_CONNECTIONS),
             max_tables: SystemVar::new(&MAX_TABLES),
             max_sources: SystemVar::new(&MAX_SOURCES),
@@ -971,7 +1048,8 @@ impl Default for SystemVars {
             max_result_size: SystemVar::new(&MAX_RESULT_SIZE),
             allowed_cluster_replica_sizes: SystemVar::new(&ALLOWED_CLUSTER_REPLICA_SIZES),
             window_functions: SystemVar::new(&WINDOW_FUNCTIONS),
-            config_has_synced_once: SystemVar::new(&CONFIG_HAS_SYNCED_ONCE),
+            persist_blob_target_size: SystemVar::new(&PERSIST_BLOB_TARGET_SIZE),
+            persist_compaction_minimum_timeout: SystemVar::new(&PERSIST_COMPACTION_MINIMUM_TIMEOUT),
             metrics_retention: SystemVar::new(&METRICS_RETENTION),
         }
     }
@@ -981,7 +1059,8 @@ impl SystemVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 17] = [
+        let vars: [&dyn Var; 19] = [
+            &self.config_has_synced_once,
             &self.max_aws_privatelink_connections,
             &self.max_tables,
             &self.max_sources,
@@ -997,7 +1076,8 @@ impl SystemVars {
             &self.max_result_size,
             &self.allowed_cluster_replica_sizes,
             &self.window_functions,
-            &self.config_has_synced_once,
+            &self.persist_blob_target_size,
+            &self.persist_compaction_minimum_timeout,
             &self.metrics_retention,
         ];
         vars.into_iter()
@@ -1026,7 +1106,9 @@ impl SystemVars {
     /// The call will return an error:
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     pub fn get(&self, name: &str) -> Result<&dyn Var, AdapterError> {
-        if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
+        if name == CONFIG_HAS_SYNCED_ONCE.name {
+            Ok(&self.config_has_synced_once)
+        } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
             Ok(&self.max_aws_privatelink_connections)
         } else if name == MAX_TABLES.name {
             Ok(&self.max_tables)
@@ -1056,8 +1138,10 @@ impl SystemVars {
             Ok(&self.allowed_cluster_replica_sizes)
         } else if name == WINDOW_FUNCTIONS.name {
             Ok(&self.window_functions)
-        } else if name == CONFIG_HAS_SYNCED_ONCE.name {
-            Ok(&self.config_has_synced_once)
+        } else if name == PERSIST_BLOB_TARGET_SIZE.name {
+            Ok(&self.persist_blob_target_size)
+        } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
+            Ok(&self.persist_compaction_minimum_timeout)
         } else if name == METRICS_RETENTION.name {
             Ok(&self.metrics_retention)
         } else {
@@ -1075,7 +1159,9 @@ impl SystemVars {
     /// 2. If `value` does not represent a valid [`SystemVars`] value for
     ///    `name`.
     pub fn is_default(&self, name: &str, value: &str) -> Result<bool, AdapterError> {
-        if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
+        if name == CONFIG_HAS_SYNCED_ONCE.name {
+            self.config_has_synced_once.is_default(value)
+        } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
             self.max_aws_privatelink_connections.is_default(value)
         } else if name == MAX_TABLES.name {
             self.max_tables.is_default(value)
@@ -1105,8 +1191,10 @@ impl SystemVars {
             self.allowed_cluster_replica_sizes.is_default(value)
         } else if name == WINDOW_FUNCTIONS.name {
             self.window_functions.is_default(value)
-        } else if name == CONFIG_HAS_SYNCED_ONCE.name {
-            self.config_has_synced_once.is_default(value)
+        } else if name == PERSIST_BLOB_TARGET_SIZE.name {
+            self.persist_blob_target_size.is_default(value)
+        } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
+            self.persist_compaction_minimum_timeout.is_default(value)
         } else if name == METRICS_RETENTION.name {
             self.metrics_retention.is_default(value)
         } else {
@@ -1133,7 +1221,9 @@ impl SystemVars {
     /// 2. If `value` does not represent a valid [`SystemVars`] value for
     ///    `name`.
     pub fn set(&mut self, name: &str, value: &str) -> Result<bool, AdapterError> {
-        if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
+        if name == CONFIG_HAS_SYNCED_ONCE.name {
+            self.config_has_synced_once.set(value)
+        } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
             self.max_aws_privatelink_connections.set(value)
         } else if name == MAX_TABLES.name {
             self.max_tables.set(value)
@@ -1163,8 +1253,10 @@ impl SystemVars {
             self.allowed_cluster_replica_sizes.set(value)
         } else if name == WINDOW_FUNCTIONS.name {
             self.window_functions.set(value)
-        } else if name == CONFIG_HAS_SYNCED_ONCE.name {
-            self.config_has_synced_once.set(value)
+        } else if name == PERSIST_BLOB_TARGET_SIZE.name {
+            self.persist_blob_target_size.set(value)
+        } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
+            self.persist_compaction_minimum_timeout.set(value)
         } else if name == METRICS_RETENTION.name {
             self.metrics_retention.set(value)
         } else {
@@ -1186,7 +1278,9 @@ impl SystemVars {
     /// The call will return an error:
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     pub fn reset(&mut self, name: &str) -> Result<bool, AdapterError> {
-        if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
+        if name == CONFIG_HAS_SYNCED_ONCE.name {
+            Ok(self.config_has_synced_once.reset())
+        } else if name == MAX_AWS_PRIVATELINK_CONNECTIONS.name {
             Ok(self.max_aws_privatelink_connections.reset())
         } else if name == MAX_TABLES.name {
             Ok(self.max_tables.reset())
@@ -1216,13 +1310,20 @@ impl SystemVars {
             Ok(self.allowed_cluster_replica_sizes.reset())
         } else if name == WINDOW_FUNCTIONS.name {
             Ok(self.window_functions.reset())
-        } else if name == CONFIG_HAS_SYNCED_ONCE.name {
-            Ok(self.config_has_synced_once.reset())
+        } else if name == PERSIST_BLOB_TARGET_SIZE.name {
+            Ok(self.persist_blob_target_size.reset())
+        } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
+            Ok(self.persist_compaction_minimum_timeout.reset())
         } else if name == METRICS_RETENTION.name {
             Ok(self.metrics_retention.reset())
         } else {
             Err(AdapterError::UnknownParameter(name.into()))
         }
+    }
+
+    /// Returns the `config_has_synced_once` configuration parameter.
+    pub fn config_has_synced_once(&self) -> bool {
+        *self.config_has_synced_once.value()
     }
 
     /// Returns the value of the `max_aws_privatelink_connections` configuration parameter.
@@ -1300,9 +1401,14 @@ impl SystemVars {
         *self.window_functions.value()
     }
 
-    /// Returns the `config_has_synced_once` configuration parameter.
-    pub fn config_has_synced_once(&self) -> bool {
-        *self.config_has_synced_once.value()
+    /// Returns the `persist_blob_target_size` configuration parameter.
+    pub fn persist_blob_target_size(&self) -> usize {
+        *self.persist_blob_target_size.value()
+    }
+
+    /// Returns the `persist_compaction_minimum_timeout` configuration parameter.
+    pub fn persist_compaction_minimum_timeout(&self) -> Duration {
+        *self.persist_compaction_minimum_timeout.value()
     }
 
     pub fn metrics_retention(&self) -> Duration {
@@ -1565,6 +1671,28 @@ where
     }
 }
 
+impl Var for BuildInfo {
+    fn name(&self) -> &'static str {
+        "mz_version"
+    }
+
+    fn value(&self) -> String {
+        self.human_version()
+    }
+
+    fn description(&self) -> &'static str {
+        "Shows the Materialize server version (Materialize)."
+    }
+
+    fn type_name(&self) -> &'static str {
+        str::TYPE_NAME
+    }
+
+    fn visible(&self, _: &User) -> bool {
+        true
+    }
+}
+
 /// A value that can be stored in a session or server variable.
 pub trait Value: ToOwned + Send + Sync {
     /// The name of the value type.
@@ -1610,6 +1738,18 @@ impl Value for u32 {
     const TYPE_NAME: &'static str = "unsigned integer";
 
     fn parse(s: &str) -> Result<u32, ()> {
+        s.parse().map_err(|_| ())
+    }
+
+    fn format(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl Value for usize {
+    const TYPE_NAME: &'static str = "unsigned integer";
+
+    fn parse(s: &str) -> Result<usize, ()> {
         s.parse().map_err(|_| ())
     }
 
@@ -1819,16 +1959,16 @@ impl Value for Vec<String> {
 impl Value for Option<String> {
     const TYPE_NAME: &'static str = "optional string";
 
-    fn parse(s: &str) -> Result<Self::Owned, ()> {
+    fn parse(s: &str) -> Result<Option<String>, ()> {
         match s {
             "" => Ok(None),
-            _ => Ok(Some(s.into())),
+            _ => <str as Value>::parse(s).map(Some),
         }
     }
 
     fn format(&self) -> String {
         match self {
-            Some(s) => s.clone(),
+            Some(s) => s.format(),
             None => "".into(),
         }
     }
@@ -2054,4 +2194,19 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
             TransactionIsolationLevel::StrictSerializable => Self::StrictSerializable,
         }
     }
+}
+
+/// Returns whether the named variable is a compute configuration parameter.
+pub(crate) fn is_compute_config_var(name: &str) -> bool {
+    name == MAX_RESULT_SIZE.name() || is_persist_config_var(name)
+}
+
+/// Returns whether the named variable is a storage configuration parameter.
+pub(crate) fn is_storage_config_var(name: &str) -> bool {
+    is_persist_config_var(name)
+}
+
+/// Returns whether the named variable is a persist configuration parameter.
+fn is_persist_config_var(name: &str) -> bool {
+    name == PERSIST_BLOB_TARGET_SIZE.name() || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
 }

@@ -171,13 +171,13 @@ pub fn construct<A: Allocate>(
                         row_buf.clone()
                     },
                 );
-                persist_sink(scope, *id, meta, compute_state, sinked);
+                persist_sink(*id, meta, compute_state, sinked);
             }
 
             for variant in logs_active {
                 if config.index_logs.contains_key(&variant) {
                     let key = variant.index_by();
-                    let (_, value) = permutation_for_arrangement::<HashMap<_, _>>(
+                    let (_, value) = permutation_for_arrangement(
                         &key.iter()
                             .cloned()
                             .map(MirScalarExpr::Column)

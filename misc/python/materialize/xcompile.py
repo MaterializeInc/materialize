@@ -72,7 +72,10 @@ def cargo(
     _target = target(arch)
     _target_env = _target.upper().replace("-", "_")
 
-    rustflags += ["-Clink-arg=-Wl,--compress-debug-sections=zlib"]
+    rustflags += [
+        "-Clink-arg=-Wl,--compress-debug-sections=zlib",
+        "-Csymbol-mangling-version=v0",
+    ]
 
     if sys.platform == "darwin":
         _bootstrap_darwin(arch)

@@ -36,4 +36,16 @@ a b
 10 20
 20 30
 
+$ set-from-sql var=expected-user
+SELECT user FROM linked_cluster_audit_event_user ORDER BY priority DESC LIMIT 1
+
+# Test that the migration backfilled a linked cluster for the source.
+> SELECT cluster, replica FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_kafka_source'
+materialize_public_kafka_source  linked
+> SELECT event_type, object_type, details - 'id' - 'cluster_id' - 'replica_id', user
+  FROM mz_audit_events
+  WHERE details->>'name' = 'materialize_public_kafka_source' OR details->>'cluster_name' = 'materialize_public_kafka_source'
+create  cluster          "{\"name\":\"materialize_public_kafka_source\"}"  ${expected-user}
+create  cluster-replica  "{\"cluster_name\":\"materialize_public_kafka_source\",\"logical_size\":\"4\",\"replica_name\":\"linked\"}"  ${expected-user}
+
 > DROP SOURCE kafka_source;

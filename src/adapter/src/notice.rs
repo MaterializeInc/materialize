@@ -11,6 +11,7 @@ use std::fmt;
 
 use chrono::{DateTime, Utc};
 
+use crate::session::vars::IsolationLevel;
 use mz_compute_client::controller::ComputeInstanceStatus;
 use mz_ore::str::StrExt;
 use mz_repr::strconv;
@@ -63,6 +64,12 @@ pub enum AdapterNotice {
     },
     EqualSubscribeBounds {
         bound: mz_repr::Timestamp,
+    },
+    QueryTrace {
+        trace_id: opentelemetry::trace::TraceId,
+    },
+    UnimplementedIsolationLevel {
+        isolation_level: String,
     },
 }
 
@@ -144,6 +151,16 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::EqualSubscribeBounds { bound } => {
                 write!(f, "subscribe as of {bound} (inclusive) up to the same bound {bound} (exclusive) is guaranteed to be empty")
+            }
+            AdapterNotice::QueryTrace { trace_id } => {
+                write!(f, "trace id: {}", trace_id)
+            }
+            AdapterNotice::UnimplementedIsolationLevel { isolation_level } => {
+                write!(
+                    f,
+                    "transaction isolation level {isolation_level} is unimplemented, the session will be upgraded to {}",
+                    IsolationLevel::Serializable.as_str()
+                )
             }
         }
     }

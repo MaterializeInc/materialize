@@ -16,6 +16,7 @@ from materialize.zippy.framework import Action, ActionFactory, Capabilities, Cap
 from materialize.zippy.kafka_capabilities import KafkaRunning, TopicExists
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.source_capabilities import SourceExists
+from materialize.zippy.storaged_capabilities import StoragedRunning
 
 
 class CreateSourceParameterized(ActionFactory):
@@ -23,7 +24,7 @@ class CreateSourceParameterized(ActionFactory):
 
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
-        return {MzIsRunning, KafkaRunning, TopicExists}
+        return {MzIsRunning, StoragedRunning, KafkaRunning, TopicExists}
 
     def __init__(self, max_sources: int = 10) -> None:
         self.max_sources = max_sources
@@ -68,6 +69,9 @@ class CreateSource(Action):
                   (TOPIC 'testdrive-{self.source.topic.name}-${{testdrive.seed}}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.source.name}_csr_conn
                   ENVELOPE {envelope}
+                  WITH (
+                    REMOTE 'storaged:2100'
+                  )
                 """
             )
         )

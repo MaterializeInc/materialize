@@ -23,7 +23,7 @@
 //!     is beneficial to use this operator if the number of retractions is expected to be small, and
 //!     if a potential downstream operator does not expect its input to be arranged.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::plan::any_arranged_thin;
 use proptest_derive::Arbitrary;
@@ -75,7 +75,7 @@ impl RustType<ProtoThresholdPlan> for ThresholdPlan {
     }
 }
 
-impl RustType<ProtoArrangement> for (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>) {
+impl RustType<ProtoArrangement> for (Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>) {
     fn into_proto(&self) -> ProtoArrangement {
         use proto_arrangement::ProtoArrangementPermutation;
         ProtoArrangement {
@@ -93,7 +93,7 @@ impl RustType<ProtoArrangement> for (Vec<MirScalarExpr>, HashMap<usize, usize>, 
     }
 
     fn from_proto(proto: ProtoArrangement) -> Result<Self, TryFromProtoError> {
-        let perm: Result<HashMap<usize, usize>, TryFromProtoError> = proto
+        let perm: Result<BTreeMap<usize, usize>, TryFromProtoError> = proto
             .permutation
             .iter()
             .map(|x| {
@@ -131,7 +131,7 @@ impl ThresholdPlan {
 pub struct BasicThresholdPlan {
     /// Description of how the input has been arranged, and how to arrange the output
     #[proptest(strategy = "any_arranged_thin()")]
-    pub ensure_arrangement: (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>),
+    pub ensure_arrangement: (Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>),
 }
 
 /// A plan to maintain all inputs with negative counts, which are subtracted from the output
@@ -140,7 +140,7 @@ pub struct BasicThresholdPlan {
 pub struct RetractionsThresholdPlan {
     /// Description of how the input has been arranged
     #[proptest(strategy = "any_arranged_thin()")]
-    pub ensure_arrangement: (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>),
+    pub ensure_arrangement: (Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>),
 }
 
 impl ThresholdPlan {
@@ -154,7 +154,7 @@ impl ThresholdPlan {
         maintain_retractions: bool,
     ) -> (
         Self,
-        (Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>),
+        (Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>),
     ) {
         // Arrange the input by all columns in order.
         let mut all_columns = Vec::new();

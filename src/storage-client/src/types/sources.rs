@@ -28,6 +28,7 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{Antichain, AntichainRef};
+use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
 use timely::scheduling::ActivateOnDrop;
 use uuid::Uuid;
@@ -278,7 +279,7 @@ where
     }
 }
 
-pub trait SourceTimestamp: timely::progress::Timestamp {
+pub trait SourceTimestamp: timely::progress::Timestamp + Refines<()> + std::fmt::Display {
     fn from_compat_ts(pid: PartitionId, offset: MzOffset) -> Self;
     fn from_compat_frontier(frontier: OffsetAntichain) -> Antichain<Self>;
     fn into_compat_frontier(frontier: AntichainRef<'_, Self>) -> OffsetAntichain;
@@ -556,6 +557,14 @@ impl PathSummary<MzOffset> for MzOffset {
             offset: PathSummary::<u64>::followed_by(&self.offset, &other.offset)?,
         })
     }
+}
+
+impl Refines<()> for MzOffset {
+    fn to_inner(_: ()) -> Self {
+        MzOffset::minimum()
+    }
+    fn to_outer(self) {}
+    fn summarize(_: Self::Summary) {}
 }
 
 impl PartialOrder for MzOffset {

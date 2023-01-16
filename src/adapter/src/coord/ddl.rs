@@ -25,7 +25,6 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::ResolvedDatabaseSpecifier;
-use mz_stash::Append;
 use mz_storage_client::controller::{CreateExportToken, ExportDescription};
 use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage_client::types::sources::{
@@ -51,7 +50,7 @@ pub struct CatalogTxn<'a, T> {
     pub(crate) catalog: &'a CatalogState,
 }
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     /// Same as [`Self::catalog_transact_with`] without a closure passed in.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn catalog_transact(
@@ -217,6 +216,16 @@ impl<S: Append + 'static> Coordinator<S> {
                 .unwrap_or(SYSTEM_CONN_ID),
         )?;
 
+        // This will produce timestamps that are guaranteed to increase on each
+        // call, and also never be behind the system clock. If the system clock
+        // hasn't advanced (or has gone backward), it will increment by 1. For
+        // the audit log, we need to balance "close (within 10s or so) to the
+        // system clock" and "always goes up". We've chosen here to prioritize
+        // always going up, and believe we will always be close to the system
+        // clock because it is well configured (chrony) and so may only rarely
+        // regress or pause for 10s.
+        let oracle_write_ts = self.get_local_write_ts().await.timestamp;
+
         let TransactionResult {
             builtin_table_updates,
             audit_events,
@@ -224,7 +233,7 @@ impl<S: Append + 'static> Coordinator<S> {
             result,
         } = self
             .catalog
-            .transact(session, ops, |catalog| {
+            .transact(oracle_write_ts, session, ops, |catalog| {
                 f(CatalogTxn {
                     dataflow_client: &self.controller,
                     catalog,
@@ -583,8 +592,17 @@ impl<S: Append + 'static> Coordinator<S> {
                 Op::CreateRole { .. } => {
                     new_roles += 1;
                 }
-                Op::CreateComputeInstance { .. } => {
-                    new_clusters += 1;
+                Op::CreateComputeInstance {
+                    linked_object_id, ..
+                } => {
+                    // Linked compute clusters don't count against the limit,
+                    // since we have a separate sources and sinks limit.
+                    //
+                    // TODO(benesch): remove the `max_sources` and `max_sinks`
+                    // limit, and set a higher max cluster limit?
+                    if linked_object_id.is_none() {
+                        new_clusters += 1;
+                    }
                 }
                 Op::CreateComputeReplica {
                     on_cluster_name, ..
@@ -748,7 +766,15 @@ impl<S: Append + 'static> Coordinator<S> {
             "Materialized view",
         )?;
         self.validate_resource_limit(
-            self.catalog.user_compute_instances().count(),
+            // Linked compute clusters don't count against the limit, since
+            // we have a separate sources and sinks limit.
+            //
+            // TODO(benesch): remove the `max_sources` and `max_sinks` limit,
+            // and set a higher max cluster limit?
+            self.catalog
+                .user_compute_instances()
+                .filter(|c| c.linked_object_id.is_none())
+                .count(),
             new_clusters,
             SystemVars::max_clusters,
             "Cluster",

@@ -19,6 +19,7 @@ from semver import Version
 from materialize import util
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
+    Cockroach,
     Kafka,
     Materialized,
     Postgres,
@@ -49,12 +50,11 @@ SERVICES = [
         ],
     ),
     Postgres(),
+    Cockroach(setup_materialize=True),
     Materialized(
-        options=" ".join(mz_options.values()),
-        environment_extra=[
-            "SSL_KEY_PASSWORD=mzmzmz",
-        ],
+        options=list(mz_options.values()),
         volumes_extra=["secrets:/share/secrets"],
+        external_cockroach=True,
     ),
     # N.B.: we need to use `validate_postgres_stash=False` because testdrive uses
     # HEAD to load the catalog from disk but does *not* run migrations. There
@@ -68,7 +68,7 @@ SERVICES = [
     # because that would involve maintaining backwards compatibility for all
     # testdrive commands.
     Testdrive(
-        validate_postgres_stash=False,
+        validate_postgres_stash=None,
         volumes_extra=["secrets:/share/secrets"],
     ),
 ]
@@ -112,16 +112,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     if args.tests in ["all", "non-ssl"]:
         for version in tested_versions:
-            priors = [f"v{v}" for v in all_versions if v < version]
+            priors = [v for v in all_versions if v <= version]
             test_upgrade_from_version(c, f"v{version}", priors, filter=args.filter)
 
-        test_upgrade_from_version(c, "current_source", priors=["*"], filter=args.filter)
+        test_upgrade_from_version(c, "current_source", priors=[], filter=args.filter)
 
     if args.tests in ["all", "ssl"]:
         kafka, schema_registry, testdrive = ssl_services()
         with c.override(kafka, schema_registry, testdrive):
             for version in tested_versions:
-                priors = [f"v{v}" for v in all_versions if v < version]
+                priors = [v for v in all_versions if v <= version]
                 test_upgrade_from_version(
                     c, f"v{version}", priors, filter=args.filter, style="ssl-"
                 )
@@ -129,9 +129,28 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def test_upgrade_from_version(
-    c: Composition, from_version: str, priors: List[str], filter: str, style: str = ""
+    c: Composition,
+    from_version: str,
+    priors: List[Version],
+    filter: str,
+    style: str = "",
 ) -> None:
     print(f"===>>> Testing upgrade from Materialize {from_version} to current_source.")
+
+    # If we are testing vX.Y.Z, the glob should include all patch versions 0 to Z
+    prior_patch_versions = []
+    for prior in priors:
+        for prior_patch_version in range(0, prior.patch):
+            prior_patch_versions.append(
+                Version(major=prior.major, minor=prior.minor, patch=prior_patch_version)
+            )
+
+    priors = priors + prior_patch_versions
+    priors.sort()
+    priors = [f"v{prior}" for prior in priors]
+
+    if len(priors) == 0:
+        priors = ["*"]
 
     version_glob = "{" + ",".join(["any_version", *priors, from_version]) + "}"
     print(">>> Version glob pattern: " + version_glob)
@@ -142,24 +161,15 @@ def test_upgrade_from_version(
     )
 
     if from_version != "current_source":
-        # Older Mz versions are not configured to know SIZE '4-4' clusters by default
-        # so we need to compose MZ_STORAGE_HOST_SIZES and MZ_CLUSTER_REPLICA_SIZES
-        size = Materialized.Size.DEFAULT_SIZE
-        environment_extra = [
-            f'MZ_STORAGE_HOST_SIZES={{"{size}":{{"workers":{size}}}}}',
-            f'MZ_CLUSTER_REPLICA_SIZES={{"1":{{"workers":1,"scale":1}},"{size}-{size}":{{"workers":{size},"scale":{size}}}}}',
-            "SSL_KEY_PASSWORD=mzmzmz",
-        ]
-
         mz_from = Materialized(
             image=f"materialize/materialized:{from_version}",
-            options=" ".join(
+            options=[
                 opt
                 for start_version, opt in mz_options.items()
                 if from_version[1:] >= start_version
-            ),
-            environment_extra=environment_extra,
+            ],
             volumes_extra=["secrets:/share/secrets"],
+            external_cockroach=True,
         )
         with c.override(mz_from):
             c.up("materialized")
@@ -193,7 +203,8 @@ def test_upgrade_from_version(
 
     with c.override(
         Testdrive(
-            validate_postgres_stash=True, volumes_extra=["secrets:/share/secrets"]
+            validate_postgres_stash="cockroach",
+            volumes_extra=["secrets:/share/secrets"],
         )
     ):
         c.run(
@@ -277,7 +288,7 @@ def ssl_services() -> Tuple[Kafka, SchemaRegistry, Testdrive]:
         volumes_extra=["secrets:/share/secrets"],
         # Required to install root certs above
         propagate_uid_gid=False,
-        validate_postgres_stash=False,
+        validate_postgres_stash=None,
     )
 
     return (kafka, schema_registry, testdrive)

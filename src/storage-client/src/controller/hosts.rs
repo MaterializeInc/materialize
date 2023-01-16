@@ -20,7 +20,7 @@
 //! host. This policy is subject to change in the future.
 
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -41,6 +41,7 @@ use mz_repr::GlobalId;
 use crate::client::{ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse};
 use crate::controller::rehydration::RehydratingStorageClient;
 use crate::types::hosts::{StorageHostConfig, StorageHostResourceAllocation};
+use crate::types::parameters::StorageParameters;
 
 /// The network address of a storage host.
 pub type StorageHostAddr = String;
@@ -77,6 +78,8 @@ pub struct StorageHosts<T> {
     objects: Arc<std::sync::Mutex<HashMap<GlobalId, StorageHostAddr>>>,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
+    /// Storage configuration to apply to newly provisioned hosts.
+    config: StorageParameters,
     /// A handle to Persist
     persist: Arc<Mutex<PersistClientCache>>,
 }
@@ -110,6 +113,7 @@ where
             objects: Arc::new(std::sync::Mutex::new(HashMap::new())),
             hosts: HashMap::new(),
             initialized: false,
+            config: Default::default(),
             persist,
         }
     }
@@ -125,6 +129,15 @@ where
         for client in self.clients() {
             client.send(StorageCommand::InitializationComplete);
         }
+    }
+
+    /// Update the configuration of all hosts (existing and future).
+    pub fn update_configuration(&mut self, config_params: StorageParameters) {
+        for client in self.clients() {
+            client.send(StorageCommand::UpdateConfiguration(config_params.clone()));
+        }
+
+        self.config.update(config_params);
     }
 
     /// Creates a [`MetricsFetcher`] that can be used to repeatedly fetch
@@ -174,6 +187,8 @@ where
             }
         };
 
+        let config_params = self.config.clone();
+
         let host = self.hosts.entry(host_addr.clone()).or_insert_with(|| {
             let mut client = RehydratingStorageClient::new(
                 host_addr,
@@ -183,6 +198,7 @@ where
             if self.initialized {
                 client.send(StorageCommand::InitializationComplete);
             }
+            client.send(StorageCommand::UpdateConfiguration(config_params));
             StorageHost {
                 client,
                 objects: HashSet::with_capacity(1),
@@ -286,7 +302,7 @@ where
                     cpu_limit: allocation.cpu_limit,
                     memory_limit: allocation.memory_limit,
                     scale: NonZeroUsize::new(1).unwrap(),
-                    labels: HashMap::from_iter([(
+                    labels: BTreeMap::from_iter([(
                         "size".to_string(),
                         allocation.workers.to_string(),
                     )]),

@@ -7,18 +7,19 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=cluster1|default replacement=<CLUSTER_NAME>
+$ set-regex match="cluster1|default|v\d+\.\d+\.\d+(-[a-z0-9]+)? \([a-f0-9]{9}\)" replacement=<VARIES>
 
 > SHOW ALL
 allowed_cluster_replica_sizes           ""                     "The allowed sizes when creating a new cluster replica (Materialize)."
 application_name                        ""                     "Sets the application name to be reported in statistics and logs (PostgreSQL)."
 client_encoding                         UTF8                   "Sets the client's character set encoding (PostgreSQL)."
 client_min_messages                     notice                 "Sets the message levels that are sent to the client (PostgreSQL)."
-cluster                                 <CLUSTER_NAME>         "Sets the current cluster (Materialize)."
+cluster                                 <VARIES>               "Sets the current cluster (Materialize)."
 cluster_replica                         ""                     "Sets a target cluster replica for SELECT queries (Materialize)."
 database                                materialize            "Sets the current database (CockroachDB)."
 DateStyle                               "ISO, MDY"             "Sets the display format for date and time values (PostgreSQL)."
-emit_timestamp_notice               off                 "Boolean flag indicating whether to send a NOTICE specifying query timestamps (Materialize)."
+emit_timestamp_notice                   off                    "Boolean flag indicating whether to send a NOTICE specifying query timestamps (Materialize)."
+emit_trace_id_notice                    off                    "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize)."
 extra_float_digits                      3                      "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
 failpoints                              ""                     "Allows failpoints to be dynamically activated."
 idle_in_transaction_session_timeout     "2 min"                "Sets the maximum allowed duration that a session can sit idle in a transaction before being terminated. A value of zero disables the timeout (PostgreSQL)."
@@ -37,6 +38,7 @@ max_secrets                             100                    "The maximum numb
 max_sinks                               25                     "The maximum number of sinks in the region, across all schemas (Materialize)."
 max_sources                             25                     "The maximum number of sources in the region, across all schemas (Materialize)."
 max_tables                              25                     "The maximum number of tables in the region, across all schemas (Materialize)."
+mz_version                              <VARIES>               "Shows the Materialize server version (Materialize)."
 search_path                             "public"               "Sets the schema search order for names that are not schema-qualified (PostgreSQL)."
 server_version                          9.5.0                  "Shows the server version (PostgreSQL)."
 server_version_num                      90500                  "Shows the server version as an integer (PostgreSQL)."

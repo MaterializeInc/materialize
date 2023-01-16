@@ -1,0 +1,77 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "compute-client/src/logging.proto";
+import "compute-client/src/types/dataflows.proto";
+import "expr/src/linear.proto";
+import "expr/src/relation.proto";
+import "proto/src/proto.proto";
+import "repr/src/global_id.proto";
+import "repr/src/row.proto";
+import "storage-client/src/client.proto";
+import "storage-client/src/types/parameters.proto";
+
+import "google/protobuf/empty.proto";
+
+package mz_compute_client.protocol.command;
+
+message ProtoComputeStartupEpoch {
+  int64 envd = 1;
+  uint64 replica = 2;
+}
+
+message ProtoComputeCommand {
+    message ProtoCreateDataflows {
+        repeated types.dataflows.ProtoDataflowDescription dataflows = 1;
+    }
+
+    message ProtoCancelPeeks {
+        repeated mz_proto.ProtoU128 uuids = 1;
+    }
+
+    message ProtoCreateTimely {
+        ProtoTimelyConfig config = 1;
+        ProtoComputeStartupEpoch epoch = 2;
+    }
+
+    oneof kind {
+        ProtoCreateTimely create_timely = 1;
+        logging.ProtoLoggingConfig create_instance = 2;
+        ProtoCreateDataflows create_dataflows = 3;
+        mz_storage_client.client.ProtoAllowCompaction allow_compaction = 4;
+        ProtoPeek peek = 5;
+        ProtoCancelPeeks cancel_peeks = 6;
+        google.protobuf.Empty initialization_complete = 7;
+        ProtoComputeParameters update_configuration = 8;
+    }
+}
+
+message ProtoTimelyConfig {
+    uint64 workers = 1;
+    uint64 process = 2;
+    repeated string addresses = 3;
+    uint32 idle_arrangement_merge_effort = 4;
+}
+
+message ProtoPeek {
+    mz_repr.global_id.ProtoGlobalId id = 1;
+    repeated mz_repr.row.ProtoRow key = 2;
+    mz_proto.ProtoU128 uuid = 3;
+    uint64 timestamp = 4;
+    mz_expr.relation.ProtoRowSetFinishing finishing = 5;
+    mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
+    map<string, string> otel_ctx = 7;
+}
+
+message ProtoComputeParameters {
+    optional uint32 max_result_size = 1;
+    mz_storage_client.types.parameters.ProtoPersistParameters persist = 2;
+}

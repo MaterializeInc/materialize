@@ -14,7 +14,7 @@
 //! and indicate which identifiers have arrangements available. This module
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::Antichain;
@@ -37,7 +37,6 @@ use mz_ore::cast::ReinterpretCast;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
-use mz_stash::Append;
 
 use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View};
 use crate::coord::ddl::CatalogTxn;
@@ -72,7 +71,7 @@ pub enum ExprPrepStyle<'a> {
     AsOfUpTo,
 }
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
     pub fn dataflow_builder(
         &self,
@@ -465,7 +464,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
 
                     // Inspect global ids that occur in the Gets in view_expr, and collect the ids
                     // of monotonic (materialized) views and sources (but not indexes).
-                    let mut monotonic_ids = HashSet::new();
+                    let mut monotonic_ids = BTreeSet::new();
                     let recursion_result: Result<(), RecursionLimitError> = view_expr
                         .try_visit_post(&mut |e| {
                             if let MirRelationExpr::Get {
@@ -502,7 +501,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                     mz_transform::monotonic::MonotonicFlag::default().apply(
                         &mut view_expr,
                         &monotonic_ids,
-                        &mut HashSet::new(),
+                        &mut BTreeSet::new(),
                     )
                 }
                 CatalogItem::Secret(_)
@@ -717,7 +716,7 @@ fn eval_unmaterializable_func(
 }
 
 #[cfg(test)]
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     #[allow(dead_code)]
     async fn verify_ship_dataflow_no_error(&mut self) {
         // ship_dataflow, ship_dataflows, and finalize_dataflow are not allowed

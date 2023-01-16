@@ -7,8 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from textwrap import dedent
-
 from kubernetes.client import (
     V1ConfigMap,
     V1ConfigMapVolumeSource,
@@ -30,6 +28,7 @@ from kubernetes.client import (
     V1VolumeMount,
 )
 
+from materialize import ROOT
 from materialize.cloudtest.k8s import K8sConfigMap, K8sService, K8sStatefulSet
 
 
@@ -40,13 +39,9 @@ class CockroachConfigMap(K8sConfigMap):
                 name="cockroach-init",
             ),
             data={
-                "schemas.sql": dedent(
-                    """
-                CREATE SCHEMA consensus;
-                CREATE SCHEMA catalog;
-                CREATE SCHEMA storage;
-                """
-                ),
+                "setup_materialize.sql": (
+                    ROOT / "misc" / "cockroach" / "setup_materialize.sql"
+                ).read_text(),
             },
         )
 

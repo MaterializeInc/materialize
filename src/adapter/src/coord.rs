@@ -82,16 +82,17 @@ use rand::seq::SliceRandom;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{error, info, span, warn, Level};
+use tracing::{info, span, warn, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId, ReplicaId};
+use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
@@ -99,17 +100,18 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{stack, task};
 use mz_persist_client::usage::StorageUsageClient;
 use mz_persist_client::ShardId;
+use mz_repr::explain_new::ExplainFormat;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::Aug;
-use mz_sql::plan::{MutationKind, Params};
-use mz_stash::Append;
+use mz_sql::plan::{self, CopyFormat, MutationKind, Params, QueryWhen};
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, StorageError,
 };
 use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::hosts::StorageHostConfig;
 use mz_storage_client::types::sinks::StorageSinkConnection;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_transform::Optimizer;
@@ -127,9 +129,7 @@ use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, PendingWriteTxn}
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
-use crate::coord::timeline::{
-    TimelineState, WriteTimestamp, TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
-};
+use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
@@ -198,9 +198,14 @@ pub enum Message<T = mz_repr::Timestamp> {
         conn_id: ConnectionId,
     },
     LinearizeReads(Vec<PendingReadTxn>),
-    StorageUsageFetch(EpochMillis),
-    StorageUsageUpdate(HashMap<Option<ShardId>, u64>, EpochMillis),
+    StorageUsageFetch,
+    StorageUsageUpdate(HashMap<Option<ShardId>, u64>),
     Consolidate(Vec<mz_stash::Id>),
+    RealTimeRecencyTimestamp {
+        conn_id: ConnectionId,
+        transient_revision: u64,
+        real_time_recency_ts: Timestamp,
+    },
 }
 
 #[derive(Derivative)]
@@ -245,10 +250,47 @@ pub struct SinkConnectionReady {
     pub result: Result<StorageSinkConnection, AdapterError>,
 }
 
+#[derive(Debug)]
+pub enum RealTimeRecencyContext {
+    ExplainTimestamp {
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
+        format: ExplainFormat,
+        compute_instance: ComputeInstanceId,
+        optimized_plan: OptimizedMirRelationExpr,
+        id_bundle: CollectionIdBundle,
+    },
+    Peek {
+        tx: ClientTransmitter<ExecuteResponse>,
+        finishing: RowSetFinishing,
+        copy_to: Option<CopyFormat>,
+        source: MirRelationExpr,
+        session: Session,
+        compute_instance: ComputeInstanceId,
+        when: QueryWhen,
+        target_replica: Option<ReplicaId>,
+        view_id: GlobalId,
+        index_id: GlobalId,
+        timeline_context: TimelineContext,
+        source_ids: BTreeSet<GlobalId>,
+        id_bundle: CollectionIdBundle,
+        in_immediate_multi_stmt_txn: bool,
+    },
+}
+
+impl RealTimeRecencyContext {
+    pub(crate) fn take_tx_and_session(self) -> (ClientTransmitter<ExecuteResponse>, Session) {
+        match self {
+            RealTimeRecencyContext::ExplainTimestamp { tx, session, .. }
+            | RealTimeRecencyContext::Peek { tx, session, .. } => (tx, session),
+        }
+    }
+}
+
 /// Configures a coordinator.
-pub struct Config<S> {
+pub struct Config {
     pub dataflow_client: mz_controller::Controller,
-    pub storage: storage::Connection<S>,
+    pub storage: storage::Connection,
     pub unsafe_mode: bool,
     pub persisted_introspection: bool,
     pub build_info: &'static BuildInfo,
@@ -271,6 +313,7 @@ pub struct Config<S> {
     pub consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
     pub consolidations_rx: mpsc::UnboundedReceiver<Vec<mz_stash::Id>>,
     pub aws_account_id: Option<String>,
+    pub aws_privatelink_availability_zones: Option<Vec<String>>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -376,12 +419,12 @@ impl PendingReadTxn {
 }
 
 /// Glues the external world to the Timely workers.
-pub struct Coordinator<S> {
+pub struct Coordinator {
     /// The controller for the storage and compute layers.
     controller: mz_controller::Controller,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
-    catalog: Catalog<S>,
+    catalog: Catalog,
 
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
@@ -431,8 +474,11 @@ pub struct Coordinator<S> {
     /// A map from pending peek ids to the queue into which responses are sent, and
     /// the connection id of the client that initiated the peek.
     pending_peeks: HashMap<Uuid, PendingPeek>,
-    /// A map from client connection ids to a set of all pending peeks for that client
+    /// A map from client connection ids to a set of all pending peeks for that client.
     client_pending_peeks: HashMap<ConnectionId, BTreeMap<Uuid, ComputeInstanceId>>,
+
+    /// A map from client connection ids to a pending real time recency timestamps.
+    pending_real_time_recency_timestamp: HashMap<ConnectionId, RealTimeRecencyContext>,
 
     /// A map from pending subscribes to the subscribe description.
     pending_subscribes: HashMap<GlobalId, PendingSubscribe>,
@@ -441,7 +487,7 @@ pub struct Coordinator<S> {
     write_lock: Arc<tokio::sync::Mutex<()>>,
     /// Holds plans deferred due to write lock.
     write_lock_wait_group: VecDeque<Deferred>,
-    /// Pending writes waiting for a group commit
+    /// Pending writes waiting for a group commit.
     pending_writes: Vec<PendingWriteTxn>,
 
     /// Handle to secret manager that can create and delete secrets from
@@ -474,7 +520,7 @@ pub struct Coordinator<S> {
     metrics: Metrics,
 }
 
-impl<S: Append + 'static> Coordinator<S> {
+impl Coordinator {
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
@@ -485,6 +531,12 @@ impl<S: Append + 'static> Coordinator<S> {
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
         info!("coordinator init: beginning bootstrap");
+
+        // Inform the controllers about their initial configuration.
+        let compute_config = self.catalog.compute_config();
+        self.controller.compute.update_configuration(compute_config);
+        let storage_config = self.catalog.storage_config();
+        self.controller.storage.update_configuration(storage_config);
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
         //
@@ -499,11 +551,19 @@ impl<S: Append + 'static> Coordinator<S> {
 
         info!("coordinator init: creating compute replicas");
         for instance in self.catalog.compute_instances() {
-            self.controller.compute.create_instance(
-                instance.id,
-                instance.log_indexes.clone(),
-                self.catalog.system_config().max_result_size(),
-            )?;
+            // Linked clusters are presently a fiction maintained by the
+            // catalog. They should not yet result in the creation of actual
+            // compute instances.
+            //
+            // TODO(benesch): turn linked clusters into real clusters. See
+            // MaterializeInc/cloud#4929.
+            if instance.linked_object_id.is_some() {
+                continue;
+            }
+
+            self.controller
+                .compute
+                .create_instance(instance.id, instance.log_indexes.clone())?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 let introspection_collections = replica
                     .config
@@ -681,6 +741,29 @@ impl<S: Append + 'static> Coordinator<S> {
                         .insert(entry.id());
                 }
                 CatalogItem::Index(idx) => {
+                    // Linked clusters are presently a fiction maintained by the
+                    // catalog. They do not yet result in the creation of actual
+                    // compute instances, and so we must suppress the creation
+                    // of indexes on those clusters. (Users cannot create
+                    // indexes on linked clusters, but the indexes for the
+                    // built-in logging sources must be suppressed.)
+                    //
+                    // TODO(benesch): turn linked clusters into real clusters.
+                    // See MaterializeInc/cloud#4929.
+                    if self
+                        .catalog
+                        .try_get_compute_instance(idx.compute_instance)
+                        .expect("index on missing compute instance")
+                        .linked_object_id
+                        .is_some()
+                    {
+                        assert!(
+                            logs.contains(&idx.on),
+                            "non introspection source indexes in linked clusters are impossible"
+                        );
+                        continue;
+                    }
+
                     let policy_entry = policies_to_set
                         .entry(policy.expect("indexes have a compaction window"))
                         .or_insert_with(Default::default);
@@ -955,6 +1038,49 @@ impl<S: Append + 'static> Coordinator<S> {
         self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
             .await;
 
+        // TODO(benesch): remove this migration in v0.40, since all sources and
+        // sinks created in v0.39+ will be created with linked clusters if
+        // appropriate.
+        info!("coordinator init: SPECIAL MIGRATION: ensuring all sources and sinks have linked clusters");
+        let mut linked_cluster_ops = vec![];
+        for entry in &entries {
+            // Only sources with ingestions need linked clusters.
+            let host_config = match entry.item() {
+                CatalogItem::Source(source) => match &source.data_source {
+                    DataSourceDesc::Ingestion(ingestion) => &ingestion.host_config,
+                    _ => continue,
+                },
+                CatalogItem::Sink(sink) => &sink.host_config,
+                _ => continue,
+            };
+
+            // Don't create linked clusters if one already exists.
+            if self.catalog.get_linked_cluster(entry.id()).is_some() {
+                continue;
+            }
+
+            // Convert resolved host config back to the host config we would
+            // have gotten from the SQL layer.
+            let host_config = match host_config {
+                StorageHostConfig::Managed { size, .. } => {
+                    plan::StorageHostConfig::Managed { size: size.into() }
+                }
+                StorageHostConfig::Remote { addr } => {
+                    plan::StorageHostConfig::Remote { addr: addr.into() }
+                }
+            };
+
+            info!("adding linked cluster for {}", entry.id());
+            linked_cluster_ops.extend(
+                self.create_linked_cluster_ops(entry.id(), entry.name(), &host_config)
+                    .await?,
+            );
+        }
+        // Dummy session is appropriate for system migrations, as it will
+        // present as user `mz_system` in the audit log.
+        self.catalog_transact(Some(&Session::dummy()), linked_cluster_ops)
+            .await?;
+
         info!("coordinator init: bootstrap complete");
         Ok(())
     }
@@ -1075,7 +1201,7 @@ impl<S: Append + 'static> Coordinator<S> {
 ///
 /// Returns a handle to the coordinator and a client to communicate with the
 /// coordinator.
-pub async fn serve<S: Append + 'static>(
+pub async fn serve(
     Config {
         dataflow_client,
         storage,
@@ -1100,8 +1226,9 @@ pub async fn serve<S: Append + 'static>(
         consolidations_tx,
         consolidations_rx,
         aws_account_id,
+        aws_privatelink_availability_zones,
         system_parameter_frontend,
-    }: Config<S>,
+    }: Config,
 ) -> Result<(Handle, Client), AdapterError> {
     info!("coordinator init: beginning");
 
@@ -1133,6 +1260,9 @@ pub async fn serve<S: Append + 'static>(
             None
         };
 
+    let aws_privatelink_availability_zones = aws_privatelink_availability_zones
+        .map(|azs_vec| HashSet::from_iter(azs_vec.iter().cloned()));
+
     info!("coordinator init: opening catalog");
     let (mut catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
         Catalog::open(catalog::Config {
@@ -1152,6 +1282,7 @@ pub async fn serve<S: Append + 'static>(
             secrets_reader: secrets_controller.reader(),
             egress_ips,
             aws_principal_context,
+            aws_privatelink_availability_zones,
             system_parameter_frontend,
         })
         .await?;
@@ -1175,33 +1306,8 @@ pub async fn serve<S: Append + 'static>(
         .name("coordinator".to_string())
         .spawn(move || {
             let mut timestamp_oracles = BTreeMap::new();
-            for (timeline, mut initial_timestamp) in initial_timestamps {
-                if timeline == Timeline::EpochMilliseconds {
-                    let mut now_ts = now();
-                    initial_timestamp = std::cmp::max(initial_timestamp, now_ts.into());
-                    let mut upper_bound = timeline::upper_bound(&Timestamp::from(now_ts));
-                    while initial_timestamp > upper_bound {
-                        // Cap retry time to 1s. In cases where the system clock has retreated by
-                        // some large amount of time, this prevents against then waiting for that
-                        // large amount of time in case the system clock then advances back to near
-                        // what it was.
-                        let remaining_ms = std::cmp::min(
-                            initial_timestamp.saturating_sub(upper_bound),
-                            1_000.into(),
-                        );
-                        error!(
-                            "Coordinator tried to start with initial timestamp of \
-                            {initial_timestamp}, which is more than \
-                            {TIMESTAMP_INTERVAL_UPPER_BOUND} intervals of size {} larger than \
-                            now, {now_ts}. Sleeping for {remaining_ms} ms.",
-                            *TIMESTAMP_PERSIST_INTERVAL
-                        );
-                        std::thread::sleep(Duration::from_millis(remaining_ms.into()));
-                        now_ts = now();
-                        upper_bound = timeline::upper_bound(&Timestamp::from(now_ts));
-                    }
-                }
-                handle.block_on(Coordinator::<S>::ensure_timeline_state_with_initial_time(
+            for (timeline, initial_timestamp) in initial_timestamps {
+                handle.block_on(Coordinator::ensure_timeline_state_with_initial_time(
                     &timeline,
                     initial_timestamp,
                     now.clone(),
@@ -1225,6 +1331,7 @@ pub async fn serve<S: Append + 'static>(
                 txn_reads: Default::default(),
                 pending_peeks: HashMap::new(),
                 client_pending_peeks: HashMap::new(),
+                pending_real_time_recency_timestamp: HashMap::new(),
                 pending_subscribes: HashMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
@@ -1272,7 +1379,7 @@ pub async fn serve<S: Append + 'static>(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(cmd_tx.clone(), metrics_clone);
+            let client = Client::new(build_info, cmd_tx.clone(), metrics_clone);
             Ok((handle, client))
         }
         Err(e) => Err(e),

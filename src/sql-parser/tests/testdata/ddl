@@ -1037,6 +1037,13 @@ CREATE CLUSTER cluster REPLICAS (a (REMOTE = ('host1'), INTROSPECTION INTERVAL =
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Sequence([Value(String("host1"))])) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(String("1s"))) }, ReplicaOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(Number("0"))) }] }])) }] })
 
 parse-statement
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1'], IDLE ARRANGEMENT MERGE EFFORT = 100), b (SIZE '1', IDLE ARRANGEMENT MERGE EFFORT 0))
+----
+CREATE CLUSTER cluster REPLICAS (a (REMOTE = ('host1'), IDLE ARRANGEMENT MERGE EFFORT = 100), b (SIZE = '1', IDLE ARRANGEMENT MERGE EFFORT = 0))
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Sequence([Value(String("host1"))])) }, ReplicaOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("100"))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }, ReplicaOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("0"))) }] }])) }] })
+
+parse-statement
 CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1'], SIZE '1'))
 ----
 CREATE CLUSTER cluster REPLICAS (a (REMOTE = ('host1'), SIZE = '1'))
@@ -1119,6 +1126,20 @@ CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], INTROSPECTION INTERVAL 
 CREATE CLUSTER REPLICA default.replica REMOTE = ('host1'), INTROSPECTION INTERVAL = NULL
 =>
 CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Remote, value: Some(Sequence([Value(String("host1"))])) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(Null)) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], IDLE ARRANGEMENT MERGE EFFORT = 100
+----
+CREATE CLUSTER REPLICA default.replica REMOTE = ('host1'), IDLE ARRANGEMENT MERGE EFFORT = 100
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Remote, value: Some(Sequence([Value(String("host1"))])) }, ReplicaOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("100"))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], IDLE ARRANGEMENT MERGE EFFORT 0
+----
+CREATE CLUSTER REPLICA default.replica REMOTE = ('host1'), IDLE ARRANGEMENT MERGE EFFORT = 0
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Remote, value: Some(Sequence([Value(String("host1"))])) }, ReplicaOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("0"))) }] } })
 
 parse-statement
 DROP CLUSTER cluster

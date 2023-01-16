@@ -8,10 +8,10 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Postgres, Service
+from materialize.mzcompose.services import Cockroach, Service
 
 SERVICES = [
-    Postgres(),
+    Cockroach(setup_materialize=True),
     Service(
         "maelstrom-persist",
         {"mzbuild": "maelstrom-persist", "volumes": ["./maelstrom:/store"]},
@@ -38,7 +38,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--consensus",
         type=str,
-        choices=["mem", "postgres", "maelstrom"],
+        choices=["mem", "cockroach", "maelstrom"],
         default="maelstrom",
     )
     parser.add_argument(
@@ -49,17 +49,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     if args.consensus == "mem":
         consensus_uri = "mem://consensus"
-    elif args.consensus == "postgres":
-        consensus_uri = "postgresql://postgres:postgres@postgres:5432?options=--search_path=consensus"
-        c.start_and_wait_for_tcp(services=["postgres"])
-        c.wait_for_postgres(service="postgres")
-
-        c.sql(
-            sql="CREATE SCHEMA IF NOT EXISTS consensus;",
-            service="postgres",
-            user="postgres",
-            password="postgres",
+    elif args.consensus == "cockroach":
+        consensus_uri = (
+            "postgres://root@cockroach:26257?options=--search_path=consensus"
         )
+        c.start_and_wait_for_tcp(services=["cockroach"])
+        c.wait_for_cockroach()
     else:
         # empty consensus uri defaults to Maelstrom consensus implementation
         consensus_uri = ""

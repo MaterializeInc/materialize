@@ -44,7 +44,7 @@ BUILDKITE_PULL_REQUEST = environ.get("BUILDKITE_PULL_REQUEST")
 
 # This should always coincide with the MZ_ENVIRONMENT_ID value passed to the
 # Materialize service.
-LD_USER_KEY = DEFAULT_MZ_ENVIRONMENT_ID
+LD_CONTEXT_KEY = DEFAULT_MZ_ENVIRONMENT_ID
 # A unique feature flag key to use for this test.
 LD_FEATURE_FLAG_KEY = f"ci-test-{BUILDKITE_JOB_ID}"
 
@@ -92,7 +92,7 @@ def workflow_default(c: Composition) -> None:
         ld_client.create_flag(
             LD_FEATURE_FLAG_KEY,
             tags=["ci-test", f"gh-{BUILDKITE_PULL_REQUEST}"]
-            if BUILDKITE_PULL_REQUEST is not None
+            if BUILDKITE_PULL_REQUEST
             else ["ci-test"],
         )
         # Turn on targeting. The default rule will now serve 2GiB for the test
@@ -133,9 +133,10 @@ def workflow_default(c: Composition) -> None:
         # Add a rule that targets the current user with the 3GiB variant.
         ld_client.update_targeting(
             LD_FEATURE_FLAG_KEY,
-            targets=[
+            contextTargets=[
                 {
-                    "values": [LD_USER_KEY],
+                    "contextKind": "environment",
+                    "values": [LD_CONTEXT_KEY],
                     "variation": 2,
                 }
             ],
@@ -147,9 +148,10 @@ def workflow_default(c: Composition) -> None:
         # Add a rule that targets the current user with the 4GiB - 1 byte variant.
         ld_client.update_targeting(
             LD_FEATURE_FLAG_KEY,
-            targets=[
+            contextTargets=[
                 {
-                    "values": [LD_USER_KEY],
+                    "contextKind": "environment",
+                    "values": [LD_CONTEXT_KEY],
                     "variation": 3,
                 }
             ],
@@ -161,7 +163,7 @@ def workflow_default(c: Composition) -> None:
         # Remove custom targeting.
         ld_client.update_targeting(
             LD_FEATURE_FLAG_KEY,
-            targets=[],
+            contextTargets=[],
         )
 
         # Assert that max_result_size is 2 GiB (the default when targeting is
@@ -243,7 +245,7 @@ class LaunchDarklyClient:
         self,
         feature_flag_key: str,
         on: Optional[bool] = None,
-        targets: Optional[List[Any]] = None,
+        contextTargets: Optional[List[Any]] = None,
     ) -> Any:
         with launchdarkly_api.ApiClient(self.configuration) as api_client:
             api = feature_flags_api.FeatureFlagsApi(api_client)
@@ -266,11 +268,11 @@ class LaunchDarklyClient:
                                 [
                                     PatchOperation(
                                         op="replace",
-                                        path=f"/environments/{self.environment_key}/targets",
-                                        value=targets,
+                                        path=f"/environments/{self.environment_key}/contextTargets",
+                                        value=contextTargets,
                                     ),
                                 ]
-                                if targets is not None
+                                if contextTargets is not None
                                 else [],
                             )
                         )

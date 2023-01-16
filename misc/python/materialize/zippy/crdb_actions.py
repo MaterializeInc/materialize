@@ -19,15 +19,7 @@ class CockroachStart(Action):
     """Starts a CockroachDB instance."""
 
     def run(self, c: Composition) -> None:
-        c.start_and_wait_for_tcp(services=["cockroach"])
-        c.wait_for_cockroach()
-
-        for schema in ["adapter", "storage", "consensus"]:
-            c.sql(
-                f"CREATE SCHEMA IF NOT EXISTS {schema}",
-                service="cockroach",
-                user="root",
-            )
+        c.up("cockroach")
 
     def provides(self) -> List[Capability]:
         return [CockroachIsRunning()]

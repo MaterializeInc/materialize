@@ -165,18 +165,24 @@ input[type="submit"] {
     border: none;
     transition: all 0.2s;
     transition-delay: 50ms;
-    white-space: nowrap;
     font-family: inherit;
 }
 
 a {
     color: var(--sub);
-    text-decoration: none;
+
+    &:not(.link-with-code) {
+        text-decoration: none;
+    }
 
     &:hover,
     &:focus {
         text-decoration: underline;
-        color: var(--important);
+
+        &,
+        code {
+            color: var(--important);
+        }
     }
 }
 
@@ -186,6 +192,7 @@ a {
     align-items: center;
     font-size: 12px;
     text-transform: uppercase;
+    white-space: nowrap;
     font-weight: 600;
     letter-spacing: 0.1em;
     background: var(--graidient-primary);

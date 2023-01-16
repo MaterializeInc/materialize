@@ -1289,6 +1289,14 @@ pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
         .with_column("sink_progress_topic", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: false,
 });
+pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_object_dependencies",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("referenced_object_id", ScalarType::String.nullable(false)),
+    is_retained_metrics_relation: false,
+});
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_databases",
     schema: MZ_CATALOG_SCHEMA,
@@ -1500,6 +1508,7 @@ pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("returns_set", ScalarType::Bool.nullable(false)),
     is_retained_metrics_relation: false,
 });
+
 pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_clusters",
     schema: MZ_CATALOG_SCHEMA,
@@ -1508,6 +1517,16 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("name", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: false,
 });
+
+pub static MZ_CLUSTER_LINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_cluster_links",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("cluster_id", ScalarType::String.nullable(false))
+        .with_column("object_id", ScalarType::String.nullable(false)),
+    is_retained_metrics_relation: false,
+});
+
 pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_secrets",
     schema: MZ_CATALOG_SCHEMA,
@@ -1598,48 +1617,6 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
     is_retained_metrics_relation: false,
 });
 
-pub const MZ_SOURCE_STATUS: BuiltinView = BuiltinView {
-    name: "mz_source_status",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_source_status AS
-WITH ordered_events AS (
-    SELECT
-        source_id,
-        occurred_at,
-        status,
-        error,
-        details,
-        row_number() over (partition by source_id order by occurred_at desc) as row_number
-    FROM
-        mz_internal.mz_source_status_history
-),
-latest_events AS (
-    SELECT
-        source_id,
-        occurred_at,
-        status,
-        error,
-        details
-    FROM
-        ordered_events
-    WHERE
-        row_number = 1
-)
-SELECT
-    mz_sources.id,
-    name,
-    mz_sources.type,
-    occurred_at as last_status_change_at,
-    coalesce(status, 'created') as status,
-    error,
-    details
-FROM mz_sources
-LEFT JOIN latest_events ON mz_sources.id = latest_events.source_id
-WHERE
-    -- This is a convenient way to filter out system sources, like the status_history table itself.
-    mz_sources.size IS NOT NULL",
-};
-
 pub const MZ_SOURCE_STATUSES: BuiltinView = BuiltinView {
     name: "mz_source_statuses",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1676,48 +1653,6 @@ pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSou
         .with_column("details", ScalarType::Jsonb.nullable(true)),
     is_retained_metrics_relation: false,
 });
-
-pub const MZ_SINK_STATUS: BuiltinView = BuiltinView {
-    name: "mz_sink_status",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_sink_status AS
-WITH ordered_events AS (
-    SELECT
-        sink_id,
-        occurred_at,
-        status,
-        error,
-        details,
-        row_number() over (partition by sink_id order by occurred_at desc) as row_number
-    FROM
-        mz_internal.mz_sink_status_history
-),
-latest_events AS (
-    SELECT
-        sink_id,
-        occurred_at,
-        status,
-        error,
-        details
-    FROM
-        ordered_events
-    WHERE
-        row_number = 1
-)
-SELECT
-    mz_sinks.id,
-    name,
-    mz_sinks.type,
-    occurred_at as last_status_change_at,
-    coalesce(status, 'created') as status,
-    error,
-    details
-FROM mz_sinks
-LEFT JOIN latest_events ON mz_sinks.id = latest_events.sink_id
-WHERE
-    -- This is a convenient way to filter out system sinks, like the status_history table itself.
-    mz_sinks.size IS NOT NULL",
-};
 
 pub const MZ_SINK_STATUSES: BuiltinView = BuiltinView {
     name: "mz_sink_statuses",
@@ -1811,6 +1746,23 @@ pub static MZ_STORAGE_HOST_METRICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSo
         .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
         .with_column("memory_bytes", ScalarType::UInt64.nullable(true)),
+    is_retained_metrics_relation: true,
+});
+
+// This will be replaced with per-replica tables once source/sink multiplexing on
+// a single cluster is supported.
+pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_source_statistics",
+    schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::StorageSourceStatistics),
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("worker_id", ScalarType::UInt64.nullable(false))
+        .with_column("snapshot_committed", ScalarType::Bool.nullable(false))
+        .with_column("messages_received", ScalarType::UInt64.nullable(false))
+        .with_column("updates_staged", ScalarType::UInt64.nullable(false))
+        .with_column("updates_committed", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_received", ScalarType::UInt64.nullable(false)),
     is_retained_metrics_relation: true,
 });
 
@@ -3061,6 +3013,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
         Builtin::Table(&MZ_KAFKA_SINKS),
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
+        Builtin::Table(&MZ_OBJECT_DEPENDENCIES),
         Builtin::Table(&MZ_DATABASES),
         Builtin::Table(&MZ_SCHEMAS),
         Builtin::Table(&MZ_COLUMNS),
@@ -3080,6 +3033,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_PSEUDO_TYPES),
         Builtin::Table(&MZ_FUNCTIONS),
         Builtin::Table(&MZ_CLUSTERS),
+        Builtin::Table(&MZ_CLUSTER_LINKS),
         Builtin::Table(&MZ_SECRETS),
         Builtin::Table(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
@@ -3141,13 +3095,12 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
-        Builtin::View(&MZ_SINK_STATUS),
         Builtin::View(&MZ_SINK_STATUSES),
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
-        Builtin::View(&MZ_SOURCE_STATUS),
         Builtin::View(&MZ_SOURCE_STATUSES),
         Builtin::Source(&MZ_STORAGE_SHARDS),
         Builtin::Source(&MZ_STORAGE_HOST_METRICS),
+        Builtin::Source(&MZ_SOURCE_STATISTICS),
         Builtin::View(&MZ_STORAGE_USAGE),
         Builtin::Table(&MZ_STORAGE_HOST_SIZES),
         Builtin::View(&MZ_SOURCE_UTILIZATION),
@@ -3231,7 +3184,6 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::env;
 
-    use anyhow::anyhow;
     use tokio_postgres::NoTls;
 
     use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
@@ -3247,42 +3199,44 @@ mod tests {
     // Connect to a running Postgres server and verify that our builtin
     // types and functions match it, in addition to some other things.
     #[tokio::test]
-    async fn compare_builtins_postgres() -> Result<(), anyhow::Error> {
-        // Verify that all builtin functions:
-        // - have a unique OID
-        // - if they have a postgres counterpart (same oid) then they have matching name
-        // Note: Use Postgres 13 when testing because older version don't have all
-        // functions.
-        let (client, connection) = tokio_postgres::connect(
-            &env::var("POSTGRES_URL").unwrap_or_else(|_| "host=localhost user=postgres".into()),
-            NoTls,
-        )
-        .await?;
+    async fn compare_builtins_postgres() {
+        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
+            // Verify that all builtin functions:
+            // - have a unique OID
+            // - if they have a postgres counterpart (same oid) then they have matching name
+            // Note: Use Postgres 13 when testing because older version don't have all
+            // functions.
+            let (client, connection) = tokio_postgres::connect(
+                &env::var("POSTGRES_URL").unwrap_or_else(|_| "host=localhost user=postgres".into()),
+                NoTls,
+            )
+            .await
+            .unwrap();
 
-        task::spawn(|| "compare_builtin_postgres", async move {
-            if let Err(e) = connection.await {
-                panic!("connection error: {}", e);
+            task::spawn(|| "compare_builtin_postgres", async move {
+                if let Err(e) = connection.await {
+                    panic!("connection error: {}", e);
+                }
+            });
+
+            struct PgProc {
+                name: String,
+                schema: String,
+                arg_oids: Vec<u32>,
+                ret_oid: Option<u32>,
+                ret_set: bool,
             }
-        });
 
-        struct PgProc {
-            name: String,
-            schema: String,
-            arg_oids: Vec<u32>,
-            ret_oid: Option<u32>,
-            ret_set: bool,
-        }
+            struct PgType {
+                name: String,
+                ty: String,
+                elem: u32,
+                array: u32,
+            }
 
-        struct PgType {
-            name: String,
-            ty: String,
-            elem: u32,
-            array: u32,
-        }
-
-        let pg_proc: HashMap<_, _> = client
-            .query(
-                "SELECT
+            let pg_proc: HashMap<_, _> = client
+                .query(
+                    "SELECT
                     p.oid,
                     proname,
                     nspname,
@@ -3291,306 +3245,320 @@ mod tests {
                     proretset
                 FROM pg_proc p
                 JOIN pg_namespace n ON p.pronamespace = n.oid",
-                &[],
-            )
-            .await?
-            .into_iter()
-            .map(|row| {
-                let oid: u32 = row.get("oid");
-                let pg_proc = PgProc {
-                    name: row.get("proname"),
-                    schema: row.get("nspname"),
-                    arg_oids: row.get("proargtypes"),
-                    ret_oid: row.get("prorettype"),
-                    ret_set: row.get("proretset"),
-                };
-                (oid, pg_proc)
-            })
-            .collect();
-
-        let pg_proc_by_name: HashMap<_, _> = pg_proc
-            .iter()
-            .map(|(_, proc)| ((&*proc.schema, &*proc.name), proc))
-            .collect();
-
-        let pg_type: HashMap<_, _> = client
-            .query(
-                "SELECT oid, typname, typtype::text, typelem, typarray FROM pg_type",
-                &[],
-            )
-            .await?
-            .into_iter()
-            .map(|row| {
-                let oid: u32 = row.get("oid");
-                let pg_type = PgType {
-                    name: row.get("typname"),
-                    ty: row.get("typtype"),
-                    elem: row.get("typelem"),
-                    array: row.get("typarray"),
-                };
-                (oid, pg_type)
-            })
-            .collect();
-
-        let catalog = Catalog::open_debug_memory(NOW_ZERO.clone()).await?;
-        let conn_catalog = catalog.for_system_session();
-        let resolve_type_oid = |item: &str| {
-            conn_catalog
-                .resolve_item(&PartialObjectName {
-                    database: None,
-                    // All functions we check exist in PG, so the types must, as
-                    // well
-                    schema: Some(PG_CATALOG_SCHEMA.into()),
-                    item: item.to_string(),
-                })
+                    &[],
+                )
+                .await
                 .unwrap()
-                .oid()
-        };
-
-        let mut proc_oids = HashSet::new();
-        let mut type_oids = HashSet::new();
-
-        for builtin in BUILTINS::iter() {
-            match builtin {
-                Builtin::Type(ty) => {
-                    // Verify that all type OIDs are unique.
-                    assert!(
-                        type_oids.insert(ty.oid),
-                        "{} reused oid {}",
-                        ty.name,
-                        ty.oid
-                    );
-
-                    if ty.oid >= FIRST_MATERIALIZE_OID {
-                        // High OIDs are reserved in Materialize and don't have
-                        // PostgreSQL counterparts.
-                        continue;
-                    }
-
-                    // For types that have a PostgreSQL counterpart, verify that
-                    // the name and oid match.
-                    let pg_ty = pg_type.get(&ty.oid).unwrap_or_else(|| {
-                        panic!("pg_proc missing type {}: oid {}", ty.name, ty.oid)
-                    });
-                    assert_eq!(
-                        ty.name, pg_ty.name,
-                        "oid {} has name {} in postgres; expected {}",
-                        ty.oid, pg_ty.name, ty.name,
-                    );
-
-                    // Ensure the type matches.
-                    match &ty.details.typ {
-                        CatalogType::Array { element_reference } => {
-                            let elem_ty = BUILTINS::iter()
-                                .filter_map(|builtin| match builtin {
-                                    Builtin::Type(ty @ BuiltinType { name, .. })
-                                        if element_reference == name =>
-                                    {
-                                        Some(ty)
-                                    }
-                                    _ => None,
-                                })
-                                .next();
-                            let elem_ty = match elem_ty {
-                                Some(ty) => ty,
-                                None => panic!("{} is unexpectedly not a type", element_reference),
-                            };
-                            assert_eq!(
-                                pg_ty.elem, elem_ty.oid,
-                                "type {} has mismatched element OIDs",
-                                ty.name
-                            )
-                        }
-                        CatalogType::Pseudo => {
-                            assert_eq!(
-                                pg_ty.ty, "p",
-                                "type {} is not a pseudo type as expected",
-                                ty.name
-                            )
-                        }
-                        CatalogType::Range { .. } => {
-                            assert_eq!(
-                                pg_ty.ty, "r",
-                                "type {} is not a range type as expected",
-                                ty.name
-                            );
-                        }
-                        _ => {
-                            assert_eq!(
-                                pg_ty.ty, "b",
-                                "type {} is not a base type as expected",
-                                ty.name
-                            )
-                        }
-                    }
-
-                    // Ensure the array type reference is correct.
-                    let schema = catalog.resolve_schema_in_database(
-                        &ResolvedDatabaseSpecifier::Ambient,
-                        ty.schema,
-                        SYSTEM_CONN_ID,
-                    )?;
-                    let allocated_type = catalog.resolve_entry(
-                        None,
-                        &vec![(ResolvedDatabaseSpecifier::Ambient, schema.id().clone())],
-                        &PartialObjectName {
-                            database: None,
-                            schema: Some(schema.name().schema.clone()),
-                            item: ty.name.to_string(),
-                        },
-                        SYSTEM_CONN_ID,
-                    )?;
-                    let ty = if let CatalogItem::Type(ty) = &allocated_type.item {
-                        ty
-                    } else {
-                        panic!("unexpectedly not a type")
+                .into_iter()
+                .map(|row| {
+                    let oid: u32 = row.get("oid");
+                    let pg_proc = PgProc {
+                        name: row.get("proname"),
+                        schema: row.get("nspname"),
+                        arg_oids: row.get("proargtypes"),
+                        ret_oid: row.get("prorettype"),
+                        ret_set: row.get("proretset"),
                     };
-                    match ty.details.array_id {
-                        Some(array_id) => {
-                            let array_ty = catalog.get_entry(&array_id);
-                            assert_eq!(
-                                pg_ty.array, array_ty.oid,
-                                "type {} has mismatched array OIDs",
-                                allocated_type.name.item,
-                            );
-                        }
-                        None => assert_eq!(
-                            pg_ty.array, 0,
-                            "type {} does not have an array type in mz but does in pg",
-                            allocated_type.name.item,
-                        ),
-                    }
-                }
-                Builtin::Func(func) => {
-                    for imp in func.inner.func_impls() {
-                        // Verify that all function OIDs are unique.
+                    (oid, pg_proc)
+                })
+                .collect();
+
+            let pg_proc_by_name: HashMap<_, _> = pg_proc
+                .iter()
+                .map(|(_, proc)| ((&*proc.schema, &*proc.name), proc))
+                .collect();
+
+            let pg_type: HashMap<_, _> = client
+                .query(
+                    "SELECT oid, typname, typtype::text, typelem, typarray FROM pg_type",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|row| {
+                    let oid: u32 = row.get("oid");
+                    let pg_type = PgType {
+                        name: row.get("typname"),
+                        ty: row.get("typtype"),
+                        elem: row.get("typelem"),
+                        array: row.get("typarray"),
+                    };
+                    (oid, pg_type)
+                })
+                .collect();
+
+            let conn_catalog = catalog.for_system_session();
+            let resolve_type_oid = |item: &str| {
+                conn_catalog
+                    .resolve_item(&PartialObjectName {
+                        database: None,
+                        // All functions we check exist in PG, so the types must, as
+                        // well
+                        schema: Some(PG_CATALOG_SCHEMA.into()),
+                        item: item.to_string(),
+                    })
+                    .unwrap()
+                    .oid()
+            };
+
+            let mut proc_oids = HashSet::new();
+            let mut type_oids = HashSet::new();
+
+            for builtin in BUILTINS::iter() {
+                match builtin {
+                    Builtin::Type(ty) => {
+                        // Verify that all type OIDs are unique.
                         assert!(
-                            proc_oids.insert(imp.oid),
+                            type_oids.insert(ty.oid),
                             "{} reused oid {}",
-                            func.name,
-                            imp.oid
+                            ty.name,
+                            ty.oid
                         );
 
-                        if imp.oid >= FIRST_MATERIALIZE_OID {
+                        if ty.oid >= FIRST_MATERIALIZE_OID {
                             // High OIDs are reserved in Materialize and don't have
-                            // postgres counterparts.
+                            // PostgreSQL counterparts.
                             continue;
                         }
 
-                        // For functions that have a postgres counterpart, verify that the name and
-                        // oid match.
-                        let pg_fn = if imp.oid >= FIRST_UNPINNED_OID {
-                            pg_proc_by_name
-                                .get(&(func.schema, func.name))
-                                .unwrap_or_else(|| {
-                                    panic!("pg_proc missing function {}.{}", func.schema, func.name)
-                                })
-                        } else {
-                            pg_proc.get(&imp.oid).unwrap_or_else(|| {
-                                panic!("pg_proc missing function {}: oid {}", func.name, imp.oid)
-                            })
-                        };
+                        // For types that have a PostgreSQL counterpart, verify that
+                        // the name and oid match.
+                        let pg_ty = pg_type.get(&ty.oid).unwrap_or_else(|| {
+                            panic!("pg_proc missing type {}: oid {}", ty.name, ty.oid)
+                        });
                         assert_eq!(
-                            func.name, pg_fn.name,
-                            "funcs with oid {} don't match names: {} in mz, {} in pg",
-                            imp.oid, func.name, pg_fn.name
+                            ty.name, pg_ty.name,
+                            "oid {} has name {} in postgres; expected {}",
+                            ty.oid, pg_ty.name, ty.name,
                         );
 
-                        // Complain, but don't fail, if argument oids don't match.
-                        // TODO: make these match.
-                        let imp_arg_oids = imp
-                            .arg_typs
-                            .iter()
-                            .map(|item| resolve_type_oid(item))
-                            .collect::<Vec<_>>();
+                        // Ensure the type matches.
+                        match &ty.details.typ {
+                            CatalogType::Array { element_reference } => {
+                                let elem_ty = BUILTINS::iter()
+                                    .filter_map(|builtin| match builtin {
+                                        Builtin::Type(ty @ BuiltinType { name, .. })
+                                            if element_reference == name =>
+                                        {
+                                            Some(ty)
+                                        }
+                                        _ => None,
+                                    })
+                                    .next();
+                                let elem_ty = match elem_ty {
+                                    Some(ty) => ty,
+                                    None => {
+                                        panic!("{} is unexpectedly not a type", element_reference)
+                                    }
+                                };
+                                assert_eq!(
+                                    pg_ty.elem, elem_ty.oid,
+                                    "type {} has mismatched element OIDs",
+                                    ty.name
+                                )
+                            }
+                            CatalogType::Pseudo => {
+                                assert_eq!(
+                                    pg_ty.ty, "p",
+                                    "type {} is not a pseudo type as expected",
+                                    ty.name
+                                )
+                            }
+                            CatalogType::Range { .. } => {
+                                assert_eq!(
+                                    pg_ty.ty, "r",
+                                    "type {} is not a range type as expected",
+                                    ty.name
+                                );
+                            }
+                            _ => {
+                                assert_eq!(
+                                    pg_ty.ty, "b",
+                                    "type {} is not a base type as expected",
+                                    ty.name
+                                )
+                            }
+                        }
 
-                        if imp_arg_oids != pg_fn.arg_oids {
-                            println!(
+                        // Ensure the array type reference is correct.
+                        let schema = catalog
+                            .resolve_schema_in_database(
+                                &ResolvedDatabaseSpecifier::Ambient,
+                                ty.schema,
+                                SYSTEM_CONN_ID,
+                            )
+                            .unwrap();
+                        let allocated_type = catalog
+                            .resolve_entry(
+                                None,
+                                &vec![(ResolvedDatabaseSpecifier::Ambient, schema.id().clone())],
+                                &PartialObjectName {
+                                    database: None,
+                                    schema: Some(schema.name().schema.clone()),
+                                    item: ty.name.to_string(),
+                                },
+                                SYSTEM_CONN_ID,
+                            )
+                            .unwrap();
+                        let ty = if let CatalogItem::Type(ty) = &allocated_type.item {
+                            ty
+                        } else {
+                            panic!("unexpectedly not a type")
+                        };
+                        match ty.details.array_id {
+                            Some(array_id) => {
+                                let array_ty = catalog.get_entry(&array_id);
+                                assert_eq!(
+                                    pg_ty.array, array_ty.oid,
+                                    "type {} has mismatched array OIDs",
+                                    allocated_type.name.item,
+                                );
+                            }
+                            None => assert_eq!(
+                                pg_ty.array, 0,
+                                "type {} does not have an array type in mz but does in pg",
+                                allocated_type.name.item,
+                            ),
+                        }
+                    }
+                    Builtin::Func(func) => {
+                        for imp in func.inner.func_impls() {
+                            // Verify that all function OIDs are unique.
+                            assert!(
+                                proc_oids.insert(imp.oid),
+                                "{} reused oid {}",
+                                func.name,
+                                imp.oid
+                            );
+
+                            if imp.oid >= FIRST_MATERIALIZE_OID {
+                                // High OIDs are reserved in Materialize and don't have
+                                // postgres counterparts.
+                                continue;
+                            }
+
+                            // For functions that have a postgres counterpart, verify that the name and
+                            // oid match.
+                            let pg_fn = if imp.oid >= FIRST_UNPINNED_OID {
+                                pg_proc_by_name
+                                    .get(&(func.schema, func.name))
+                                    .unwrap_or_else(|| {
+                                        panic!(
+                                            "pg_proc missing function {}.{}",
+                                            func.schema, func.name
+                                        )
+                                    })
+                            } else {
+                                pg_proc.get(&imp.oid).unwrap_or_else(|| {
+                                    panic!(
+                                        "pg_proc missing function {}: oid {}",
+                                        func.name, imp.oid
+                                    )
+                                })
+                            };
+                            assert_eq!(
+                                func.name, pg_fn.name,
+                                "funcs with oid {} don't match names: {} in mz, {} in pg",
+                                imp.oid, func.name, pg_fn.name
+                            );
+
+                            // Complain, but don't fail, if argument oids don't match.
+                            // TODO: make these match.
+                            let imp_arg_oids = imp
+                                .arg_typs
+                                .iter()
+                                .map(|item| resolve_type_oid(item))
+                                .collect::<Vec<_>>();
+
+                            if imp_arg_oids != pg_fn.arg_oids {
+                                println!(
                                 "funcs with oid {} ({}) don't match arguments: {:?} in mz, {:?} in pg",
                                 imp.oid, func.name, imp_arg_oids, pg_fn.arg_oids
                             );
-                        }
+                            }
 
-                        let imp_return_oid = imp.return_typ.map(|item| resolve_type_oid(item));
+                            let imp_return_oid = imp.return_typ.map(|item| resolve_type_oid(item));
 
-                        if imp_return_oid != pg_fn.ret_oid {
-                            println!(
+                            if imp_return_oid != pg_fn.ret_oid {
+                                println!(
                                 "funcs with oid {} ({}) don't match return types: {:?} in mz, {:?} in pg",
                                 imp.oid, func.name, imp_return_oid, pg_fn.ret_oid
                             );
-                        }
+                            }
 
-                        if imp.return_is_set != pg_fn.ret_set {
-                            println!(
+                            if imp.return_is_set != pg_fn.ret_set {
+                                println!(
                                 "funcs with oid {} ({}) don't match set-returning value: {:?} in mz, {:?} in pg",
                                 imp.oid, func.name, imp.return_is_set, pg_fn.ret_set
                             );
+                            }
                         }
                     }
+                    _ => (),
                 }
-                _ => (),
             }
-        }
-
-        Ok(())
+        }).await
     }
 
     // Make sure pg views don't use types that only exist in Materialize.
     #[tokio::test]
-    async fn test_pg_views_forbidden_types() -> Result<(), anyhow::Error> {
-        let catalog = Catalog::open_debug_memory(SYSTEM_TIME.clone()).await?;
-        let conn_catalog = catalog.for_system_session();
+    async fn test_pg_views_forbidden_types() {
+        Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
+            let conn_catalog = catalog.for_system_session();
 
-        for view in BUILTINS::views()
-            .filter(|view| view.schema == PG_CATALOG_SCHEMA || view.schema == INFORMATION_SCHEMA)
-        {
-            let item = conn_catalog.resolve_item(&PartialObjectName {
-                database: None,
-                schema: Some(view.schema.to_string()),
-                item: view.name.to_string(),
-            })?;
-            let full_name = conn_catalog.resolve_full_name(item.name());
-            for col_type in item.desc(&full_name)?.iter_types() {
-                match &col_type.scalar_type {
-                    typ @ ScalarType::UInt16
-                    | typ @ ScalarType::UInt32
-                    | typ @ ScalarType::UInt64
-                    | typ @ ScalarType::MzTimestamp
-                    | typ @ ScalarType::List { .. }
-                    | typ @ ScalarType::Map { .. } => {
-                        return Err(anyhow!("{typ:?} type found in {full_name}"))
+            for view in BUILTINS::views().filter(|view| {
+                view.schema == PG_CATALOG_SCHEMA || view.schema == INFORMATION_SCHEMA
+            }) {
+                let item = conn_catalog
+                    .resolve_item(&PartialObjectName {
+                        database: None,
+                        schema: Some(view.schema.to_string()),
+                        item: view.name.to_string(),
+                    })
+                    .unwrap();
+                let full_name = conn_catalog.resolve_full_name(item.name());
+                for col_type in item.desc(&full_name).unwrap().iter_types() {
+                    match &col_type.scalar_type {
+                        typ @ ScalarType::UInt16
+                        | typ @ ScalarType::UInt32
+                        | typ @ ScalarType::UInt64
+                        | typ @ ScalarType::MzTimestamp
+                        | typ @ ScalarType::List { .. }
+                        | typ @ ScalarType::Map { .. } => {
+                            panic!("{typ:?} type found in {full_name}");
+                        }
+                        ScalarType::Bool
+                        | ScalarType::Int16
+                        | ScalarType::Int32
+                        | ScalarType::Int64
+                        | ScalarType::Float32
+                        | ScalarType::Float64
+                        | ScalarType::Numeric { .. }
+                        | ScalarType::Date
+                        | ScalarType::Time
+                        | ScalarType::Timestamp
+                        | ScalarType::TimestampTz
+                        | ScalarType::Interval
+                        | ScalarType::PgLegacyChar
+                        | ScalarType::Bytes
+                        | ScalarType::String
+                        | ScalarType::Char { .. }
+                        | ScalarType::VarChar { .. }
+                        | ScalarType::Jsonb
+                        | ScalarType::Uuid
+                        | ScalarType::Array(_)
+                        | ScalarType::Record { .. }
+                        | ScalarType::Oid
+                        | ScalarType::RegProc
+                        | ScalarType::RegType
+                        | ScalarType::RegClass
+                        | ScalarType::Int2Vector
+                        | ScalarType::Range { .. } => {}
                     }
-                    ScalarType::Bool
-                    | ScalarType::Int16
-                    | ScalarType::Int32
-                    | ScalarType::Int64
-                    | ScalarType::Float32
-                    | ScalarType::Float64
-                    | ScalarType::Numeric { .. }
-                    | ScalarType::Date
-                    | ScalarType::Time
-                    | ScalarType::Timestamp
-                    | ScalarType::TimestampTz
-                    | ScalarType::Interval
-                    | ScalarType::PgLegacyChar
-                    | ScalarType::Bytes
-                    | ScalarType::String
-                    | ScalarType::Char { .. }
-                    | ScalarType::VarChar { .. }
-                    | ScalarType::Jsonb
-                    | ScalarType::Uuid
-                    | ScalarType::Array(_)
-                    | ScalarType::Record { .. }
-                    | ScalarType::Oid
-                    | ScalarType::RegProc
-                    | ScalarType::RegType
-                    | ScalarType::RegClass
-                    | ScalarType::Int2Vector
-                    | ScalarType::Range { .. } => {}
                 }
             }
-        }
-
-        Ok(())
+        })
+        .await
     }
 }

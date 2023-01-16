@@ -10,6 +10,7 @@ publish = false
 anyhow = "1.0.66"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+futures = "0.3.25"
 mz-build-info = { path = "../build-info" }
 mz-compute-client = { path = "../compute-client" }
 mz-orchestrator = { path = "../orchestrator" }
@@ -25,3 +26,6 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 tokio = "1.23.0"
 uuid = { version = "1.2.2" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

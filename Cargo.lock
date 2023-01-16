@@ -2874,7 +2874,7 @@ dependencies = [
 [[package]]
 name = "launchdarkly-server-sdk"
 version = "1.0.0"
-source = "git+https://github.com/MaterializeInc/rust-server-sdk#d866421dbcaeee81679d06861594493797a8e7be"
+source = "git+https://github.com/MaterializeInc/rust-server-sdk#dcda26dad12a871795a6958ef238536c27c67164"
 dependencies = [
  "built",
  "chrono",
@@ -3020,12 +3020,6 @@ dependencies = [
  "cfg-if",
  "winapi",
 ]
-
-[[package]]
-name = "libm"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7d73b3f436185384286bd8098d17ec07c9a7d2388a6599f824d8502b529702a"
 
 [[package]]
 name = "libz-sys"
@@ -3373,6 +3367,7 @@ dependencies = [
  "mz-storage-client",
  "mz-transform",
  "once_cell",
+ "opentelemetry",
  "prometheus",
  "prost",
  "rand",
@@ -3387,9 +3382,20 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "uncased",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-alloc"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "mz-prof",
+ "tikv-jemallocator",
  "workspace-hack",
 ]
 
@@ -3435,30 +3441,6 @@ version = "0.0.0"
 dependencies = [
  "quote",
  "syn",
- "workspace-hack",
-]
-
-[[package]]
-name = "mz-billing-demo"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "hex",
- "mz-ore",
- "mz-test-util",
- "prost",
- "prost-build",
- "prost-types",
- "protobuf-src",
- "rand",
- "rand_distr",
- "tokio",
- "tokio-postgres",
- "tracing",
- "tracing-subscriber",
- "uuid",
  "workspace-hack",
 ]
 
@@ -3520,13 +3502,14 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.39.0-dev"
+version = "0.40.0-dev"
 dependencies = [
  "anyhow",
  "axum",
  "clap",
  "fail",
  "futures",
+ "mz-alloc",
  "mz-build-info",
  "mz-cloud-resources",
  "mz-compute",
@@ -3542,7 +3525,6 @@ dependencies = [
  "mz-storage-client",
  "mz-timely-util",
  "once_cell",
- "tikv-jemallocator",
  "timely",
  "tokio",
  "tracing",
@@ -3565,8 +3547,6 @@ dependencies = [
  "mz-build-info",
  "mz-compute-client",
  "mz-expr",
- "mz-http-util",
- "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist-client",
  "mz-pid-file",
@@ -3578,6 +3558,7 @@ dependencies = [
  "prometheus",
  "scopeguard",
  "serde",
+ "smallvec",
  "timely",
  "tokio",
  "tracing",
@@ -3636,6 +3617,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "differential-dataflow",
+ "futures",
  "mz-build-info",
  "mz-compute-client",
  "mz-orchestrator",
@@ -3655,7 +3637,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.39.0-dev"
+version = "0.40.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3682,6 +3664,7 @@ dependencies = [
  "libc",
  "mime",
  "mz-adapter",
+ "mz-alloc",
  "mz-build-info",
  "mz-cloud-resources",
  "mz-controller",
@@ -3731,7 +3714,6 @@ dependencies = [
  "sysctl",
  "tempfile",
  "thiserror",
- "tikv-jemallocator",
  "timely",
  "tokio",
  "tokio-openssl",
@@ -4176,7 +4158,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.39.0-dev"
+version = "0.40.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4341,6 +4323,7 @@ dependencies = [
  "askama",
  "axum",
  "backtrace",
+ "bytesize",
  "cfg-if",
  "headers",
  "http",
@@ -4649,7 +4632,6 @@ name = "mz-stash"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "criterion",
  "differential-dataflow",
  "futures",
@@ -4719,18 +4701,15 @@ dependencies = [
  "mz-ccsr",
  "mz-cloud-resources",
  "mz-expr",
- "mz-http-util",
  "mz-interchange",
  "mz-kafka-util",
  "mz-kinesis-util",
- "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
  "mz-pgcopy",
  "mz-pid-file",
  "mz-postgres-util",
- "mz-prof",
  "mz-repr",
  "mz-secrets",
  "mz-service",
@@ -4771,6 +4750,7 @@ dependencies = [
  "aws-smithy-http",
  "aws-types",
  "bytes",
+ "chrono",
  "dec",
  "derivative",
  "differential-dataflow",
@@ -5112,7 +5092,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "578ede34cf02f8924ab9447f50c28075b4d3e5b269972345e7e0372b38c6cdcd"
 dependencies = [
  "autocfg",
- "libm",
 ]
 
 [[package]]
@@ -6043,16 +6022,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34cf66eb183df1c5876e2dcf6b13d57340741e8dc255b48e40a26de954d06ae7"
 dependencies = [
  "getrandom",
-]
-
-[[package]]
-name = "rand_distr"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32cb0b9bc82b0a0876c2dd994a7e7a2683d3e7390ca40e6886785ef0c7e3ee31"
-dependencies = [
- "num-traits",
- "rand",
 ]
 
 [[package]]
@@ -7010,9 +6979,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.27.1"
+version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccb297c0afb439440834b4bcf02c5c9da8ec2e808e70f36b0d8e815ff403bd24"
+checksum = "17351d0e9eb8841897b14e9669378f3c69fb57779cc04f8ca9a9d512edfb2563"
 dependencies = [
  "cfg-if",
  "core-foundation-sys",
@@ -7144,9 +7113,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-ctl"
-version = "0.4.2"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb833c46ecbf8b6daeccb347cefcabf9c1beb5c9b0f853e1cec45632d9963e69"
+checksum = "e37706572f4b151dff7a0146e040804e9c26fe3a3118591112f05cf12a4216c1"
 dependencies = [
  "libc",
  "paste",
@@ -7155,9 +7124,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-sys"
-version = "0.4.3+5.2.1-patched.2"
+version = "0.5.2+5.3.0-patched"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1792ccb507d955b46af42c123ea8863668fae24d03721e40cad6a41773dbb49"
+checksum = "ec45c14da997d0925c7835883e4d5c181f196fa142f8c19d7643d1e9af2592c3"
 dependencies = [
  "cc",
  "fs_extra",
@@ -7166,9 +7135,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemallocator"
-version = "0.4.3"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5b7bcecfafe4998587d636f9ae9d55eb9d0499877b88757767c346875067098"
+checksum = "20612db8a13a6c06d57ec83953694185a367e16945f66565e8028d2c0bd76979"
 dependencies = [
  "libc",
  "tikv-jemalloc-sys",
@@ -7672,6 +7641,7 @@ dependencies = [
  "http",
  "httparse",
  "log",
+ "native-tls",
  "rand",
  "sha1",
  "thiserror",
@@ -8171,8 +8141,6 @@ dependencies = [
  "tikv-jemalloc-sys",
  "time",
  "time-macros",
- "timely",
- "timely_communication",
  "tokio",
  "tokio-postgres",
  "tokio-stream",
