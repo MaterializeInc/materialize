@@ -126,23 +126,6 @@ pub enum Datum<'a> {
     MzTimestamp(crate::Timestamp),
     /// A range of values, e.g. [-1, 1).
     Range(Range<DatumNested<'a>>),
-    /// A placeholder value.
-    ///
-    /// Dummy values are never meant to be observed. Many operations on `Datum`
-    /// panic if called on this variant.
-    ///
-    /// Dummies are useful as placeholders in e.g. a `Vec<Datum>`, where it is
-    /// known that a certain element of the vector is never observed and
-    /// therefore needn't be computed, but where *some* `Datum` must still be
-    /// provided to maintain the shape of the vector. While any valid datum
-    /// could be used for this purpose, having a dedicated variant makes it
-    /// obvious when these optimizations have gone awry. If we used e.g.
-    /// `Datum::Null`, an unexpected `Datum::Null` could indicate any number of
-    /// problems: bad user data, bad function metadata, or a bad optimization.
-    ///
-    // TODO(benesch): get rid of this variant. With a more capable optimizer, I
-    // don't think there would be any need for dummy datums.
-    Dummy,
     // Keep `Null` last so that calling `<` on Datums sorts nulls last, to
     // match the default in PostgreSQL. Note that this doesn't have an effect
     // on ORDER BY, because that is handled by compare_columns. The only
@@ -763,7 +746,6 @@ impl<'a> Datum<'a> {
             } else {
                 // sql type checking
                 match (datum, scalar_type) {
-                    (Datum::Dummy, _) => panic!("Datum::Dummy observed"),
                     (Datum::Null, _) => false,
                     (Datum::False, ScalarType::Bool) => true,
                     (Datum::False, _) => false,
@@ -1129,7 +1111,6 @@ impl fmt::Display for Datum<'_> {
             Datum::Numeric(n) => write!(f, "{}", n.0.to_standard_notation_string()),
             Datum::MzTimestamp(t) => write!(f, "{}", t),
             Datum::JsonNull => f.write_str("json_null"),
-            Datum::Dummy => f.write_str("dummy"),
             Datum::Range(i) => write!(f, "{}", i),
         }
     }
@@ -2814,7 +2795,6 @@ pub enum PropDatum {
 
     JsonNull,
     Uuid(Uuid),
-    Dummy,
 }
 
 /// Generate an arbitrary [`PropDatum`].
@@ -2849,7 +2829,6 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
         Just(PropDatum::JsonNull).boxed(),
         Just(PropDatum::Uuid(Uuid::nil())).boxed(),
         arb_range().prop_map(PropDatum::Range).boxed(),
-        Just(PropDatum::Dummy).boxed(),
     ]);
     leaf.prop_recursive(3, 8, 16, |inner| {
         Union::new(vec![
@@ -3135,7 +3114,6 @@ impl<'a> From<&'a PropDatum> for Datum<'a> {
             }
             JsonNull => Datum::JsonNull,
             Uuid(u) => Datum::from(*u),
-            Dummy => Datum::Dummy,
         }
     }
 }

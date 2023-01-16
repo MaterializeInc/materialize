@@ -192,12 +192,14 @@ fn evaluate(
         }
     }
 
-    // We pack dummy values in locations that do not reference
-    // specific columns.
+    // We pack `NULL` values in locations that do not reference
+    // specific columns. These values should not be read, and if
+    // they are there is a fundamental error in the `position_or`
+    // argument.
     let mut row_packer = row_buf.packer();
     row_packer.extend(position_or.iter().map(|x| match x {
         Some(column) => datums[*column],
-        None => Datum::Dummy,
+        None => Datum::Null,
     }));
     Ok(Some(row_buf.clone()))
 }

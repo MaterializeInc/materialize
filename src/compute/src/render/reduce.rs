@@ -1078,16 +1078,6 @@ where
                     x, dataflow_id
                 ),
             },
-            AggregateFunc::Dummy => match datum {
-                Datum::Dummy => Accum::SimpleNumber {
-                    accum: 0,
-                    non_nulls: 0,
-                },
-                x => panic!(
-                    "Invalid argument to AggregateFunc::Dummy: {:?} in dataflow id {}",
-                    x, dataflow_id
-                ),
-            },
             AggregateFunc::SumFloat32 | AggregateFunc::SumFloat64 => {
                 let n = match datum {
                     Datum::Float32(n) => f64::from(*n),
@@ -1322,7 +1312,6 @@ where
                                     Datum::Null
                                 }
                             }
-                            (AggregateFunc::Dummy, _) => Datum::Dummy,
                             // If any non-nulls, just report the aggregate.
                             (AggregateFunc::SumInt16, Accum::SimpleNumber { accum, .. })
                             | (AggregateFunc::SumInt32, Accum::SimpleNumber { accum, .. }) => {
@@ -1571,7 +1560,6 @@ pub mod monoids {
             | AggregateFunc::Count
             | AggregateFunc::Any
             | AggregateFunc::All
-            | AggregateFunc::Dummy
             | AggregateFunc::JsonbAgg { .. }
             | AggregateFunc::JsonbObjectAgg { .. }
             | AggregateFunc::ArrayConcat { .. }
