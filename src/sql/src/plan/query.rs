@@ -1228,7 +1228,7 @@ pub fn plan_nested_query(
     qcx: &mut QueryContext,
     q: &Query<Aug>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    let (mut expr, scope, finishing) = plan_query(qcx, q)?;
+    let (mut expr, scope, finishing) = qcx.checked_recur_mut(|qcx| plan_query(qcx, q))?;
     if finishing.limit.is_some() || finishing.offset > 0 {
         expr = HirRelationExpr::TopK {
             input: Box::new(expr),
@@ -1261,8 +1261,9 @@ fn plan_set_expr(
             right,
         } => {
             // Plan the LHS and RHS.
-            let (left_expr, left_scope) = plan_set_expr(qcx, left)?;
-            let (right_expr, right_scope) = plan_set_expr(qcx, right)?;
+            let (left_expr, left_scope) = qcx.checked_recur_mut(|qcx| plan_set_expr(qcx, left))?;
+            let (right_expr, right_scope) =
+                qcx.checked_recur_mut(|qcx| plan_set_expr(qcx, right))?;
 
             // Validate that the LHS and RHS are the same width.
             let left_type = qcx.relation_type(&left_expr);
