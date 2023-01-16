@@ -32,7 +32,7 @@ Pattern example:
 To know the remaining time to live:
 
 ```sql
-  SELECT (expiration_time - mz_now()) AS remaining_ttl
+  SELECT (expiration_time - now()) AS remaining_ttl
   FROM TTL_VIEW;
 ```
 
@@ -67,7 +67,7 @@ For a real-world example of the pattern, let's build a task tracking system. It 
 
 - Query the time to live for a row:
   ```sql
-    SELECT expiration_time - to_timestamp(mz_now()::text::numeric / 1000) AS remaining_ttl
+    SELECT expiration_time - now() AS remaining_ttl
     FROM tracking_tasks
     WHERE name = 'time_to_eat';
   ```
