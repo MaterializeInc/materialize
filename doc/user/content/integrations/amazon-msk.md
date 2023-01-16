@@ -1,10 +1,12 @@
 ---
 title: "Amazon Managed Streaming for Apache Kafka (Amazon MSK)"
-description: "How to securely connect an Amazon Managed Streaming for Apache Kafka (Amazon MSK) cluster as a source to Materialize."
+description: "How to securely connect an Amazon MSK cluster as a source to Materialize."
+aliases:
+  - /integrations/aws-msk/
 menu:
   main:
     parent: "integration-guides"
-    name: "AWS MSK"
+    name: "Amazon MSK"
 ---
 
 This guide goes through the required steps to connect Materialize to an Amazon MSK cluster, including some of the more complicated bits around configuring security settings in Amazon MSK.
@@ -164,4 +166,4 @@ The process to connect Materialize to Amazon MSK consists of the following steps
 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
-- [`CREATE SOURCE`: Apache Kafka](/sql/create-source/kafka/)
+- [`CREATE SOURCE`: Kafka](/sql/create-source/kafka/)
