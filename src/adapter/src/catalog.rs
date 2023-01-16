@@ -27,7 +27,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, Mutex, MutexGuard};
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use mz_audit_log::{
@@ -2738,12 +2738,22 @@ impl Catalog {
             (system_config, boot_ts)
         };
         for (name, value) in &bootstrap_system_parameters {
-            if !system_config.contains_key(name) {
-                self.state.insert_system_configuration(name, value)?;
-            }
+            match self.state.insert_system_configuration(name, value) {
+                Ok(_) => (),
+                Err(AdapterError::UnknownParameter(name)) => {
+                    warn!(%name, "cannot load unknown system parameter from stash");
+                }
+                Err(e) => return Err(e),
+            };
         }
         for (name, value) in system_config {
-            self.state.insert_system_configuration(&name, &value)?;
+            match self.state.insert_system_configuration(&name, &value) {
+                Ok(_) => (),
+                Err(AdapterError::UnknownParameter(name)) => {
+                    warn!(%name, "cannot load unknown system parameter from stash");
+                }
+                Err(e) => return Err(e),
+            };
         }
         if let Some(system_parameter_frontend) = system_parameter_frontend {
             if !self.state.system_config().config_has_synced_once() {
@@ -6261,12 +6271,6 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         self.state.config()
-    }
-
-    fn window_functions(&self) -> bool {
-        // Always enable this feature for system connections in order to protect
-        // the system against breaking when in the Catalog::open re-hydration phase.
-        self.conn_id == SYSTEM_CONN_ID || self.state.system_config().window_functions()
     }
 
     fn now(&self) -> EpochMillis {

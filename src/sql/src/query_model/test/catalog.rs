@@ -299,10 +299,6 @@ impl SessionCatalog for TestCatalog {
         &DUMMY_CONFIG
     }
 
-    fn window_functions(&self) -> bool {
-        true
-    }
-
     fn now(&self) -> EpochMillis {
         (self.config().now)()
     }

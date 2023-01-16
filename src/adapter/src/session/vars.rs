@@ -331,14 +331,6 @@ static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<String>>> = Lazy::new(|
     internal: false,
 });
 
-/// Feature flag indicating whether window functions are enabled.
-static WINDOW_FUNCTIONS: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("window_functions"),
-    value: &true,
-    description: "Feature flag indicating whether window functions are enabled (Materialize).",
-    internal: false,
-};
-
 /// Controls [`PersistConfig::blob_target_size`].
 const PERSIST_BLOB_TARGET_SIZE: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_blob_target_size"),
@@ -1019,7 +1011,7 @@ pub struct SystemVars {
     allowed_cluster_replica_sizes: SystemVar<Vec<String>>, // TODO: BTreeSet<String> will be better
 
     // features
-    window_functions: SystemVar<bool>,
+    // (empty)
 
     // persist configuration
     persist_blob_target_size: SystemVar<usize>,
@@ -1047,7 +1039,6 @@ impl Default for SystemVars {
             max_roles: SystemVar::new(&MAX_ROLES),
             max_result_size: SystemVar::new(&MAX_RESULT_SIZE),
             allowed_cluster_replica_sizes: SystemVar::new(&ALLOWED_CLUSTER_REPLICA_SIZES),
-            window_functions: SystemVar::new(&WINDOW_FUNCTIONS),
             persist_blob_target_size: SystemVar::new(&PERSIST_BLOB_TARGET_SIZE),
             persist_compaction_minimum_timeout: SystemVar::new(&PERSIST_COMPACTION_MINIMUM_TIMEOUT),
             metrics_retention: SystemVar::new(&METRICS_RETENTION),
@@ -1059,7 +1050,7 @@ impl SystemVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 19] = [
+        let vars: [&dyn Var; 18] = [
             &self.config_has_synced_once,
             &self.max_aws_privatelink_connections,
             &self.max_tables,
@@ -1075,7 +1066,6 @@ impl SystemVars {
             &self.max_roles,
             &self.max_result_size,
             &self.allowed_cluster_replica_sizes,
-            &self.window_functions,
             &self.persist_blob_target_size,
             &self.persist_compaction_minimum_timeout,
             &self.metrics_retention,
@@ -1084,7 +1074,8 @@ impl SystemVars {
     }
 
     /// Returns an iterator over the configuration parameters and their current
-    /// values on disk.
+    /// values on disk. Compared to [`SystemVars::iter`], this should omit vars
+    /// that shouldn't be synced by [`crate::config::SystemParameterFrontend`].
     pub fn iter_synced(&self) -> impl Iterator<Item = &dyn Var> {
         self.iter()
             .filter(|v| v.name() != CONFIG_HAS_SYNCED_ONCE.name)
@@ -1136,8 +1127,6 @@ impl SystemVars {
             Ok(&self.max_result_size)
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
             Ok(&self.allowed_cluster_replica_sizes)
-        } else if name == WINDOW_FUNCTIONS.name {
-            Ok(&self.window_functions)
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
             Ok(&self.persist_blob_target_size)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
@@ -1189,8 +1178,6 @@ impl SystemVars {
             self.max_result_size.is_default(value)
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
             self.allowed_cluster_replica_sizes.is_default(value)
-        } else if name == WINDOW_FUNCTIONS.name {
-            self.window_functions.is_default(value)
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
             self.persist_blob_target_size.is_default(value)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
@@ -1251,8 +1238,6 @@ impl SystemVars {
             self.max_result_size.set(value)
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
             self.allowed_cluster_replica_sizes.set(value)
-        } else if name == WINDOW_FUNCTIONS.name {
-            self.window_functions.set(value)
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
             self.persist_blob_target_size.set(value)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
@@ -1308,8 +1293,6 @@ impl SystemVars {
             Ok(self.max_result_size.reset())
         } else if name == ALLOWED_CLUSTER_REPLICA_SIZES.name {
             Ok(self.allowed_cluster_replica_sizes.reset())
-        } else if name == WINDOW_FUNCTIONS.name {
-            Ok(self.window_functions.reset())
         } else if name == PERSIST_BLOB_TARGET_SIZE.name {
             Ok(self.persist_blob_target_size.reset())
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
@@ -1396,11 +1379,6 @@ impl SystemVars {
         self.allowed_cluster_replica_sizes.value()
     }
 
-    /// Returns the `window_functions` configuration parameter.
-    pub fn window_functions(&self) -> bool {
-        *self.window_functions.value()
-    }
-
     /// Returns the `persist_blob_target_size` configuration parameter.
     pub fn persist_blob_target_size(&self) -> usize {
         *self.persist_blob_target_size.value()
@@ -1411,6 +1389,7 @@ impl SystemVars {
         *self.persist_compaction_minimum_timeout.value()
     }
 
+    /// Returns the `metrics_retention` configuration parameter.
     pub fn metrics_retention(&self) -> Duration {
         *self.metrics_retention.value()
     }
