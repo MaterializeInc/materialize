@@ -124,6 +124,9 @@ struct Args {
     /// Inject `CREATE INDEX` after all `CREATE TABLE` statements.
     #[clap(long)]
     auto_index_tables: bool,
+    /// Run Materialize with persisted introspection sources enabled.
+    #[clap(long)]
+    persisted_introspection: bool,
 }
 
 #[tokio::main]
@@ -141,6 +144,7 @@ async fn main() {
         no_fail: args.no_fail,
         fail_fast: args.fail_fast,
         auto_index_tables: args.auto_index_tables,
+        persisted_introspection: args.persisted_introspection,
     };
 
     if args.rewrite_results {
