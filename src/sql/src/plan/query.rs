@@ -1373,17 +1373,38 @@ fn plan_set_expr(
                 }
                 SetOperator::Except => Hir::except(all, lhs, rhs),
                 SetOperator::Intersect => {
-                    // TODO: Let's not duplicate the left-hand expression into TWO dataflows!
-                    // Though we believe that render() does The Right Thing (TM)
-                    // Also note that we do *not* need another threshold() at the end of the method chain
+                    // XXX not sure if I need to thread in an IdGen in
+                    // QueryContext here, and whether that needs to
+                    // interact with CTE's LocalIds and therefore be
+                    // the same generator.  These Gets are always
+                    // immediate children of the Let(Union(...)), so
+                    // my assumption is that as long as ID shadowing
+                    // works, this should be fine.  But I'm wary of
+                    // some kind of movement I don't expect here.
+                    let id = LocalId::new(0);
+                    let lhs_get = HirRelationExpr::Get {
+                        id: mz_expr::Id::Local(id),
+                        typ: left_type.clone(),
+                    };
+
+                    // Note that we do *not* need another threshold() at the end of the method chain
                     // because the right-hand side of the outer union only produces existing records,
                     // i.e., the record counts for differential data flow definitely remain non-negative.
-                    let left_clone = lhs.clone();
-                    if *all {
-                        lhs.union(left_clone.union(rhs.negate()).threshold().negate())
+                    let body = if *all {
+                        lhs_get
+                            .clone()
+                            .union(lhs_get.union(rhs.negate()).threshold().negate())
                     } else {
-                        lhs.union(left_clone.union(rhs.negate()).threshold().negate())
+                        lhs_get
+                            .clone()
+                            .union(lhs_get.union(rhs.negate()).threshold().negate())
                             .distinct()
+                    };
+                    HirRelationExpr::Let {
+                        name: "lhs".to_owned(),
+                        id,
+                        value: Box::new(lhs),
+                        body: Box::new(body),
                     }
                 }
             };
