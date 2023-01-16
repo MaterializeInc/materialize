@@ -347,7 +347,6 @@ impl ErrorResponse {
             AdapterError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
             AdapterError::PlanError(_) => SqlState::INTERNAL_ERROR,
             AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
-            AdapterError::QGM(_) => SqlState::INTERNAL_ERROR,
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
             AdapterError::ReadWriteUnavailable => SqlState::INVALID_TRANSACTION_STATE,

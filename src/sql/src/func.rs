@@ -1709,7 +1709,7 @@ macro_rules! impl_def {
     // Return type can be automatically determined as a function of the
     // parameters.
     ($params:expr, $op:expr, $oid:expr) => {{
-        let pcx = crate::plan::PlanContext::new(DateTime::<Utc>::MIN_UTC, false);
+        let pcx = crate::plan::PlanContext::new(DateTime::<Utc>::MIN_UTC);
         let scx = StatementContext::new(None, &crate::catalog::DummyCatalog);
         // This lifetime is compatible with more functions.
         let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(&pcx));

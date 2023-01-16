@@ -9,30 +9,19 @@
 
 ///! This module defines the API and logic for running optimization pipelines.
 use crate::plan::expr::HirRelationExpr;
-use crate::query_model::{Model, QGMError};
 
 use super::{PlanError, StatementContext};
 
 /// Feature flags for the [`HirRelationExpr::optimize_and_lower()`] logic.
 #[derive(Debug)]
 pub struct OptimizerConfig {
-    pub qgm_optimizations: bool,
+    // TODO: add parameters driving the optimization pass here
 }
 
 /// Convert a reference to a [`StatementContext`] to an [`OptimizerConfig`].
-///
-/// This picks up feature flag values such as `qgm_optimizations` from the `PlanContext` if this is present in
-/// the [`StatementContext`], otherwise uses sensible defaults.
 impl<'a> From<&StatementContext<'a>> for OptimizerConfig {
-    fn from(scx: &StatementContext) -> Self {
-        match scx.pcx() {
-            Ok(pcx) => OptimizerConfig {
-                qgm_optimizations: pcx.qgm_optimizations,
-            },
-            Err(..) => OptimizerConfig {
-                qgm_optimizations: false,
-            },
-        }
+    fn from(_scx: &StatementContext) -> Self {
+        OptimizerConfig {}
     }
 }
 
@@ -42,39 +31,8 @@ impl HirRelationExpr {
     /// The optimization path is fully-determined by the values of the feature flag defined in the [`OptimizerConfig`].
     pub fn optimize_and_lower(
         self,
-        config: &OptimizerConfig,
+        _config: &OptimizerConfig,
     ) -> Result<mz_expr::MirRelationExpr, PlanError> {
-        if config.qgm_optimizations {
-            // try to go through the QGM path
-            self.try_qgm_path().map_err(Into::into)
-        } else {
-            // directly decorrelate and lower into a MirRelationExpr
-            Ok(self.lower())
-        }
-    }
-
-    /// Attempt an optimization path from HIR to MIR that goes through a QGM representation.
-    ///
-    /// Return `Result::Err` if the path is not possible.
-    #[tracing::instrument(target = "optimizer", level = "debug", name = "qgm", skip_all)]
-    fn try_qgm_path(self) -> Result<mz_expr::MirRelationExpr, QGMError> {
-        // create a query graph model from this HirRelationExpr
-        let mut model = Model::try_from(self)?;
-
-        tracing::span!(tracing::Level::INFO, "raw").in_scope(|| {
-            // TODO: this requires to implement Clone for Model
-            // mz_repr::explain_new::trace_plan(model);
-        });
-
-        // perform optimizing algebraic rewrites on the qgm
-        model.optimize();
-
-        tracing::span!(tracing::Level::INFO, "raw").in_scope(|| {
-            // TODO: this requires to implement Clone for Model
-            // mz_repr::explain_new::trace_plan(model);
-        });
-
-        // decorrelate and lower the optimized query graph model into a MirRelationExpr
-        model.try_into()
+        Ok(self.lower())
     }
 }

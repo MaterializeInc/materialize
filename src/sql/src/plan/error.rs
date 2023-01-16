@@ -34,7 +34,6 @@ use crate::names::PartialObjectName;
 use crate::names::ResolvedObjectName;
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
-use crate::query_model::QGMError;
 
 #[derive(Clone, Debug)]
 pub enum PlanError {
@@ -83,7 +82,6 @@ pub enum PlanError {
     InvalidSecret(ResolvedObjectName),
     InvalidTemporarySchema,
     Parser(ParserError),
-    Qgm(QGMError),
     DropViewOnMaterializedView(String),
     DropSubsource {
         subsource: String,
@@ -319,7 +317,6 @@ impl fmt::Display for PlanError {
             Self::Unstructured(e) => write!(f, "{}", e),
             Self::InvalidObject(i) => write!(f, "{} is not a database object", i.full_name_str()),
             Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
-            Self::Qgm(e) => e.fmt(f),
             Self::InvalidTemporarySchema => {
                 write!(f, "cannot create temporary item in non-temporary schema")
             }
@@ -452,12 +449,6 @@ impl From<EvalError> for PlanError {
 impl From<ParserError> for PlanError {
     fn from(e: ParserError) -> PlanError {
         PlanError::Parser(e)
-    }
-}
-
-impl From<QGMError> for PlanError {
-    fn from(e: QGMError) -> PlanError {
-        PlanError::Qgm(e)
     }
 }
 

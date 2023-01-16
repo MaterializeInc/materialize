@@ -104,13 +104,6 @@ EXPLAIN TIMESTAMP AS TEXT FOR SELECT 1
 Explain(ExplainStatement { stage: Timestamp, config_flags: [], format: Text, explainee: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) })
 
 parse-statement
-EXPLAIN OPTIMIZED QUERY GRAPH WITH (monotonicity, types) AS TEXT FOR VIEW foo
-----
-EXPLAIN OPTIMIZED QUERY GRAPH WITH(monotonicity, types) AS TEXT FOR VIEW foo
-=>
-Explain(ExplainStatement { stage: OptimizedQueryGraph, config_flags: [Ident("monotonicity"), Ident("types")], format: Text, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))) })
-
-parse-statement
 EXPLAIN AS JSON SELECT * FROM foo
 ----
 EXPLAIN OPTIMIZED PLAN AS JSON FOR SELECT * FROM foo
