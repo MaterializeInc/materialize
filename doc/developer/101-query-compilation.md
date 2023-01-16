@@ -85,29 +85,6 @@ Existing "fast paths" include:
 
 Currently, the optimization team is mostly concerned with the `HIR ⇒ MIR` and `MIR ⇒ MIR` stages.
 
-<!--
-# Future Pipeline
-
-[Diagram](https://docs.google.com/drawings/d/1Fil1-oYy3PkP3bD7WoZphW319Pj60cMAs2HcS9A21uo/edit)
-
-[Design doc](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210707_qgm_sql_high_level_representation.md)
-
-* [`SQL ⇒ AST`](https://github.com/MaterializeInc/materialize/blob/main/src/sql-parser).
-    * Parsing the SQL query
-* `AST ⇒ QGM`.
-    * Name resolution.
-* `QGM ⇒ QGM`.
-    * Optimizing rewrites + decorrelation + more optimizing rewrites.
-* `QGM ⇒ MIR`.
-    * Lowering.
-* [`MIR ⇒ MIR`](https://github.com/MaterializeInc/materialize/blob/main/src/transform).
-    * Optimizations. What this looks like is to be determined.
-        * Some optimizations may become redundant after optimizing rewrites are added.
-        * Note that we may be able to eliminate the per-view/cross-view distinction by modifying MIR to have more than one starting point.
-* `MIR ⇒ LIR`.
-* `LIR ⇒ TDO`.
--->
-
 ## Testing
 
 ### Integration tests
