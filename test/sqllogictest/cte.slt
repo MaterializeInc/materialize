@@ -242,3 +242,10 @@ WITH outermost(x) AS (
          UNION SELECT * FROM innermost)
 )
 SELECT * FROM outermost ORDER BY 1;
+
+# INTERSECT now introduces a binding; make sure it doesn't interact with CTE
+query I
+WITH q AS (SELECT 42),
+     p AS (SELECT 1)
+SELECT * FROM p INTERSECT SELECT * FROM q;
+----
