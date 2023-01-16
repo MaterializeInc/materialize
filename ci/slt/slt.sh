@@ -34,3 +34,8 @@ sqllogictest --auto-index-tables \
     -v "$@" \
     test/sqllogictest/sqlite/test \
     | tee -a target/slt.log
+
+sqllogictest --persisted-introspection \
+    -v "$@" \
+    test/sqllogictest/introspection/*.slt \
+    | tee -a target/slt.log

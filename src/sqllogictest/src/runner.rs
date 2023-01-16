@@ -845,7 +845,7 @@ impl RunnerInner {
             frontegg: None,
             cors_allowed_origin: AllowOrigin::list([]),
             unsafe_mode: true,
-            persisted_introspection: true,
+            persisted_introspection: config.persisted_introspection,
             metrics_registry,
             now,
             environment_id,
@@ -1327,6 +1327,7 @@ pub struct RunConfig<'a> {
     pub no_fail: bool,
     pub fail_fast: bool,
     pub auto_index_tables: bool,
+    pub persisted_introspection: bool,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {

@@ -12,9 +12,6 @@ mode cockroach
 query error system schema 'mz_catalog.mz_tables' cannot be modified
 ALTER TABLE mz_tables RENAME TO foo;
 
-query error system schema 'mz_internal.mz_dataflow_channels' cannot be modified
-ALTER SOURCE mz_internal.mz_dataflow_channels RENAME TO foo;
-
 query error system schema 'mz_internal.mz_storage_shards' cannot be modified
 ALTER SOURCE mz_internal.mz_storage_shards RENAME TO foo;
 

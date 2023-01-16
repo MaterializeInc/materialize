@@ -9,12 +9,6 @@
 
 mode cockroach
 
-query error cannot show create for system object mz_internal.mz_dataflow_channels
-SHOW CREATE SOURCE mz_internal.mz_dataflow_channels
-
-query error cannot show create for system object mz_internal.mz_dataflow_channels_1
-SHOW CREATE SOURCE mz_internal.mz_dataflow_channels_1
-
 query error cannot show create for system object mz_internal.mz_storage_shards
 SHOW CREATE SOURCE mz_internal.mz_storage_shards
 
