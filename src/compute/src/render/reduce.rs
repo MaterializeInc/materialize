@@ -27,7 +27,7 @@ use mz_expr::MirScalarExpr;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
-use tracing::error;
+use tracing::warn;
 
 use mz_compute_client::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
@@ -292,12 +292,11 @@ where
     G::Timestamp: Lattice,
 {
     // we must have more than one arrangement to collate
-    soft_assert_or_log!(
-        arrangements.len() > 1,
-        "Building a collation of {} arrangements, but expected more than one in dataflow {}",
-        arrangements.len(),
-        debug_name
-    );
+    if arrangements.len() <= 1 {
+        warn!("Building a collation of {} arrangements, but expected more than one in dataflow {debug_name}",
+            arrangements.len());
+        soft_assert_or_log!(true, "Incorrect number of arrangements in reduce collation");
+    }
 
     let mut to_concat = vec![];
 
@@ -329,11 +328,10 @@ where
                 // We expect not to have any negative multiplicities, but are not 100% sure it will
                 // never happen so for now just log an error if it does.
                 for (val, cnt) in input.iter() {
-                    soft_assert_or_log!(
-                        *cnt >= 0,
-                        "[customer-data] Negative accumulation in ReduceCollation: {:?} with count {:?} in dataflow {}",
-                        val, cnt, debug_name
-                    );
+                    if *cnt < 0 {
+                        warn!("[customer-data] Negative accumulation in ReduceCollation: {val:?} with count {cnt:?} in dataflow {debug_name}");
+                        soft_assert_or_log!(true, "Negative accumulation in ReduceCollation");
+                    }
                 }
 
                 for ((reduction_type, row), _) in input.iter() {
@@ -441,11 +439,10 @@ where
 {
     // We are only using this function to render multiple basic aggregates and
     // stitch them together. If that's not true we should complain.
-    soft_assert_or_log!(
-        aggrs.len() > 1,
-        "Unexpectedly computing {} basic aggregations together but we expected to be doing more than one in dataflow {}",
-        aggrs.len(), debug_name
-    );
+    if aggrs.len() <= 1 {
+        warn!("Unexpectedly computing {} basic aggregations together, but we expected to be doing more than one in dataflow {debug_name}", aggrs.len());
+        soft_assert_or_log!(true, "Too few aggregations when building basic aggregates");
+    }
     let mut to_collect = Vec::new();
     for (index, aggr) in aggrs {
         let result = build_basic_aggregate(debug_name, input.clone(), index, &aggr);
@@ -510,11 +507,10 @@ where
             if source.iter().any(|(_val, cnt)| cnt < &0) {
                 // XXX: This reports user data, which we perhaps should not do!
                 for (val, cnt) in source.iter() {
-                    soft_assert_or_log!(
-                        *cnt >= 0,
-                        "[customer-data] Negative accumulation in ReduceInaccumulable: {:?} with count {:?} in dataflow {}",
-                        val, cnt, debug_name
-                    );
+                    if *cnt < 0 {
+                        warn!("[customer-data] Negative accumulation in ReduceInaccumulable: {val:?} with count {cnt:?} in dataflow {debug_name}");
+                        soft_assert_or_log!(true, "Negative accumulation in ReduceInaccumulable");
+                    }
                 }
             } else {
                 // We respect the multiplicity here (unlike in hierarchical aggregation)
@@ -595,7 +591,8 @@ where
                     // XXX: This reports user data, which we perhaps should not do!
                     for (val, cnt) in source.iter() {
                         if cnt < &0 {
-                            error!("[customer-data] Negative accumulation in ReduceMinsMaxes: {:?} with count {:?} in dataflow {}", val, cnt, debug_name);
+                            warn!("[customer-data] Negative accumulation in ReduceMinsMaxes: {val:?} with count {cnt:?} in dataflow {debug_name}");
+                            soft_assert_or_log!(true, "Negative accumulation in ReduceMinsMaxes");
                         }
                     }
                 } else {
@@ -640,11 +637,13 @@ where
                 if source.iter().any(|(_val, cnt)| cnt <= &0) {
                     for (val, cnt) in source.iter() {
                         // XXX: This reports user data, which we perhaps should not do!
-                        soft_assert_or_log!(
-                            *cnt > 0,
-                            "[customer-data] Non-positive accumulation in MinsMaxesHierarchical: key: {:?}\tvalue: {:?}\tcount: {:?} in dataflow {}",
-                            key, val, cnt, debug_name
-                        );
+                        if *cnt <= 0 {
+                            warn!("[customer-data] Non-positive accumulation in MinsMaxesHierarchical: key: {key:?}\tvalue: {val:?}\tcount: {cnt:?} in dataflow {debug_name}");
+                            soft_assert_or_log!(
+                                true,
+                                "Non-positive accumulation in MinsMaxesHierarchical"
+                            );
+                        }
                     }
                 } else {
                     let mut output = Vec::with_capacity(aggrs.len());
@@ -864,7 +863,7 @@ impl Semigroup for Accum {
                 },
             ) => {
                 *accum = accum.checked_add(*other_accum).unwrap_or_else(|| {
-                    tracing::warn!("Float accumulator overflow. Incorrect results possible");
+                    warn!("Float accumulator overflow. Incorrect results possible");
                     accum.wrapping_add(*other_accum)
                 });
                 *pos_infs += other_pos_infs;
@@ -921,8 +920,7 @@ impl Semigroup for Accum {
                 *non_nulls += other_non_nulls;
             }
             (l, r) => unreachable!(
-                "Accumulator::plus_equals called with non-matching variants: {:?} vs {:?}",
-                l, r
+                "Accumulator::plus_equals called with non-matching variants: {l:?} vs {r:?}"
             ),
         }
     }
@@ -950,7 +948,7 @@ impl Multiply<Diff> for Accum {
                 non_nulls,
             } => Accum::Float {
                 accum: accum.checked_mul(i128::from(factor)).unwrap_or_else(|| {
-                    tracing::warn!("Float accumulator overflow. Incorrect results possible");
+                    warn!("Float accumulator overflow. Incorrect results possible");
                     accum.wrapping_mul(i128::from(factor))
                 }),
                 pos_infs: pos_infs * factor,
@@ -1009,11 +1007,14 @@ where
     G::Timestamp: Lattice,
 {
     // we must have called this function with something to reduce
-    soft_assert_or_log!(
-        full_aggrs.len() > 0 && (simple_aggrs.len() + distinct_aggrs.len() == full_aggrs.len()),
-        "Building arrangement for accumulable plan requires aggregates ({} found) and that their counts match ({} + {}) in dataflow {}",
-        full_aggrs.len(), simple_aggrs.len(), distinct_aggrs.len(), debug_name
-    );
+    if full_aggrs.len() == 0 || simple_aggrs.len() + distinct_aggrs.len() != full_aggrs.len() {
+        warn!("Building arrangement for accumulable plan requires aggregates ({} found) and that their counts match ({} + {}) in dataflow {debug_name}",
+            full_aggrs.len(), simple_aggrs.len(), distinct_aggrs.len());
+        soft_assert_or_log!(
+            true,
+            "Incorrect numbers of aggregates in accummulable reduction rendering"
+        );
+    }
 
     // Some of the aggregations may have the `distinct` bit set, which means that they'll
     // need to be extracted from `collection` and be subjected to `distinct` with `key`.
@@ -1079,21 +1080,21 @@ where
                     trues: 0,
                     falses: 1,
                 },
-                x => panic!("Invalid argument to AggregateFunc::Any: {:?}", x),
+                x => panic!("Invalid argument to AggregateFunc::Any: {x:?}"),
             },
             AggregateFunc::Dummy => match datum {
                 Datum::Dummy => Accum::SimpleNumber {
                     accum: 0,
                     non_nulls: 0,
                 },
-                x => panic!("Invalid argument to AggregateFunc::Dummy: {:?}", x),
+                x => panic!("Invalid argument to AggregateFunc::Dummy: {x:?}"),
             },
             AggregateFunc::SumFloat32 | AggregateFunc::SumFloat64 => {
                 let n = match datum {
                     Datum::Float32(n) => f64::from(*n),
                     Datum::Float64(n) => *n,
                     Datum::Null => 0f64,
-                    x => panic!("Invalid argument to AggregateFunc::{:?}: {:?}", aggr, x),
+                    x => panic!("Invalid argument to AggregateFunc::{aggr:?}: {x:?}"),
                 };
 
                 let nans = Diff::from(n.is_nan());
@@ -1154,7 +1155,7 @@ where
                     nans: 0,
                     non_nulls: 0,
                 },
-                x => panic!("Invalid argument to AggregateFunc::SumNumeric: {:?}", x),
+                x => panic!("Invalid argument to AggregateFunc::SumNumeric: {x:?}"),
             },
             _ => {
                 // Other accumulations need to disentangle the accumulable
@@ -1193,7 +1194,7 @@ where
                         accum: 0,
                         non_nulls: 0,
                     },
-                    x => panic!("Accumulating non-integer data: {:?}", x),
+                    x => panic!("Accumulating non-integer data: {x:?}"),
                 }
             }
         }
@@ -1272,14 +1273,11 @@ where
                     // operator, when this key is presented but matching aggregates are not found. We will
                     // suppress the output for inputs without net-positive records, which *should* avoid
                     // that panic.
-                    soft_assert_or_log!(
-                        total != 0 || accum.is_zero(),
-                        "[customer-data] ReduceAccumulable observed net-zero records \
-                        with non-zero accumulation: {:?}: {:?} in dataflow {}",
-                        aggr,
-                        accum,
-                        debug_name
-                    );
+                    if total == 0 && !accum.is_zero() {
+                        warn!("[customer-data] ReduceAccumulable observed net-zero records \
+                            with non-zero accumulation: {aggr:?}: {accum:?} in dataflow {debug_name}");
+                        soft_assert_or_log!(true, "Net-zero records with non-zero accumulation in ReduceAccumulable");
+                    }
 
                     // The finished value depends on the aggregation function in a variety of ways.
                     // For all aggregates but count, if only null values were
@@ -1335,7 +1333,7 @@ where
                             | (
                                 AggregateFunc::SumUInt32,
                                 Accum::SimpleNumber { accum, .. },
-                            ) => Datum::UInt64(u64::try_from(*accum).unwrap_or_else(|_| panic!("Invalid accumulated result {accum} for unsigned function in dataflow {}", debug_name))),
+                            ) => Datum::UInt64(u64::try_from(*accum).unwrap_or_else(|_| panic!("Invalid accumulated result {accum} for unsigned function in dataflow {debug_name}"))),
                             (
                                 AggregateFunc::SumUInt64,
                                 Accum::SimpleNumber { accum, .. },
@@ -1429,8 +1427,8 @@ where
                                 }
                             }
                             _ => panic!(
-                                "Unexpected accumulation (aggr={:?}, accum={:?}) in dataflow {}",
-                                aggr.func, accum, debug_name
+                                "Unexpected accumulation (aggr={:?}, accum={accum:?}) in dataflow {debug_name}",
+                                aggr.func
                             ),
                         }
                     };
@@ -1504,9 +1502,7 @@ pub mod monoids {
                 }
                 (lhs, rhs) => {
                     soft_panic_or_log!(
-                        "Mismatched monoid variants in reduction! lhs: {:?} rhs: {:?}",
-                        lhs,
-                        rhs
+                        "Mismatched monoid variants in reduction! lhs: {lhs:?} rhs: {rhs:?}"
                     );
                 }
             }
