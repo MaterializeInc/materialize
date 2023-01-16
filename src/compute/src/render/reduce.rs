@@ -295,7 +295,7 @@ where
     if arrangements.len() <= 1 {
         warn!("Building a collation of {} arrangements, but expected more than one in dataflow {debug_name}",
             arrangements.len());
-        soft_assert_or_log!(true, "Incorrect number of arrangements in reduce collation");
+        soft_assert_or_log!(false, "Incorrect number of arrangements in reduce collation");
     }
 
     let mut to_concat = vec![];
@@ -330,7 +330,7 @@ where
                 for (val, cnt) in input.iter() {
                     if *cnt < 0 {
                         warn!("[customer-data] Negative accumulation in ReduceCollation: {val:?} with count {cnt:?} in dataflow {debug_name}");
-                        soft_assert_or_log!(true, "Negative accumulation in ReduceCollation");
+                        soft_assert_or_log!(false, "Negative accumulation in ReduceCollation");
                     }
                 }
 
@@ -441,7 +441,7 @@ where
     // stitch them together. If that's not true we should complain.
     if aggrs.len() <= 1 {
         warn!("Unexpectedly computing {} basic aggregations together, but we expected to be doing more than one in dataflow {debug_name}", aggrs.len());
-        soft_assert_or_log!(true, "Too few aggregations when building basic aggregates");
+        soft_assert_or_log!(false, "Too few aggregations when building basic aggregates");
     }
     let mut to_collect = Vec::new();
     for (index, aggr) in aggrs {
@@ -509,7 +509,7 @@ where
                 for (val, cnt) in source.iter() {
                     if *cnt < 0 {
                         warn!("[customer-data] Negative accumulation in ReduceInaccumulable: {val:?} with count {cnt:?} in dataflow {debug_name}");
-                        soft_assert_or_log!(true, "Negative accumulation in ReduceInaccumulable");
+                        soft_assert_or_log!(false, "Negative accumulation in ReduceInaccumulable");
                     }
                 }
             } else {
@@ -592,7 +592,7 @@ where
                     for (val, cnt) in source.iter() {
                         if cnt < &0 {
                             warn!("[customer-data] Negative accumulation in ReduceMinsMaxes: {val:?} with count {cnt:?} in dataflow {debug_name}");
-                            soft_assert_or_log!(true, "Negative accumulation in ReduceMinsMaxes");
+                            soft_assert_or_log!(false, "Negative accumulation in ReduceMinsMaxes");
                         }
                     }
                 } else {
@@ -640,7 +640,7 @@ where
                         if *cnt <= 0 {
                             warn!("[customer-data] Non-positive accumulation in MinsMaxesHierarchical: key: {key:?}\tvalue: {val:?}\tcount: {cnt:?} in dataflow {debug_name}");
                             soft_assert_or_log!(
-                                true,
+                                false,
                                 "Non-positive accumulation in MinsMaxesHierarchical"
                             );
                         }
@@ -1011,7 +1011,7 @@ where
         warn!("Building arrangement for accumulable plan requires aggregates ({} found) and that their counts match ({} + {}) in dataflow {debug_name}",
             full_aggrs.len(), simple_aggrs.len(), distinct_aggrs.len());
         soft_assert_or_log!(
-            true,
+            false,
             "Incorrect numbers of aggregates in accummulable reduction rendering"
         );
     }
@@ -1276,7 +1276,7 @@ where
                     if total == 0 && !accum.is_zero() {
                         warn!("[customer-data] ReduceAccumulable observed net-zero records \
                             with non-zero accumulation: {aggr:?}: {accum:?} in dataflow {debug_name}");
-                        soft_assert_or_log!(true, "Net-zero records with non-zero accumulation in ReduceAccumulable");
+                        soft_assert_or_log!(false, "Net-zero records with non-zero accumulation in ReduceAccumulable");
                     }
 
                     // The finished value depends on the aggregation function in a variety of ways.
