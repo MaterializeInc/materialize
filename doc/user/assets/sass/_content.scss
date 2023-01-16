@@ -323,10 +323,8 @@ p+p {
         line-height: 2.1rem;
 
         @media(max-width: 500px) {
-            font-size: var(--xsm);
-
             code {
-                font-size: 1.1rem;
+                font-size: var(--xsm);
             }
         }
     }
@@ -691,8 +689,8 @@ p+p {
         overflow-x: scroll;
 
         padding-bottom: var(--xx-small);
-        @media(max-width: 850px) {
-        }
+
+        @media(max-width: 850px) {}
 
         li {
             display: inline-block;
