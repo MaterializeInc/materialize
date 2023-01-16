@@ -62,8 +62,8 @@ use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 
 use crate::catalog::builtin::{
-    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_INTROSPECTION_COMPUTE_INSTANCE,
-    MZ_INTROSPECTION_ROLE, MZ_SYSTEM_COMPUTE_INSTANCE, PG_CATALOG_SCHEMA,
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_INTROSPECTION_ROLE,
+    PG_CATALOG_SCHEMA,
 };
 use crate::catalog::{
     self, Catalog, CatalogItem, ComputeInstance, Connection, DataSourceDesc, Ingestion,
@@ -3871,18 +3871,6 @@ impl Coordinator {
                 return Err(AdapterError::Unauthorized(
                     "user 'mz_introspection' is unauthorized to perform this action".into(),
                 ))
-            }
-        }
-
-        if let Ok(active_compute_instance) = self.catalog.active_compute_instance(session) {
-            let active_compute_instance = active_compute_instance.name();
-            if (matches!(plan, Plan::Peek(_)) || matches!(plan, Plan::Subscribe(_)))
-                && active_compute_instance != MZ_INTROSPECTION_COMPUTE_INSTANCE.name
-                && active_compute_instance != MZ_SYSTEM_COMPUTE_INSTANCE.name
-            {
-                return Err(AdapterError::Unauthorized(format!(
-                    "user 'mz_introspection' is unauthorized to use cluster {active_compute_instance}",
-                )));
             }
         }
 
