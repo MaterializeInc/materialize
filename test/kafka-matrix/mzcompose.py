@@ -18,19 +18,20 @@ from materialize.mzcompose.services import (
 )
 
 CONFLUENT_PLATFORM_VERSIONS = [
-    "4.1.4",
-    "5.5.0",
-    "6.0.6",
-    "6.1.5",
-    "6.2.4",
-    "7.0.3",
-    "7.1.1",
+    "5.5.11",
+    "6.0.11",
+    "6.1.9",
+    "6.2.8",
+    "7.0.7",
+    "7.1.5",
+    "7.2.3",
+    "7.3.1",
     "latest",
 ]
 
 SERVICES = [
     Materialized(),
-    Testdrive(volumes_extra=["../testdrive:/workdir/testdrive"]),
+    Testdrive(volumes_extra=["../testdrive:/workdir/testdrive"], default_timeout="60s"),
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
