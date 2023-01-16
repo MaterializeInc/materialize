@@ -1976,15 +1976,16 @@ fn test_introspection_user_permissions() {
     introspection_client
         .batch_execute("SET CLUSTER TO 'default'")
         .unwrap();
+    assert!(introspection_client.query("SELECT * FROM t1", &[]).is_err());
     assert!(introspection_client
         .query("SELECT * FROM mz_internal.mz_view_keys", &[])
-        .is_err());
+        .is_ok());
     assert!(introspection_client
         .query("SELECT * FROM mz_catalog.mz_tables", &[])
-        .is_err());
+        .is_ok());
     assert!(introspection_client
         .query("SELECT * FROM pg_catalog.pg_namespace", &[])
-        .is_err());
+        .is_ok());
 }
 
 #[test]
