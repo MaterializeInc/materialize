@@ -283,3 +283,24 @@ class DataflowsLarge(Scenario):
             Ingest: 50,
             DML: 50,
         }
+
+
+class NoKilling(Scenario):
+    """A Zippy scenario that does not involve any killing."""
+
+    def bootstrap(self) -> List[ActionOrFactory]:
+        return DEFAULT_BOOTSTRAP
+
+    def config(self) -> Dict[ActionOrFactory, float]:
+        return {
+            CreateTableParameterized(max_tables=2): 10,
+            CreateTopicParameterized(max_topics=2, envelopes=[Envelope.UPSERT]): 10,
+            CreateSourceParameterized(max_sources=10): 10,
+            CreateViewParameterized(
+                max_views=5, expensive_aggregates=True, max_inputs=5
+            ): 10,
+            CreateSinkParameterized(max_sinks=10): 10,
+            ValidateView: 10,
+            Ingest: 50,
+            DML: 50,
+        }
