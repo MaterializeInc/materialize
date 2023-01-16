@@ -295,7 +295,10 @@ where
     if arrangements.len() <= 1 {
         warn!("Building a collation of {} arrangements, but expected more than one in dataflow {debug_name}",
             arrangements.len());
-        soft_assert_or_log!(false, "Incorrect number of arrangements in reduce collation");
+        soft_assert_or_log!(
+            false,
+            "Incorrect number of arrangements in reduce collation"
+        );
     }
 
     let mut to_concat = vec![];
