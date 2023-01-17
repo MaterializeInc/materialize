@@ -170,6 +170,14 @@ impl<T> Instance<T> {
     pub fn replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
         self.replicas.keys().copied()
     }
+
+    /// Return the IDs of in-progress subscribes targeting the specified replica.
+    fn subscribes_targeting(&self, replica_id: ReplicaId) -> impl Iterator<Item = GlobalId> + '_ {
+        self.subscribes.iter().filter_map(move |(id, subscribe)| {
+            let targeting = subscribe.target_replica == Some(replica_id);
+            targeting.then_some(*id)
+        })
+    }
 }
 
 impl<T> Instance<T>
@@ -465,6 +473,23 @@ where
             }
         }
         self.remove_peeks(&peeks_to_remove);
+
+        // Subscribes targeting this replica either won't be served anymore (if the replica is
+        // dropped) or might produce inconsistent output (if the target collection is an
+        // introspection index). We produce an error to inform upstream.
+        let to_drop: Vec<_> = self.compute.subscribes_targeting(id).collect();
+        for subscribe_id in to_drop {
+            let subscribe = self.compute.subscribes.remove(&subscribe_id).unwrap();
+            let response = ComputeControllerResponse::SubscribeResponse(
+                subscribe_id,
+                SubscribeResponse::Batch(SubscribeBatch {
+                    lower: subscribe.frontier.clone(),
+                    upper: subscribe.frontier,
+                    updates: Err("target replica failed or was dropped".into()),
+                }),
+            );
+            self.compute.ready_responses.push_back(response);
+        }
 
         self.compute
             .replicas
