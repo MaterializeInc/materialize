@@ -621,7 +621,7 @@ mod tests {
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::{PersistConfig, PersistLocation, ShardId};
-    use mz_repr::{GlobalId, Timestamp};
+    use mz_repr::{GlobalId, RelationDesc, Timestamp};
     use mz_storage_client::controller::CollectionMetadata;
     use mz_storage_client::types::sources::{MzOffset, SourceData};
     use mz_storage_client::util::remap_handle::RemapHandle;
@@ -660,6 +660,7 @@ mod tests {
             remap_shard: shard,
             data_shard: ShardId::new(),
             status_shard: None,
+            relation_desc: RelationDesc::empty(),
         };
 
         let clock_stream = futures::stream::iter((0..).map(|seconds| {

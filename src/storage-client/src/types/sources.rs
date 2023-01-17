@@ -102,6 +102,7 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
                 data_shard,
                 // The status shard only contains non-definite status updates
                 status_shard: _,
+                relation_desc: _,
             } = &export.storage_metadata;
             let handle = client_cache
                 .open(persist_location.clone())
@@ -122,6 +123,7 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
             data_shard: _,
             // The status shard only contains non-definite status updates
             status_shard: _,
+            relation_desc: _,
         } = &self.ingestion_metadata;
         let remap_handle = client_cache
             .open(persist_location.clone())

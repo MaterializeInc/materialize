@@ -134,6 +134,7 @@ impl Coordinator {
                     // return it below, so that its usage is recorded in the
                     // `mz_storage_usage_by_shard` table.
                     persist_location: _,
+                    relation_desc: _,
                 } = &collection.collection_metadata;
                 [*data_shard, *remap_shard].into_iter().chain(*status_shard)
             })

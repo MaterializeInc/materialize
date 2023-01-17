@@ -426,16 +426,18 @@ impl<T: Timestamp> ReadPolicy<T> {
 }
 
 /// Metadata required by a storage instance to read a storage collection
-#[derive(Arbitrary, Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollectionMetadata {
-    /// The persist location where the shards are located
+    /// The persist location where the shards are located.
     pub persist_location: PersistLocation,
-    /// The persist shard id of the remap collection used to reclock this collection
+    /// The persist shard id of the remap collection used to reclock this collection.
     pub remap_shard: ShardId,
-    /// The persist shard containing the contents of this storage collection
+    /// The persist shard containing the contents of this storage collection.
     pub data_shard: ShardId,
-    /// The persist shard containing the status updates for this storage collection
+    /// The persist shard containing the status updates for this storage collection.
     pub status_shard: Option<ShardId>,
+    /// The `RelationDesc` that describes the contents of the `data_shard`.
+    pub relation_desc: RelationDesc,
 }
 
 impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
@@ -446,6 +448,7 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
             data_shard: self.data_shard.to_string(),
             remap_shard: self.remap_shard.to_string(),
             status_shard: self.status_shard.map(|s| s.to_string()),
+            relation_desc: Some(self.relation_desc.into_proto()),
         }
     }
 
@@ -467,6 +470,9 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
                 .status_shard
                 .map(|s| s.parse().map_err(TryFromProtoError::InvalidShardId))
                 .transpose()?,
+            relation_desc: value
+                .relation_desc
+                .into_rust_if_some("ProtoCollectionMetadata::relation_desc")?,
         })
     }
 }
@@ -891,6 +897,7 @@ where
                 remap_shard: collection_shards.remap_shard,
                 data_shard: collection_shards.data_shard,
                 status_shard,
+                relation_desc: description.desc.clone(),
             };
 
             Ok((id, description, metadata))
@@ -1014,6 +1021,9 @@ where
                     // Each ingestion is augmented with the collection metadata.
                     let mut source_imports = BTreeMap::new();
                     for (id, _) in ingestion.source_imports {
+                        // This _requires_ that the sub-source collection (with
+                        // `DataSource::Other`) was registered BEFORE we process this, the
+                        // top-level collection.
                         let metadata = self.collection(id)?.collection_metadata.clone();
                         source_imports.insert(id, metadata);
                     }
@@ -1024,6 +1034,8 @@ where
 
                     let mut source_exports = BTreeMap::new();
                     for (id, export) in ingestion.source_exports {
+                        // Note that these metadata's have been previously enriched with the
+                        // required `RelationDesc` for each sub-source above!
                         let storage_metadata = self.collection(id)?.collection_metadata.clone();
                         source_exports.insert(
                             id,
