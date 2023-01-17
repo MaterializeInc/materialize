@@ -70,64 +70,26 @@ Materialize provides public Kafka topics and a Confluent Schema Registry for its
     ```
 
 1. Create the sources, one per Kafka topic:
-    <!-- ```sql
-    CREATE TABLE IF NOT EXISTS users (
-        id INT,
-        email TEXT,
-        is_vip BOOLEAN,
-        created_at TIMESTAMP,
-        updated_at TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS items (
-        id INT,
-        name TEXT,
-        category TEXT,
-        price INT,
-        inventory INT,
-        inventory_updated_at TIMESTAMP,
-        created_at TIMESTAMP,
-        updated_at TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS purchases (
-        id INT,
-        user_id BIGINT,
-        item_id BIGINT,
-        status INT,
-        quantity INT,
-        purchase_price INT,
-        deleted BOOLEAN,
-        created_at TIMESTAMP,
-        updated_at TIMESTAMP
-    );
-
-    INSERT INTO users VALUES (1, 'random@email.com', true, current_timestamp(), current_timestamp());
-    INSERT INTO items VALUES (1, 'Random Random', 'Category', 230, 3, current_timestamp(), current_timestamp(), current_timestamp());
-    INSERT INTO purchases VALUES (1, 1, 1, 1, 3, 10, false, current_timestamp(), current_timestamp());
-    ``` -->
 
     ```sql
     CREATE SOURCE purchases
     FROM KAFKA CONNECTION kafka_connection (TOPIC 'purchases')
-    FORMAT ENVELOPE DEBEZIUM USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_basic_http
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_basic_http
+    ENVELOPE DEBEZIUM
     WITH (SIZE = '3xsmall');
 
     CREATE SOURCE items
     FROM KAFKA CONNECTION kafka_connection (TOPIC 'items')
-    FORMAT ENVELOPE DEBEZIUM USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_basic_http
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_basic_http
+    ENVELOPE DEBEZIUM
     WITH (SIZE = '3xsmall');
 
     CREATE SOURCE users
     FROM KAFKA CONNECTION kafka_connection (TOPIC 'users')
-    FORMAT ENVELOPE DEBEZIUM USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_basic_http
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_basic_http
+    ENVELOPE DEBEZIUM
     WITH (SIZE = '3xsmall');
     ```
-
-    <!-- Each topic contains different data:
-    * Items: items by category and stock
-    * Users: registration and vip access
-    * Purchases: item purchases from users -->
 
 ### Build the analytics
 
@@ -152,7 +114,7 @@ Reuse your `psql` session and build the analytics:
         GROUP BY 1, 2;
     ```
 
-    The above model will update as new purchases come in and if existing purchases are marked as deleted later (soft deletes). Usually handling soft deletes or retractions is very difficult for streaming systems. Most other systems would require you to store that dimensional data in state indefinitely but with our views in Materialize we do not need to worry about the additional challenges of this use case.
+    The above model will update as new purchases come in, as well as when existing purchases are marked as deleted (soft deletes). Handling soft deletes is a challenging use case in streaming, and most systems can only provide eventually consistent results. Materialize not only provides strong consistency guarantees when handling the resulting retractions, but also minimizes the amount of state that needs to be maintained for the join.
 
 ### Subscribe to updates
 
@@ -179,9 +141,9 @@ Reuse your `psql` session and build the analytics:
 
 1. Press `CTRL + C` to interrupt the subscription after a few changes.
 
-### Connect to a BI Tool
+### Connect to a BI tool
 
-Instead of subscribing to the changes in the materialized view, you can connect to a BI tool directly and create a dashboard that keeps track of its results in real time . Here, we'll use [Metabase](https://www.metabase.com/), but most tools that support PostgreSQL should work out-of-the-box since Materialize is wire-compatible with PostgreSQL.
+Instead of subscribing to the changes in the materialized view, you can connect to a BI tool directly and create a dashboard that keeps track of its results in real time. Here, we'll use [Metabase](https://www.metabase.com/), but most tools that support PostgreSQL should work out-of-the-box since Materialize is wire-compatible with PostgreSQL.
 
 1. In Metabase, add a new database connection:
 
@@ -196,7 +158,13 @@ Instead of subscribing to the changes in the materialized view, you can connect 
     | Password | `MATERIALIZE_PASSWORD` |
     | Use a secure connection (SSL) | True |
 
-1. To build a visualization on top of the `vip_purchases` materialized view, click "Browse Data". Then, drill down until you find the view. By default, the visualization will be a table, but you can change this to e.g. a "Bar" chart and get live updates for new purchases as they are created or deleted in the upstream MySQL database.
+1. To build a visualization on top of the `vip_purchases` materialized view, click **Browse Data**. Then, drill down until you find the view. By default, the visualization will be a "Table", but you can change this to e.g. a "Bar" chart.
+
+1. Click **Auto-refresh**, and select **1 minute**.
+
+  60 seconds is the fastest refresh rate selectable in the UI, but if you copy the URL, open a new tab and edit the end of the url to change the `refresh=60` anchor to `refresh=1`, you can force Metabase to update every second.
+
+[//]: # "TODO(morsapaes) Add GIF of Metabase dashboard."
 
 ## Recap
 
