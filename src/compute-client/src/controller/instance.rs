@@ -71,6 +71,8 @@ impl From<CollectionMissing> for DataflowCreationError {
 pub(super) enum PeekError {
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
+    #[error("replica does not exist: {0}")]
+    ReplicaMissing(ReplicaId),
     #[error("peek timestamp is not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
 }
@@ -149,9 +151,14 @@ impl<T> Instance<T> {
         || !self.ready_responses.is_empty()
     }
 
-    /// Returns the ids of all replicas of this instance
-    pub fn replica_ids(&self) -> impl Iterator<Item = &ReplicaId> {
-        self.replicas.keys()
+    /// Returns whether the identified replica exists.
+    pub fn replica_exists(&self, id: ReplicaId) -> bool {
+        self.replicas.contains_key(&id)
+    }
+
+    /// Returns the ids of all replicas of this instance.
+    pub fn replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
+        self.replicas.keys().copied()
     }
 }
 
@@ -295,7 +302,7 @@ where
         id: ReplicaId,
         mut config: ReplicaConfig,
     ) -> Result<(), ReplicaExists> {
-        if self.compute.replicas.contains_key(&id) {
+        if self.compute.replica_exists(id) {
             return Err(ReplicaExists(id));
         }
 
@@ -540,7 +547,7 @@ where
                 updates.push((export_id, as_of.clone()));
             }
             // Initialize tracking of replica frontiers.
-            let replica_ids: Vec<_> = self.compute.replicas.keys().copied().collect();
+            let replica_ids: Vec<_> = self.compute.replica_ids().collect();
             for replica_id in replica_ids {
                 self.update_write_frontiers(replica_id, &updates);
             }
@@ -645,9 +652,14 @@ where
         target_replica: Option<ReplicaId>,
     ) -> Result<(), PeekError> {
         let since = self.compute.collection(id)?.read_capabilities.frontier();
-
         if !since.less_equal(&timestamp) {
             Err(PeekError::SinceViolation(id))?;
+        }
+
+        if let Some(target) = target_replica {
+            if !self.compute.replica_exists(target) {
+                return Err(PeekError::ReplicaMissing(target));
+            }
         }
 
         // Install a compaction hold on `id` at `timestamp`.
@@ -655,7 +667,7 @@ where
         updates.insert(id, ChangeBatch::new_from(timestamp.clone(), 1));
         self.update_read_capabilities(&mut updates);
 
-        let unfinished = self.compute.replicas.keys().copied().collect();
+        let unfinished = self.compute.replica_ids().collect();
         let otel_ctx = OpenTelemetryContext::obtain();
         self.compute.peeks.insert(
             uuid,

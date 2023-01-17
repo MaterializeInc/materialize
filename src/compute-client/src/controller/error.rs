@@ -147,6 +147,8 @@ pub enum PeekError {
     InstanceMissing(ComputeInstanceId),
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
+    #[error("replica does not exist: {0}")]
+    ReplicaMissing(ReplicaId),
     #[error("peek timestamp is not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
 }
@@ -162,6 +164,7 @@ impl From<instance::PeekError> for PeekError {
         use instance::PeekError::*;
         match error {
             CollectionMissing(id) => Self::CollectionMissing(id),
+            ReplicaMissing(id) => Self::ReplicaMissing(id),
             SinceViolation(id) => Self::CollectionMissing(id),
         }
     }
