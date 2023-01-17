@@ -303,6 +303,10 @@ pub async fn force_compaction(
     }
 }
 
+/// Wrap a lower-level service (Blob or Consensus) to make it read only.
+/// This is probably not elaborate enough to work in general -- folks may expect to read
+/// their own writes, among other things -- but it should handle the case of GC, where
+/// all reads finish before the writes begin.
 #[derive(Debug)]
 struct ReadOnly<T>(T);
 
