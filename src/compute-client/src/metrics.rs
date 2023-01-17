@@ -16,6 +16,7 @@ use mz_ore::metric;
 use mz_ore::metrics::DeleteOnDropHistogram;
 use mz_ore::metrics::HistogramVecExt;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::stats::HISTOGRAM_BYTE_BUCKETS;
 use mz_service::codec::StatsCollector;
 
 use crate::controller::{ComputeInstanceId, ReplicaId};
@@ -35,12 +36,14 @@ impl ComputeControllerMetrics {
             messages_sent_bytes: metrics_registry.register(metric!(
                 name: "mz_compute_messages_sent_bytes",
                 help: "size of compute messages sent",
-                var_labels: ["instance", "replica"]
+                var_labels: ["instance", "replica"],
+                buckets: HISTOGRAM_BYTE_BUCKETS.to_vec()
             )),
             messages_received_bytes: metrics_registry.register(metric!(
                 name: "mz_compute_messages_received_bytes",
                 help: "size of compute messages received",
-                var_labels: ["instance", "replica"]
+                var_labels: ["instance", "replica"],
+                buckets: HISTOGRAM_BYTE_BUCKETS.to_vec()
             )),
         }
     }

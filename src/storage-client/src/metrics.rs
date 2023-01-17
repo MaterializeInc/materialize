@@ -16,6 +16,7 @@ use mz_ore::metric;
 use mz_ore::metrics::DeleteOnDropHistogram;
 use mz_ore::metrics::HistogramVecExt;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::stats::HISTOGRAM_BYTE_BUCKETS;
 use mz_service::codec::StatsCollector;
 
 use crate::client::{ProtoStorageCommand, ProtoStorageResponse};
