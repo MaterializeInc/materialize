@@ -46,6 +46,8 @@ pub struct AdminArgs {
 pub(crate) enum Command {
     /// Manually completes all fueled compactions in a shard.
     ForceCompaction(ForceCompactionArgs),
+    /// Manually kick off a GC run for a shard.
+    ForceGc(ForceGcArgs),
 }
 
 /// Manually completes all fueled compactions in a shard.
@@ -59,6 +61,13 @@ pub(crate) struct ForceCompactionArgs {
     compaction_memory_bound_bytes: usize,
 }
 
+/// Manually completes all fueled compactions in a shard.
+#[derive(Debug, clap::Parser)]
+pub(crate) struct ForceGcArgs {
+    #[clap(flatten)]
+    state: StateArgs,
+}
+
 /// Runs the given read-write admin command.
 pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
     match command.command {
@@ -70,6 +79,21 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             }
             let metrics_registry = MetricsRegistry::new();
             let () = force_compaction(
+                cfg,
+                &metrics_registry,
+                shard_id,
+                &args.state.consensus_uri,
+                &args.state.blob_uri,
+                command.commit,
+            )
+            .await?;
+            info_log_non_zero_metrics(&metrics_registry.gather());
+        }
+        Command::ForceGc(args) => {
+            let shard_id = ShardId::from_str(&args.state.shard_id).expect("invalid shard id");
+            let mut cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+            let metrics_registry = MetricsRegistry::new();
+            let () = force_gc(
                 cfg,
                 &metrics_registry,
                 shard_id,
@@ -272,4 +296,15 @@ pub async fn force_compaction(
         info!("expired writer {}", writer_id);
         return Ok(());
     }
+}
+
+async fn force_gc(
+    cfg: PersistConfig,
+    metrics_registry: &MetricsRegistry,
+    shard_id: ShardId,
+    consensus_uri: &str,
+    blob_uri: &str,
+    commit: bool,
+) -> anyhow::Result<()> {
+    Ok(())
 }
