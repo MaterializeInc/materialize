@@ -64,7 +64,11 @@ async fn bench_writes_one_iter(
     data: &DataGenerator,
 ) -> Result<usize, anyhow::Error> {
     let mut write = client
-        .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(ShardId::new(), "bench")
+        .open_writer::<Vec<u8>, Vec<u8>, u64, i64, _>(
+            ShardId::new(),
+            "bench",
+            PersistClient::TEST_SCHEMA,
+        )
         .await?;
 
     // Write the data as fast as we can while keeping each batch in its own
@@ -113,7 +117,7 @@ async fn bench_write_to_listen_one_iter(
     data: &DataGenerator,
 ) -> Result<usize, anyhow::Error> {
     let (mut write, read) = client
-        .open::<Vec<u8>, Vec<u8>, u64, i64>(ShardId::new(), "bench")
+        .open::<Vec<u8>, Vec<u8>, u64, i64, _>(ShardId::new(), "bench", PersistClient::TEST_SCHEMA)
         .await?;
 
     // Start the listener in a task before the write so it can't "cheat" by
@@ -219,7 +223,11 @@ async fn bench_snapshot_one_iter(
     as_of: &Antichain<u64>,
 ) -> Result<(), anyhow::Error> {
     let mut read = client
-        .open_leased_reader::<Vec<u8>, Vec<u8>, u64, i64>(*shard_id, "bench")
+        .open_leased_reader::<Vec<u8>, Vec<u8>, u64, i64, _>(
+            *shard_id,
+            "bench",
+            PersistClient::TEST_SCHEMA,
+        )
         .await?;
 
     let x = read

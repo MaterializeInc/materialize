@@ -442,7 +442,8 @@ impl ConsensusKnobs for PersistConfig {
 /// # let timeout: std::time::Duration = unimplemented!();
 /// # let id = mz_persist_client::ShardId::new();
 /// # async {
-/// tokio::time::timeout(timeout, client.open::<String, String, u64, i64>(id, "desc")).await
+/// tokio::time::timeout(timeout, client.open::<String, String, u64, i64, _>(id, "desc",
+///     mz_persist_client::PersistClient::TEST_SCHEMA)).await
 /// # };
 /// ```
 #[derive(Debug, Clone)]
@@ -455,6 +456,9 @@ pub struct PersistClient {
 }
 
 impl PersistClient {
+    /// A "fake" object used to fill `schema` parameters for opening handles in tests.
+    pub const TEST_SCHEMA: () = ();
+
     /// Returns a new client for interfacing with persist shards made durable to
     /// the given [Blob] and [Consensus].
     ///
@@ -491,33 +495,44 @@ impl PersistClient {
     /// If `shard_id` has never been used before, initializes a new shard and
     /// returns handles with `since` and `upper` frontiers set to initial values
     /// of `Antichain::from_elem(T::minimum())`.
+    ///
+    /// The `schema` parameter is currently unused, but should be an object
+    /// that represents the schema of the data in the shard. This will be required
+    /// in the future.
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
-    pub async fn open<K, V, T, D>(
+    pub async fn open<K, V, T, D, S>(
         &self,
         shard_id: ShardId,
         purpose: &str,
+        schema: S,
     ) -> Result<(WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>), InvalidUsage<T>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
+        S: Clone,
     {
         Ok((
-            self.open_writer(shard_id, purpose).await?,
-            self.open_leased_reader(shard_id, purpose).await?,
+            self.open_writer(shard_id, purpose, schema.clone()).await?,
+            self.open_leased_reader(shard_id, purpose, schema).await?,
         ))
     }
 
-    /// [Self::open], but returning only a [ReadHandle].
+    /// [Self::open], but returning only a [/eadHandle].
     ///
     /// Use this to save latency and a bit of persist traffic if you're just
     /// going to immediately drop or expire the [WriteHandle].
+    ///
+    /// The `_schema` parameter is currently unused, but should be an object
+    /// that represents the schema of the data in the shard. This will be required
+    /// in the future.
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
-    pub async fn open_leased_reader<K, V, T, D>(
+    pub async fn open_leased_reader<K, V, T, D, S>(
         &self,
         shard_id: ShardId,
         purpose: &str,
+        _schema: S,
     ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -566,10 +581,15 @@ impl PersistClient {
     }
 
     /// Creates and returns a [BatchFetcher] for the given shard id.
+    ///
+    /// The `_schema` parameter is currently unused, but should be an object
+    /// that represents the schema of the data in the shard. This will be required
+    /// in the future.
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
-    pub async fn create_batch_fetcher<K, V, T, D>(
+    pub async fn create_batch_fetcher<K, V, T, D, S>(
         &self,
         shard_id: ShardId,
+        _schema: S,
     ) -> BatchFetcher<K, V, T, D>
     where
         K: Debug + Codec,
@@ -694,11 +714,16 @@ impl PersistClient {
     ///
     /// Use this to save latency and a bit of persist traffic if you're just
     /// going to immediately drop or expire the [ReadHandle].
+    ///
+    /// The `_schema` parameter is currently unused, but should be an object
+    /// that represents the schema of the data in the shard. This will be required
+    /// in the future.
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
-    pub async fn open_writer<K, V, T, D>(
+    pub async fn open_writer<K, V, T, D, S>(
         &self,
         shard_id: ShardId,
         purpose: &str,
+        _schema: S,
     ) -> Result<WriteHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -767,7 +792,9 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        self.open(shard_id, "tests").await.expect("codec mismatch")
+        self.open(shard_id, "tests", Self::TEST_SCHEMA)
+            .await
+            .expect("codec mismatch")
     }
 
     /// Return the metrics being used by this client.
@@ -943,19 +970,27 @@ mod tests {
         let shard_id = ShardId::new();
         let client = new_test_client().await;
         let mut write1 = client
-            .open_writer::<String, String, u64, i64>(shard_id, "")
+            .open_writer::<String, String, u64, i64, _>(shard_id, "", PersistClient::TEST_SCHEMA)
             .await
             .expect("codec mismatch");
         let mut read1 = client
-            .open_leased_reader::<String, String, u64, i64>(shard_id, "")
+            .open_leased_reader::<String, String, u64, i64, _>(
+                shard_id,
+                "",
+                PersistClient::TEST_SCHEMA,
+            )
             .await
             .expect("codec mismatch");
         let mut read2 = client
-            .open_leased_reader::<String, String, u64, i64>(shard_id, "")
+            .open_leased_reader::<String, String, u64, i64, _>(
+                shard_id,
+                "",
+                PersistClient::TEST_SCHEMA,
+            )
             .await
             .expect("codec mismatch");
         let mut write2 = client
-            .open_writer::<String, String, u64, i64>(shard_id, "")
+            .open_writer::<String, String, u64, i64, _>(shard_id, "", PersistClient::TEST_SCHEMA)
             .await
             .expect("codec mismatch");
 
@@ -997,7 +1032,7 @@ mod tests {
 
             assert_eq!(
                 client
-                    .open::<Vec<u8>, String, u64, i64>(shard_id0, "")
+                    .open::<Vec<u8>, String, u64, i64, _>(shard_id0, "", PersistClient::TEST_SCHEMA)
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
@@ -1007,7 +1042,7 @@ mod tests {
             );
             assert_eq!(
                 client
-                    .open::<String, Vec<u8>, u64, i64>(shard_id0, "")
+                    .open::<String, Vec<u8>, u64, i64, _>(shard_id0, "", PersistClient::TEST_SCHEMA)
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
@@ -1017,7 +1052,7 @@ mod tests {
             );
             assert_eq!(
                 client
-                    .open::<String, String, i64, i64>(shard_id0, "")
+                    .open::<String, String, i64, i64, _>(shard_id0, "", PersistClient::TEST_SCHEMA)
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
@@ -1027,7 +1062,7 @@ mod tests {
             );
             assert_eq!(
                 client
-                    .open::<String, String, u64, u64>(shard_id0, "")
+                    .open::<String, String, u64, u64, _>(shard_id0, "", PersistClient::TEST_SCHEMA)
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
@@ -1041,7 +1076,11 @@ mod tests {
             // set.
             assert_eq!(
                 client
-                    .open_leased_reader::<Vec<u8>, String, u64, i64>(shard_id0, "")
+                    .open_leased_reader::<Vec<u8>, String, u64, i64, _>(
+                        shard_id0,
+                        "",
+                        PersistClient::TEST_SCHEMA
+                    )
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
@@ -1051,7 +1090,11 @@ mod tests {
             );
             assert_eq!(
                 client
-                    .open_writer::<Vec<u8>, String, u64, i64>(shard_id0, "")
+                    .open_writer::<Vec<u8>, String, u64, i64, _>(
+                        shard_id0,
+                        "",
+                        PersistClient::TEST_SCHEMA
+                    )
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
