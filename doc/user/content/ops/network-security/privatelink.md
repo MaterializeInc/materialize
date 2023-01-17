@@ -71,7 +71,59 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
      ```sql
     CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
         SERVICE NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
-        AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az3'),
+        AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az3')
+    );
+    ```
+
+    Update the list of the availability zones to match the ones in your AWS account.
+
+{{< /tab >}}
+{{< tab "AWS RDS">}}
+1. #### Create target groups
+    Create a dedicated [target group](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html) for your RDS instance with the following details:
+
+    a. Target type as **IP address**.
+
+    b. Protocol as **TCP**.
+
+    c. Port as **5432**, or the port that you are using in case it is not 5432.
+
+    d. Make sure that the target group is in the same VPC as the RDS instance.
+
+    e. Click next, and register the respective RDS instance to the target group using its IP address.
+
+1. #### Verify security groups and health checks
+
+    Once the target groups have been created, make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html) are passing and that the targets are reported as healthy.
+
+    If you have set up a security group for your RDS instance, you must ensure that it allows traffic on the health check port.
+
+    **Remarks**:
+
+    a. Network Load Balancers do not have associated security groups. Therefore, the security groups for your targets must use IP addresses to allow traffic.
+
+    b. You can't use the security groups for the clients as a source in the security groups for the targets. Therefore, the security groups for your targets must use the IP addresses of the clients to allow traffic. For more details, check the [AWS documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
+
+1. #### Create a Network Load Balancer (NLB)
+    Create a [Network Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html) that is **enabled for the same subnets** that the RDS instance is in.
+
+1. #### Create TCP listeners
+
+    Create a [TCP listener](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-listener.html) for your RDS instance that forwards to the corresponding target group you created.
+
+1. #### Create a VPC endpoint service
+
+    Create a VPC [endpoint service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html) and associate it with the **Network Load Balancer** that you’ve just created.
+
+    Note the **service name** that is generated for the endpoint service.
+
+1. #### Create an AWS PrivateLink Connection
+     In Materialize, create a [`AWS PRIVATELINK`](/sql/create-connection/#aws-privatelink) connection that references the endpoint service that you created in the previous step.
+
+     ```sql
+    CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+        SERVICE NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
+        AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az3')
     );
     ```
 
@@ -135,6 +187,27 @@ statements:
 CREATE SOURCE json_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT BYTES
+  WITH (SIZE = '3xsmall');
+```
+{{< /tab >}}
+{{< tab "AWS RDS">}}
+```sql
+CREATE CONNECTION pg_connection TO POSTGRES (
+    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
+    PORT 5432,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass,
+    AWS PRIVATELINK privatelink_svc
+);
+```
+
+This PostgreSQL connection can then be reused across multiple [CREATE SOURCE](https://materialize.com/docs/sql/create-source/postgres/) statements:
+
+```sql
+CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
+  FOR ALL TABLES
   WITH (SIZE = '3xsmall');
 ```
 {{< /tab >}}
