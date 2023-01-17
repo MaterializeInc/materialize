@@ -202,7 +202,7 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 );
 ```
 
-You can use the above Postgres connections to create a [Postgres source](https://materialize.com/docs/sql/create-source/postgres/).
+This PostgreSQL connection can then be reused across multiple [CREATE SOURCE](https://materialize.com/docs/sql/create-source/postgres/) statements:
 
 ```sql
 CREATE SOURCE mz_source
