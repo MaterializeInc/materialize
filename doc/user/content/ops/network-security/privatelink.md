@@ -75,7 +75,7 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
     );
     ```
 
-    Update the list of the availability zones to match the ones that you are using in your AWS account.
+    Update the list of the availability zones to match the ones in your AWS account.
 
 {{< /tab >}}
 {{< tab "AWS RDS">}}
