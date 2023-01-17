@@ -102,15 +102,16 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
                 data_shard,
                 // The status shard only contains non-definite status updates
                 status_shard: _,
-                relation_desc: _,
+                relation_desc,
             } = &export.storage_metadata;
             let handle = client_cache
                 .open(persist_location.clone())
                 .await
                 .expect("error creating persist client")
-                .open_writer::<SourceData, (), T, Diff>(
+                .open_writer::<SourceData, (), T, Diff, _>(
                     *data_shard,
                     &format!("resumption data {}", id),
+                    relation_desc.clone(),
                 )
                 .await
                 .unwrap();
@@ -123,14 +124,18 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
             data_shard: _,
             // The status shard only contains non-definite status updates
             status_shard: _,
-            relation_desc: _,
+            relation_desc,
         } = &self.ingestion_metadata;
         let remap_handle = client_cache
             .open(persist_location.clone())
             .await
             .expect("error creating persist client")
             // TODO: Any way to plumb the GlobalId to this?
-            .open_writer::<SourceData, (), T, Diff>(*remap_shard, "resumption remap")
+            .open_writer::<SourceData, (), T, Diff, _>(
+                *remap_shard,
+                "resumption remap",
+                relation_desc.clone(),
+            )
             .await
             .unwrap();
         handles.push(remap_handle);

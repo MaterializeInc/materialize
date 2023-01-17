@@ -33,9 +33,17 @@ pub async fn write_to_persist(
         now_ms,
     );
 
-    let mut handle = client.open_writer(status_shard, &format!("healthcheck::write_to_persist {}", collection_id)).await.expect(
-        "Invalid usage of the persist client for collection {collection_id} status history shard",
-    );
+    let mut handle = client
+        .open_writer(
+            status_shard,
+            &format!("healthcheck::write_to_persist {}", collection_id),
+            PersistClient::TO_REPLACE_SCHEMA,
+        )
+        .await
+        .expect(
+            "Invalid usage of the persist \
+            client for collection {collection_id} status history shard",
+        );
 
     let mut recent_upper = handle.upper().clone();
     let mut append_ts = Timestamp::from(now_ms);

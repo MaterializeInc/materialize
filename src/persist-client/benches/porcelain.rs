@@ -203,7 +203,11 @@ pub fn bench_snapshot(
         let shard_id = ShardId::new();
         let (_, as_of) = runtime.block_on(async {
             let mut write = client
-                .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(shard_id, "bench")
+                .open_writer::<Vec<u8>, Vec<u8>, u64, i64, _>(
+                    shard_id,
+                    "bench",
+                    PersistClient::TEST_SCHEMA,
+                )
                 .await
                 .expect("failed to open shard");
             load(&mut write, data).await

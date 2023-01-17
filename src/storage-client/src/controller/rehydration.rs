@@ -211,9 +211,17 @@ where
                 .await
                 .expect("error creating persist client");
             let from_read_handle = persist_client
-                .open_leased_reader::<SourceData, (), T, Diff>(
+                .open_leased_reader::<SourceData, (), T, Diff, _>(
                     export.description.from_storage_metadata.data_shard,
                     "rehydration since",
+                    // This is also `from_desc`, but this would be the _only_ usage
+                    // of `from_desc` in storage, and we try to be consistent about
+                    // where we get `RelationDesc`s for perist clients
+                    export
+                        .description
+                        .from_storage_metadata
+                        .relation_desc
+                        .clone(),
                 )
                 .await
                 .expect("from collection disappeared");

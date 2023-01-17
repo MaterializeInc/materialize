@@ -467,7 +467,11 @@ mod tests {
             .unwrap();
 
         let (write_handle, mut read_handle) = persist_client
-            .open(shard_id, "tests::dump_storage_collection")
+            .open(
+                shard_id,
+                "tests::dump_storage_collection",
+                PersistClient::TO_REPLACE_SCHEMA,
+            )
             .await
             .unwrap();
 

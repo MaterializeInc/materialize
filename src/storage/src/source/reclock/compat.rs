@@ -155,7 +155,11 @@ where
         let since = since_handle.since();
 
         let (write_handle, mut read_handle) = persist_client
-            .open(metadata.remap_shard.clone(), &format!("reclock {}", id))
+            .open(
+                metadata.remap_shard.clone(),
+                &format!("reclock {}", id),
+                PersistClient::TO_REPLACE_SCHEMA,
+            )
             .await
             .context("error opening persist shard")?;
 
