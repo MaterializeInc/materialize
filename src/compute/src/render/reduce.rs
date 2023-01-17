@@ -27,7 +27,7 @@ use mz_expr::MirScalarExpr;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
-use tracing::error;
+use tracing::warn;
 
 use mz_compute_client::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
@@ -51,7 +51,7 @@ use crate::typedefs::{RowKeySpine, RowSpine};
 /// we just had a single reduce operator computing everything together, and
 /// this arrangement can also be re-used.
 fn render_reduce_plan<G, T>(
-    dataflow_id: usize,
+    debug_name: &str,
     plan: ReducePlan,
     collection: Collection<G, (Row, Row), Diff>,
     err_input: Collection<G, DataflowError, Diff>,
@@ -65,24 +65,24 @@ where
     // Convenience wrapper to render the right kind of hierarchical plan.
     let build_hierarchical = |collection: Collection<G, (Row, Row), Diff>,
                               expr: HierarchicalPlan| match expr {
-        HierarchicalPlan::Monotonic(expr) => build_monotonic(dataflow_id, collection, expr),
-        HierarchicalPlan::Bucketed(expr) => build_bucketed(dataflow_id, collection, expr),
+        HierarchicalPlan::Monotonic(expr) => build_monotonic(debug_name, collection, expr),
+        HierarchicalPlan::Bucketed(expr) => build_bucketed(debug_name, collection, expr),
     };
 
     // Convenience wrapper to render the right kind of basic plan.
     let build_basic = |collection: Collection<G, (Row, Row), Diff>, expr: BasicPlan| match expr {
         BasicPlan::Single(index, aggr) => {
-            build_basic_aggregate(dataflow_id, collection, index, &aggr)
+            build_basic_aggregate(debug_name, collection, index, &aggr)
         }
-        BasicPlan::Multiple(aggrs) => build_basic_aggregates(dataflow_id, collection, aggrs),
+        BasicPlan::Multiple(aggrs) => build_basic_aggregates(debug_name, collection, aggrs),
     };
 
     let arrangement_or_bundle: ArrangementOrCollection<G> = match plan {
         // If we have no aggregations or just a single type of reduction, we
         // can go ahead and render them directly.
-        ReducePlan::Distinct => build_distinct(dataflow_id, collection).into(),
-        ReducePlan::DistinctNegated => build_distinct_retractions(dataflow_id, collection).into(),
-        ReducePlan::Accumulable(expr) => build_accumulable(dataflow_id, collection, expr).into(),
+        ReducePlan::Distinct => build_distinct(debug_name, collection).into(),
+        ReducePlan::DistinctNegated => build_distinct_retractions(debug_name, collection).into(),
+        ReducePlan::Accumulable(expr) => build_accumulable(debug_name, collection, expr).into(),
         ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr).into(),
         ReducePlan::Basic(expr) => build_basic(collection, expr).into(),
         // Otherwise, we need to render something different for each type of
@@ -94,7 +94,7 @@ where
             if let Some(accumulable) = expr.accumulable {
                 to_collate.push((
                     ReductionType::Accumulable,
-                    build_accumulable(dataflow_id, collection.clone(), accumulable),
+                    build_accumulable(debug_name, collection.clone(), accumulable),
                 ));
             }
             if let Some(hierarchical) = expr.hierarchical {
@@ -108,7 +108,7 @@ where
             }
             // Now we need to collate them together.
             build_collation(
-                dataflow_id,
+                debug_name,
                 to_collate,
                 expr.aggregate_types,
                 &mut collection.scope(),
@@ -270,7 +270,7 @@ where
         err = err.concat(&err_input);
 
         // Render the reduce plan
-        render_reduce_plan(self.dataflow_id, reduce_plan, ok, err, key_arity)
+        render_reduce_plan(&self.debug_name, reduce_plan, ok, err, key_arity)
     }
 }
 
@@ -282,7 +282,7 @@ where
 /// arrangements present values in a way that respects the desired output order,
 /// so we can do a linear merge to form the output.
 fn build_collation<G>(
-    dataflow_id: usize,
+    debug_name: &str,
     arrangements: Vec<(ReductionType, Arrangement<G, Row>)>,
     aggregate_types: Vec<ReductionType>,
     scope: &mut G,
@@ -292,11 +292,14 @@ where
     G::Timestamp: Lattice,
 {
     // we must have more than one arrangement to collate
-    soft_assert_or_log!(
-        arrangements.len() > 1,
-        "Building a collation of {} arrangements, but expected more than one",
-        arrangements.len()
-    );
+    if arrangements.len() <= 1 {
+        warn!("Building a collation of {} arrangements, but expected more than one in dataflow {debug_name}",
+            arrangements.len());
+        soft_assert_or_log!(
+            false,
+            "Incorrect number of arrangements in reduce collation"
+        );
+    }
 
     let mut to_concat = vec![];
 
@@ -307,6 +310,7 @@ where
         to_concat.push(collection);
     }
 
+    let debug_name = debug_name.to_string();
     use differential_dataflow::collection::concatenate;
     concatenate(scope, to_concat)
         .arrange_named::<RowSpine<_, _, _, _>>("Arrange ReduceCollation")
@@ -327,11 +331,10 @@ where
                 // We expect not to have any negative multiplicities, but are not 100% sure it will
                 // never happen so for now just log an error if it does.
                 for (val, cnt) in input.iter() {
-                    soft_assert_or_log!(
-                        *cnt >= 0,
-                        "[customer-data] Negative accumulation in ReduceCollation: {:?} with count {:?} in dataflow id {}",
-                        val, cnt, dataflow_id
-                    );
+                    if *cnt < 0 {
+                        warn!("[customer-data] Negative accumulation in ReduceCollation: {val:?} with count {cnt:?} in dataflow {debug_name}");
+                        soft_assert_or_log!(false, "Negative accumulation in ReduceCollation");
+                    }
                 }
 
                 for ((reduction_type, row), _) in input.iter() {
@@ -359,7 +362,7 @@ where
                     if let Some(datum) = datum {
                         row_packer.push(datum);
                     } else {
-                        panic!("[customer-data] Missing {typ:?} value for key: {key} in dataflow id {dataflow_id}");
+                        panic!("[customer-data] Missing {typ:?} value for key: {key} in dataflow {debug_name}");
                     }
                 }
                 output.push((row_buf.clone(), 1));
@@ -369,7 +372,7 @@ where
 
 /// Build the dataflow to compute the set of distinct keys.
 fn build_distinct<G>(
-    _dataflow_id: usize,
+    _debug_name: &str,
     collection: Collection<G, (Row, Row), Diff>,
 ) -> Arrangement<G, Row>
 where
@@ -391,7 +394,7 @@ where
 ///
 /// This implementation maintains the rows that don't appear in the output.
 fn build_distinct_retractions<G, T>(
-    _dataflow_id: usize,
+    _debug_name: &str,
     collection: Collection<G, (Row, Row), Diff>,
 ) -> Collection<G, Row, Diff>
 where
@@ -429,7 +432,7 @@ where
 /// results together into a final arrangement that presents all the results
 /// in the order specified by `aggrs`.
 fn build_basic_aggregates<G>(
-    dataflow_id: usize,
+    debug_name: &str,
     input: Collection<G, (Row, Row), Diff>,
     aggrs: Vec<(usize, AggregateExpr)>,
 ) -> Arrangement<G, Row>
@@ -439,14 +442,13 @@ where
 {
     // We are only using this function to render multiple basic aggregates and
     // stitch them together. If that's not true we should complain.
-    soft_assert_or_log!(
-        aggrs.len() > 1,
-        "Unexpectedly computing {} basic aggregations together but we expected to be doing more than one in dataflow id {}",
-        aggrs.len(), dataflow_id
-    );
+    if aggrs.len() <= 1 {
+        warn!("Unexpectedly computing {} basic aggregations together, but we expected to be doing more than one in dataflow {debug_name}", aggrs.len());
+        soft_assert_or_log!(false, "Too few aggregations when building basic aggregates");
+    }
     let mut to_collect = Vec::new();
     for (index, aggr) in aggrs {
-        let result = build_basic_aggregate(dataflow_id, input.clone(), index, &aggr);
+        let result = build_basic_aggregate(debug_name, input.clone(), index, &aggr);
         to_collect.push(result.as_collection(move |key, val| (key.clone(), (index, val.clone()))));
     }
     differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
@@ -468,7 +470,7 @@ where
 ///
 /// This method also applies distinctness if required.
 fn build_basic_aggregate<G>(
-    dataflow_id: usize,
+    debug_name: &str,
     input: Collection<G, (Row, Row), Diff>,
     index: usize,
     aggr: &AggregateExpr,
@@ -498,6 +500,7 @@ where
     }
 
     // TODO(#16549): Use explicit arrangement
+    let debug_name = debug_name.to_string();
     partial.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceInaccumulable", {
         let mut row_buf = Row::default();
         move |_key, source, target| {
@@ -507,11 +510,10 @@ where
             if source.iter().any(|(_val, cnt)| cnt < &0) {
                 // XXX: This reports user data, which we perhaps should not do!
                 for (val, cnt) in source.iter() {
-                    soft_assert_or_log!(
-                        *cnt >= 0,
-                        "[customer-data] Negative accumulation in ReduceInaccumulable: {:?} with count {:?} in dataflow id {}",
-                        val, cnt, dataflow_id
-                    );
+                    if *cnt < 0 {
+                        warn!("[customer-data] Negative accumulation in ReduceInaccumulable: {val:?} with count {cnt:?} in dataflow {debug_name}");
+                        soft_assert_or_log!(false, "Negative accumulation in ReduceInaccumulable");
+                    }
                 }
             } else {
                 // We respect the multiplicity here (unlike in hierarchical aggregation)
@@ -541,7 +543,7 @@ where
 /// currently only perform min / max hierarchically and the reduction tree
 /// efficiently suppresses non-distinct updates.
 fn build_bucketed<G>(
-    dataflow_id: usize,
+    debug_name: &str,
     input: Collection<G, (Row, Row), Diff>,
     BucketedPlan {
         aggr_funcs,
@@ -572,7 +574,7 @@ where
         // Repeatedly apply hierarchical reduction with a progressively coarser key.
         let mut stage = input.map(move |(key, values)| ((key, values.hashed()), values));
         for b in buckets.into_iter() {
-            stage = build_bucketed_stage(stage, aggr_funcs.clone(), b);
+            stage = build_bucketed_stage(debug_name, stage, aggr_funcs.clone(), b);
         }
 
         // Discard the hash from the key and return to the format of the input data.
@@ -580,6 +582,7 @@ where
 
         // Build a series of stages for the reduction
         // Arrange the final result into (key, Row)
+        let debug_name = debug_name.to_string();
         partial.arrange_named::<RowSpine<_,Vec<Row>,_,_>>("Arrange ReduceMinsMaxes")
             .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMinsMaxes", {
             let mut row_buf = Row::default();
@@ -591,7 +594,8 @@ where
                     // XXX: This reports user data, which we perhaps should not do!
                     for (val, cnt) in source.iter() {
                         if cnt < &0 {
-                            error!("[customer-data] Negative accumulation in ReduceMinsMaxes: {:?} with count {:?} in dataflow id {}", val, cnt, dataflow_id);
+                            warn!("[customer-data] Negative accumulation in ReduceMinsMaxes: {val:?} with count {cnt:?} in dataflow {debug_name}");
+                            soft_assert_or_log!(false, "Negative accumulation in ReduceMinsMaxes");
                         }
                     }
                 } else {
@@ -616,6 +620,7 @@ where
 /// output collection maintains the `((key, bucket), (passing value)` for this
 /// stage.
 fn build_bucketed_stage<G>(
+    debug_name: &str,
     input: Collection<G, ((Row, u64), Vec<Row>), Diff>,
     aggrs: Vec<AggregateFunc>,
     buckets: u64,
@@ -626,6 +631,7 @@ where
 {
     let input = input.map(move |((key, hash), values)| ((key, hash % buckets), values));
 
+    let debug_name = debug_name.to_string();
     let negated_output = input
         // TODO(#16549): Use explicit arrangement
         .reduce_named("MinsMaxesHierarchical", {
@@ -634,11 +640,13 @@ where
                 if source.iter().any(|(_val, cnt)| cnt <= &0) {
                     for (val, cnt) in source.iter() {
                         // XXX: This reports user data, which we perhaps should not do!
-                        soft_assert_or_log!(
-                            *cnt > 0,
-                            "[customer-data] Non-positive accumulation in MinsMaxesHierarchical: key: {:?}\tvalue: {:?}\tcount: {:?}",
-                            key, val, cnt,
-                        );
+                        if *cnt <= 0 {
+                            warn!("[customer-data] Non-positive accumulation in MinsMaxesHierarchical: key: {key:?}\tvalue: {val:?}\tcount: {cnt:?} in dataflow {debug_name}");
+                            soft_assert_or_log!(
+                                false,
+                                "Non-positive accumulation in MinsMaxesHierarchical"
+                            );
+                        }
                     }
                 } else {
                     let mut output = Vec::with_capacity(aggrs.len());
@@ -668,7 +676,7 @@ where
 /// Build the dataflow to compute and arrange multiple hierarchical aggregations
 /// on monotonic inputs.
 fn build_monotonic<G>(
-    _dataflow_id: usize,
+    _debug_name: &str,
     collection: Collection<G, (Row, Row), Diff>,
     MonotonicPlan { aggr_funcs, skips }: MonotonicPlan,
 ) -> Arrangement<G, Row>
@@ -705,7 +713,7 @@ where
             let mut output = Vec::new();
             for (row, func) in values.into_iter().zip(aggr_funcs.iter()) {
                 output.push(monoids::get_monoid(row, func).expect(
-                    "hierarchical aggregations are expected to have monoid implementations in dataflow id {dataflow_id}",
+                    "hierarchical aggregations are expected to have monoid implementations",
                 ));
             }
 
@@ -858,7 +866,7 @@ impl Semigroup for Accum {
                 },
             ) => {
                 *accum = accum.checked_add(*other_accum).unwrap_or_else(|| {
-                    tracing::warn!("Float accumulator overflow. Incorrect results possible");
+                    warn!("Float accumulator overflow. Incorrect results possible");
                     accum.wrapping_add(*other_accum)
                 });
                 *pos_infs += other_pos_infs;
@@ -915,8 +923,7 @@ impl Semigroup for Accum {
                 *non_nulls += other_non_nulls;
             }
             (l, r) => unreachable!(
-                "Accumulator::plus_equals called with non-matching variants: {:?} vs {:?}",
-                l, r
+                "Accumulator::plus_equals called with non-matching variants: {l:?} vs {r:?}"
             ),
         }
     }
@@ -944,7 +951,7 @@ impl Multiply<Diff> for Accum {
                 non_nulls,
             } => Accum::Float {
                 accum: accum.checked_mul(i128::from(factor)).unwrap_or_else(|| {
-                    tracing::warn!("Float accumulator overflow. Incorrect results possible");
+                    warn!("Float accumulator overflow. Incorrect results possible");
                     accum.wrapping_mul(i128::from(factor))
                 }),
                 pos_infs: pos_infs * factor,
@@ -990,7 +997,7 @@ impl Multiply<Diff> for Accum {
 /// values to data, at which point a final map applies operator-specific logic to
 /// yield the final aggregate.
 fn build_accumulable<G>(
-    dataflow_id: usize,
+    debug_name: &str,
     collection: Collection<G, (Row, Row), Diff>,
     AccumulablePlan {
         full_aggrs,
@@ -1003,11 +1010,14 @@ where
     G::Timestamp: Lattice,
 {
     // we must have called this function with something to reduce
-    soft_assert_or_log!(
-        full_aggrs.len() > 0 && (simple_aggrs.len() + distinct_aggrs.len() == full_aggrs.len()),
-        "Building arrangement for accumulable plan requires aggregates ({} found) and that their counts match ({} + {}) in dataflow id {}",
-        full_aggrs.len(), simple_aggrs.len(), distinct_aggrs.len(), dataflow_id
-    );
+    if full_aggrs.len() == 0 || simple_aggrs.len() + distinct_aggrs.len() != full_aggrs.len() {
+        warn!("Building arrangement for accumulable plan requires aggregates ({} found) and that their counts match ({} + {}) in dataflow {debug_name}",
+            full_aggrs.len(), simple_aggrs.len(), distinct_aggrs.len());
+        soft_assert_or_log!(
+            false,
+            "Incorrect numbers of aggregates in accummulable reduction rendering"
+        );
+    }
 
     // Some of the aggregations may have the `distinct` bit set, which means that they'll
     // need to be extracted from `collection` and be subjected to `distinct` with `key`.
@@ -1073,30 +1083,21 @@ where
                     trues: 0,
                     falses: 1,
                 },
-                x => panic!(
-                    "Invalid argument to AggregateFunc::Any: {:?} in dataflow id {}",
-                    x, dataflow_id
-                ),
+                x => panic!("Invalid argument to AggregateFunc::Any: {x:?}"),
             },
             AggregateFunc::Dummy => match datum {
                 Datum::Dummy => Accum::SimpleNumber {
                     accum: 0,
                     non_nulls: 0,
                 },
-                x => panic!(
-                    "Invalid argument to AggregateFunc::Dummy: {:?} in dataflow id {}",
-                    x, dataflow_id
-                ),
+                x => panic!("Invalid argument to AggregateFunc::Dummy: {x:?}"),
             },
             AggregateFunc::SumFloat32 | AggregateFunc::SumFloat64 => {
                 let n = match datum {
                     Datum::Float32(n) => f64::from(*n),
                     Datum::Float64(n) => *n,
                     Datum::Null => 0f64,
-                    x => panic!(
-                        "Invalid argument to AggregateFunc::{:?}: {:?} in dataflow id {}",
-                        aggr, x, dataflow_id
-                    ),
+                    x => panic!("Invalid argument to AggregateFunc::{aggr:?}: {x:?}"),
                 };
 
                 let nans = Diff::from(n.is_nan());
@@ -1157,10 +1158,7 @@ where
                     nans: 0,
                     non_nulls: 0,
                 },
-                x => panic!(
-                    "Invalid argument to AggregateFunc::SumNumeric: {:?} in dataflow id {}",
-                    x, dataflow_id
-                ),
+                x => panic!("Invalid argument to AggregateFunc::SumNumeric: {x:?}"),
             },
             _ => {
                 // Other accumulations need to disentangle the accumulable
@@ -1199,10 +1197,7 @@ where
                         accum: 0,
                         non_nulls: 0,
                     },
-                    x => panic!(
-                        "Accumulating non-integer data: {:?} in dataflow id {}",
-                        x, dataflow_id
-                    ),
+                    x => panic!("Accumulating non-integer data: {x:?}"),
                 }
             }
         }
@@ -1267,6 +1262,7 @@ where
         differential_dataflow::collection::concatenate(&mut collection.scope(), to_aggregate)
     };
 
+    let debug_name = debug_name.to_string();
     collection
         .arrange_named::<RowKeySpine<_, _, (Vec<Accum>, Diff)>>("ArrangeAccumulable")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceAccumulable", {
@@ -1280,14 +1276,11 @@ where
                     // operator, when this key is presented but matching aggregates are not found. We will
                     // suppress the output for inputs without net-positive records, which *should* avoid
                     // that panic.
-                    soft_assert_or_log!(
-                        total != 0 || accum.is_zero(),
-                        "[customer-data] ReduceAccumulable observed net-zero records \
-                        with non-zero accumulation: {:?}: {:?} in dataflow id {}",
-                        aggr,
-                        accum,
-                        dataflow_id
-                    );
+                    if total == 0 && !accum.is_zero() {
+                        warn!("[customer-data] ReduceAccumulable observed net-zero records \
+                            with non-zero accumulation: {aggr:?}: {accum:?} in dataflow {debug_name}");
+                        soft_assert_or_log!(false, "Net-zero records with non-zero accumulation in ReduceAccumulable");
+                    }
 
                     // The finished value depends on the aggregation function in a variety of ways.
                     // For all aggregates but count, if only null values were
@@ -1343,7 +1336,7 @@ where
                             | (
                                 AggregateFunc::SumUInt32,
                                 Accum::SimpleNumber { accum, .. },
-                            ) => Datum::UInt64(u64::try_from(*accum).unwrap_or_else(|_| panic!("Invalid accumulated result {accum} for unsigned function in dataflow {}", dataflow_id))),
+                            ) => Datum::UInt64(u64::try_from(*accum).unwrap_or_else(|_| panic!("Invalid accumulated result {accum} for unsigned function in dataflow {debug_name}"))),
                             (
                                 AggregateFunc::SumUInt64,
                                 Accum::SimpleNumber { accum, .. },
@@ -1437,8 +1430,8 @@ where
                                 }
                             }
                             _ => panic!(
-                                "Unexpected accumulation (aggr={:?}, accum={:?}) in dataflow id {}",
-                                aggr.func, accum, dataflow_id
+                                "Unexpected accumulation (aggr={:?}, accum={accum:?}) in dataflow {debug_name}",
+                                aggr.func
                             ),
                         }
                     };
@@ -1512,9 +1505,7 @@ pub mod monoids {
                 }
                 (lhs, rhs) => {
                     soft_panic_or_log!(
-                        "Mismatched monoid variants in reduction! lhs: {:?} rhs: {:?}",
-                        lhs,
-                        rhs
+                        "Mismatched monoid variants in reduction! lhs: {lhs:?} rhs: {rhs:?}"
                     );
                 }
             }
