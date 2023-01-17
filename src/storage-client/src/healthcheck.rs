@@ -11,7 +11,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use mz_repr::{Datum, GlobalId, Row};
 
 pub fn pack_status_row(
-    source_id: GlobalId,
+    collection_id: GlobalId,
     status_name: &str,
     error: Option<&str>,
     ts: u64,
@@ -30,10 +30,10 @@ pub fn pack_status_row(
             .try_into()
             .expect("must fit"),
     );
-    let source_id = source_id.to_string();
-    let source_id = Datum::String(&source_id);
+    let collection_id = collection_id.to_string();
+    let collection_id = Datum::String(&collection_id);
     let status = Datum::String(status_name);
-    let error = error.as_deref().into();
+    let error = error.into();
     let metadata = Datum::Null;
-    Row::pack_slice(&[timestamp, source_id, status, error, metadata])
+    Row::pack_slice(&[timestamp, collection_id, status, error, metadata])
 }
