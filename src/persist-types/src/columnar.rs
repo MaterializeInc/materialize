@@ -95,14 +95,14 @@ pub trait Data: Debug + Send + Sync + Sized + 'static {
     type Mut: ColumnPush<Self> + Default;
 }
 
-/// A type that may be retrieved from a column of [T].
+/// A type that may be retrieved from a column of `[T]`.
 pub trait ColumnGet<T: Data>: ColumnRef {
     /// Retrieves the value at index.
     fn get<'a>(&'a self, idx: usize) -> T::Ref<'a>;
 }
 
-/// A type that may be added into a column of [T].
-pub trait ColumnPush<T: Data> {
+/// A type that may be added into a column of `[T]`.
+pub trait ColumnPush<T: Data>: Send + Sync {
     /// Pushes a new value into this column.
     fn push<'a>(&mut self, val: T::Ref<'a>);
 }
@@ -111,8 +111,8 @@ pub(crate) mod sealed {
     use arrow2::array::Array;
     use arrow2::io::parquet::write::Encoding;
 
-    /// A common trait implemented by all [Data::Col] types.
-    pub trait ColumnRef: Sized {
+    /// A common trait implemented by all `Data::Col` types.
+    pub trait ColumnRef: Sized + Send + Sync {
         /// Returns the number of elements in this column.
         fn len(&self) -> usize;
 

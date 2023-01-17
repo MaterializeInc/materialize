@@ -27,6 +27,9 @@ use crate::columnar::{PartDecoder, PartEncoder, Schema};
 use crate::part::{Part, PartBuilder};
 
 /// Encodes the given part into our parquet-based serialization format.
+///
+/// It doesn't particularly get any anything to use more than one "chunk" per
+/// blob, and it's simpler to only have one, so do that.
 pub fn encode_part<W: Write>(w: &mut W, part: &Part) -> Result<(), anyhow::Error> {
     let metadata = Vec::new();
     let (fields, encodings, chunk) = part.to_arrow();
@@ -59,6 +62,9 @@ pub fn decode_part<R: Read + Seek, K, KS: Schema<K>, V, VS: Schema<V>>(
     let schema = infer_schema(&metadata)?;
     let mut reader = FileReader::new(r, metadata.row_groups, schema, None, None, None);
 
+    // encode_part documents that there is exactly one chunk in every blob.
+    // Verify that here by ensuring the first call to `next` is Some and the
+    // second call to it is None.
     let chunk = reader
         .next()
         .ok_or_else(|| anyhow!("not enough chunks in part"))?

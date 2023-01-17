@@ -13,7 +13,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow2::array::{Array, NullArray, PrimitiveArray, StructArray};
+use arrow2::array::{Array, PrimitiveArray, StructArray};
 use arrow2::buffer::Buffer;
 use arrow2::chunk::Chunk;
 use arrow2::datatypes::{DataType as ArrowLogicalType, Field};
@@ -39,7 +39,7 @@ impl Part {
         self.len
     }
 
-    /// Returns a [Columns] for the key columns.
+    /// Returns a [ColumnsRef] for the key columns.
     pub fn key_ref<'a>(&'a self) -> ColumnsRef<'a> {
         ColumnsRef {
             cols: self
@@ -50,7 +50,7 @@ impl Part {
         }
     }
 
-    /// Returns a [Columns] for the val columns.
+    /// Returns a [ColumnsRef] for the val columns.
     pub fn val_ref<'a>(&'a self) -> ColumnsRef<'a> {
         ColumnsRef {
             cols: self
@@ -74,13 +74,12 @@ impl Part {
                 key_encodings.push(encoding);
                 key_arrays.push(array);
             }
-            if key_arrays.is_empty() {
-                // arrow2 doesn't allow empty struct arrays
-                let key = NullArray::new(ArrowLogicalType::Null, self.ts.len());
-                fields.push(Field::new("k", key.data_type().clone(), false));
-                encodings.push(vec![Encoding::Plain]);
-                arrays.push(Box::new(key));
-            } else {
+            // arrow2 doesn't allow empty struct arrays. To make a future schema
+            // migration for <no columns> <-> <one optional column> easier, we
+            // model this as a missing column (rather than something like
+            // NullArray). This also matches how we'd do the same for nested
+            // structs.
+            if !key_arrays.is_empty() {
                 let key = StructArray::new(ArrowLogicalType::Struct(key_fields), key_arrays, None);
                 fields.push(Field::new("k", key.data_type().clone(), false));
                 encodings.push(key_encodings);
@@ -97,13 +96,12 @@ impl Part {
                 val_encodings.push(encoding);
                 val_arrays.push(array);
             }
-            if val_arrays.is_empty() {
-                // arrow2 doesn't allow empty struct arrays
-                let val = NullArray::new(ArrowLogicalType::Null, self.ts.len());
-                fields.push(Field::new("v", val.data_type().clone(), false));
-                encodings.push(vec![Encoding::Plain]);
-                arrays.push(Box::new(val));
-            } else {
+            // arrow2 doesn't allow empty struct arrays. To make a future schema
+            // migration for <no columns> <-> <one optional column> easier, we
+            // model this as a missing column (rather than something like
+            // NullArray). This also matches how we'd do the same for nested
+            // structs.
+            if !val_arrays.is_empty() {
                 let val = StructArray::new(ArrowLogicalType::Struct(val_fields), val_arrays, None);
                 fields.push(Field::new("v", val.data_type().clone(), false));
                 encodings.push(val_encodings);
@@ -137,46 +135,73 @@ impl Part {
         let val_schema = val_schema.columns();
 
         let len = chunk.len();
-        let chunk = chunk.into_arrays();
-        if chunk.len() != 4 {
-            return Err(format!("expected 4 columns got {}", chunk.len()));
-        }
-        let (key, val, ts, diff) = (&chunk[0], &chunk[1], &chunk[2], &chunk[3]);
-
-        let key = if let Some(_) = key.as_any().downcast_ref::<NullArray>() {
-            Vec::new()
-        } else if let Some(key_array) = key.as_any().downcast_ref::<StructArray>() {
-            assert!(key_array.validity().is_none());
-            assert_eq!(key_schema.len(), key_array.values().len());
-            let mut key = Vec::new();
-            for ((name, typ), array) in key_schema.iter().zip(key_array.values()) {
-                let col = DynColumnRef::from_arrow(typ, array)?;
-                key.push((name.clone(), col));
-            }
-            key
+        let mut chunk = chunk.arrays().iter();
+        let key = if key_schema.is_empty() {
+            None
         } else {
-            return Err(format!(
-                "expected key to be Null or Struct array got {:?}",
-                key.data_type()
-            ));
+            Some(
+                chunk
+                    .next()
+                    .ok_or_else(|| "missing key column".to_owned())?,
+            )
+        };
+        let val = if val_schema.is_empty() {
+            None
+        } else {
+            Some(
+                chunk
+                    .next()
+                    .ok_or_else(|| "missing val column".to_owned())?,
+            )
+        };
+        let ts = chunk.next().ok_or_else(|| "missing ts column".to_owned())?;
+        let diff = chunk
+            .next()
+            .ok_or_else(|| "missing diff column".to_owned())?;
+        if let Some(_) = chunk.next() {
+            return Err("too many columns".to_owned());
+        }
+
+        let key = match key {
+            None => Vec::new(),
+            Some(key) => {
+                if let Some(key_array) = key.as_any().downcast_ref::<StructArray>() {
+                    assert!(key_array.validity().is_none());
+                    assert_eq!(key_schema.len(), key_array.values().len());
+                    let mut key = Vec::new();
+                    for ((name, typ), array) in key_schema.iter().zip(key_array.values()) {
+                        let col = DynColumnRef::from_arrow(typ, array)?;
+                        key.push((name.clone(), col));
+                    }
+                    key
+                } else {
+                    return Err(format!(
+                        "expected key to be Null or Struct array got {:?}",
+                        key.data_type()
+                    ));
+                }
+            }
         };
 
-        let val = if let Some(_) = val.as_any().downcast_ref::<NullArray>() {
-            Vec::new()
-        } else if let Some(val_array) = val.as_any().downcast_ref::<StructArray>() {
-            assert!(val_array.validity().is_none());
-            assert_eq!(val_schema.len(), val_array.values().len());
-            let mut val = Vec::new();
-            for ((name, typ), array) in val_schema.iter().zip(val_array.values()) {
-                let col = DynColumnRef::from_arrow(typ, array)?;
-                val.push((name.clone(), col));
+        let val = match val {
+            None => Vec::new(),
+            Some(val) => {
+                if let Some(val_array) = val.as_any().downcast_ref::<StructArray>() {
+                    assert!(val_array.validity().is_none());
+                    assert_eq!(val_schema.len(), val_array.values().len());
+                    let mut val = Vec::new();
+                    for ((name, typ), array) in val_schema.iter().zip(val_array.values()) {
+                        let col = DynColumnRef::from_arrow(typ, array)?;
+                        val.push((name.clone(), col));
+                    }
+                    val
+                } else {
+                    return Err(format!(
+                        "expected val to be Null or Struct array got {:?}",
+                        val.data_type()
+                    ));
+                }
             }
-            val
-        } else {
-            return Err(format!(
-                "expected val to be Null or Struct array got {:?}",
-                val.data_type()
-            ));
         };
 
         let diff = diff
@@ -341,7 +366,7 @@ impl PartBuilder {
 
 /// Hack to make things work with `Arc<dyn Any>::downcast_ref`.
 #[derive(Debug)]
-struct DynColumnRef(DataType, Arc<dyn Any>);
+struct DynColumnRef(DataType, Arc<dyn Any + Send + Sync>);
 
 impl DynColumnRef {
     pub fn new<T: Data>(col: T::Col) -> Self {
@@ -375,7 +400,7 @@ impl DynColumnRef {
             fn call<T: Data>(self) -> Result<DynColumnRef, String> {
                 let typ = T::TYPE.clone();
                 let col = T::Col::from_arrow(self.0)?;
-                let col: Arc<dyn Any> = Arc::new(col);
+                let col: Arc<dyn Any + Send + Sync> = Arc::new(col);
                 Ok(DynColumnRef(typ, col))
             }
         }
@@ -399,7 +424,7 @@ impl DynColumnRef {
 
 /// Hack to make things work with `Box<dyn Any>::downcast_mut`.
 #[derive(Debug)]
-struct DynColumnMut(DataType, Box<dyn Any>);
+struct DynColumnMut(DataType, Box<dyn Any + Send + Sync>);
 
 impl DynColumnMut {
     pub fn new<T: Data>(col: T::Mut) -> Self {
@@ -547,5 +572,24 @@ impl DataType {
             (false, ColumnFormat::String) => logic.call::<String>(),
             (true, ColumnFormat::String) => logic.call::<Option<String>>(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::marker::PhantomData;
+
+    use super::*;
+
+    // Make sure that the API structs are Sync + Send, so that they can be used in async tasks.
+    // NOTE: This is a compile-time only test. If it compiles, we're good.
+    #[allow(unused)]
+    fn sync_send() {
+        fn is_send_sync<T: Send + Sync>(_: PhantomData<T>) -> bool {
+            true
+        }
+
+        assert!(is_send_sync::<Part>(PhantomData));
+        assert!(is_send_sync::<PartBuilder>(PhantomData));
     }
 }
