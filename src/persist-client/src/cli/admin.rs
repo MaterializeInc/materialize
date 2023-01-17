@@ -14,16 +14,21 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::anyhow;
+use async_trait::async_trait;
+use bytes::Bytes;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
-use mz_persist::location::{Blob, Consensus};
+use mz_persist::location::{
+    Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
+};
 use prometheus::proto::{MetricFamily, MetricType};
 use tracing::info;
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::cli::inspect::StateArgs;
 use crate::internal::compact::{CompactReq, Compactor};
+use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::{MetricsBlob, MetricsConsensus};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
@@ -91,7 +96,7 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
         }
         Command::ForceGc(args) => {
             let shard_id = ShardId::from_str(&args.state.shard_id).expect("invalid shard id");
-            let mut cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+            let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
             let metrics_registry = MetricsRegistry::new();
             let () = force_gc(
                 cfg,
@@ -298,6 +303,66 @@ pub async fn force_compaction(
     }
 }
 
+#[derive(Debug)]
+struct ReadOnly<T>(T);
+
+#[async_trait]
+impl Blob for ReadOnly<Arc<dyn Blob + Sync + Send>> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+        self.0.get(key).await
+    }
+
+    async fn list_keys_and_metadata(
+        &self,
+        key_prefix: &str,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError> {
+        self.0.list_keys_and_metadata(key_prefix, f).await
+    }
+
+    async fn set(
+        &self,
+        _key: &str,
+        _value: Bytes,
+        _atomic: Atomicity,
+    ) -> Result<(), ExternalError> {
+        Ok(())
+    }
+
+    async fn delete(&self, _key: &str) -> Result<Option<usize>, ExternalError> {
+        Ok(None)
+    }
+}
+
+#[async_trait]
+impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
+    async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
+        self.0.head(key).await
+    }
+
+    async fn compare_and_set(
+        &self,
+        _key: &str,
+        _expected: Option<SeqNo>,
+        _new: VersionedData,
+    ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
+        Ok(Ok(()))
+    }
+
+    async fn scan(
+        &self,
+        key: &str,
+        from: SeqNo,
+        limit: usize,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
+        self.0.scan(key, from, limit).await
+    }
+
+    async fn truncate(&self, _key: &str, _seqno: SeqNo) -> Result<usize, ExternalError> {
+        Ok(0)
+    }
+}
+
 async fn force_gc(
     cfg: PersistConfig,
     metrics_registry: &MetricsRegistry,
@@ -306,5 +371,79 @@ async fn force_gc(
     blob_uri: &str,
     commit: bool,
 ) -> anyhow::Result<()> {
+    let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
+    let consensus = ConsensusConfig::try_from(
+        consensus_uri,
+        Box::new(cfg.clone()),
+        metrics.postgres_consensus.clone(),
+    )?;
+    let consensus = consensus.clone().open().await?;
+    let consensus = if commit {
+        consensus
+    } else {
+        Arc::new(ReadOnly(consensus))
+    };
+    let consensus: Arc<dyn Consensus + Send + Sync> =
+        Arc::new(MetricsConsensus::new(consensus, Arc::clone(&metrics)));
+    let blob = BlobConfig::try_from(blob_uri).await?;
+    let blob = blob.clone().open().await?;
+    let blob = if commit {
+        blob
+    } else {
+        Arc::new(ReadOnly(blob))
+    };
+    let blob: Arc<dyn Blob + Send + Sync> = Arc::new(MetricsBlob::new(blob, Arc::clone(&metrics)));
+
+    let state_versions = Arc::new(StateVersions::new(
+        cfg.clone(),
+        consensus,
+        Arc::clone(&blob),
+        Arc::clone(&metrics),
+    ));
+
+    // Prime the K V codec magic
+    let versions = state_versions
+        .fetch_recent_live_diffs::<u64>(&shard_id)
+        .await;
+
+    loop {
+        let state_res = state_versions
+            .fetch_current_state::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>(
+                &shard_id,
+                versions.0.clone(),
+            )
+            .await;
+        let state = match state_res {
+            Ok(state) => state,
+            Err(codec) => {
+                let mut kvtd = crate::cli::inspect::KVTD_CODECS.lock().expect("lockable");
+                *kvtd = codec.actual;
+                continue;
+            }
+        };
+        // This isn't the perfect place to put this check, the ideal would be in
+        // the apply_unbatched_cmd loop, but I don't want to pollute the prod
+        // code with this logic.
+        if cfg.build_version != state.applier_version {
+            // We could add a flag to override this check, if that comes up.
+            return Err(anyhow!("version of this tool {} does not match version of state {}. bailing so we don't corrupt anything", cfg.build_version, state.applier_version));
+        }
+        break;
+    }
+
+    let mut machine = Machine::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>::new(
+        cfg.clone(),
+        shard_id,
+        Arc::clone(&metrics),
+        Arc::clone(&state_versions),
+    )
+    .await?;
+
+    let gc_req = GcReq {
+        shard_id,
+        new_seqno_since: machine.state().seqno_since(),
+    };
+    GarbageCollector::gc_and_truncate(&mut machine, gc_req).await;
+
     Ok(())
 }
