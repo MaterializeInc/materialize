@@ -191,6 +191,36 @@ impl From<CollectionMissing> for CollectionUpdateError {
     }
 }
 
+// Errors arising during subscribe target assignment.
+#[derive(Error, Debug)]
+pub enum SubscribeTargetError {
+    #[error("instance does not exist: {0}")]
+    InstanceMissing(ComputeInstanceId),
+    #[error("subscribe does not exist: {0}")]
+    SubscribeMissing(GlobalId),
+    #[error("replica does not exist: {0}")]
+    ReplicaMissing(ReplicaId),
+    #[error("subscribe has already produced output")]
+    SubscribeAlreadyStarted,
+}
+
+impl From<InstanceMissing> for SubscribeTargetError {
+    fn from(error: InstanceMissing) -> Self {
+        Self::InstanceMissing(error.0)
+    }
+}
+
+impl From<instance::SubscribeTargetError> for SubscribeTargetError {
+    fn from(error: instance::SubscribeTargetError) -> Self {
+        use instance::SubscribeTargetError::*;
+        match error {
+            SubscribeMissing(id) => Self::SubscribeMissing(id),
+            ReplicaMissing(id) => Self::ReplicaMissing(id),
+            SubscribeAlreadyStarted => Self::SubscribeAlreadyStarted,
+        }
+    }
+}
+
 /// Errors arising during orphan removal.
 #[derive(Error, Debug)]
 pub enum RemoveOrphansError {

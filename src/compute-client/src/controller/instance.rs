@@ -83,6 +83,16 @@ impl From<CollectionMissing> for PeekError {
     }
 }
 
+#[derive(Error, Debug)]
+pub(super) enum SubscribeTargetError {
+    #[error("subscribe does not exist: {0}")]
+    SubscribeMissing(GlobalId),
+    #[error("replica does not exist: {0}")]
+    ReplicaMissing(ReplicaId),
+    #[error("subscribe has already produced output")]
+    SubscribeAlreadyStarted,
+}
+
 /// The state we keep for a compute instance.
 #[derive(Debug)]
 pub(super) struct Instance<T> {
@@ -98,8 +108,8 @@ pub(super) struct Instance<T> {
     arranged_logs: BTreeMap<LogVariant, GlobalId>,
     /// Currently outstanding peeks.
     peeks: HashMap<Uuid, PendingPeek<T>>,
-    /// Frontiers of in-progress subscribes.
-    subscribes: BTreeMap<GlobalId, Antichain<T>>,
+    /// Currently in-progress subscribes.
+    subscribes: BTreeMap<GlobalId, ActiveSubscribe<T>>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<T>,
     /// IDs of replicas that have failed and require rehydration.
@@ -281,6 +291,33 @@ where
                 Ok((replica_id, response))
             }
         }
+    }
+
+    /// Assign a target replica to the identified subscribe.
+    ///
+    /// If a subscribe has a target replica assigned, only subscribe responses
+    /// sent by that replica are considered.
+    pub fn set_subscribe_target_replica(
+        &mut self,
+        id: GlobalId,
+        target_replica: ReplicaId,
+    ) -> Result<(), SubscribeTargetError> {
+        if !self.replica_exists(target_replica) {
+            return Err(SubscribeTargetError::ReplicaMissing(target_replica));
+        }
+
+        let Some(subscribe) = self.subscribes.get_mut(&id) else {
+            return Err(SubscribeTargetError::SubscribeMissing(id));
+        };
+
+        // For sanity reasons, we don't allow re-targeting a subscribe for which we have already
+        // produced output.
+        if !subscribe.frontier.less_equal(&T::minimum()) {
+            return Err(SubscribeTargetError::SubscribeAlreadyStarted);
+        }
+
+        subscribe.target_replica = Some(target_replica);
+        Ok(())
     }
 }
 
@@ -556,7 +593,7 @@ where
             for subscribe_id in dataflow.subscribe_ids() {
                 self.compute
                     .subscribes
-                    .insert(subscribe_id, Antichain::from_elem(Timestamp::minimum()));
+                    .insert(subscribe_id, ActiveSubscribe::new());
             }
         }
 
@@ -1086,67 +1123,65 @@ where
         response: SubscribeResponse<T>,
         replica_id: ReplicaId,
     ) -> Option<ComputeControllerResponse<T>> {
-        let mut frontier_updates = Vec::new();
-        let controller_response = match response {
-            SubscribeResponse::Batch(SubscribeBatch {
-                lower: _,
-                upper,
-                mut updates,
-            }) => {
-                frontier_updates.push((subscribe_id, upper.clone()));
+        // Always apply write frontier updates. Even if the subscribe is not tracked anymore, there
+        // might still be replicas reading from its inputs, so we need to track the frontiers until
+        // all replicas have advanced to the empty one.
+        let write_frontier = match &response {
+            SubscribeResponse::Batch(batch) => batch.upper.clone(),
+            SubscribeResponse::DroppedAt(_) => Antichain::new(),
+        };
+        self.update_write_frontiers(replica_id, &[(subscribe_id, write_frontier)]);
+
+        // If the subscribe is not tracked, or targets a different replica, there is nothing to do.
+        let mut subscribe = self.compute.subscribes.get(&subscribe_id)?.clone();
+        let replica_targeted = subscribe.target_replica.unwrap_or(replica_id) == replica_id;
+        if !replica_targeted {
+            return None;
+        }
+
+        match response {
+            SubscribeResponse::Batch(batch) => {
+                let upper = batch.upper;
+                let mut updates = batch.updates;
 
                 // If this batch advances the subscribe's frontier, we emit all updates at times
                 // greater or equal to the last frontier (to avoid emitting duplicate updates).
-                // let old_upper_bound = entry.bounds.upper.clone();
-                let prev_frontier = self
-                    .compute
-                    .subscribes
-                    .remove(&subscribe_id)
-                    .unwrap_or_else(Antichain::new);
+                if PartialOrder::less_than(&subscribe.frontier, &upper) {
+                    let lower = std::mem::replace(&mut subscribe.frontier, upper.clone());
 
-                if PartialOrder::less_than(&prev_frontier, &upper) {
-                    if !upper.is_empty() {
-                        // This subscribe can produce more data. Keep tracking it.
-                        self.compute.subscribes.insert(subscribe_id, upper.clone());
+                    if upper.is_empty() {
+                        // This subscribe cannot produce more data. Stop tracking it.
+                        self.compute.subscribes.remove(&subscribe_id);
+                    } else {
+                        // This subscribe can produce more data. Update our tracking of it.
+                        self.compute.subscribes.insert(subscribe_id, subscribe);
                     }
 
                     if let Ok(updates) = updates.as_mut() {
-                        updates.retain(|(time, _data, _diff)| prev_frontier.less_equal(time));
+                        updates.retain(|(time, _data, _diff)| lower.less_equal(time));
                     }
                     Some(ComputeControllerResponse::SubscribeResponse(
                         subscribe_id,
                         SubscribeResponse::Batch(SubscribeBatch {
-                            lower: prev_frontier,
+                            lower,
                             upper,
                             updates,
                         }),
                     ))
                 } else {
-                    if !prev_frontier.is_empty() {
-                        // This subscribe can produce more data. Keep tracking it.
-                        self.compute.subscribes.insert(subscribe_id, prev_frontier);
-                    }
                     None
                 }
             }
             SubscribeResponse::DroppedAt(_) => {
-                frontier_updates.push((subscribe_id, Antichain::new()));
+                // This subscribe cannot produce more data. Stop tracking it.
+                self.compute.subscribes.remove(&subscribe_id);
 
-                // If this subscribe is still in progress, forward the `DroppedAt` response.
-                // Otherwise ignore it.
-                if let Some(frontier) = self.compute.subscribes.remove(&subscribe_id) {
-                    Some(ComputeControllerResponse::SubscribeResponse(
-                        subscribe_id,
-                        SubscribeResponse::DroppedAt(frontier),
-                    ))
-                } else {
-                    None
-                }
+                Some(ComputeControllerResponse::SubscribeResponse(
+                    subscribe_id,
+                    SubscribeResponse::DroppedAt(subscribe.frontier),
+                ))
             }
-        };
-
-        self.update_write_frontiers(replica_id, &frontier_updates);
-        controller_response
+        }
     }
 }
 
@@ -1177,5 +1212,24 @@ impl<T> PendingPeek<T> {
         // has no replicas or all replicas have been temporarily removed for re-hydration. In this
         // case, we wait for new replicas to be added to eventually serve the peek.
         self.otel_ctx.is_none() && self.unfinished.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ActiveSubscribe<T> {
+    /// Current upper frontier of this subscribe.
+    frontier: Antichain<T>,
+    /// For replica-targeted subscribes, this specifies the replica whose responses we should pass on.
+    ///
+    /// If this value is `None`, we pass on the first response for each time slice.
+    target_replica: Option<ReplicaId>,
+}
+
+impl<T: Timestamp> ActiveSubscribe<T> {
+    fn new() -> Self {
+        Self {
+            frontier: Antichain::from_elem(Timestamp::minimum()),
+            target_replica: None,
+        }
     }
 }

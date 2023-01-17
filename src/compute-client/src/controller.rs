@@ -64,7 +64,7 @@ use crate::types::dataflows::DataflowDescription;
 use self::error::{
     CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
     InstanceExists, InstanceMissing, PeekError, RemoveOrphansError, ReplicaCreationError,
-    ReplicaDropError,
+    ReplicaDropError, SubscribeTargetError,
 };
 use self::instance::{ActiveInstance, Instance};
 use self::orchestrator::ComputeOrchestrator;
@@ -541,6 +541,21 @@ where
     /// Listen for changes to compute services reported by the orchestrator.
     pub fn watch_services(&self) -> BoxStream<'static, ComputeInstanceEvent> {
         self.orchestrator.watch_services()
+    }
+
+    /// Assign a target replica to the identified subscribe.
+    ///
+    /// If a subscribe has a target replica assigned, only subscribe responses
+    /// sent by that replica are considered.
+    pub fn set_subscribe_target_replica(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        subscribe_id: GlobalId,
+        target_replica: ReplicaId,
+    ) -> Result<(), SubscribeTargetError> {
+        self.instance_mut(instance_id)?
+            .set_subscribe_target_replica(subscribe_id, target_replica)?;
+        Ok(())
     }
 }
 
