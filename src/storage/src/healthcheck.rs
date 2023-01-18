@@ -14,7 +14,7 @@ use mz_ore::now::NowFn;
 use timely::progress::Antichain;
 
 use mz_persist_client::{PersistClient, ShardId};
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_storage_client::types::sources::SourceData;
 
 pub async fn write_to_persist(
@@ -24,6 +24,7 @@ pub async fn write_to_persist(
     now: NowFn,
     client: &PersistClient,
     status_shard: ShardId,
+    relation_desc: &RelationDesc,
 ) {
     let now_ms = now();
     let row = mz_storage_client::healthcheck::pack_status_row(
@@ -37,7 +38,7 @@ pub async fn write_to_persist(
         .open_writer(
             status_shard,
             &format!("healthcheck::write_to_persist {}", collection_id),
-            PersistClient::TO_REPLACE_SCHEMA,
+            relation_desc.clone(),
         )
         .await
         .expect(

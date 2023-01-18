@@ -59,6 +59,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_storage_client::client::SourceStatisticsUpdate;
 use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
+use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
 use mz_storage_client::source::util::async_source;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceError;
@@ -922,7 +923,15 @@ where
         if is_active_worker {
             if let Some(status_shard) = storage_metadata.status_shard {
                 info!("Health for source {source_id} being written to {status_shard}");
-                write_to_persist(source_id, last_reported_status.name(), last_reported_status.error(), now.clone(), &persist_client, status_shard).await;
+                write_to_persist(
+                    source_id,
+                    last_reported_status.name(),
+                    last_reported_status.error(),
+                    now.clone(),
+                    &persist_client,
+                    status_shard,
+                    &*MZ_SOURCE_STATUS_HISTORY_DESC
+                ).await;
             } else {
                 info!("Health for source {source_id} not being written to status shard");
             }
@@ -950,7 +959,15 @@ where
                 if &last_reported_status != new_status {
                     info!("Health transition for source {source_id}: {last_reported_status:?} -> {new_status:?}");
                     if let Some(status_shard) = storage_metadata.status_shard {
-                        write_to_persist(source_id, new_status.name(), new_status.error(), now.clone(), &persist_client, status_shard).await;
+                        write_to_persist(
+                            source_id,
+                            new_status.name(),
+                            new_status.error(),
+                            now.clone(),
+                            &persist_client,
+                            status_shard,
+                            &*MZ_SOURCE_STATUS_HISTORY_DESC
+                        ).await;
                     }
 
                     last_reported_status = new_status.clone();

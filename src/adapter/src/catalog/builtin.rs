@@ -34,6 +34,7 @@ use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, TypeReference,
 };
 use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
 
 use crate::catalog::{DEFAULT_CLUSTER_REPLICA_NAME, INTROSPECTION_USER, SYSTEM_USER};
 
@@ -1608,12 +1609,7 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
     name: "mz_source_status_history",
     schema: MZ_INTERNAL_SCHEMA,
     data_source: Some(IntrospectionType::SourceStatusHistory),
-    desc: RelationDesc::empty()
-        .with_column("occurred_at", ScalarType::TimestampTz.nullable(false))
-        .with_column("source_id", ScalarType::String.nullable(false))
-        .with_column("status", ScalarType::String.nullable(false))
-        .with_column("error", ScalarType::String.nullable(true))
-        .with_column("details", ScalarType::Jsonb.nullable(true)),
+    desc: MZ_SOURCE_STATUS_HISTORY_DESC.clone(),
     is_retained_metrics_relation: false,
 });
 
@@ -1645,12 +1641,7 @@ pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSou
     name: "mz_sink_status_history",
     schema: MZ_INTERNAL_SCHEMA,
     data_source: Some(IntrospectionType::SinkStatusHistory),
-    desc: RelationDesc::empty()
-        .with_column("occurred_at", ScalarType::TimestampTz.nullable(false))
-        .with_column("sink_id", ScalarType::String.nullable(false))
-        .with_column("status", ScalarType::String.nullable(false))
-        .with_column("error", ScalarType::String.nullable(true))
-        .with_column("details", ScalarType::Jsonb.nullable(true)),
+    desc: MZ_SINK_STATUS_HISTORY_DESC.clone(),
     is_retained_metrics_relation: false,
 });
 
