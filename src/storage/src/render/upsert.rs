@@ -127,7 +127,10 @@ where
     // On the other hand, "Err(everything eles)", which we don't.
     let (previous, mut errs) = previous.ok_err(|(d, t, r)| match d {
         Ok(row) => Ok((Ok(row), t, r)),
-        Err(DataflowError::EnvelopeError(EnvelopeError::Upsert(err))) => Ok((Err(err), t, r)),
+        Err(DataflowError::EnvelopeError(err)) => match *err {
+            EnvelopeError::Upsert(e) => Ok((Err(e), t, r)),
+            err => Err((err.into(), t, r)),
+        },
         Err(err) => Err((err, t, r)),
     });
 
@@ -257,13 +260,13 @@ fn extract_kv<G: Scope>(
             }
             Err(UpsertError::KeyDecode(err)) => (
                 Err(err.clone()),
-                Err(DataflowError::EnvelopeError(EnvelopeError::Upsert(
+                Err(DataflowError::from(EnvelopeError::Upsert(
                     UpsertError::KeyDecode(err),
                 ))),
             ),
             Err(UpsertError::Value(UpsertValueError { inner, for_key })) => (
                 Ok(for_key.clone()),
-                Err(DataflowError::EnvelopeError(EnvelopeError::Upsert(
+                Err(DataflowError::from(EnvelopeError::Upsert(
                     UpsertError::Value(UpsertValueError { inner, for_key }),
                 ))),
             ),
@@ -589,7 +592,7 @@ fn process_pending_values_batch(
             let (decoded_key, decoded_value): (_, Result<_, DataflowError>) =
                 match (decoded_key, data.value) {
                     (Err(key_decode_error), Some(_)) => {
-                        let err = DataflowError::EnvelopeError(EnvelopeError::Upsert(
+                        let err = DataflowError::from(EnvelopeError::Upsert(
                             UpsertError::KeyDecode(key_decode_error.clone()),
                         ));
                         (Err(key_decode_error), Err(err))
@@ -612,12 +615,12 @@ fn process_pending_values_batch(
                                 })
                             })
                             .map_err(|err| {
-                                DataflowError::EnvelopeError(EnvelopeError::Upsert(
-                                    UpsertError::Value(UpsertValueError {
+                                DataflowError::from(EnvelopeError::Upsert(UpsertError::Value(
+                                    UpsertValueError {
                                         inner: Box::new(err),
                                         for_key: decoded_key.clone(),
-                                    }),
-                                ))
+                                    },
+                                )))
                             });
                         (Ok(decoded_key), decoded_value)
                     }

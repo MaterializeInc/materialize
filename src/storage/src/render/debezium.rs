@@ -72,7 +72,7 @@ where
                                     Ok(b) => b,
                                     Err(err) => {
                                         session.give((
-                                            Err(DataflowError::EnvelopeError(err)),
+                                            Err(DataflowError::from(err)),
                                             cap.time().clone(),
                                             1,
                                         ));
@@ -215,7 +215,7 @@ where
                             for (row, time, diff) in tx_data.drain(..) {
                                 if diff != 1 {
                                     output.session(&tx_metadata_cap).give((
-                                        Err(DataflowError::EvalError(EvalError::Internal(
+                                        Err(DataflowError::from(EvalError::Internal(
                                             format!("Transaction metadata supplied diff value {:?}", diff),
                                         ))),
                                         time,
@@ -320,7 +320,7 @@ where
                                             // We could theoretically use tx_cap_map.get(tx_id) here but for sake of
                                             // consistency, we output all errors at the data_cap time.
                                             output.session(&data_cap).give((
-                                                Err(DataflowError::EnvelopeError(err)),
+                                                Err(DataflowError::from(err)),
                                                 *data_cap.time(),
                                                 1,
                                             ));

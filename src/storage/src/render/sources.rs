@@ -204,7 +204,7 @@ where
         // whose contents will be concatenated and inserted along the collection.
         // All subsources include the non-definite errors of the ingestion
         let error_collections = vec![err_source
-            .map(DataflowError::SourceError)
+            .map(DataflowError::from)
             .pass_through("source-errors", 1)
             .as_collection()];
 
@@ -630,7 +630,7 @@ fn raise_key_value_errors(
         (Some(Err(e)), _) => Some(Err(e.into())),
         (None, None) => None,
         // TODO(petrosagg): these errors would be better grouped under an EnvelopeError enum
-        _ => Some(Err(DataflowError::EnvelopeError(EnvelopeError::Flat(
+        _ => Some(Err(DataflowError::from(EnvelopeError::Flat(
             "Value not present for message".to_string(),
         )))),
     }
