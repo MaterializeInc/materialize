@@ -9,6 +9,7 @@
 
 //! CLI introspection tools for persist
 
+use std::any::Any;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -98,7 +99,9 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             let shard_id = ShardId::from_str(&args.state.shard_id).expect("invalid shard id");
             let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
             let metrics_registry = MetricsRegistry::new();
-            let () = force_gc(
+            // We don't actually care about the return value here, but we do need to prevent
+            // the shard metrics from being dropped before they're reported below.
+            let _machine = force_gc(
                 cfg,
                 &metrics_registry,
                 shard_id,
@@ -374,7 +377,7 @@ async fn force_gc(
     consensus_uri: &str,
     blob_uri: &str,
     commit: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Box<dyn Any>> {
     let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
     let consensus = ConsensusConfig::try_from(
         consensus_uri,
@@ -449,5 +452,5 @@ async fn force_gc(
     };
     GarbageCollector::gc_and_truncate(&mut machine, gc_req).await;
 
-    Ok(())
+    Ok(Box::new(machine))
 }
