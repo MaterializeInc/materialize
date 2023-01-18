@@ -195,62 +195,64 @@ pub fn build_compute_dataflow<A: Allocate>(
         scope.clone().region_named(&input_name, |region| {
             // Import declared sources into the rendering context.
             for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
-                let mut mfp = source.arguments.operators.clone().map(|ops| {
-                    mz_expr::MfpPlan::create_from(ops)
-                        .expect("Linear operators should always be valid")
-                });
+                region.region_named(&format!("Source({:?})", source_id), |inner| {
+                    let mut mfp = source.arguments.operators.clone().map(|ops| {
+                        mz_expr::MfpPlan::create_from(ops)
+                            .expect("Linear operators should always be valid")
+                    });
 
-                let probe = flow_control_probe.get_or_insert_with(Default::default);
-                let flow_control_input = probe::source(
-                    region.clone(),
-                    format!("flow_control_input({source_id})"),
-                    probe.clone(),
-                );
-                let flow_control = FlowControl {
-                    progress_stream: flow_control_input,
-                    // TODO: Enable flow control with a sensible limit value. This is currently
-                    // blocked by a bug in `persist_source` (#16995).
-                    max_inflight_bytes: usize::MAX,
-                };
-
-                // Note: For correctness, we require that sources only emit times advanced by
-                // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                let (mut ok_stream, err_stream, token) = persist_source::persist_source(
-                    region,
-                    *source_id,
-                    Arc::clone(&compute_state.persist_clients),
-                    source.storage_metadata.clone(),
-                    dataflow.as_of.clone(),
-                    dataflow.until.clone(),
-                    mfp.as_mut(),
-                    Some(flow_control),
-                    // Copy the logic in DeltaJoin/Get/Join to start.
-                    |_timer, count| count > 1_000_000,
-                );
-
-                // If `mfp` is non-identity, we need to apply what remains.
-                // For the moment, assert that it is either trivial or `None`.
-                assert!(mfp.map(|x| x.is_identity()).unwrap_or(true));
-
-                // If logging is enabled, intercept frontier advancements coming from persist to track materialization lags.
-                // Note that we do this here instead of in the server.rs worker loop since we want to catch the wall-clock
-                // time of the frontier advancement for each dataflow as early as possible.
-                if let Some(logger) = compute_state.compute_logger.clone() {
-                    let export_ids = dataflow.export_ids().collect();
-                    ok_stream = intercept_source_instantiation_frontiers(
-                        &ok_stream, logger, *source_id, export_ids,
+                    let probe = flow_control_probe.get_or_insert_with(Default::default);
+                    let flow_control_input = probe::source(
+                        inner.clone(),
+                        format!("flow_control_input({source_id})"),
+                        probe.clone(),
                     );
-                }
+                    let flow_control = FlowControl {
+                        progress_stream: flow_control_input,
+                        // TODO: Enable flow control with a sensible limit value. This is currently
+                        // blocked by a bug in `persist_source` (#16995).
+                        max_inflight_bytes: usize::MAX,
+                    };
 
-                let (oks, errs) = (
-                    ok_stream.as_collection().leave_region(),
-                    err_stream.as_collection().leave_region(),
-                );
+                    // Note: For correctness, we require that sources only emit times advanced by
+                    // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
+                    let (mut ok_stream, err_stream, token) = persist_source::persist_source(
+                        inner,
+                        *source_id,
+                        Arc::clone(&compute_state.persist_clients),
+                        source.storage_metadata.clone(),
+                        dataflow.as_of.clone(),
+                        dataflow.until.clone(),
+                        mfp.as_mut(),
+                        Some(flow_control),
+                        // Copy the logic in DeltaJoin/Get/Join to start.
+                        |_timer, count| count > 1_000_000,
+                    );
 
-                imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
+                    // If `mfp` is non-identity, we need to apply what remains.
+                    // For the moment, assert that it is either trivial or `None`.
+                    assert!(mfp.map(|x| x.is_identity()).unwrap_or(true));
 
-                // Associate returned tokens with the source identifier.
-                tokens.insert(*source_id, token);
+                    // If logging is enabled, intercept frontier advancements coming from persist to track materialization lags.
+                    // Note that we do this here instead of in the server.rs worker loop since we want to catch the wall-clock
+                    // time of the frontier advancement for each dataflow as early as possible.
+                    if let Some(logger) = compute_state.compute_logger.clone() {
+                        let export_ids = dataflow.export_ids().collect();
+                        ok_stream = intercept_source_instantiation_frontiers(
+                            &ok_stream, logger, *source_id, export_ids,
+                        );
+                    }
+
+                    let (oks, errs) = (
+                        ok_stream.as_collection().leave_region().leave_region(),
+                        err_stream.as_collection().leave_region().leave_region(),
+                    );
+
+                    imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
+
+                    // Associate returned tokens with the source identifier.
+                    tokens.insert(*source_id, token);
+                });
             }
         });
 

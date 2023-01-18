@@ -41,8 +41,6 @@ where
         sink: &ComputeSinkDesc<CollectionMetadata>,
         probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
-        let sink_render = get_sink_render_for::<G>(&sink.connection);
-
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
         for import_id in import_ids {
@@ -76,26 +74,36 @@ where
         let ok_collection = ok_collection.leave();
         let err_collection = err_collection.leave();
 
-        let sink_token = sink_render.render_continuous_sink(
-            compute_state,
-            sink,
-            sink_id,
-            ok_collection,
-            err_collection,
-            probes,
-        );
+        self.scope
+            .parent
+            .clone()
+            .region_named(&format!("PersistSink({:?})", sink_id), |inner| {
+                let sink_render = get_sink_render_for::<_>(&sink.connection);
 
-        if let Some(sink_token) = sink_token {
-            needed_tokens.push(sink_token);
-        }
+                let sink_token = sink_render.render_continuous_sink(
+                    compute_state,
+                    sink,
+                    sink_id,
+                    ok_collection.enter_region(inner),
+                    err_collection.enter_region(inner),
+                    probes,
+                );
 
-        compute_state.sink_tokens.insert(
-            sink_id,
-            SinkToken {
-                token: Box::new(needed_tokens),
-                is_subscribe: matches!(sink.connection, ComputeSinkConnection::Subscribe(_)),
-            },
-        );
+                if let Some(sink_token) = sink_token {
+                    needed_tokens.push(sink_token);
+                }
+
+                compute_state.sink_tokens.insert(
+                    sink_id,
+                    SinkToken {
+                        token: Box::new(needed_tokens),
+                        is_subscribe: matches!(
+                            sink.connection,
+                            ComputeSinkConnection::Subscribe(_)
+                        ),
+                    },
+                );
+            });
     }
 }
 
