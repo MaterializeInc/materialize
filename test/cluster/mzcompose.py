@@ -772,10 +772,12 @@ def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
 
         c.run("testdrive", "pg-snapshot-partial-failure/03-verify-good-sub-source.td")
 
+        c.kill("storage")
         # Restart the storage instance with the failpoint off...
         with c.override(
             # turn off the failpoint
             Clusterd(name="storage")
         ):
+            c.run("testdrive", "pg-snapshot-partial-failure/04-add-more-data.td")
             c.up("storage")
-            c.run("testdrive", "pg-snapshot-partial-failure/04-verify-data.td")
+            c.run("testdrive", "pg-snapshot-partial-failure/05-verify-data.td")

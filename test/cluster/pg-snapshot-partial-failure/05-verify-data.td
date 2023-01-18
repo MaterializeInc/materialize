@@ -9,7 +9,7 @@
 
 # The non-stuck sub-source is fine...
 > SELECT COUNT(*) FROM two;
-10
+11
 
 # The above select statement should ensure that the persist-sink for `one` also
 # received the "new" snapshot, ensuring we don't double count, but we add additional
@@ -20,4 +20,4 @@
 
 # But the other one has duplicated data!
 > SELECT COUNT(*) FROM one;
-10
+11
