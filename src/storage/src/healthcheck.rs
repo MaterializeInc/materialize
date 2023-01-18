@@ -9,13 +9,12 @@
 
 //! Healthcheck common
 
-use chrono::{DateTime, NaiveDateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_ore::now::NowFn;
 use timely::progress::Antichain;
 
 use mz_persist_client::{PersistClient, ShardId};
-use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::types::sources::SourceData;
 
 pub async fn write_to_persist(
@@ -27,28 +26,12 @@ pub async fn write_to_persist(
     status_shard: ShardId,
 ) {
     let now_ms = now();
-    let row = {
-        let timestamp = NaiveDateTime::from_timestamp_opt(
-            (now_ms / 1000)
-                .try_into()
-                .expect("timestamp seconds does not fit into i64"),
-            (now_ms % 1000 * 1_000_000)
-                .try_into()
-                .expect("timestamp millis does not fit into a u32"),
-        )
-        .unwrap();
-        let timestamp = Datum::TimestampTz(
-            DateTime::from_utc(timestamp, Utc)
-                .try_into()
-                .expect("must fit"),
-        );
-        let collection_id = collection_id.to_string();
-        let collection_id = Datum::String(&collection_id);
-        let status = Datum::String(new_status);
-        let error = new_error.into();
-        let metadata = Datum::Null;
-        Row::pack_slice(&[timestamp, collection_id, status, error, metadata])
-    };
+    let row = mz_storage_client::healthcheck::pack_status_row(
+        collection_id,
+        new_status,
+        new_error,
+        now_ms,
+    );
 
     let mut handle = client.open_writer(status_shard, &format!("healthcheck::write_to_persist {}", collection_id)).await.expect(
         "Invalid usage of the persist client for collection {collection_id} status history shard",
