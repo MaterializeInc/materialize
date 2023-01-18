@@ -124,7 +124,7 @@ source = "git+https://github.com/jorgecarleitao/arrow2.git#0ba4f8e21547ed08b4468
 dependencies = [
  "ahash",
  "arrow-format",
- "base64",
+ "base64 0.13.1",
  "bytemuck",
  "chrono",
  "dyn-clone",
@@ -238,9 +238,9 @@ dependencies = [
 
 [[package]]
 name = "async-trait"
-version = "0.1.59"
+version = "0.1.61"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31e6e93155431f3931513b243d371981bb2770112b370c82745a1d19d2f99364"
+checksum = "705339e0e4a9690e2908d2b3d049d85682cf19fbd5782494498fbf7003a6a282"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -675,12 +675,49 @@ dependencies = [
 
 [[package]]
 name = "axum"
-version = "0.6.1"
-source = "git+https://github.com/tokio-rs/axum.git#978ae6335862b264b4368e01a52177d98c42b2d9"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1304eab461cf02bd70b083ed8273388f9724c549b316ba3d1e213ce0e9e7fb7e"
 dependencies = [
  "async-trait",
- "axum-core",
- "base64",
+ "axum-core 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "base64 0.20.0",
+ "bitflags",
+ "bytes",
+ "futures-util",
+ "headers",
+ "http",
+ "http-body",
+ "hyper",
+ "itoa",
+ "matchit",
+ "memchr",
+ "mime",
+ "percent-encoding",
+ "pin-project-lite",
+ "rustversion",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_urlencoded",
+ "sha1",
+ "sync_wrapper",
+ "tokio",
+ "tokio-tungstenite",
+ "tower",
+ "tower-http",
+ "tower-layer",
+ "tower-service",
+]
+
+[[package]]
+name = "axum"
+version = "0.6.2"
+source = "git+https://github.com/tokio-rs/axum.git#00d20eb00799e091f522e72b8612a471a7635a69"
+dependencies = [
+ "async-trait",
+ "axum-core 0.3.1 (git+https://github.com/tokio-rs/axum.git)",
+ "base64 0.20.0",
  "bitflags",
  "bytes",
  "futures-util",
@@ -711,8 +748,25 @@ dependencies = [
 
 [[package]]
 name = "axum-core"
-version = "0.3.0"
-source = "git+https://github.com/tokio-rs/axum.git#978ae6335862b264b4368e01a52177d98c42b2d9"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f487e40dc9daee24d8a1779df88522f159a54a980f99cfbe43db0be0bd3444a8"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-util",
+ "http",
+ "http-body",
+ "mime",
+ "rustversion",
+ "tower-layer",
+ "tower-service",
+]
+
+[[package]]
+name = "axum-core"
+version = "0.3.1"
+source = "git+https://github.com/tokio-rs/axum.git#00d20eb00799e091f522e72b8612a471a7635a69"
 dependencies = [
  "async-trait",
  "bytes",
@@ -762,6 +816,12 @@ name = "base64"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
+
+[[package]]
+name = "base64"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ea22880d78093b0cbe17c89f64a7d457941e65759157ec6cb31a31d652b05e5"
 
 [[package]]
 name = "base64-simd"
@@ -2371,7 +2431,7 @@ version = "7.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6490be71f07a5f62b564bc58e36953f675833df11c7e4a0647bee7a07ca1ec5e"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "byteorder",
  "flate2",
  "nom",
@@ -2384,7 +2444,7 @@ version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3e372db8e5c0d213e0cd0b9be18be2aca3d44cf2fe30a9d46a65581cd454584"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "bitflags",
  "bytes",
  "headers-core",
@@ -2728,7 +2788,7 @@ version = "8.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09f4f04699947111ec1733e71778d763555737579e44b85844cae8e1940a1828"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "pem",
  "ring",
  "serde",
@@ -2755,7 +2815,7 @@ version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d9455388f4977de4d0934efa9f7d36296295537d774574113a20f6082de03da"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "bytes",
  "chrono",
  "http",
@@ -2785,7 +2845,7 @@ version = "0.77.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e80db3ca107e89da5f7eae37ea5274e06cefdcf9689d0ebd5ec3575a6f983e4e"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "bytes",
  "chrono",
  "dirs-next",
@@ -3266,7 +3326,7 @@ version = "0.29.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9006c95034ccf7b903d955f210469119f6c3477fc9c9e7a7845ce38a3e665c2a"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "bigdecimal",
  "bindgen",
  "bitflags",
@@ -3302,7 +3362,7 @@ name = "mz"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "axum",
+ "axum 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "clap",
  "dirs",
  "indicatif",
@@ -3505,7 +3565,7 @@ name = "mz-clusterd"
 version = "0.41.0-dev"
 dependencies = [
  "anyhow",
- "axum",
+ "axum 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "clap",
  "fail",
  "futures",
@@ -3643,8 +3703,8 @@ dependencies = [
  "askama",
  "assert_cmd",
  "async-trait",
- "axum",
- "base64",
+ "axum 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "base64 0.13.1",
  "bytes",
  "cc",
  "chrono",
@@ -3800,7 +3860,7 @@ name = "mz-frontegg-auth"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "base64",
+ "base64 0.13.1",
  "derivative",
  "jsonwebtoken",
  "mz-ore",
@@ -3819,7 +3879,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "askama",
- "axum",
+ "axum 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "headers",
  "include_dir",
  "mz-ore",
@@ -4126,7 +4186,7 @@ dependencies = [
  "aws-smithy-http",
  "aws-smithy-types",
  "aws-types",
- "base64",
+ "base64 0.13.1",
  "bytes",
  "deadpool-postgres",
  "differential-dataflow",
@@ -4163,7 +4223,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
- "axum",
+ "axum 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "bytes",
  "clap",
  "criterion",
@@ -4321,7 +4381,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "askama",
- "axum",
+ "axum 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "backtrace",
  "bytesize",
  "cfg-if",
@@ -5435,7 +5495,7 @@ version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9a3b09a20e374558580a4914d3b7d89bd61b954a5a5e1dcbea98753addb1947"
 dependencies = [
- "base64",
+ "base64 0.13.1",
 ]
 
 [[package]]
@@ -5618,7 +5678,7 @@ name = "postgres-protocol"
 version = "0.6.4"
 source = "git+https://github.com/MaterializeInc/rust-postgres#9c9086235344fe794361a9985d97a64b42e61929"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "byteorder",
  "bytes",
  "fallible-iterator",
@@ -5903,7 +5963,7 @@ version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d378290cd658b119ce87621931ef448017ef1a0044d7b681159d779e7e07b8f6"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "prost",
  "prost-types",
  "serde",
@@ -6149,7 +6209,7 @@ version = "0.11.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68cc60575865c7831548863cc02356512e3f1dc2f3f82cb837d7fc4cc8f3c97c"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "bytes",
  "encoding_rs",
  "futures-core",
@@ -6624,7 +6684,7 @@ version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25bf4a5a814902cd1014dbccfa4d4560fb8432c779471e96e035602519f82eef"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "chrono",
  "hex",
  "indexmap",
@@ -7412,8 +7472,8 @@ checksum = "8f219fad3b929bef19b1f86fbc0358d35daed8f2cac972037ac0dc10bbb8d5fb"
 dependencies = [
  "async-stream",
  "async-trait",
- "axum",
- "base64",
+ "axum 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "base64 0.13.1",
  "bytes",
  "futures-core",
  "futures-util",
@@ -7475,7 +7535,7 @@ version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f873044bf02dd1e8239e9c1293ea39dad76dc594ec16185d0a1bf31d8dc8d858"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "bitflags",
  "bytes",
  "futures-core",
@@ -7634,7 +7694,7 @@ version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "30ee6ab729cd4cf0fd55218530c4522ed30b7b6081752839b68fcec8d0960788"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "byteorder",
  "bytes",
  "http",
@@ -7746,7 +7806,7 @@ version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b97acb4c28a254fd7a4aeec976c46a7fa404eac4d7c134b30c75144846d7cb8f"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "chunked_transfer",
  "log",
  "native-tls",
@@ -8060,8 +8120,8 @@ dependencies = [
  "aws-sigv4",
  "aws-smithy-http",
  "aws-types",
- "axum",
- "base64",
+ "axum 0.6.2 (git+https://github.com/tokio-rs/axum.git)",
+ "base64 0.13.1",
  "bstr",
  "byteorder",
  "bytes",
@@ -8213,3 +8273,8 @@ dependencies = [
  "cc",
  "libc",
 ]
+
+[[patch.unused]]
+name = "axum"
+version = "0.6.1"
+source = "git+https://github.com/tokio-rs/axum.git#978ae6335862b264b4368e01a52177d98c42b2d9"
