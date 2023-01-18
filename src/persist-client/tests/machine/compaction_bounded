@@ -58,11 +58,10 @@ part 0
 part 1
 part 2
 
-# introduce a new batch, that is *gasp* unordered
 write-batch output=b2 lower=6 upper=9 target_size=0 parts_size_override=25
-f 7 1
-e 6 1
 a 8 1
+e 6 1
+f 7 1
 ----
 parts=3 len=3
 
@@ -84,31 +83,31 @@ f 8 1
 part 0
 
 # compact b0, b1, b2 with enough memory for all runs, but a target size that can only hold 2 keys in mem at a time.
-# because b2 is out of order, we expect its entry for `aaaa` to appear in a separate run
+# we expect `aaaa` to appear twice because we calculate part size by unconsolidated updates.
 compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=50 memory_bound=1000
 ----
-parts=5 len=7
+parts=5 len=8
 
 fetch-batch input=b0_1_2
 ----
 <part 0>
 a 8 2
 <part 1>
-b 8 2
-<part 2>
-c 8 1
-d 8 1
-<part 3>
-e 8 1
-f 8 1
-<part 4>
 a 8 1
+b 8 1
+<part 2>
+b 8 1
+c 8 1
+<part 3>
+d 8 1
+e 8 1
+<part 4>
+f 8 1
 <run 0>
 part 0
 part 1
 part 2
 part 3
-<run 1>
 part 4
 
 # compact b0, b1, b2 with enough memory for all keys, but only 2 runs at a time. this means
@@ -150,7 +149,7 @@ part 1
 
 # compact b0, b1, b2 with enough memory for only 2 runs at a time, and a target size that can only hold 2 keys in mem at a time.
 # this means b0 and b1 will be physically compacted together, and then b2 compacted in isolation. evaluating b2 should
-# produce a new run, and then because of its out-of-order `aaaa` key, a third run should be created
+# produce a new run.
 set-batch-parts-size input=b0 size=50
 ----
 ok
@@ -177,17 +176,16 @@ b 8 2
 c 8 1
 d 8 1
 <part 3>
-e 8 1
-f 8 1
-<part 4>
 a 8 1
+e 8 1
+<part 4>
+f 8 1
 <run 0>
 part 0
 part 1
 part 2
 <run 1>
 part 3
-<run 2>
 part 4
 
 # compact b0, b1, b2 even though our memory isn't enough to hold any 2 runs at a time. this is an edge case
@@ -220,17 +218,16 @@ b 8 2
 c 8 1
 d 8 1
 <part 3>
-e 8 1
-f 8 1
-<part 4>
 a 8 1
+e 8 1
+<part 4>
+f 8 1
 <run 0>
 part 0
 part 1
 part 2
 <run 1>
 part 3
-<run 2>
 part 4
 
 # for good measure, repeatedly compacting a single batch of several runs should eventually
@@ -241,25 +238,21 @@ ok
 
 compact output=b0_1_2_iter1 inputs=(b0_1_2) lower=0 upper=9 since=8 target_size=100 memory_bound=1000
 ----
-parts=3 len=7
+parts=2 len=6
 
 fetch-batch input=b0_1_2_iter1
 ----
 <part 0>
-a 8 2
+a 8 3
 b 8 2
 c 8 1
-d 8 1
 <part 1>
+d 8 1
 e 8 1
 f 8 1
-<part 2>
-a 8 1
 <run 0>
 part 0
 part 1
-<run 1>
-part 2
 
 set-batch-parts-size input=b0_1_2_iter1 size=1000
 ----
@@ -275,8 +268,8 @@ fetch-batch input=b0_1_2_iter2
 a 8 3
 b 8 2
 c 8 1
-<part 1>
 d 8 1
+<part 1>
 e 8 1
 f 8 1
 <run 0>
