@@ -42,11 +42,29 @@ Apache License, Version 2.0. */}}
       <main
         class="content {{ if .Params.make_table_row_headers_searchable }} docsearch_index_table_headers {{ end }}"
       >
+        <button class="show-topics" aria-label="Open the topics sidebar">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            class="ionicon"
+            viewBox="0 0 512 512"
+          >
+            <title>Arrow Pointing to the left</title>
+            <path
+              fill="none"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="48"
+              d="M328 112L184 256l144 144"
+            />
+          </svg>
+          All Topics
+        </button>
         <div>
           {{ partial "breadcrumbs.html" . }} {{ block "main" . }}{{ end }}
         </div>
 
-        <a href="#top">Back to top &uarr;</a>
+        <a href="#top" class="back-to-top">Back to top &uarr;</a>
         <!-- Footer goes in main so the border-right of
                 sidebar.html can extend to the bottom of the page. -->
         {{ partial "footer.html" . }}
@@ -55,6 +73,8 @@ Apache License, Version 2.0. */}}
       {{ partial "toc.html" . }}
     </div>
     {{ end }}
+
+    <div class="backdrop"></div>
 
     <script>
       anchors.add(
@@ -114,6 +134,68 @@ Apache License, Version 2.0. */}}
     </script>
 
     <script>
+      const menuToggle = document.querySelector("nav .toggle");
+      const mobileLinks = document.querySelector(".mobile");
+      const sidebarOpenButton = document.querySelector("button.show-topics");
+      const sidebarCloseButton = document.querySelector("button.close-topics");
+      const sidebarWrapper = document.querySelector(".sidebar-wrapper");
+      const backdrop = document.querySelector(".backdrop");
+      const allTables  = document.querySelectorAll("table");
+
+      allTables.forEach(table => {
+       table.outerHTML = `<div class="table-container">${table.outerHTML}</div>`;
+      })
+
+      const toggleBodyOverflow = (boolean) => {
+        if (boolean) {
+          document.documentElement.style.overflowY = "scroll";
+        } else {
+          document.documentElement.style.overflowY = "hidden";
+        }
+      };
+
+      sidebarOpenButton.addEventListener("click", () => {
+        sidebarWrapper.classList.add("shown");
+        backdrop.style.display = "block";
+        toggleBodyOverflow(false);
+      });
+
+      const closeSidebar = () => {
+        sidebarWrapper.classList.remove("shown");
+        backdrop.style.display = "none";
+        toggleBodyOverflow(true);
+      };
+
+      sidebarCloseButton.addEventListener("click", () => {
+        closeSidebar();
+      });
+
+      backdrop.addEventListener("click", () => {
+        closeSidebar();
+      });
+
+      menuToggle.addEventListener("click", () => {
+        menuToggle.classList.toggle("open");
+        if (menuToggle.classList.contains("open")) {
+          mobileLinks.style.display = "block";
+          toggleBodyOverflow(false);
+        } else {
+          mobileLinks.style.display = "none";
+          toggleBodyOverflow(true);
+        }
+      });
+
+      const query = window.matchMedia("(max-width: 850px)");
+
+      query.addEventListener("change", (e) => {
+        if (!e.matches) {
+          mobileLinks.style.display = "none";
+          menuToggle.classList.remove("open");
+          toggleBodyOverflow(true);
+          backdrop.style.display = 'none'
+        }
+      });
+
       const systemButton = document.querySelector("button.system");
       const lightButton = document.querySelector("button.light");
       const darkButton = document.querySelector("button.dark");

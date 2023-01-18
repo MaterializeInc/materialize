@@ -1,7 +1,7 @@
 {{ $title := delimit (slice (cond (isset .Params "htmltitle") .Params.htmltitle
 .Page.Title) .Site.Title) " | " }} {{ $description := cond (isset .Params
 "description") .Params.description .Page.Description }}
-<meta name="viewport" content="width=1024" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta charset="utf-8" />
 <meta http-equiv="X-UA-Compatible" content="IE=edge" />
 <meta name="description" content="{{ $description }}" />

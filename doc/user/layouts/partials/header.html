@@ -36,13 +36,20 @@
       </a>
       <a href="https://materialize.com/docs">Documentation</a>
     </div>
-    <div>
+
+    <button class="toggle">
+      <div>
+        <span />
+      </div>
+    </button>
+
+    <div class="desktop">
       <a role="menuitem" class="active" href="{{.Site.BaseURL}}">Docs</a>
       <a role="menuitem" href="https://materialize.com/pricing">Pricing</a>
       <a role="menuitem" href="https://materialize.com/blog">Blog</a>
       <a role="menuitem" href="https://materialize.com/about">About</a>
     </div>
-    <div>
+    <div class="desktop">
       <a role="menuitem" href="https://cloud.materialize.com/">Login</a>
       <a
         class="btn"
@@ -51,6 +58,24 @@
       >
         Get Early Access
       </a>
+    </div>
+  </div>
+  <div class="mobile">
+    <div class="row">
+      <a role="menuitem" class="active" href="{{.Site.BaseURL}}">Docs</a>
+      <a role="menuitem" href="https://materialize.com/pricing">Pricing</a>
+      <a role="menuitem" href="https://materialize.com/blog">Blog</a>
+      <a role="menuitem" href="https://materialize.com/about">About</a>
+      <a role="menuitem" href="https://cloud.materialize.com/">Login</a>
+      <div>
+        <a
+          class="btn"
+          role="menuitem"
+          href="https://materialize.com/materialize-cloud-access/"
+        >
+          Get Early Access
+        </a>
+      </div>
     </div>
   </div>
 </nav>

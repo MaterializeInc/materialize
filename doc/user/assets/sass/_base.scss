@@ -14,6 +14,14 @@
     --sm: 1.4rem;
     --xsm: 1.2rem;
 
+    @media(max-width: 850px) {
+        --h1: 3.4rem;
+        --h2: 2.6rem;
+        --h3: 2.2rem;
+        --h4: 1.8rem;
+        --h5: 1.6rem;
+    }
+
     --pico: 0.5rem;
     --nano: 1rem;
     --micro: 1.5rem;
@@ -25,16 +33,16 @@
     --large: 6rem;
 
     --graidient-primary: linear-gradient(270deg,
-            hsl(270deg 68% 58%) 0%,
-            hsl(287deg 59% 55%) 11%,
-            hsl(303deg 54% 53%) 22%,
-            hsl(315deg 65% 57%) 33%,
-            hsl(325deg 74% 60%) 44%,
-            hsl(333deg 81% 64%) 56%,
-            hsl(340deg 86% 67%) 67%,
-            hsl(348deg 88% 70%) 78%,
-            hsl(355deg 88% 73%) 89%,
-            hsl(3deg 86% 74%) 100%);
+        hsl(270deg 68% 58%) 0%,
+        hsl(287deg 59% 55%) 11%,
+        hsl(303deg 54% 53%) 22%,
+        hsl(315deg 65% 57%) 33%,
+        hsl(325deg 74% 60%) 44%,
+        hsl(333deg 81% 64%) 56%,
+        hsl(340deg 86% 67%) 67%,
+        hsl(348deg 88% 70%) 78%,
+        hsl(355deg 88% 73%) 89%,
+        hsl(3deg 86% 74%) 100%);
 
     --orchid: #e537c0;
     --orange: #ee8660;
@@ -135,6 +143,12 @@ body {
     font-size: var(--base);
     line-height: 1.7;
     font-weight: 300;
+    max-width: 100vw;
+    overflow-x: hidden;
+
+    @media(max-width: 500px) {
+        font-size: 1.5rem;
+    }
 }
 
 input,
@@ -147,8 +161,11 @@ a,
 button,
 input[type="submit"] {
     cursor: pointer;
+    background: none;
+    border: none;
     transition: all 0.2s;
     transition-delay: 50ms;
+    font-family: inherit;
 }
 
 a {
