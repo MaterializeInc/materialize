@@ -209,4 +209,7 @@ allow-git = [
     # Waiting on https://github.com/launchdarkly/rust-server-sdk/pull/20 to make
     # it into a release.
     "https://github.com/MaterializeInc/rust-server-sdk",
+
+    # TODO Remove
+    "https://github.com/antiguru/timely-dataflow",
 ]

@@ -7172,7 +7172,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#faf5eb6457e69ac2bfbbb8a0f62deda55aa2c927"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=output_handle_cease#de1f20ec735c6fa3ebf4a214e2108c5a74bc260d"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7190,12 +7190,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#faf5eb6457e69ac2bfbbb8a0f62deda55aa2c927"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=output_handle_cease#de1f20ec735c6fa3ebf4a214e2108c5a74bc260d"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#faf5eb6457e69ac2bfbbb8a0f62deda55aa2c927"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=output_handle_cease#de1f20ec735c6fa3ebf4a214e2108c5a74bc260d"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7211,7 +7211,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#faf5eb6457e69ac2bfbbb8a0f62deda55aa2c927"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=output_handle_cease#de1f20ec735c6fa3ebf4a214e2108c5a74bc260d"
 dependencies = [
  "columnation",
  "serde",
@@ -7220,7 +7220,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#faf5eb6457e69ac2bfbbb8a0f62deda55aa2c927"
+source = "git+https://github.com/antiguru/timely-dataflow?branch=output_handle_cease#de1f20ec735c6fa3ebf4a214e2108c5a74bc260d"
 
 [[package]]
 name = "tiny-keccak"

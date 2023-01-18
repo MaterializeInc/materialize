@@ -96,6 +96,11 @@ where
             self.output_handle.session(cap).give_vec(&mut self.buffer);
         }
     }
+
+    pub fn cease(&mut self) {
+        self.flush();
+        self.output_handle.cease();
+    }
 }
 
 impl<'a, T, D: ExchangeData, R: Semigroup, P> Drop for ConsolidateBuffer<'a, T, D, R, P>
