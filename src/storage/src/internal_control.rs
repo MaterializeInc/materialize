@@ -26,7 +26,12 @@ use crate::storage_state::Worker;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum InternalStorageCommand {
     /// Suspend and restart the dataflow identified by the `GlobalId`.
-    SuspendAndRestart(GlobalId),
+    SuspendAndRestart {
+        /// The id of the dataflow that should be restarted.
+        id: GlobalId,
+        /// The reason for the restart request.
+        reason: String,
+    },
     /// Render an ingestion dataflow at the given resumption frontier.
     CreateIngestionDataflow {
         /// ID of the ingestion/sourve.
