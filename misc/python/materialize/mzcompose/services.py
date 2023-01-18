@@ -9,7 +9,10 @@
 
 import os
 import random
+import tempfile
 from typing import Dict, List, Optional, Tuple, Union
+
+import toml
 
 from materialize import ROOT
 from materialize.mzcompose import Service, ServiceConfig, ServiceDependency, loader
@@ -799,5 +802,50 @@ class SshBastionHost(Service):
                     "SSH_USERS=mz:1000:1000",
                     "TCP_FORWARDING=true",
                 ],
+            },
+        )
+
+
+class Mz(Service):
+    def __init__(
+        self,
+        *,
+        name: str = "mz",
+        region: str = "aws/us-east-1",
+        environment: str = "staging",
+        username: str,
+        app_password: str,
+    ) -> None:
+        # We must create the temporary config file in a location
+        # that is accessible on the same path in both the ci-builder
+        # container and the host that runs the docker daemon
+        # $TMP does not guarantee that, but loader.composition_path does.
+        config = tempfile.NamedTemporaryFile(
+            dir=loader.composition_path,
+            prefix="tmp_",
+            suffix=".toml",
+            mode="w",
+            delete=False,
+        )
+        toml.dump(
+            {
+                "current_profile": "default",
+                "profiles": {
+                    "default": {
+                        "email": username,
+                        "app-password": app_password,
+                        "region": region,
+                        "endpoint": f"https://{environment}.cloud.materialize.com/",
+                    },
+                },
+            },
+            config,
+        )
+        config.close()
+        super().__init__(
+            name=name,
+            config={
+                "mzbuild": "mz",
+                "volumes": [f"{config.name}:/root/.config/mz/profiles.toml"],
             },
         )
