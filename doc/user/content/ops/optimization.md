@@ -207,3 +207,7 @@ Create a default index when there is no particular `WHERE` or `JOIN` clause that
 Clause                                               | Index                               |
 -----------------------------------------------------|-------------------------------------|
 `SELECT x, y FROM obj_name`                          | `CREATE DEFAULT INDEX ON obj_name;` |
+
+## Learn more
+
+Check out the blog post [Delta Joins and Late Materialization](https://materialize.com/blog/delta-joins/) to go deeper on join optimization in Materialize.
