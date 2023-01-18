@@ -959,7 +959,7 @@ where
                 // We should definitely do that, but this is okay for a PoC.
                 if let Some(halt_with) = halt_with {
                     info!("Broadcasting suspend-and-restart command because of {:?}", halt_with);
-                    internal_cmd_tx.borrow_mut().broadcast(InternalStorageCommand::SuspendAndRestart(source_id));
+                    internal_cmd_tx.borrow_mut().broadcast(InternalStorageCommand::SuspendAndRestart{id: source_id, reason: format!("{:?}", halt_with)});
                 }
             }
         }

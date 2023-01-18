@@ -267,6 +267,7 @@ where
 
                 let mut async_storage_worker =
                     AsyncStorageWorker::new(thread::current(), Arc::clone(&persist_clients));
+                let internal_command_fabric = &mut HaltingInternalCommandSender::new();
 
                 // NOTE: We only feed internal commands into the worker,
                 // bypassing "external" StorageCommand and the async worker that
@@ -274,6 +275,7 @@ where
                 // encounter weird behaviour from this test, this might be the
                 // reason.
                 worker.handle_internal_storage_command(
+                    &mut *internal_command_fabric.as_mut().unwrap().borrow_mut(),
                     &mut async_storage_worker,
                     InternalStorageCommand::CreateIngestionDataflow {
                         id,

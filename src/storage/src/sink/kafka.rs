@@ -9,13 +9,13 @@
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::cmp;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
 use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{cmp, future};
 
 use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{Collection, Hashable};
@@ -51,7 +51,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::retry::{Retry, RetryResult};
-use mz_ore::{halt, task};
+use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::DataflowError;
@@ -61,6 +61,7 @@ use mz_storage_client::types::sinks::{
 };
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 
+use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
 use crate::render::sinks::{HealthcheckerArgs, SinkRender};
 use crate::sink::{Healthchecker, KafkaBaseMetrics, SinkStatus};
 use crate::storage_state::StorageState;
@@ -120,6 +121,13 @@ where
             Antichain::new()
         }));
 
+        let internal_cmd_tx = Rc::clone(
+            storage_state
+                .internal_cmd_tx
+                .as_ref()
+                .expect("missing internal command sender"),
+        );
+
         let token = kafka(
             sinked_collection,
             sink_id,
@@ -130,6 +138,7 @@ where
             &storage_state.sink_metrics.kafka,
             &storage_state.connection_context,
             healthchecker_args,
+            internal_cmd_tx,
         );
 
         storage_state
@@ -363,6 +372,7 @@ impl KafkaTxProducer {
 }
 
 struct KafkaSinkState {
+    sink_id: GlobalId,
     name: String,
     topic: String,
     metrics: Arc<SinkMetrics>,
@@ -376,6 +386,7 @@ struct KafkaSinkState {
     progress_client: Option<Arc<BaseConsumer<BrokerRewritingClientContext<SinkConsumerContext>>>>,
 
     healthchecker: Arc<Mutex<Option<Healthchecker>>>,
+    internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
 
     /// Timestamp of the latest progress record that was written out to Kafka.
@@ -419,6 +430,7 @@ impl KafkaSinkState {
         metrics: &KafkaBaseMetrics,
         connection_context: &ConnectionContext,
         gate_ts: Rc<Cell<Option<Timestamp>>>,
+        internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
     ) -> Self {
         let metrics = Arc::new(SinkMetrics::new(
             metrics,
@@ -504,6 +516,7 @@ impl KafkaSinkState {
             .expect("creating Kafka progress client for sink failed");
 
         KafkaSinkState {
+            sink_id: sink_id.clone(),
             name: sink_name,
             topic: connection.topic,
             metrics,
@@ -515,6 +528,7 @@ impl KafkaSinkState {
             progress_key: format!("mz-sink-{sink_id}"),
             progress_client: Some(Arc::new(progress_client)),
             healthchecker,
+            internal_cmd_tx,
             gate_ts,
             latest_progress_ts: Timestamp::minimum(),
             write_frontier,
@@ -900,7 +914,16 @@ impl KafkaSinkState {
             Err(msg) => {
                 self.update_status(SinkStatus::Stalled(msg.to_string()))
                     .await;
-                halt!("{msg:?}")
+                self.internal_cmd_tx.borrow_mut().broadcast(
+                    InternalStorageCommand::SuspendAndRestart {
+                        id: self.sink_id.clone(),
+                        reason: msg.to_string(),
+                    },
+                );
+
+                // Make sure to never return, preventing the sink from writing
+                // out anything it might regret in the future.
+                future::pending().await
             }
         }
     }
@@ -924,6 +947,7 @@ fn kafka<G>(
     metrics: &KafkaBaseMetrics,
     connection_context: &ConnectionContext,
     healthchecker_args: HealthcheckerArgs,
+    internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -991,6 +1015,7 @@ where
         metrics,
         connection_context,
         healthchecker_args,
+        internal_cmd_tx,
     )
 }
 
@@ -1016,6 +1041,7 @@ pub fn produce_to_kafka<G>(
     metrics: &KafkaBaseMetrics,
     connection_context: &ConnectionContext,
     healthchecker_args: HealthcheckerArgs,
+    internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1032,6 +1058,7 @@ where
         metrics,
         connection_context,
         Rc::clone(&shared_gate_ts),
+        internal_cmd_tx,
     );
 
     let mut vector = Vec::new();
