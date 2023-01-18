@@ -18,11 +18,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail};
 use futures::{FutureExt, Stream, StreamExt};
 use once_cell::sync::Lazy;
+use postgres_protocol::message::backend::{
+    LogicalReplicationMessage, ReplicationMessage, TupleData,
+};
 use timely::dataflow::operators::to_stream::Event;
 use timely::scheduling::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_postgres::error::DbError;
+use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
 use tokio_postgres::Client;
 use tokio_postgres::SimpleQueryMessage;
@@ -32,10 +36,6 @@ use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::display::DisplayExt;
 use mz_ore::task;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::replication::types::{
-    LogicalReplicationMessage, ReplicationMessage, TupleData,
-};
-use mz_postgres_util::replication::LogicalReplicationStream;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceErrorDetails;
@@ -131,6 +131,7 @@ impl ErrorExt for std::io::Error {
     }
 }
 
+#[derive(Debug)]
 enum ReplicationError {
     /// This error is definite: this source is permanently wedged.
     /// Returning a definite error will cause the collection to become un-queryable.
@@ -481,7 +482,7 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
             }
             Err(ReplicationError::Definite(e)) => {
                 warn!(
-                    "irrecoverable error for source {}: {}, cause: {}",
+                    "definite error for source {}: {}, cause: {}",
                     &task_info.source_id,
                     e,
                     e.source().unwrap_or(anyhow::anyhow!("unknown").as_ref())
@@ -611,20 +612,29 @@ async fn postgres_replication_loop_inner(
         }
         client.simple_query("COMMIT;").await?;
 
+        // Drop the stream and the client, to ensure that the future `produce_replication` don't
+        // conflict with the above processing.
+        //
+        // Its possible we can avoid dropping the `client` value here, but we do it out of an
+        // abundance of caution, as rust-postgres has had curious bugs around this.
+        drop(stream);
+        drop(client);
+
         assert!(slot_lsn <= snapshot_lsn);
         if slot_lsn < snapshot_lsn {
-            tracing::trace!("postgres snapshot was at {snapshot_lsn:?} but we need it at {slot_lsn:?}. Rewinding");
+            tracing::info!("postgres snapshot was at {snapshot_lsn:?} but we need it at {slot_lsn:?}. Rewinding");
             // Our snapshot was too far ahead so we must rewind it by reading the replication
             // stream until the snapshot lsn and emitting any rows that we find with negated diffs
             let replication_stream = produce_replication(
-                &client,
+                task_info.connection_config.clone(),
                 &task_info.slot,
                 &task_info.publication,
                 slot_lsn,
                 Arc::clone(&task_info.resume_lsn),
                 &task_info.metrics,
                 &task_info.source_tables,
-            );
+            )
+            .await;
             tokio::pin!(replication_stream);
 
             while let Some(event) = replication_stream.next().await {
@@ -663,22 +673,16 @@ async fn postgres_replication_loop_inner(
         task_info.replication_lsn = slot_lsn;
     }
 
-    let client = task_info
-        .connection_config
-        .clone()
-        .connect_replication()
-        .await
-        .err_indefinite()?;
-
     let replication_stream = produce_replication(
-        &client,
+        task_info.connection_config.clone(),
         &task_info.slot,
         &task_info.publication,
         task_info.replication_lsn,
         Arc::clone(&task_info.resume_lsn),
         &task_info.metrics,
         &task_info.source_tables,
-    );
+    )
+    .await;
     tokio::pin!(replication_stream);
 
     // TODO(petrosagg): The API does not guarantee that we won't see an error after we have already
@@ -943,8 +947,11 @@ fn cast_row(table_cast: &[MirScalarExpr], datums: &[Datum<'_>]) -> Result<Row, a
     Ok(row)
 }
 
-fn produce_replication<'a>(
-    client: &'a Client,
+// TODO(guswynn|petrosagg): fix the underlying bug that prevents client re-use
+// when exiting the CopyBoth mode, so we don't need to re-create clients in every loop
+// in this function.
+async fn produce_replication<'a>(
+    client_config: mz_postgres_util::Config,
     slot: &'a str,
     publication: &'a str,
     as_of: PgLsn,
@@ -954,8 +961,8 @@ fn produce_replication<'a>(
 ) -> impl Stream<Item = Result<Event<[PgLsn; 1], (usize, Row, Diff)>, ReplicationError>> + 'a {
     use ReplicationError::*;
     use ReplicationMessage::*;
-    async_stream::try_stream! {
-        let mut last_data_message = Instant::now();
+    async_stream::try_stream!({
+        //let mut last_data_message = Instant::now();
         let mut inserts = vec![];
         let mut deletes = vec![];
 
@@ -976,6 +983,11 @@ fn produce_replication<'a>(
         // creating two independent slots so that we can use the secondary to check without
         // interrupting the stream on the first one
         loop {
+            let client = client_config
+                .clone()
+                .connect_replication()
+                .await
+                .err_indefinite()?;
             tracing::trace!("starting replication slot");
             let query = format!(
                 r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
@@ -986,6 +998,8 @@ fn produce_replication<'a>(
             );
             let copy_stream = client.copy_both_simple(&query).await.err_indefinite()?;
             let mut stream = Box::pin(LogicalReplicationStream::new(copy_stream));
+
+            let mut last_data_message = Instant::now();
 
             // The inner loop
             loop {
@@ -1035,10 +1049,15 @@ fn produce_replication<'a>(
                                     rel_id
                                 )
                             };
-                            let old_tuple = update.old_tuple().ok_or_else(err).err_definite()?.tuple_data();
+                            let old_tuple = update
+                                .old_tuple()
+                                .ok_or_else(err)
+                                .err_definite()?
+                                .tuple_data();
 
                             let mut old_datums = datum_vec.borrow();
-                            datums_from_tuple(rel_id, old_tuple, &mut *old_datums).err_definite()?;
+                            datums_from_tuple(rel_id, old_tuple, &mut *old_datums)
+                                .err_definite()?;
                             let old_row = cast_row(&info.casts, &old_datums).err_definite()?;
                             deletes.push((info.output_index, old_row));
                             drop(old_datums);
@@ -1055,7 +1074,8 @@ fn produce_replication<'a>(
                                     _ => new,
                                 });
                             let mut new_datums = datum_vec.borrow();
-                            datums_from_tuple(rel_id, new_tuple, &mut *new_datums).err_definite()?;
+                            datums_from_tuple(rel_id, new_tuple, &mut *new_datums)
+                                .err_definite()?;
                             let new_row = cast_row(&info.casts, &new_datums).err_definite()?;
                             inserts.push((info.output_index, new_row));
                         }
@@ -1071,7 +1091,11 @@ fn produce_replication<'a>(
                                     rel_id
                                 )
                             };
-                            let old_tuple = delete.old_tuple().ok_or_else(err).err_definite()?.tuple_data();
+                            let old_tuple = delete
+                                .old_tuple()
+                                .ok_or_else(err)
+                                .err_definite()?
+                                .tuple_data();
                             let mut datums = datum_vec.borrow();
                             datums_from_tuple(rel_id, old_tuple, &mut *datums).err_definite()?;
                             let row = cast_row(&info.casts, &datums).err_definite()?;
@@ -1161,7 +1185,9 @@ fn produce_replication<'a>(
                                 .iter()
                                 // Filter here makes option handling in map "safe"
                                 .filter_map(|id| source_tables.get(id))
-                                .map(|info| format!("name: {} id: {}", info.desc.name, info.desc.oid))
+                                .map(|info| {
+                                    format!("name: {} id: {}", info.desc.name, info.desc.oid)
+                                })
                                 .collect::<Vec<String>>();
                             return Err(Definite(anyhow!(
                                 "source table(s) {} got truncated",
@@ -1171,7 +1197,9 @@ fn produce_replication<'a>(
                         // The enum is marked as non_exhaustive. Better to be conservative here in
                         // case a new message is relevant to the semantics of our source
                         _ => {
-                            return Err(Definite(anyhow!("unexpected logical replication message")))?;
+                            return Err(Definite(anyhow!(
+                                "unexpected logical replication message"
+                            )))?;
                         }
                     },
                     Some(Ok(PrimaryKeepAlive(keepalive))) => {
@@ -1185,7 +1213,9 @@ fn produce_replication<'a>(
                     Some(Err(err)) => {
                         return Err(ReplicationError::from(err))?;
                     }
-                    None => break,
+                    None => {
+                        break;
+                    }
                     // The enum is marked non_exhaustive, better be conservative
                     _ => {
                         return Err(Definite(anyhow!("Unexpected replication message")))?;
@@ -1210,8 +1240,15 @@ fn produce_replication<'a>(
                     last_feedback = Instant::now();
                 }
             }
-            // Drop the stream so that the client exits the CopyBoth mode
+            // This may not be required, but as mentioned above in
+            // `postgres_replication_loop_inner`, we drop clients aggressively out of caution.
             drop(stream);
+
+            let client = client_config
+                .clone()
+                .connect_replication()
+                .await
+                .err_indefinite()?;
 
             // We reach this place if the consume loop above detected large WAL lag. This
             // section determines whether or not we can skip over that part of the WAL by
@@ -1256,7 +1293,9 @@ fn produce_replication<'a>(
             // If there are no changes until the end of the WAL it's safe to fast forward
             if changes == 0 {
                 last_commit_lsn = observed_wal_end;
-                yield Event::Progress([observed_wal_end]);
+                // `Progress` events are _frontiers_, so we add 1, just like when we
+                // handle data in `Commit` above.
+                yield Event::Progress([PgLsn::from(u64::from(last_commit_lsn) + 1)]);
             }
 
             tracing::info!(
@@ -1267,5 +1306,5 @@ fn produce_replication<'a>(
                 changes
             );
         }
-    }
+    })
 }

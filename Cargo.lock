@@ -4342,10 +4342,6 @@ name = "mz-postgres-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "byteorder",
- "bytes",
- "futures-util",
- "memchr",
  "mz-cloud-resources",
  "mz-ore",
  "mz-proto",
@@ -4353,10 +4349,7 @@ dependencies = [
  "mz-ssh-util",
  "openssh",
  "openssl",
- "pin-project-lite",
  "postgres-openssl",
- "postgres-protocol",
- "postgres-types",
  "proptest",
  "prost",
  "prost-build",
@@ -5655,7 +5648,7 @@ checksum = "15eb2c6e362923af47e13c23ca5afb859e83d54452c55b0b9ac763b8f7c1ac16"
 [[package]]
 name = "postgres"
 version = "0.19.4"
-source = "git+https://github.com/petrosagg/rust-postgres?branch=remove-replication#bf227f4d6c05b95f09f38850185841964ed711d2"
+source = "git+https://github.com/MaterializeInc/rust-postgres#9c9086235344fe794361a9985d97a64b42e61929"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -5668,7 +5661,7 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.0"
-source = "git+https://github.com/petrosagg/rust-postgres?branch=remove-replication#bf227f4d6c05b95f09f38850185841964ed711d2"
+source = "git+https://github.com/MaterializeInc/rust-postgres#9c9086235344fe794361a9985d97a64b42e61929"
 dependencies = [
  "openssl",
  "tokio",
@@ -5679,7 +5672,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.4"
-source = "git+https://github.com/petrosagg/rust-postgres?branch=remove-replication#bf227f4d6c05b95f09f38850185841964ed711d2"
+source = "git+https://github.com/MaterializeInc/rust-postgres#9c9086235344fe794361a9985d97a64b42e61929"
 dependencies = [
  "base64",
  "byteorder",
@@ -5696,7 +5689,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.4"
-source = "git+https://github.com/petrosagg/rust-postgres?branch=remove-replication#bf227f4d6c05b95f09f38850185841964ed711d2"
+source = "git+https://github.com/MaterializeInc/rust-postgres#9c9086235344fe794361a9985d97a64b42e61929"
 dependencies = [
  "bytes",
  "chrono",
@@ -7397,7 +7390,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.7"
-source = "git+https://github.com/petrosagg/rust-postgres?branch=remove-replication#bf227f4d6c05b95f09f38850185841964ed711d2"
+source = "git+https://github.com/MaterializeInc/rust-postgres#9c9086235344fe794361a9985d97a64b42e61929"
 dependencies = [
  "async-trait",
  "byteorder",
