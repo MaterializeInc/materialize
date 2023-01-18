@@ -458,7 +458,8 @@ pub struct PersistClient {
 impl PersistClient {
     /// A "fake" object used to fill `schema` parameters for opening handles in tests.
     pub const TEST_SCHEMA: () = ();
-    /// Same as `TEST_SCHEMA_DESC`, but to be deleted over the course of a stack of commits.
+    /// Same as `TEST_SCHEMA`, but to be deleted over the course of a stack of commits, and
+    /// after some migrations are done.
     pub const TO_REPLACE_SCHEMA: () = ();
 
     /// Returns a new client for interfacing with persist shards made durable to

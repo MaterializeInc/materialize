@@ -56,7 +56,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
-use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_repr::{Diff, GlobalId, RelationDesc, Timestamp};
 use mz_storage_client::client::SourceStatisticsUpdate;
 use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
@@ -225,8 +225,13 @@ where
         &resume_stream,
     );
 
-    let (remap_stream, remap_token) =
-        remap_operator(scope, config.clone(), batch_upper_summaries, &resume_stream);
+    let (remap_stream, remap_token) = remap_operator(
+        scope,
+        config.clone(),
+        batch_upper_summaries,
+        &resume_stream,
+        C::REMAP_RELATION_DESC.clone(),
+    );
 
     let ((reclocked_stream, reclocked_err_stream), _reclock_token) = reclock_operator(
         scope,
@@ -1046,6 +1051,7 @@ fn remap_operator<G, FromTime>(
     config: RawSourceCreationConfig,
     batch_upper_summaries: Stream<G, BatchUpperSummary>,
     resume_stream: &Stream<G, ()>,
+    remap_relation_desc: RelationDesc,
 ) -> (Stream<G, (FromTime, Timestamp, Diff)>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1117,6 +1123,7 @@ where
             "remap",
             worker_id,
             worker_count,
+            remap_relation_desc,
         )
         .await
         .unwrap_or_else(|e| panic!("Failed to create remap handle for source {}: {:#}", name, e));

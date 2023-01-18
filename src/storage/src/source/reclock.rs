@@ -620,7 +620,7 @@ mod tests {
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cache::PersistClientCache;
-    use mz_persist_client::{PersistClient, PersistConfig, PersistLocation, ShardId};
+    use mz_persist_client::{PersistConfig, PersistLocation, ShardId};
     use mz_repr::{GlobalId, RelationDesc, Timestamp};
     use mz_storage_client::controller::CollectionMetadata;
     use mz_storage_client::types::sources::{MzOffset, SourceData};
@@ -677,6 +677,7 @@ mod tests {
             "unittest",
             0,
             1,
+            mz_storage_client::types::sources::KAFKA_PROGRESS_DESC.clone(),
         )
         .await
         .unwrap();
@@ -1349,7 +1350,7 @@ mod tests {
             .open_leased_reader::<SourceData, (), Timestamp, Diff, _>(
                 binding_shard,
                 "test_since_hold",
-                PersistClient::TO_REPLACE_SCHEMA,
+                mz_storage_client::types::sources::KAFKA_PROGRESS_DESC.clone(),
             )
             .await
             .expect("error opening persist shard");

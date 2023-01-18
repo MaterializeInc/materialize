@@ -32,7 +32,7 @@ use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::PersistClient;
 use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::controller::PersistEpoch;
 use mz_storage_client::types::sources::{MzOffset, SourceData, SourceTimestamp};
@@ -135,6 +135,13 @@ where
         operator: &str,
         worker_id: usize,
         worker_count: usize,
+        // Must match the `FromTime`. Ideally we would be able to discover this
+        // from `SourceTimestamp`, but each source would need a specific `SourceTimestamp`
+        // implementation, as they do not share remap `RelationDesc`'s (columns names
+        // are different).
+        //
+        // TODO(guswynn): use the type-system to prevent misuse here.
+        remap_relation_desc: RelationDesc,
     ) -> anyhow::Result<Self> {
         let mut persist_clients = persist_clients.lock().await;
         let persist_client = persist_clients
@@ -158,7 +165,7 @@ where
             .open(
                 metadata.remap_shard.clone(),
                 &format!("reclock {}", id),
-                PersistClient::TO_REPLACE_SCHEMA,
+                remap_relation_desc,
             )
             .await
             .context("error opening persist shard")?;

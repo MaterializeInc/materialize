@@ -1979,6 +1979,8 @@ where
                 .open::<crate::types::sources::SourceData, (), T, Diff, _>(
                     *shard_id,
                     shard_purpose.as_str(),
+                    // We have to _read_ the shard to figure out if its been migrated or not, so we
+                    // hedge on setting a `RelationDesc`.
                     PersistClient::TO_REPLACE_SCHEMA,
                 )
                 .await
