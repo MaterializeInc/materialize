@@ -95,6 +95,8 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     lld \
     make \
     openssh-client \
+    postgresql-client-common \
+    postgresql-client-14 \
     pkg-config \
     python3 \
     python3-dev \

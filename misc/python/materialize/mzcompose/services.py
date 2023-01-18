@@ -608,6 +608,8 @@ class Testdrive(Service):
         name: str = "testdrive",
         mzbuild: str = "testdrive",
         materialize_url: str = "postgres://materialize@materialized:6875",
+        materialize_username: Optional[str] = None,
+        materialize_password: Optional[str] = None,
         materialize_url_internal: str = "postgres://materialize@materialized:6877",
         materialize_params: Dict[str, str] = {},
         kafka_url: str = "kafka:9092",
@@ -658,6 +660,13 @@ class Testdrive(Service):
                 f"--materialize-url={materialize_url}",
                 f"--materialize-internal-url={materialize_url_internal}",
             ]
+
+        if materialize_username:
+            entrypoint += [f"--materialize-username={materialize_username}"]
+
+        # Pass the password via an environment variable for some extra security
+        if materialize_password:
+            environment += [f"TESTDRIVE_MATERIALIZE_PASSWORD={materialize_password}"]
 
         if aws_region:
             entrypoint.append(f"--aws-region={aws_region}")

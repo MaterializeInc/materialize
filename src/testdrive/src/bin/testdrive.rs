@@ -185,6 +185,12 @@ struct Args {
         value_name = "URL"
     )]
     materialize_url: tokio_postgres::Config,
+    /// Username to use when connecting
+    #[clap(long, value_name = "USER")]
+    materialize_username: Option<String>,
+    /// Password to use when connecting
+    #[clap(long, env = "TESTDRIVE_MATERIALIZE_PASSWORD", value_name = "PASSWORD")]
+    materialize_password: Option<String>,
     /// materialize internal SQL connection string.
     #[clap(
         long,
@@ -381,6 +387,8 @@ async fn main() {
 
         // === Materialize options. ===
         materialize_pgconfig: args.materialize_url,
+        materialize_username: args.materialize_username,
+        materialize_password: args.materialize_password,
         materialize_internal_pgconfig: args.materialize_internal_url,
         materialize_http_port: args.materialize_http_port,
         materialize_internal_http_port: args.materialize_internal_http_port,

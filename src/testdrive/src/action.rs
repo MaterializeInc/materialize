@@ -100,6 +100,10 @@ pub struct Config {
     /// The pgwire connection parameters for the Materialize instance that
     /// testdrive will connect to.
     pub materialize_pgconfig: tokio_postgres::Config,
+    /// The pgwire username to use
+    pub materialize_username: Option<String>,
+    /// The pgwire password to use
+    pub materialize_password: Option<String>,
     /// The internal pgwire connection parameters for the Materialize instance that
     /// testdrive will connect to.
     pub materialize_internal_pgconfig: tokio_postgres::Config,
@@ -843,6 +847,12 @@ pub async fn create_state(
             .retry_async_canceling(|_| async move {
                 let mut pgconfig = config.materialize_pgconfig.clone();
                 pgconfig.connect_timeout(config.default_timeout);
+                if let Some(username) = &config.materialize_username {
+                    pgconfig.user(username);
+                }
+                if let Some(password) = &config.materialize_password {
+                    pgconfig.password(password);
+                }
                 let tls = make_tls(&pgconfig)?;
                 pgconfig.connect(tls).await.map_err(|e| anyhow!(e))
             })

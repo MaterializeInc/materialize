@@ -134,7 +134,7 @@ case "$cmd" in
         docker push materialize/ci-builder:"$cache_tag"
         ;;
     run)
-        mkdir -p target-xcompile ~/.kube
+        mkdir -p target-xcompile ~/.kube ~/.config/mz
         args=(
             --cidfile "$cid_file"
             --rm --interactive
@@ -151,6 +151,7 @@ case "$cmd" in
             --env GPG_KEY
             --env LAUNCHDARKLY_API_TOKEN
             --env LAUNCHDARKLY_SDK_KEY
+            --env NIGHTLY_CANARY_APP_PASSWORD
             --env PYPI_TOKEN
         )
         for env in $(printenv | grep '^BUILDKITE' | sed 's/=.*//'); do
@@ -165,6 +166,10 @@ case "$cmd" in
             # deletion of config.lock.
             --volume "$HOME/.kube:/kube"
             --env "KUBECONFIG=/kube/config"
+        )
+        # Forward the hosts' .config/mz
+        args+=(
+            --volume "$HOME/.config/mz:/home/materialize/.config/mz"
         )
         # Forward the host's SSH agent, if available.
         if [[ "${SSH_AUTH_SOCK:-}" ]]; then

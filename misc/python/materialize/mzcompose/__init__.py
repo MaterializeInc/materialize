@@ -29,6 +29,7 @@ import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
 from inspect import getmembers, isfunction
+from ssl import SSLContext
 from tempfile import TemporaryFile
 from typing import (
     Any,
@@ -1017,9 +1018,11 @@ def _wait_for_pg(
     password: Optional[str],
     expected: Union[Iterable[Any], Literal["any"]],
     print_result: bool = False,
+    ssl_context: Optional[SSLContext] = None,
 ) -> None:
     """Wait for a pg-compatible database (includes materialized)"""
-    args = f"dbname={dbname} host={host} port={port} user={user} password={password}"
+    obfuscated_password = password[0:1] if password is not None else ""
+    args = f"dbname={dbname} host={host} port={port} user={user} password='{obfuscated_password}...'"
     ui.progress(f"waiting for {args} to handle {query!r}", "C")
     error = None
     for remaining in ui.timeout_loop(timeout_secs, tick=0.1):
@@ -1031,6 +1034,7 @@ def _wait_for_pg(
                 user=user,
                 password=password,
                 timeout=1,
+                ssl_context=ssl_context,
             )
             # The default (autocommit = false) wraps everything in a transaction.
             conn.autocommit = True
