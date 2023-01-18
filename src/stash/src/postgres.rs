@@ -517,12 +517,27 @@ impl Stash {
                 }
                 tx.batch_execute(SCHEMA).await?;
             }
-            // Bump the epoch, which will cause any previous connection to fail. Add a
-            // unique nonce so that if some other thing recreates the entire schema, we
-            // can't accidentally have the same epoch, nonce pair (especially risky if the
-            // current epoch has been bumped exactly once, then gets recreated by another
-            // connection that also bumps it once).
             let epoch = if matches!(self.txn_mode, TransactionMode::Writeable) {
+                // The `data`, `sinces`, and `uppers` tables can create and delete
+                // rows at a high frequency, generating many tombstoned rows. If
+                // Cockroach's GC interval is set high (the default is 25h) and
+                // these tombstones accumulate, scanning over the table will take
+                // increasingly and prohibitively long.
+                //
+                // See: https://github.com/MaterializeInc/materialize/issues/15842
+                // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
+                tx.batch_execute("ALTER TABLE data CONFIGURE ZONE USING gc.ttlseconds = 600;")
+                    .await?;
+                tx.batch_execute("ALTER TABLE sinces CONFIGURE ZONE USING gc.ttlseconds = 600;")
+                    .await?;
+                tx.batch_execute("ALTER TABLE uppers CONFIGURE ZONE USING gc.ttlseconds = 600;")
+                    .await?;
+
+                // Bump the epoch, which will cause any previous connection to fail. Add a
+                // unique nonce so that if some other thing recreates the entire schema, we
+                // can't accidentally have the same epoch, nonce pair (especially risky if the
+                // current epoch has been bumped exactly once, then gets recreated by another
+                // connection that also bumps it once).
                 let row = tx
                     .query_one(
                         "UPDATE fence SET epoch=epoch+1, nonce=$1 RETURNING epoch",
@@ -536,21 +551,6 @@ impl Stash {
                 self.nonce = nonce.try_into().map_err(|_| "could not read nonce")?;
                 NonZeroI64::new(row.get(0)).unwrap()
             };
-
-            // The `data`, `sinces`, and `uppers` tables can create and delete
-            // rows at a high frequency, generating many tombstoned rows. If
-            // Cockroach's GC interval is set high (the default is 25h) and
-            // these tombstones accumulate, scanning over the table will take
-            // increasingly and prohibitively long.
-            //
-            // See: https://github.com/MaterializeInc/materialize/issues/15842
-            // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
-            tx.batch_execute("ALTER TABLE data CONFIGURE ZONE USING gc.ttlseconds = 600;")
-                .await?;
-            tx.batch_execute("ALTER TABLE sinces CONFIGURE ZONE USING gc.ttlseconds = 600;")
-                .await?;
-            tx.batch_execute("ALTER TABLE uppers CONFIGURE ZONE USING gc.ttlseconds = 600;")
-                .await?;
 
             tx.commit().await?;
             self.epoch = Some(epoch);
