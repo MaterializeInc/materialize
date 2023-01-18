@@ -80,7 +80,7 @@ SELECT
     s.schedule,
     s.course_id
 FROM teachers t
-INNER JOIN sections s ON (t.id = s.teacher_id);
+INNER JOIN sections s ON t.id = s.teacher_id;
 ```
 
 We can optimize this query by creating an index for each column being joined.
