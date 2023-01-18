@@ -431,9 +431,15 @@ async fn force_gc(
         // This isn't the perfect place to put this check, the ideal would be in
         // the apply_unbatched_cmd loop, but I don't want to pollute the prod
         // code with this logic.
-        if cfg.build_version != state.applier_version {
+        let safe_version_change = if commit {
+            cfg.build_version == state.applier_version
+        } else {
+            // We never actually write out state changes, so increasing the version is okay.
+            cfg.build_version >= state.applier_version
+        };
+        if !safe_version_change {
             // We could add a flag to override this check, if that comes up.
-            return Err(anyhow!("version of this tool {} does not match version of state {}. bailing so we don't corrupt anything", cfg.build_version, state.applier_version));
+            return Err(anyhow!("version of this tool {} does not match version of state {} when --commit is {commit}. bailing so we don't corrupt anything", cfg.build_version, state.applier_version));
         }
         break;
     }
