@@ -115,6 +115,7 @@ message ProtoAggregateFunc {
         ProtoColumnOrders row_number  = 37;
         ProtoColumnOrders dense_rank  = 38;
         ProtoLagLead lag_lead  = 39;
+        google.protobuf.Empty dummy = 40;   // DUMMY is unsupported and may crash if recorded and then read back.
         ProtoWindowFrame first_value = 41;
         ProtoWindowFrame last_value = 42;
         google.protobuf.Empty max_uint16 = 43;

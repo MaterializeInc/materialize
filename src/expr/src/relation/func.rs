@@ -1486,6 +1486,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                     .window_frame
                     .into_rust_if_some("ProtoWindowFrame::window_frame")?,
             },
+            Kind::Dummy(()) => panic!("Dummy aggregate func is poison pill"),
         })
     }
 }

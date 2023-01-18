@@ -158,6 +158,7 @@ impl RowPacker<'_> {
                 Some(ProtoDatumOther::False) => self.push(Datum::False),
                 Some(ProtoDatumOther::True) => self.push(Datum::True),
                 Some(ProtoDatumOther::JsonNull) => self.push(Datum::JsonNull),
+                Some(ProtoDatumOther::Dummy) => panic!("Dummy value is poison pill"),
                 Some(ProtoDatumOther::NumericPosInf) => self.push(Datum::from(Numeric::infinity())),
                 Some(ProtoDatumOther::NumericNegInf) => {
                     self.push(Datum::from(-Numeric::infinity()))

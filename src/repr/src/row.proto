@@ -79,6 +79,7 @@ enum ProtoDatumOther {
     FALSE = 2;
     TRUE = 3;
     JSON_NULL = 4;
+    DUMMY = 5;  // DUMMY is unsupported and may crash if recorded and then read back.
     NUMERIC_POS_INF = 6;
     NUMERIC_NEG_INF = 7;
     NUMERIC_NA_N = 8;
