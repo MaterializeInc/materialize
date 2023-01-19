@@ -2191,7 +2191,7 @@ impl Coordinator {
             &self.catalog,
             compute_instance,
             &source_ids,
-            LogReadStyle::Peek(&mut target_replica),
+            &mut target_replica,
         )?;
 
         let id_bundle = self
@@ -2503,6 +2503,20 @@ impl Coordinator {
         let compute_instance = self.catalog.active_compute_instance(session)?;
         let compute_instance_id = compute_instance.id;
 
+        let target_replica_name = session.vars().cluster_replica();
+        let mut target_replica = target_replica_name
+            .map(|name| {
+                compute_instance
+                    .replica_id_by_name
+                    .get(name)
+                    .copied()
+                    .ok_or(AdapterError::UnknownClusterReplica {
+                        cluster_name: compute_instance.name.clone(),
+                        replica_name: name.to_string(),
+                    })
+            })
+            .transpose()?;
+
         // SUBSCRIBE AS OF, similar to peeks, doesn't need to worry about transaction
         // timestamp semantics.
         if when == QueryWhen::Immediately {
@@ -2568,7 +2582,7 @@ impl Coordinator {
                     &self.catalog,
                     compute_instance,
                     &btreeset!(from_id),
-                    LogReadStyle::Subscribe,
+                    &mut target_replica,
                 )?;
                 let from = self.catalog.get_entry(&from_id);
                 let from_desc = from
@@ -2590,7 +2604,7 @@ impl Coordinator {
                     &self.catalog,
                     compute_instance,
                     &expr.depends_on(),
-                    LogReadStyle::Subscribe,
+                    &mut target_replica,
                 )?;
                 let id = self.allocate_transient_id()?;
                 let expr = self.view_optimizer.optimize(expr)?;
@@ -2604,14 +2618,14 @@ impl Coordinator {
             }
         };
 
-        let (sink_id, sink_desc) = dataflow.sink_exports.iter().next().unwrap();
+        let (&sink_id, sink_desc) = dataflow.sink_exports.iter().next().unwrap();
         self.active_conns
             .get_mut(&session.conn_id())
             .expect("must exist for active sessions")
             .drop_sinks
             .push(ComputeSinkId {
                 compute_instance: compute_instance_id,
-                global_id: *sink_id,
+                global_id: sink_id,
             });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
@@ -2621,7 +2635,7 @@ impl Coordinator {
             .with_label_values(&[session_type])
             .inc();
         self.pending_subscribes.insert(
-            *sink_id,
+            sink_id,
             PendingSubscribe {
                 session_type,
                 channel: tx,
@@ -2630,6 +2644,13 @@ impl Coordinator {
             },
         );
         self.ship_dataflow(dataflow, compute_instance_id).await;
+
+        if let Some(target) = target_replica {
+            self.controller
+                .compute
+                .set_subscribe_target_replica(compute_instance_id, sink_id, target)
+                .unwrap();
+        }
 
         let resp = ExecuteResponse::Subscribing { rx };
         match copy_to {
@@ -3986,16 +4007,11 @@ impl Coordinator {
     }
 }
 
-enum LogReadStyle<'a> {
-    Peek(&'a mut Option<ReplicaId>),
-    Subscribe,
-}
-
-fn check_no_invalid_log_reads<'a>(
+fn check_no_invalid_log_reads(
     catalog: &Catalog,
     compute_instance: &ComputeInstance,
     source_ids: &BTreeSet<GlobalId>,
-    log_read_style: LogReadStyle<'a>,
+    target_replica: &mut Option<ReplicaId>,
 ) -> Result<(), AdapterError>
 where
 {
@@ -4009,20 +4025,9 @@ where
         return Ok(());
     }
 
-    // Peeking from log sources on replicated compute instances is only
-    // allowed if a target replica is selected. Otherwise, we have no
-    // way of knowing which replica we read the introspection data from.
-    //
-    // Subscribing from log sources on replicated compute instances is not
-    // supported, but in theory could support replica targeting in the same way
-    // as peeks.
-    let target_replica = match log_read_style {
-        LogReadStyle::Peek(target_replica) => target_replica,
-        LogReadStyle::Subscribe => {
-            return Err(AdapterError::TargetedSubscribe { log_names });
-        }
-    };
-
+    // Reading from log sources on replicated compute instances is only allowed
+    // if a target replica is selected. Otherwise, we have no way of knowing
+    // which replica we read the introspection data from.
     let num_replicas = compute_instance.replicas_by_id.len();
     if target_replica.is_none() {
         if num_replicas == 1 {
@@ -4033,7 +4038,7 @@ where
     }
 
     // Ensure that logging is initialized for the target replica, lest
-    // we try to peek a non-existing arrangement.
+    // we try to read from a non-existing arrangement.
     let replica_id = target_replica.unwrap();
     let replica = &compute_instance.replicas_by_id[&replica_id];
     if !replica.config.logging.enabled() {

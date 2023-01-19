@@ -147,6 +147,8 @@ pub enum PeekError {
     InstanceMissing(ComputeInstanceId),
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
+    #[error("replica does not exist: {0}")]
+    ReplicaMissing(ReplicaId),
     #[error("peek timestamp is not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
 }
@@ -162,6 +164,7 @@ impl From<instance::PeekError> for PeekError {
         use instance::PeekError::*;
         match error {
             CollectionMissing(id) => Self::CollectionMissing(id),
+            ReplicaMissing(id) => Self::ReplicaMissing(id),
             SinceViolation(id) => Self::CollectionMissing(id),
         }
     }
@@ -185,6 +188,36 @@ impl From<InstanceMissing> for CollectionUpdateError {
 impl From<CollectionMissing> for CollectionUpdateError {
     fn from(error: CollectionMissing) -> Self {
         Self::CollectionMissing(error.0)
+    }
+}
+
+// Errors arising during subscribe target assignment.
+#[derive(Error, Debug)]
+pub enum SubscribeTargetError {
+    #[error("instance does not exist: {0}")]
+    InstanceMissing(ComputeInstanceId),
+    #[error("subscribe does not exist: {0}")]
+    SubscribeMissing(GlobalId),
+    #[error("replica does not exist: {0}")]
+    ReplicaMissing(ReplicaId),
+    #[error("subscribe has already produced output")]
+    SubscribeAlreadyStarted,
+}
+
+impl From<InstanceMissing> for SubscribeTargetError {
+    fn from(error: InstanceMissing) -> Self {
+        Self::InstanceMissing(error.0)
+    }
+}
+
+impl From<instance::SubscribeTargetError> for SubscribeTargetError {
+    fn from(error: instance::SubscribeTargetError) -> Self {
+        use instance::SubscribeTargetError::*;
+        match error {
+            SubscribeMissing(id) => Self::SubscribeMissing(id),
+            ReplicaMissing(id) => Self::ReplicaMissing(id),
+            SubscribeAlreadyStarted => Self::SubscribeAlreadyStarted,
+        }
     }
 }
 

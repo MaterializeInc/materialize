@@ -10,6 +10,7 @@
 import re
 import time
 from textwrap import dedent
+from threading import Thread
 from typing import Tuple
 
 from pg8000.dbapi import ProgrammingError
@@ -67,6 +68,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-builtin-migration",
         "pg-snapshot-resumption",
         "test-system-table-indexes",
+        "test-replica-targeted-subscribe-abort",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -900,3 +902,75 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
     """
             )
         )
+
+
+def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
+    """
+    Test that a replica-targeted SUBSCRIBE is aborted when the target
+    replica disconnects.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("compute_1")
+    c.up("compute_2")
+    c.wait_for_materialized()
+
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster1 CASCADE;
+        CREATE CLUSTER cluster1 REPLICAS (
+            replica1 (REMOTE ['compute_1:2101'], COMPUTE ['compute_1:2102'], WORKERS 2),
+            replica2 (REMOTE ['compute_2:2101'], COMPUTE ['compute_2:2102'], WORKERS 2)
+        );
+        CREATE TABLE t (a int);
+        """
+    )
+
+    def drop_replica_with_delay() -> None:
+        time.sleep(2)
+        c.sql("DROP CLUSTER REPLICA cluster1.replica1;")
+
+    dropper = Thread(target=drop_replica_with_delay)
+    dropper.start()
+
+    try:
+        c.sql(
+            """
+            SET cluster = cluster1;
+            SET cluster_replica = replica1;
+            BEGIN;
+            DECLARE c CURSOR FOR SUBSCRIBE t;
+            FETCH c WITH (timeout = '5s');
+            """
+        )
+    except ProgrammingError as e:
+        assert "target replica failed or was dropped" in e.args[0]["M"], e
+    else:
+        assert False, "SUBSCRIBE didn't return the expected error"
+
+    dropper.join()
+
+    def kill_replica_with_delay() -> None:
+        time.sleep(2)
+        c.kill("compute_2")
+
+    killer = Thread(target=kill_replica_with_delay)
+    killer.start()
+
+    try:
+        c.sql(
+            """
+            SET cluster = cluster1;
+            SET cluster_replica = replica2;
+            BEGIN;
+            DECLARE c CURSOR FOR SUBSCRIBE t;
+            FETCH c WITH (timeout = '5s');
+            """
+        )
+    except ProgrammingError as e:
+        assert "target replica failed or was dropped" in e.args[0]["M"], e
+    else:
+        assert False, "SUBSCRIBE didn't return the expected error"
+
+    killer.join()
