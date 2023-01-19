@@ -1,9 +1,9 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.3.4 - 2023-01-19
 
-* Fix a bug where the adapter would fail if the `default` cluster doesn't exist
-  in Materialize (i.e. in case it was dropped by the user).
+* Fix a bug where the adapter would fail if the pre-installed `default` cluster
+  doesn't exist in Materialize (i.e. in case it was dropped by the user).
 
 ## 1.3.3 - 2023-01-05
 
