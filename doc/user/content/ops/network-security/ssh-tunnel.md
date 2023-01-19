@@ -51,7 +51,7 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
     ```
 
-1. Retrieve the static egress IPs from Materialize and restrict the firewall rules (e.g. AWS Security Groups) for your SSH bastion to allow SSH traffic only for those IP addresses.
+1. Retrieve the static egress IPs from Materialize and configure the firewall rules (e.g. AWS Security Groups) for your SSH bastion to allow SSH traffic only for those IP addresses.
 
     ```sql
     SELECT * FROM mz_catalog.mz_egress_ips;
