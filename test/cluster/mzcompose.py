@@ -613,7 +613,7 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         Service(
             name="materialized",
             config={
-                "image": "materialize/materialized:devel-aa4128c9c485322f90ab0af2b9cb4d16e1c470c0",
+                "image": "materialize/materialized:devel-e6af8921b9564d2ea69f38547cd525593c7c6a1e",
                 "command": [
                     "--persist-blob-url=file:///mzdata/persist/blob",
                     "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
@@ -642,8 +642,10 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         > CREATE VIEW v1 AS SELECT COUNT(*) FROM (SELECT * FROM pg_proc ORDER BY oid LIMIT 5);
         > SELECT * FROM v1;
         5
-        ! SELECT DISTINCT proowner FROM pg_proc;
-        contains:column "proowner" does not exist
+
+        # Apparently this column _does_ exist.
+        > SELECT DISTINCT proowner FROM pg_proc;
+        <null>
 
         # mz_internal.mz_dataflow_operator_reachability migration
 
@@ -652,22 +654,16 @@ def workflow_test_builtin_migration(c: Composition) -> None:
         > CREATE DEFAULT INDEX ON t;
 
         > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
-        "bigint list"
+        "uint8 list"
 
         # mz_internal.mz_cluster_replica_statuses migration
 
         > SELECT pg_typeof(process_id) FROM mz_internal.mz_cluster_replica_statuses LIMIT 1;
-        "bigint"
-
-        ! SELECT updated_at FROM mz_internal.mz_cluster_replica_statuses;
-        contains:column "updated_at" does not exist
-
-        > SELECT last_update FROM mz_internal.mz_cluster_replica_statuses LIMIT 0;
+        "uint8"
 
         # mz_internal.mz_show_cluster_replicas migration
 
-        ! SELECT ready FROM mz_internal.mz_show_cluster_replicas LIMIT 0;
-        contains:column "ready" does not exist
+        > SELECT ready FROM mz_internal.mz_show_cluster_replicas LIMIT 0;
 
         # mz_catalog.mz_sources migration
 
