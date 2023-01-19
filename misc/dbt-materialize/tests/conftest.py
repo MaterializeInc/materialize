@@ -30,6 +30,5 @@ def dbt_profile_target():
         "user": "materialize",
         "pass": "password",
         "database": "materialize",
-        "cluster": "default",
         "port": "{{ env_var('DBT_PORT', 6875) }}",
     }
