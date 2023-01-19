@@ -196,7 +196,6 @@ where
     shard_id: ShardId,
     blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
-    consolidate: bool,
 
     buffer: BatchBuffer<D>,
 
@@ -233,7 +232,6 @@ where
         writer_id: WriterId,
         since: Antichain<T>,
         inline_upper: Option<Antichain<T>>,
-        consolidate: bool,
     ) -> Self {
         let parts = BatchParts::new(
             cfg.batch_builder_max_outstanding_parts,
@@ -253,10 +251,8 @@ where
                 Arc::clone(&metrics),
                 batch_write_metrics,
                 cfg.blob_target_size,
-                consolidate,
             ),
             metrics,
-            consolidate,
             max_kvt_in_run: None,
             parts_written: 0,
             runs: Vec::new(),
@@ -369,45 +365,35 @@ where
             return;
         }
 
-        if self.consolidate {
-            // if our parts are consolidated, we can rely on their sorted order to
-            // appropriately determine runs of ordered parts
-            let ((min_part_k, min_part_v), min_part_t, _d) =
-                columnar.get(0).expect("num updates is greater than zero");
-            let ((max_part_k, max_part_v), max_part_t, _d) = columnar
-                .get(num_updates.saturating_sub(1))
-                .expect("num updates is greater than zero");
+        // if our parts are consolidated, we can rely on their sorted order to
+        // appropriately determine runs of ordered parts
+        let ((min_part_k, min_part_v), min_part_t, _d) =
+            columnar.get(0).expect("num updates is greater than zero");
+        let ((max_part_k, max_part_v), max_part_t, _d) = columnar
+            .get(num_updates.saturating_sub(1))
+            .expect("num updates is greater than zero");
 
-            if let Some((max_run_k, max_run_v, max_run_t)) = &mut self.max_kvt_in_run {
-                // start a new run if our part contains an update that exists in the
-                // range already covered by the existing parts of the current run
-                if (min_part_k, min_part_v, min_part_t.as_slice())
-                    < (max_run_k, max_run_v, max_run_t)
-                {
-                    self.runs.push(self.parts_written);
-                }
-
-                // given the above check, whether or not we extended an existing run or
-                // started a new one, this part contains the greatest KVT in the run
-                max_run_k.clear();
-                max_run_v.clear();
-                max_run_t.clear();
-                max_run_k.extend_from_slice(max_part_k);
-                max_run_v.extend_from_slice(max_part_v);
-                max_run_t.extend_from_slice(&max_part_t);
-            } else {
-                self.max_kvt_in_run = Some((
-                    max_part_k.to_vec(),
-                    max_part_v.to_vec(),
-                    max_part_t.to_vec(),
-                ));
-            }
-        } else {
-            // if our parts are not consolidated, we simply say each part is its own run.
-            // NB: there is an implicit run starting at index 0
-            if self.parts_written > 0 {
+        if let Some((max_run_k, max_run_v, max_run_t)) = &mut self.max_kvt_in_run {
+            // start a new run if our part contains an update that exists in the
+            // range already covered by the existing parts of the current run
+            if (min_part_k, min_part_v, min_part_t.as_slice()) < (max_run_k, max_run_v, max_run_t) {
                 self.runs.push(self.parts_written);
             }
+
+            // given the above check, whether or not we extended an existing run or
+            // started a new one, this part contains the greatest KVT in the run
+            max_run_k.clear();
+            max_run_v.clear();
+            max_run_t.clear();
+            max_run_k.extend_from_slice(max_part_k);
+            max_run_v.extend_from_slice(max_part_v);
+            max_run_t.extend_from_slice(&max_part_t);
+        } else {
+            self.max_kvt_in_run = Some((
+                max_part_k.to_vec(),
+                max_part_v.to_vec(),
+                max_part_t.to_vec(),
+            ));
         }
 
         let start = Instant::now();
@@ -430,7 +416,6 @@ struct BatchBuffer<D> {
     metrics: Arc<Metrics>,
     batch_write_metrics: BatchWriteMetrics,
     blob_target_size: usize,
-    consolidate: bool,
 
     key_buf: Vec<u8>,
     val_buf: Vec<u8>,
@@ -449,13 +434,11 @@ where
         metrics: Arc<Metrics>,
         batch_write_metrics: BatchWriteMetrics,
         blob_target_size: usize,
-        should_consolidate: bool,
     ) -> Self {
         BatchBuffer {
             metrics,
             batch_write_metrics,
             blob_target_size,
-            consolidate: should_consolidate,
             key_buf: Default::default(),
             val_buf: Default::default(),
             current_part: Default::default(),
@@ -506,13 +489,11 @@ where
             updates.push(((&self.key_buf[k_range], &self.val_buf[v_range]), t, d));
         }
 
-        if self.consolidate {
-            let start = Instant::now();
-            consolidate_updates(&mut updates);
-            self.batch_write_metrics
-                .step_consolidation
-                .inc_by(start.elapsed().as_secs_f64());
-        }
+        let start = Instant::now();
+        consolidate_updates(&mut updates);
+        self.batch_write_metrics
+            .step_consolidation
+            .inc_by(start.elapsed().as_secs_f64());
 
         if updates.is_empty() {
             self.key_buf.clear();

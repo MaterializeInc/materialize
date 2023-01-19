@@ -1362,7 +1362,6 @@ pub mod datadriven {
             .unwrap_or_else(|| Antichain::from_elem(0));
         let target_size = args.optional("target_size");
         let parts_size_override = args.optional("parts_size_override");
-        let consolidate = args.optional("consolidate").unwrap_or(true);
         let updates = args.input.split('\n').flat_map(DirectiveArgs::parse_update);
 
         let mut cfg = datadriven.client.cfg.clone();
@@ -1380,7 +1379,6 @@ pub mod datadriven {
             WriterId::new(),
             since,
             Some(upper.clone()),
-            consolidate,
         );
         for ((k, ()), t, d) in updates {
             builder.add(&k, &(), &t, &d).await.expect("invalid batch");
