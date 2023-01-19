@@ -27,7 +27,15 @@ pub struct Gen<Id: From<u64> + Default> {
     phantom: PhantomData<Id>,
 }
 
-impl<Id: From<u64> + Default> Gen<Id> {
+impl<Id: From<u64> + Default + Into<u64>> Gen<Id> {
+    /// Constructs a new generator, starting from `initial_id`.
+    pub fn new(initial_id: Id) -> Self {
+        Self {
+            id: initial_id.into(),
+            phantom: PhantomData {},
+        }
+    }
+
     /// Allocates a new identifier of type `Id` and advances the generator.
     pub fn allocate_id(&mut self) -> Id {
         let id = self.id;

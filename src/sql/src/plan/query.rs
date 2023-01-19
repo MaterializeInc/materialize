@@ -46,6 +46,7 @@ use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{func as expr_func, Id, LocalId, MirScalarExpr, RowSetFinishing};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::id_gen;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
 use mz_repr::adt::char::CharLength;
@@ -1146,6 +1147,7 @@ pub fn plan_ctes(
         )
     }
 
+    let mut max_local_id_used = LocalId::new(0);
     match &q.ctes {
         CteBlock::Simple(ctes) => {
             // Plan all CTEs, introducing the types for non-recursive CTEs as we go.
@@ -1167,6 +1169,9 @@ pub fn plan_ctes(
                         desc,
                     },
                 );
+                if cte.id > max_local_id_used {
+                    max_local_id_used = cte.id
+                }
 
                 result.push((cte.id, val, shadowed));
             }
@@ -1199,6 +1204,10 @@ pub fn plan_ctes(
                 if let Some(shadowed) = shadowed {
                     shadowed_descs.insert(cte.id, shadowed);
                 }
+
+                if cte.id > max_local_id_used {
+                    max_local_id_used = cte.id
+                }
             }
 
             // Plan all CTEs and validate the proposed types.
@@ -1220,6 +1229,8 @@ pub fn plan_ctes(
             }
         }
     }
+
+    qcx.id_gen = id_gen::Gen::new(LocalId::new(1u64 + u64::from(max_local_id_used)));
 
     Ok(result)
 }
@@ -1373,15 +1384,7 @@ fn plan_set_expr(
                 }
                 SetOperator::Except => Hir::except(all, lhs, rhs),
                 SetOperator::Intersect => {
-                    // XXX not sure if I need to thread in an IdGen in
-                    // QueryContext here, and whether that needs to
-                    // interact with CTE's LocalIds and therefore be
-                    // the same generator.  These Gets are always
-                    // immediate children of the Let(Union(...)), so
-                    // my assumption is that as long as ID shadowing
-                    // works, this should be fine.  But I'm wary of
-                    // some kind of movement I don't expect here.
-                    let id = LocalId::new(0);
+                    let id: LocalId = qcx.id_gen.allocate_id();
                     let lhs_get = HirRelationExpr::Get {
                         id: mz_expr::Id::Local(id),
                         typ: left_type.clone(),
@@ -5170,6 +5173,8 @@ pub struct QueryContext<'a> {
     pub outer_relation_types: Vec<RelationType>,
     /// CTEs for this query, mapping their assigned LocalIds to their definition.
     pub ctes: BTreeMap<LocalId, CteDesc>,
+    /// Generator for local IDs that don't collide with those in `ctes`.
+    pub id_gen: id_gen::Gen<LocalId>,
     pub recursion_guard: RecursionGuard,
 }
 
@@ -5187,6 +5192,7 @@ impl<'a> QueryContext<'a> {
             outer_scopes: vec![],
             outer_relation_types: vec![],
             ctes: BTreeMap::new(),
+            id_gen: id_gen::Gen::new(LocalId::default()),
             recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
     }
@@ -5210,6 +5216,11 @@ impl<'a> QueryContext<'a> {
             outer_scopes,
             outer_relation_types,
             ctes,
+            // It's fine to clone this because any binding scopes
+            // introduced in the subquery should be disjoint from
+            // those generated in other subqueries or further on in
+            // this query.
+            id_gen: self.id_gen.clone(),
             recursion_guard: self.recursion_guard.clone(),
         }
     }
