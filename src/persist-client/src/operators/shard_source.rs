@@ -64,7 +64,7 @@ use crate::{PersistLocation, ShardId};
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn shard_source<K, V, D, G, S>(
+pub fn shard_source<K, V, D, G>(
     scope: &G,
     name: &str,
     clients: Arc<Mutex<PersistClientCache>>,
@@ -73,10 +73,10 @@ pub fn shard_source<K, V, D, G, S>(
     as_of: Option<Antichain<G::Timestamp>>,
     until: Antichain<G::Timestamp>,
     flow_control: Option<FlowControl<G>>,
-    schema: S,
+    key_schema: Arc<K::Schema>,
+    val_schema: Arc<V::Schema>,
 ) -> (Stream<G, FetchedPart<K, V, G::Timestamp, D>>, Rc<dyn Any>)
 where
-    S: Clone + 'static,
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
@@ -110,7 +110,7 @@ where
     ) = mpsc::unbounded_channel();
 
     let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
-    let (descs, descs_shutdown) = shard_source_descs::<K, V, D, G, _>(
+    let (descs, descs_shutdown) = shard_source_descs::<K, V, D, G>(
         scope,
         name,
         Arc::clone(&clients),
@@ -121,9 +121,12 @@ where
         flow_control,
         consumed_part_rx,
         chosen_worker,
-        schema.clone(),
+        Arc::clone(&key_schema),
+        Arc::clone(&val_schema),
     );
-    let (parts, tokens) = shard_source_fetch(&descs, name, clients, location, shard_id, schema);
+    let (parts, tokens) = shard_source_fetch(
+        &descs, name, clients, location, shard_id, key_schema, val_schema,
+    );
     shard_source_tokens(&tokens, name, consumed_part_tx, chosen_worker);
 
     let token = Rc::new(descs_shutdown.press_on_drop());
@@ -143,7 +146,7 @@ pub struct FlowControl<G: Scope> {
     pub max_inflight_bytes: usize,
 }
 
-pub(crate) fn shard_source_descs<K, V, D, G, S>(
+pub(crate) fn shard_source_descs<K, V, D, G>(
     scope: &G,
     name: &str,
     clients: Arc<Mutex<PersistClientCache>>,
@@ -154,10 +157,10 @@ pub(crate) fn shard_source_descs<K, V, D, G, S>(
     flow_control: Option<FlowControl<G>>,
     mut consumed_part_rx: mpsc::UnboundedReceiver<SerdeLeasedBatchPart>,
     chosen_worker: usize,
-    schema: S,
+    key_schema: Arc<K::Schema>,
+    val_schema: Arc<V::Schema>,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, ShutdownButton<()>)
 where
-    S: 'static,
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
@@ -187,10 +190,11 @@ where
         };
         let read = read
             .expect("location should be valid")
-            .open_leased_reader::<K, V, G::Timestamp, D, _>(
+            .open_leased_reader::<K, V, G::Timestamp, D>(
                 shard_id,
                 &format!("shard_source({})", name_owned),
-                schema,
+                key_schema,
+                val_schema,
             )
             .await
             .expect("could not open persist shard");
@@ -408,19 +412,19 @@ where
     (descs_stream, shutdown_button)
 }
 
-pub(crate) fn shard_source_fetch<K, V, T, D, G, S>(
+pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     descs: &Stream<G, (usize, SerdeLeasedBatchPart)>,
     name: &str,
     clients: Arc<Mutex<PersistClientCache>>,
     location: PersistLocation,
     shard_id: ShardId,
-    schema: S,
+    key_schema: Arc<K::Schema>,
+    val_schema: Arc<V::Schema>,
 ) -> (
     Stream<G, FetchedPart<K, V, T, D>>,
     Stream<G, SerdeLeasedBatchPart>,
 )
 where
-    S: 'static,
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
@@ -464,7 +468,7 @@ where
             std::mem::drop(clients);
 
             client
-                .create_batch_fetcher::<K, V, T, D, _>(shard_id, schema)
+                .create_batch_fetcher::<K, V, T, D>(shard_id, key_schema, val_schema)
                 .await
         };
 

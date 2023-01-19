@@ -31,6 +31,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist_client::async_runtime::CpuHeavyRuntime;
 use mz_persist_client::metrics::Metrics;
+use mz_persist_types::codec_impls::{StringSchema, TodoSchema, UnitSchema};
 use tracing::error;
 
 use mz_ore::now::SYSTEM_TIME;
@@ -38,6 +39,7 @@ use mz_persist::location::ExternalError;
 use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
 use mz_persist_client::{PersistClient, PersistConfig};
 
+use crate::source_example::types::PartitionOffset;
 use crate::BUILD_INFO;
 
 use self::impls::ConsensusTimestamper;
@@ -85,7 +87,12 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         .map_err(anyhow::Error::msg)?;
 
     let (bindings_write, bindings_read) = persist
-        .open(bindings_id, "source example", PersistClient::TEST_SCHEMA)
+        .open(
+            bindings_id,
+            "source example",
+            Arc::new(TodoSchema::<PartitionOffset>::default()),
+            Arc::new(TodoSchema::<Timestamp>::default()),
+        )
         .await?;
 
     let consensus = PersistConsensus::new(bindings_write, bindings_read);
@@ -93,7 +100,12 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         ConsensusTimestamper::new(now_fn.clone(), timestamp_interval.clone(), consensus).await;
 
     let (data_write, data_read) = persist
-        .open(data_id, "source example", PersistClient::TEST_SCHEMA)
+        .open(
+            data_id,
+            "source example",
+            Arc::new(StringSchema),
+            Arc::new(UnitSchema),
+        )
         .await?;
 
     // First, render one instance of the source.
@@ -117,10 +129,11 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         let reader_name = format!("reader-{}", i);
         let reader_name_clone = reader_name.clone();
         let (_write, data_read) = persist
-            .open::<String, (), Timestamp, _, _>(
+            .open::<String, (), Timestamp, _>(
                 data_id,
                 "source example",
-                PersistClient::TEST_SCHEMA,
+                Arc::new(StringSchema),
+                Arc::new(UnitSchema),
             )
             .await?;
         let pipeline = mz_ore::task::spawn(|| &reader_name_clone, async move {
@@ -143,14 +156,24 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     let (bindings_write, bindings_read) = persist
-        .open(bindings_id, "source example", PersistClient::TEST_SCHEMA)
+        .open(
+            bindings_id,
+            "source example",
+            Arc::new(TodoSchema::<PartitionOffset>::default()),
+            Arc::new(TodoSchema::<Timestamp>::default()),
+        )
         .await?;
     let consensus = PersistConsensus::new(bindings_write, bindings_read);
     let timestamper =
         ConsensusTimestamper::new(now_fn.clone(), timestamp_interval.clone(), consensus).await;
 
     let data_write = persist
-        .open_writer(data_id, "source example", PersistClient::TEST_SCHEMA)
+        .open_writer(
+            data_id,
+            "source example",
+            Arc::new(StringSchema),
+            Arc::new(UnitSchema),
+        )
         .await?;
 
     let source2 = source.clone();

@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use mz_persist_client::operators::shard_source::shard_source;
+use mz_persist_types::codec_impls::UnitSchema;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::{Scope, Stream};
@@ -127,7 +128,8 @@ where
         as_of,
         until.clone(),
         flow_control,
-        metadata.relation_desc,
+        Arc::new(metadata.relation_desc),
+        Arc::new(UnitSchema),
     );
     let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
     (rows, token)

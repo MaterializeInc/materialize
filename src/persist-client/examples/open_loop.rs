@@ -472,7 +472,10 @@ mod api {
 }
 
 mod raw_persist_benchmark {
+    use std::sync::Arc;
+
     use async_trait::async_trait;
+    use mz_persist_types::codec_impls::VecU8Schema;
     use timely::progress::Antichain;
     use tokio::sync::mpsc::Sender;
 
@@ -508,7 +511,12 @@ mod raw_persist_benchmark {
         let mut readers = vec![];
         for _ in 0..num_readers {
             let (_writer, reader) = persist
-                .open::<Vec<u8>, Vec<u8>, u64, i64, _>(id, "open loop", PersistClient::TEST_SCHEMA)
+                .open::<Vec<u8>, Vec<u8>, u64, i64>(
+                    id,
+                    "open loop",
+                    Arc::new(VecU8Schema),
+                    Arc::new(VecU8Schema),
+                )
                 .await?;
 
             let listen = reader
@@ -538,10 +546,11 @@ mod raw_persist_benchmark {
             let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(10);
 
             let mut write = persist
-                .open_writer::<Vec<u8>, Vec<u8>, u64, i64, _>(
+                .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(
                     id,
                     "open loop",
-                    PersistClient::TEST_SCHEMA,
+                    Arc::new(VecU8Schema),
+                    Arc::new(VecU8Schema),
                 )
                 .await?;
 
@@ -586,10 +595,11 @@ mod raw_persist_benchmark {
             handles.push(handle);
 
             let mut write = persist
-                .open_writer::<Vec<u8>, Vec<u8>, u64, i64, _>(
+                .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(
                     id,
                     "open loop",
-                    PersistClient::TEST_SCHEMA,
+                    Arc::new(VecU8Schema),
+                    Arc::new(VecU8Schema),
                 )
                 .await?;
 

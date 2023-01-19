@@ -17,6 +17,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use differential_dataflow::lattice::Lattice;
 use futures::{stream::LocalBoxStream, StreamExt};
+use mz_persist_types::codec_impls::UnitSchema;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
@@ -165,7 +166,8 @@ where
             .open(
                 metadata.remap_shard.clone(),
                 &format!("reclock {}", id),
-                remap_relation_desc,
+                Arc::new(remap_relation_desc),
+                Arc::new(UnitSchema),
             )
             .await
             .context("error opening persist shard")?;

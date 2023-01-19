@@ -3549,6 +3549,7 @@ dependencies = [
  "mz-expr",
  "mz-ore",
  "mz-persist-client",
+ "mz-persist-types",
  "mz-pid-file",
  "mz-repr",
  "mz-service",

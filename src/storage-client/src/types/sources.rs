@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
@@ -22,7 +23,8 @@ use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
 use globset::{Glob, GlobBuilder};
 use itertools::Itertools;
-use mz_persist_types::codec_impls::TodoSchema;
+use mz_persist_types::codec_impls::{TodoSchema, UnitSchema};
+use mz_persist_types::columnar::Schema;
 use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -110,10 +112,11 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
                 .open(persist_location.clone())
                 .await
                 .expect("error creating persist client")
-                .open_writer::<SourceData, (), T, Diff, _>(
+                .open_writer::<SourceData, (), T, Diff>(
                     *data_shard,
                     &format!("resumption data {}", id),
-                    relation_desc.clone(),
+                    Arc::new(relation_desc.clone()),
+                    Arc::new(UnitSchema),
                 )
                 .await
                 .unwrap();
@@ -142,10 +145,11 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
             .await
             .expect("error creating persist client")
             // TODO: Any way to plumb the GlobalId to this?
-            .open_writer::<SourceData, (), T, Diff, _>(
+            .open_writer::<SourceData, (), T, Diff>(
                 *remap_shard,
                 "resumption remap",
-                remap_relation_desc,
+                Arc::new(remap_relation_desc),
+                Arc::new(UnitSchema),
             )
             .await
             .unwrap();
@@ -2515,7 +2519,7 @@ impl RustType<ProtoSourceData> for SourceData {
 }
 
 impl Codec for SourceData {
-    type Schema = TodoSchema<SourceData>;
+    type Schema = RelationDesc;
 
     fn codec_name() -> String {
         "protobuf[SourceData]".into()
@@ -2530,6 +2534,30 @@ impl Codec for SourceData {
     fn decode(buf: &[u8]) -> Result<Self, String> {
         let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
         proto.into_rust().map_err(|err| err.to_string())
+    }
+}
+
+impl Schema<SourceData> for RelationDesc {
+    type Encoder<'a> = TodoSchema<SourceData>;
+
+    type Decoder<'a> = TodoSchema<SourceData>;
+
+    fn columns(&self) -> Vec<(String, mz_persist_types::columnar::DataType)> {
+        panic!("TODO")
+    }
+
+    fn decoder<'a>(
+        &self,
+        _cols: mz_persist_types::part::ColumnsRef<'a>,
+    ) -> Result<Self::Decoder<'a>, String> {
+        panic!("TODO")
+    }
+
+    fn encoder<'a>(
+        &self,
+        _cols: mz_persist_types::part::ColumnsMut<'a>,
+    ) -> Result<Self::Encoder<'a>, String> {
+        panic!("TODO")
     }
 }
 

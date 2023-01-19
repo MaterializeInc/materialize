@@ -7,9 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use criterion::{black_box, Criterion, Throughput};
+use mz_persist_types::codec_impls::VecU8Schema;
 use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
@@ -64,10 +66,11 @@ async fn bench_writes_one_iter(
     data: &DataGenerator,
 ) -> Result<usize, anyhow::Error> {
     let mut write = client
-        .open_writer::<Vec<u8>, Vec<u8>, u64, i64, _>(
+        .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(
             ShardId::new(),
             "bench",
-            PersistClient::TEST_SCHEMA,
+            Arc::new(VecU8Schema),
+            Arc::new(VecU8Schema),
         )
         .await?;
 
@@ -117,7 +120,12 @@ async fn bench_write_to_listen_one_iter(
     data: &DataGenerator,
 ) -> Result<usize, anyhow::Error> {
     let (mut write, read) = client
-        .open::<Vec<u8>, Vec<u8>, u64, i64, _>(ShardId::new(), "bench", PersistClient::TEST_SCHEMA)
+        .open::<Vec<u8>, Vec<u8>, u64, i64>(
+            ShardId::new(),
+            "bench",
+            Arc::new(VecU8Schema),
+            Arc::new(VecU8Schema),
+        )
         .await?;
 
     // Start the listener in a task before the write so it can't "cheat" by
@@ -203,10 +211,11 @@ pub fn bench_snapshot(
         let shard_id = ShardId::new();
         let (_, as_of) = runtime.block_on(async {
             let mut write = client
-                .open_writer::<Vec<u8>, Vec<u8>, u64, i64, _>(
+                .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(
                     shard_id,
                     "bench",
-                    PersistClient::TEST_SCHEMA,
+                    Arc::new(VecU8Schema),
+                    Arc::new(VecU8Schema),
                 )
                 .await
                 .expect("failed to open shard");
@@ -227,10 +236,11 @@ async fn bench_snapshot_one_iter(
     as_of: &Antichain<u64>,
 ) -> Result<(), anyhow::Error> {
     let mut read = client
-        .open_leased_reader::<Vec<u8>, Vec<u8>, u64, i64, _>(
+        .open_leased_reader::<Vec<u8>, Vec<u8>, u64, i64>(
             *shard_id,
             "bench",
-            PersistClient::TEST_SCHEMA,
+            Arc::new(VecU8Schema),
+            Arc::new(VecU8Schema),
         )
         .await?;
 

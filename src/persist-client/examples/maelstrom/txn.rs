@@ -20,6 +20,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::metrics::Metrics;
+use mz_persist_types::codec_impls::TodoSchema;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -134,7 +135,12 @@ impl Transactor {
             .expect("maelstrom node_id should be n followed by an integer");
 
         let (mut write, mut read) = client
-            .open(shard_id, "maelstrom long-lived", PersistClient::TEST_SCHEMA)
+            .open(
+                shard_id,
+                "maelstrom long-lived",
+                Arc::new(TodoSchema::<MaelstromKey>::default()),
+                Arc::new(TodoSchema::<MaelstromVal>::default()),
+            )
             .await?;
         // Use the CONTROLLER_CRITICAL_SINCE id for all nodes so we get coverage
         // of contending traffic.
@@ -262,7 +268,8 @@ impl Transactor {
                 .open_leased_reader(
                     self.shard_id,
                     "maelstrom short-lived",
-                    PersistClient::TEST_SCHEMA,
+                    Arc::new(TodoSchema::<MaelstromKey>::default()),
+                    Arc::new(TodoSchema::<MaelstromVal>::default()),
                 )
                 .await
                 .expect("codecs should match");

@@ -85,6 +85,7 @@ use std::thread;
 use std::time::Duration;
 
 use mz_ore::halt;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand};
 use timely::progress::{Antichain, Timestamp as _};
 
@@ -306,12 +307,13 @@ where
                 (&tokio_runtime).spawn_named(|| "check_loop".to_string(), async move {
                     loop {
                         let (mut data_write_handle, data_read_handle) = persist_client
-                            .open::<SourceData, (), Timestamp, Diff, _>(
+                            .open::<SourceData, (), Timestamp, Diff>(
                                 data_shard.clone(),
                                 "tests::check_loop",
                                 // TODO(guswynn|danhhz): replace this with a real desc when persist requires a
                                 // schema.
-                                RelationDesc::empty(),
+                                Arc::new(RelationDesc::empty()),
+                                Arc::new(UnitSchema),
                             )
                             .await
                             .unwrap();

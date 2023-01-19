@@ -31,7 +31,7 @@ use crate::part::{ColumnsMut, ColumnsRef};
 use crate::{Codec, Codec64, Opaque};
 
 /// An implementation of [Schema] for [()].
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct UnitSchema;
 
 impl PartEncoder<'_, ()> for UnitSchema {
@@ -108,7 +108,7 @@ impl<'a, T: Data> PartDecoder<'a, T> for SimpleDecoder<'a, T> {
 }
 
 /// An implementation of [Schema] for [String].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct StringSchema;
 
 // TODO: Feels like it should be possible to write a single impl of Schema to
@@ -172,7 +172,7 @@ impl Codec for String {
 }
 
 /// An implementation of [Schema] for [`Vec<u8>`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct VecU8Schema;
 
 impl Schema<Vec<u8>> for VecU8Schema {
@@ -624,6 +624,12 @@ impl ColumnPush<Option<String>> for MutableUtf8Array<i32> {
 /// A placeholder for a [Codec] impl that hasn't yet gotten a real [Schema].
 #[derive(Debug)]
 pub struct TodoSchema<T>(PhantomData<T>);
+
+impl<T> Default for TodoSchema<T> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
 
 impl<T> PartEncoder<'_, T> for TodoSchema<T> {
     fn encode(&mut self, _val: &T) {
