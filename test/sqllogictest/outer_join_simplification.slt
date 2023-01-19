@@ -68,14 +68,14 @@ foo_raw left join bar on foo_raw.a = bar.a;
 Explained Query:
   Return
     Union
+      Project (#0..=#2, #0, #3)
+        Get l0
       Map (null, null)
         Union
+          Get materialize.public.foo_raw
           Negate
             Project (#0..=#2)
               Get l0
-          Get materialize.public.foo_raw
-      Project (#0..=#2, #0, #3)
-        Get l0
   With
     cte l0 =
       Project (#0..=#2, #4)
@@ -105,6 +105,7 @@ Explained Query:
       Project (#3, #4, #0..=#2)
         Map (null, null)
           Union
+            Get materialize.public.foo_raw
             Negate
               Project (#0..=#2)
                 Join on=(#0 = #3) type=differential
@@ -112,7 +113,6 @@ Explained Query:
                   ArrangeBy keys=[[#0]]
                     Project (#0)
                       Get l1
-            Get materialize.public.foo_raw
       Project (#0, #1, #0, #3, #4)
         Join on=(#0 = #2) type=differential
           ArrangeBy keys=[[#0]]
@@ -143,14 +143,14 @@ foo left join bar on foo.a = bar.a
 Explained Query:
   Return
     Union
+      Project (#0..=#7, #6, #8)
+        Get l4
       Map (null, null)
         Union
+          Get l3
           Negate
             Project (#0..=#7)
               Get l4
-          Get l3
-      Project (#0..=#7, #6, #8)
-        Get l4
   With
     cte l4 =
       Project (#0..=#7, #9)
@@ -162,14 +162,14 @@ Explained Query:
             Get materialize.public.quux
     cte l3 =
       Union
+        Project (#0..=#4, #1, #5, #6)
+          Get l2
         Map (null, null, null)
           Union
+            Get l1
             Negate
               Project (#0..=#4)
                 Get l2
-            Get l1
-        Project (#0..=#4, #1, #5, #6)
-          Get l2
     cte l2 =
       Project (#0..=#4, #6, #7)
         Join on=(#1 = #5) type=differential
@@ -179,14 +179,14 @@ Explained Query:
             Get materialize.public.baz
     cte l1 =
       Union
+        Project (#0..=#2, #0, #3)
+          Get l0
         Map (null, null)
           Union
+            Get materialize.public.foo
             Negate
               Project (#0..=#2)
                 Get l0
-            Get materialize.public.foo
-        Project (#0..=#2, #0, #3)
-          Get l0
     cte l0 =
       Project (#0..=#2, #4)
         Join on=(#0 = #3) type=differential
@@ -226,14 +226,14 @@ Explained Query:
       Reduce aggregates=[count(*)]
         Project ()
           Union
+            Get l0
             Map (null)
               Union
+                Project ()
+                  Get materialize.public.foo
                 Negate
                   Project ()
                     Get l0
-                Project ()
-                  Get materialize.public.foo
-            Get l0
     cte l0 =
       Project (#2)
         Join on=(#0 = #1) type=differential
@@ -260,14 +260,14 @@ where foo.a = 7;
 Explained Query:
   Return
     Union
+      Project (#0..=#5, #4, #6)
+        Get l3
       Map (null, null)
         Union
+          Get l2
           Negate
             Project (#0..=#5)
               Get l3
-          Get l2
-      Project (#0..=#5, #4, #6)
-        Get l3
   With
     cte l3 =
       Project (#0..=#5, #7)
@@ -279,14 +279,14 @@ Explained Query:
             Get materialize.public.quux
     cte l2 =
       Union
+        Project (#0..=#2, #1, #3, #4)
+          Get l1
         Map (null, null, null)
           Union
+            Get l0
             Negate
               Project (#0..=#2)
                 Get l1
-            Get l0
-        Project (#0..=#2, #1, #3, #4)
-          Get l1
     cte l1 =
       Project (#0..=#2, #4, #5)
         Join on=(#1 = #3) type=differential

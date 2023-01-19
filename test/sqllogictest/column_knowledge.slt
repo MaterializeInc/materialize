@@ -69,13 +69,13 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1)
 Explained Query:
   Return // { arity: 4 }
     Union // { arity: 4 }
+      Get l1 // { arity: 4 }
       Map (null, null) // { arity: 4 }
         Union // { arity: 2 }
+          Get l0 // { arity: 2 }
           Negate // { arity: 2 }
             Project (#0, #1) // { arity: 2 }
               Get l1 // { arity: 4 }
-          Get l0 // { arity: 2 }
-      Get l1 // { arity: 4 }
   With
     cte l1 =
       CrossJoin type=differential // { arity: 4 }
@@ -103,13 +103,13 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t
 Explained Query:
   Return // { arity: 3 }
     Union // { arity: 3 }
+      Get l1 // { arity: 3 }
       Map (null) // { arity: 3 }
         Union // { arity: 2 }
+          Get l0 // { arity: 2 }
           Negate // { arity: 2 }
             Project (#0, #1) // { arity: 2 }
               Get l1 // { arity: 3 }
-          Get l0 // { arity: 2 }
-      Get l1 // { arity: 3 }
   With
     cte l1 =
       CrossJoin type=differential // { arity: 3 }
@@ -227,10 +227,10 @@ Explained Query:
           Get l2 // { arity: 1 }
           Map (null) // { arity: 1 }
             Union // { arity: 0 }
+              Get l0 // { arity: 0 }
               Negate // { arity: 0 }
                 Project () // { arity: 0 }
                   Get l2 // { arity: 1 }
-              Get l0 // { arity: 0 }
   With
     cte l2 =
       CrossJoin type=differential // { arity: 1 }

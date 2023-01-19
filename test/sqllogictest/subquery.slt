@@ -449,9 +449,9 @@ Explained Query:
               Get l1 // { arity: 1 }
             Map (false) // { arity: 2 }
               Union // { arity: 1 }
+                Get l0 // { arity: 1 }
                 Negate // { arity: 1 }
                   Get l1 // { arity: 1 }
-                Get l0 // { arity: 1 }
   With
     cte l1 =
       Project (#0) // { arity: 1 }
@@ -487,9 +487,9 @@ Explained Query:
                 Get l1 // { arity: 1 }
               Map (false) // { arity: 2 }
                 Union // { arity: 1 }
+                  Get l0 // { arity: 1 }
                   Negate // { arity: 1 }
                     Get l1 // { arity: 1 }
-                  Get l0 // { arity: 1 }
   With
     cte l1 =
       Project (#0) // { arity: 1 }
@@ -526,9 +526,9 @@ Explained Query:
                 Get l1 // { arity: 1 }
               Map (false) // { arity: 2 }
                 Union // { arity: 1 }
+                  Get l0 // { arity: 1 }
                   Negate // { arity: 1 }
                     Get l1 // { arity: 1 }
-                  Get l0 // { arity: 1 }
   With
     cte l1 =
       Distinct group_by=[#0] // { arity: 1 }

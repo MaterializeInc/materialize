@@ -74,6 +74,9 @@ Explained Query:
           Get materialize.public.table_f1 // { arity: 1 }
         ArrangeBy keys=[[]] // { arity: 3 }
           Union // { arity: 3 }
+            Filter (#0 = #1) AND (#0 = #2) // { arity: 3 }
+              Get l0 // { arity: 3 }
+            Get l1 // { arity: 3 }
             Negate // { arity: 3 }
               Project (#0..=#2) // { arity: 3 }
                 Join on=(#0 = #3) type=differential // { arity: 4 }
@@ -86,9 +89,6 @@ Explained Query:
                       Distinct group_by=[#1, #0] // { arity: 2 }
                         Project (#1, #2) // { arity: 2 }
                           Get l0 // { arity: 3 }
-            Get l1 // { arity: 3 }
-            Filter (#0 = #1) AND (#0 = #2) // { arity: 3 }
-              Get l0 // { arity: 3 }
   With
     cte l1 =
       Filter (#0 = #1) AND (#0 = #2) AND (#1 = #2) // { arity: 3 }
