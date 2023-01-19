@@ -294,7 +294,7 @@ mod tests {
                 mz_transform::column_knowledge::ColumnKnowledge::default(),
             )),
             "Demand" => Ok(Box::new(mz_transform::demand::Demand::default())),
-            "FilterFusion" => Ok(Box::new(mz_transform::fusion::filter::Filter)),
+            "Fusion" => Ok(Box::new(mz_transform::fusion::Fusion)),
             "FoldConstants" => Ok(Box::new(mz_transform::fold_constants::FoldConstants {
                 limit: None,
             })),
@@ -328,7 +328,6 @@ mod tests {
             "RelationCSE" => Ok(Box::new(mz_transform::cse::relation_cse::RelationCSE::new(
                 false,
             ))),
-            "TopKFusion" => Ok(Box::new(mz_transform::fusion::top_k::TopK)),
             "ThresholdElision" => Ok(Box::new(mz_transform::threshold_elision::ThresholdElision)),
             "UnionBranchCancellation" => Ok(Box::new(
                 mz_transform::union_cancel::UnionBranchCancellation,
