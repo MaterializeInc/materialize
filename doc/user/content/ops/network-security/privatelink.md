@@ -166,9 +166,9 @@ In Materialize, create a source connection that uses the AWS PrivateLink connect
 ```sql
 CREATE CONNECTION kafka_connection TO KAFKA (
     BROKERS (
-        'b-1.hostname-1:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9001),
-        'b-2.hostname-2:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9002),
-        'b-3.hostname-3:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9003)
+        'b-1.hostname-1:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9001, AVAILABILITY ZONE 'use1-az2'),
+        'b-2.hostname-2:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9002, AVAILABILITY ZONE 'use1-az1'),
+        'b-3.hostname-3:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9003, AVAILABILITY ZONE 'use1-az3')
     ),
     -- Authentication details
     -- Depending on the authentication method the MSK cluster is using
@@ -178,7 +178,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-The `(PORT <port_number>)` value must match the port that you used when creating the **TCP listener** in the Network Load Balancer.
+The `(PORT <port_number>)` value must match the port that you used when creating the **TCP listener** in the Network Load Balancer. Be sure to specify the correct availability zone for each broker.
 
 This Kafka connection can then be reused across multiple [`CREATE SOURCE`](/sql/create-source/kafka/)
 statements:
