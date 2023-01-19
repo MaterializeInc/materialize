@@ -92,6 +92,7 @@ class TestModelCluster:
             "override_index_cluster.sql": models__override_index_cluster_sql,
             "invalid_cluster.sql": models__invalid_cluster_sql,
             "actual_clusters.sql": models_actual_clusters,
+            "default_cluster.sql": project_override_cluster_sql,
         }
 
     def test_materialize_override_ok(self, project):
@@ -100,12 +101,24 @@ class TestModelCluster:
         assert len(results) == 1
 
         project.run_sql("CREATE CLUSTER not_default REPLICAS (r1 (SIZE '1'))")
-        run_dbt(["run", "--exclude", "invalid_cluster"])
+        run_dbt(["run", "--exclude", "invalid_cluster", "default_cluster"])
 
         check_relations_equal(project.adapter, ["actual_clusters", "expected_clusters"])
 
     def test_materialize_override_noexist(self, project):
         run_dbt(["run", "--models", "invalid_cluster"], expect_pass=False)
+
+    # In the absence of the pre-installed `default` cluster, Materialize should
+    # not error if a user-provided cluster is specified as a connection or
+    # model config, but will error otherwise.
+    # See #17197: https://github.com/MaterializeInc/materialize/pull/17197
+    def test_materialize_drop_default(self, project):
+        project.run_sql("DROP CLUSTER default CASCADE")
+
+        run_dbt(["run", "--models", "override_cluster"], expect_pass=True)
+        run_dbt(["run", "--models", "default_cluster"], expect_pass=False)
+
+        project.run_sql("CREATE CLUSTER default REPLICAS (r1 (SIZE '1'))")
 
 
 class TestProjectConfigCluster:
