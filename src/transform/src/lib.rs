@@ -322,16 +322,12 @@ impl Default for FuseAndCollapse {
             transforms: vec![
                 Box::new(crate::projection_extraction::ProjectionExtraction),
                 Box::new(crate::projection_lifting::ProjectionLifting::default()),
-                Box::new(crate::fusion::map::Map),
-                Box::new(crate::fusion::negate::Negate),
-                Box::new(crate::fusion::filter::Filter),
+                Box::new(crate::fusion::Fusion),
                 Box::new(crate::fusion::flatmap_to_map::FlatMapToMap),
-                Box::new(crate::fusion::project::Project),
                 Box::new(crate::fusion::join::Join),
-                Box::new(crate::fusion::top_k::TopK),
                 Box::new(crate::normalize_lets::NormalizeLets::new(false)),
                 Box::new(crate::fusion::reduce::Reduce),
-                Box::new(crate::fusion::union::Union),
+                Box::new(crate::fusion::union::UnionNegate),
                 // This goes after union fusion so we can cancel out
                 // more branches at a time.
                 Box::new(crate::union_cancel::UnionBranchCancellation),
@@ -507,7 +503,7 @@ impl Optimizer {
     pub fn logical_cleanup_pass() -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
             // Delete unnecessary maps.
-            Box::new(crate::fusion::map::Map),
+            Box::new(crate::fusion::Fusion),
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
@@ -518,8 +514,8 @@ impl Optimizer {
                     Box::new(crate::fusion::join::Join),
                     Box::new(crate::redundant_join::RedundantJoin::default()),
                     // Redundant join produces projects that need to be fused.
-                    Box::new(crate::fusion::project::Project),
-                    Box::new(crate::fusion::union::Union),
+                    Box::new(crate::fusion::Fusion),
+                    Box::new(crate::fusion::union::UnionNegate),
                     // This goes after union fusion so we can cancel out
                     // more branches at a time.
                     Box::new(crate::union_cancel::UnionBranchCancellation),
