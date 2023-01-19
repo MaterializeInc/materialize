@@ -19,13 +19,14 @@ use aws_config::default_provider::{credentials, region};
 use aws_config::meta::region::ProvideRegion;
 use aws_config::sts::AssumeRoleProvider;
 use aws_config::timeout::TimeoutConfig;
+use aws_credential_types::provider::SharedCredentialsProvider;
+use aws_credential_types::Credentials;
 use aws_sdk_s3::model::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::types::{ByteStream, SdkError};
 use aws_sdk_s3::Client as S3Client;
+#[allow(deprecated)]
 use aws_smithy_http::endpoint::Endpoint;
-use aws_types::credentials::SharedCredentialsProvider;
 use aws_types::region::Region;
-use aws_types::Credentials;
 use bytes::{Buf, Bytes};
 use futures_util::FutureExt;
 use mz_ore::task::RuntimeExt;
@@ -88,9 +89,12 @@ impl S3BlobConfig {
         }
 
         if let Some(endpoint) = endpoint {
-            let endpoint = Endpoint::immutable(endpoint)
-                .map_err(|e| format!("parsing S3 blob endpoint: {e}"))?;
-            loader = loader.endpoint_resolver(endpoint)
+            #[allow(deprecated)]
+            {
+                let endpoint = Endpoint::immutable(endpoint)
+                    .map_err(|e| format!("parsing S3 blob endpoint: {e}"))?;
+                loader = loader.endpoint_resolver(endpoint)
+            }
         }
 
         loader = loader.timeout_config(

@@ -159,8 +159,9 @@ impl AwsConfig {
     ) -> aws_types::SdkConfig {
         use aws_config::default_provider::region::DefaultRegionChain;
         use aws_config::sts::AssumeRoleProvider;
+        use aws_credential_types::provider::SharedCredentialsProvider;
+        #[allow(deprecated)]
         use aws_smithy_http::endpoint::Endpoint;
-        use aws_types::credentials::SharedCredentialsProvider;
         use aws_types::region::Region;
 
         let region = match &self.region {
@@ -177,17 +178,18 @@ impl AwsConfig {
             session_token,
         } = &self.credentials;
 
-        let mut cred_provider = SharedCredentialsProvider::new(aws_types::Credentials::from_keys(
-            access_key_id.get_string(secrets_reader).await.unwrap(),
-            secrets_reader
-                .read_string(*secret_access_key)
-                .await
-                .unwrap(),
-            match session_token {
-                Some(t) => Some(t.get_string(secrets_reader).await.unwrap()),
-                None => None,
-            },
-        ));
+        let mut cred_provider =
+            SharedCredentialsProvider::new(aws_credential_types::Credentials::from_keys(
+                access_key_id.get_string(secrets_reader).await.unwrap(),
+                secrets_reader
+                    .read_string(*secret_access_key)
+                    .await
+                    .unwrap(),
+                match session_token {
+                    Some(t) => Some(t.get_string(secrets_reader).await.unwrap()),
+                    None => None,
+                },
+            ));
 
         if let Some(AwsAssumeRole { arn }) = &self.role {
             let mut role = AssumeRoleProvider::builder(arn).session_name("materialize");
@@ -211,9 +213,12 @@ impl AwsConfig {
             .region(region)
             .credentials_provider(cred_provider);
         if let Some(endpoint) = &self.endpoint {
-            let endpoint =
-                Endpoint::immutable_uri(endpoint.0.clone()).expect("invalid AWS endpoint");
-            loader = loader.endpoint_resolver(endpoint);
+            #[allow(deprecated)]
+            {
+                let endpoint =
+                    Endpoint::immutable_uri(endpoint.0.clone()).expect("invalid AWS endpoint");
+                loader = loader.endpoint_resolver(endpoint);
+            }
         }
         loader.load().await
     }

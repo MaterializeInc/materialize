@@ -82,9 +82,10 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Duration;
 
+use aws_credential_types::Credentials;
+#[allow(deprecated)]
 use aws_smithy_http::endpoint::Endpoint;
 use aws_types::region::Region;
-use aws_types::Credentials;
 use globset::GlobBuilder;
 use http::Uri;
 use itertools::Itertools;
@@ -324,6 +325,7 @@ async fn main() {
             let endpoint = args
                 .aws_endpoint
                 .unwrap_or_else(|| "http://localhost:4566".parse().unwrap());
+            #[allow(deprecated)]
             let config = aws_config::from_env()
                 .region(Region::new("us-east-1"))
                 .credentials_provider(Credentials::from_keys(
