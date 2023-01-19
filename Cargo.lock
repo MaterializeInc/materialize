@@ -8092,6 +8092,7 @@ dependencies = [
  "futures-sink",
  "futures-task",
  "futures-util",
+ "getrandom",
  "globset",
  "hashbrown",
  "hyper",
