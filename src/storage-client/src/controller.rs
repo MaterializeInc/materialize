@@ -65,14 +65,13 @@ use crate::types::parameters::StorageParameters;
 use crate::types::sinks::{
     MetadataUnfilled, ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc,
 };
-use crate::types::sources::{IngestionDescription, MzOffset, SourceData, SourceExport};
+use crate::types::sources::{IngestionDescription, SourceData, SourceExport};
 
 mod collection_mgmt;
 mod hosts;
 mod metrics_scraper;
 mod persist_handles;
 mod rehydration;
-mod remap_migration;
 mod statistics;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
@@ -985,7 +984,7 @@ where
             .try_collect()
             .await?;
 
-        let mut to_migrate = vec![];
+        let mut to_create = Vec::with_capacity(to_register.len());
         // This work mutates the controller state, so must be done serially. Because there
         // is no io-bound work, its very fast.
         for (id, description, write, since_handle, collection_state) in to_register {
@@ -994,54 +993,14 @@ where
 
             self.state.collections.insert(id, collection_state);
 
-            to_migrate.push((id, description));
+            to_create.push((id, description));
         }
 
         // Reborrow `&mut self` immutably, same reasoning as above.
         let this = &*self;
-        // We now register the shard mapping for each collection, which is effectively appending
-        // some updates to `CollectionManager` channel concurrently.
-        //
-        // We also determine IF we need to migrate the remap shard for each collection, by
-        // concurrently reading from persist.
-        let to_create: Vec<_> = futures::stream::iter(to_migrate)
-            .map(|(id, description)| async move {
-                let dc = this
-                    .determine_remap_shard_migration(id, &description.data_source)
-                    .await;
 
-                // TODO(guswynn): determine if this is necessary if we perform all migrations before we initialize the
-                // shard mapping collection.
-                //
-                // Note we register the mapping AFTER the migration below if there is one.
-                if dc.is_none() {
-                    this.register_shard_mapping(id).await;
-                }
-                (id, description, dc)
-            })
-            .buffer_unordered(50)
-            // See the docs on `try_collect` above for more info before attempting to change
-            // this!
-            .collect()
+        this.register_shard_mappings(to_create.iter().map(|(id, _)| *id))
             .await;
-
-        // These migrations need to alter the internal controller state, so must be done
-        // serially.
-        //
-        // TODO(guswynn): In `migrate_collection_metadata` we could split out an appending part which
-        // could be processed concurrently. Because this is a one-time migration, it may not be
-        // worth it.
-        let mut need_remap_migration = vec![];
-        let to_create: Vec<_> = to_create
-            .into_iter()
-            .map(|(id, description, dc)| {
-                if let Some(dc) = dc {
-                    need_remap_migration.push((id, dc))
-                }
-                (id, description)
-            })
-            .collect();
-        self.migrate_collection_metadata(need_remap_migration).await;
 
         // TODO(guswynn): perform the io in this final section concurrently.
         for (id, description) in to_create {
@@ -1858,7 +1817,10 @@ where
     /// - If `self.state.collections` does not have an entry for `global_id`.
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
-    async fn register_shard_mapping(&self, global_id: GlobalId) {
+    async fn register_shard_mappings<I>(&self, global_ids: I)
+    where
+        I: Iterator<Item = GlobalId>,
+    {
         let id = match self
             .state
             .introspection_ids
@@ -1868,16 +1830,20 @@ where
             _ => return,
         };
 
-        let shard_id = self.state.collections[&global_id]
-            .collection_metadata
-            .data_shard;
-
+        let mut updates = vec![];
         // Pack updates into rows
         let mut row_buf = Row::default();
-        let mut packer = row_buf.packer();
-        packer.push(Datum::from(global_id.to_string().as_str()));
-        packer.push(Datum::from(shard_id.to_string().as_str()));
-        let updates = vec![(row_buf.clone(), 1)];
+
+        for global_id in global_ids {
+            let shard_id = self.state.collections[&global_id]
+                .collection_metadata
+                .data_shard;
+
+            let mut packer = row_buf.packer();
+            packer.push(Datum::from(global_id.to_string().as_str()));
+            packer.push(Datum::from(shard_id.to_string().as_str()));
+            updates.push((row_buf.clone(), 1));
+        }
 
         self.append_to_managed_collection(id, updates).await;
     }
@@ -1887,7 +1853,7 @@ where
     ///
     /// Any shards changed between the old and the new version will be
     /// decommissioned/eventually deleted.
-    async fn rewrite_collection_metadata(
+    async fn _rewrite_collection_metadata(
         &mut self,
         id: GlobalId,
         new_metadata: DurableCollectionMetadata,
@@ -1952,6 +1918,7 @@ where
         metadata.collection_metadata.remap_shard = remap_shard;
     }
 
+    #[allow(dead_code)]
     async fn truncate_shards(&mut self, shards: &[(ShardId, String)]) {
         // Open a persist client to delete unused shards.
         let persist_client = self
@@ -1986,86 +1953,6 @@ where
                 "successfully truncated shard's write handle for {:?}",
                 shard_id
             );
-        }
-    }
-
-    /// For appropriate data sources, determine if the remap collection correlated
-    /// to `id` is compatible with `Partitioned<PartitionId, MzOffset>`, returning
-    /// the new required metadata if not.
-    pub async fn determine_remap_shard_migration(
-        &self,
-        id: GlobalId,
-        data_source: &DataSource,
-    ) -> Option<DurableCollectionMetadata> {
-        // We only want to migrate ingestion-based sources' remap collections
-        let connection = match data_source {
-            DataSource::Ingestion(IngestionDescription {
-                desc: crate::types::sources::SourceDesc { connection, .. },
-                ..
-            }) => connection,
-            _ => return None,
-        };
-
-        let metadata = self
-            .state
-            .collections
-            .get(&id)
-            .expect("must have seen metadata inserted")
-            .collection_metadata
-            .clone();
-
-        let migrate_to_shard = ShardId::new();
-
-        let res = match connection {
-            crate::types::sources::GenericSourceConnection::Kafka(_) => {
-                remap_migration::RemapHandleMigrator::<
-                    mz_timely_util::order::Partitioned<i32, MzOffset>,
-                    T,
-                >::migrate(
-                    Arc::clone(&self.persist),
-                    metadata.clone(),
-                    migrate_to_shard,
-                    id,
-                )
-                .await
-            }
-            _ => {
-                remap_migration::RemapHandleMigrator::<MzOffset, T>::migrate(
-                    Arc::clone(&self.persist),
-                    metadata.clone(),
-                    migrate_to_shard,
-                    id,
-                )
-                .await
-            }
-        };
-
-        match res {
-            None => {
-                info!("remap shard migration({id:?}): unnecessary");
-                None
-            }
-            Some(s) => Some(DurableCollectionMetadata {
-                data_shard: metadata.data_shard,
-                remap_shard: s,
-            }),
-        }
-    }
-
-    /// For each collection, migrate its collection metadata to the new
-    /// `DurableCollectionMetadata`. This is primarily intended to be used
-    /// with `determine_remap_shard_migration`, so that many
-    /// `determine_remap_shard_migration` can be processed concurrently,
-    /// which this method does not support.
-    async fn migrate_collection_metadata<I>(&mut self, iter: I)
-    where
-        I: IntoIterator<Item = (GlobalId, DurableCollectionMetadata)>,
-    {
-        for (id, dc) in iter {
-            self.rewrite_collection_metadata(id, dc).await;
-            self.register_shard_mapping(id).await;
-
-            info!("remap shard migration({id:?}): complete");
         }
     }
 }
