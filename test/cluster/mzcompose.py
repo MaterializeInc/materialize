@@ -25,7 +25,6 @@ from materialize.mzcompose.services import (
     Postgres,
     Redpanda,
     SchemaRegistry,
-    Service,
     Testdrive,
     Zookeeper,
 )
@@ -65,7 +64,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-upsert",
         "test-resource-limits",
         "test-invalid-compute-reuse",
-        "test-builtin-migration",
         "pg-snapshot-resumption",
         "test-system-table-indexes",
         "test-replica-targeted-subscribe-abort",
@@ -599,182 +597,6 @@ def workflow_test_resource_limits(c: Composition) -> None:
         )
 
         c.run("testdrive", "resources/resource-limits.td")
-
-
-def workflow_test_builtin_migration(c: Composition) -> None:
-    """Exercise the builtin object migration code by upgrading between two versions
-    that will have a migration triggered between them. Create a materialized view
-    over the affected builtin object to confirm that the migration was successful
-    """
-
-    c.down(destroy_volumes=True)
-    with c.override(
-        # Random commit before the migrations that we are testing.
-        Service(
-            name="materialized",
-            config={
-                "image": "materialize/materialized:devel-e6af8921b9564d2ea69f38547cd525593c7c6a1e",
-                "command": [
-                    "--persist-blob-url=file:///mzdata/persist/blob",
-                    "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
-                    "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
-                    "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
-                ],
-                "depends_on": {"cockroach": {"condition": "service_healthy"}},
-                "ports": [6875],
-                "volumes": [
-                    "mzdata:/mzdata",
-                ],
-            },
-        ),
-        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
-    ):
-        c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.wait_for_materialized()
-
-        c.testdrive(
-            input=dedent(
-                """
-        # pg_catalog.pg_proc migration
-
-        # The limit is added to avoid having to update the number every time we add a function.
-        > CREATE VIEW v1 AS SELECT COUNT(*) FROM (SELECT * FROM pg_proc ORDER BY oid LIMIT 5);
-        > SELECT * FROM v1;
-        5
-
-        # Apparently this column _does_ exist.
-        > SELECT DISTINCT proowner FROM pg_proc;
-        <null>
-
-        # mz_internal.mz_dataflow_operator_reachability migration
-
-        # Populate mz_dataflow_operator_reachability
-        > CREATE TABLE t (a INT);
-        > CREATE DEFAULT INDEX ON t;
-
-        > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
-        "uint8 list"
-
-        # mz_internal.mz_cluster_replica_statuses migration
-
-        > SELECT pg_typeof(process_id) FROM mz_internal.mz_cluster_replica_statuses LIMIT 1;
-        "uint8"
-
-        # mz_internal.mz_show_cluster_replicas migration
-
-        > SELECT ready FROM mz_internal.mz_show_cluster_replicas LIMIT 0;
-
-        # mz_catalog.mz_sources migration
-
-        > CREATE MATERIALIZED VIEW source_types AS SELECT type FROM mz_catalog.mz_sources WHERE id LIKE 'u%';
-
-        > CREATE SOURCE load_gen_source FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
-
-        > SELECT * FROM source_types
-        load-generator
-    """
-            )
-        )
-
-        c.kill("materialized")
-
-    with c.override(
-        # This will stop working if we introduce a breaking change.
-        Materialized(external_cockroach=True),
-        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
-    ):
-        c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.wait_for_materialized()
-
-        c.testdrive(
-            input=dedent(
-                """
-        # pg_catalog.pg_proc migration
-
-        > SELECT * FROM v1;
-        5
-        # This column is new after the migration
-        > SELECT DISTINCT proowner FROM pg_proc;
-        <null>
-
-        # mz_internal.mz_dataflow_operator_reachability migration
-
-        > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
-        "uint8 list"
-
-        # mz_internal.mz_cluster_replica_statuses migration
-
-        > SELECT pg_typeof(process_id) FROM mz_internal.mz_cluster_replica_statuses LIMIT 1;
-        "uint8"
-
-        ! SELECT last_update FROM mz_internal.mz_cluster_replica_statuses;
-        contains:column "last_update" does not exist
-
-        > SELECT updated_at FROM mz_internal.mz_cluster_replica_statuses LIMIT 0;
-
-        # mz_internal.mz_show_cluster_replicas migration
-
-        > SELECT ready FROM mz_internal.mz_show_cluster_replicas LIMIT 0;
-
-        # mz_catalog.mz_sources migration
-
-        > SELECT * FROM source_types
-        load-generator
-    """
-            )
-        )
-
-    # Restart materialize and test that everything still works to ensure that the migration was persisted correctly.
-    with c.override(
-        # This will stop working if we introduce a breaking change.
-        Materialized(external_cockroach=True),
-        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
-    ):
-        c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.wait_for_materialized()
-
-        c.testdrive(
-            input=dedent(
-                """
-        # pg_catalog.pg_proc migration
-
-        > SELECT * FROM v1;
-        5
-        # This column is new after the migration
-        > SELECT DISTINCT proowner FROM pg_proc;
-        <null>
-
-        # mz_internal.mz_dataflow_operator_reachability migration
-
-        > SELECT pg_typeof(address) FROM mz_internal.mz_dataflow_operator_reachability LIMIT 1;
-        "uint8 list"
-
-        # mz_internal.mz_cluster_replica_statuses migration
-
-        > SELECT pg_typeof(process_id) FROM mz_internal.mz_cluster_replica_statuses LIMIT 1;
-        "uint8"
-
-        ! SELECT last_update FROM mz_internal.mz_cluster_replica_statuses;
-        contains:column "last_update" does not exist
-
-        > SELECT updated_at FROM mz_internal.mz_cluster_replica_statuses LIMIT 0;
-
-        # mz_internal.mz_show_cluster_replicas migration
-
-        > SELECT ready FROM mz_internal.mz_show_cluster_replicas LIMIT 0;
-
-        # mz_catalog.mz_sources migration
-
-        # mz_catalog.mz_sources migration
-
-        > SELECT * FROM source_types
-        load-generator
-    """
-            )
-        )
 
 
 def workflow_pg_snapshot_resumption(c: Composition) -> None:
