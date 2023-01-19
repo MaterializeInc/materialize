@@ -58,6 +58,7 @@ impl Fusion {
             MirRelationExpr::Project { .. } => project::Project.action(expr),
             MirRelationExpr::Negate { .. } => negate::Negate.action(expr),
             MirRelationExpr::TopK { .. } => top_k::TopK.action(expr),
+            MirRelationExpr::Union { .. } => union::Union.action(expr),
             _ => {}
         }
     }

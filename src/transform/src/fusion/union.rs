@@ -43,6 +43,58 @@ impl crate::Transform for Union {
 
 impl Union {
     /// Fuses multiple `Union` operators into one.
+    ///
+    /// The order among children is maintained, and the action should be idempotent.
+    /// This action works best if other operators such as `Negate` and other linear
+    /// operators are pushed down through other `Union` operators.
+    pub fn action(&self, relation: &mut MirRelationExpr) {
+        if let MirRelationExpr::Union { inputs, .. } = relation {
+            let mut list: Vec<MirRelationExpr> = Vec::with_capacity(1 + inputs.len());
+            Self::unfold_unions_into(relation.take_dangerous(), &mut list);
+            *relation = MirRelationExpr::Union {
+                base: Box::new(list.remove(0)),
+                inputs: list,
+            }
+        }
+    }
+
+    /// Unfolds `self` and children into a list of expressions that can be unioned.
+    fn unfold_unions_into(expr: MirRelationExpr, list: &mut Vec<MirRelationExpr>) {
+        let mut stack = vec![expr];
+        while let Some(expr) = stack.pop() {
+            if let MirRelationExpr::Union { base, inputs } = expr {
+                stack.extend(inputs.into_iter().rev());
+                stack.push(*base);
+            } else {
+                list.push(expr);
+            }
+        }
+    }
+}
+
+/// Fuses `Union` and `Negate` operators into one `Union` and multiple `Negate` operators.
+#[derive(Debug)]
+pub struct UnionNegate;
+
+impl crate::Transform for UnionNegate {
+    #[tracing::instrument(
+        target = "optimizer"
+        level = "trace",
+        skip_all,
+        fields(path.segment = "union_negate")
+    )]
+    fn transform(
+        &self,
+        relation: &mut MirRelationExpr,
+        _: TransformArgs,
+    ) -> Result<(), crate::TransformError> {
+        let result = relation.try_visit_mut_post(&mut |e| Ok(self.action(e)));
+        mz_repr::explain_new::trace_plan(&*relation);
+        result
+    }
+}
+impl UnionNegate {
+    /// Fuses multiple `Union` operators into one.
     /// Nested negated unions are merged into the parent one by pushing
     /// the Negate to all their branches.
     pub fn action(&self, relation: &mut MirRelationExpr) {
