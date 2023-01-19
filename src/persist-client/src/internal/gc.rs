@@ -307,6 +307,7 @@ where
                 .state_versions
                 .delete_rollup(&req.shard_id, key)
                 .await;
+            debug!("gc {} deleted rollup blob {key}", req.shard_id);
         }
         debug!("gc {} deleted rollup blobs", req.shard_id);
 
