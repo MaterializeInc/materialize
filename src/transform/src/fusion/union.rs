@@ -51,6 +51,7 @@ impl Union {
         if let MirRelationExpr::Union { inputs, .. } = relation {
             let mut list: Vec<MirRelationExpr> = Vec::with_capacity(1 + inputs.len());
             Self::unfold_unions_into(relation.take_dangerous(), &mut list);
+            list.sort();
             *relation = MirRelationExpr::Union {
                 base: Box::new(list.remove(0)),
                 inputs: list,
