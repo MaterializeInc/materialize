@@ -259,6 +259,7 @@ where
 
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
+    let target_relation_desc = target.relation_desc.clone();
 
     // Only one worker is responsible for determining batch descriptions. All
     // workers must write batches with the same description, to ensure that they
@@ -306,9 +307,10 @@ where
             .expect("could not open persist client");
 
         let mut write = persist_client
-            .open_writer::<SourceData, (), Timestamp, Diff>(
+            .open_writer::<SourceData, (), Timestamp, Diff, _>(
                 shard_id,
                 &format!("compute::persist_sink::mint_batch_descriptions {}", sink_id),
+                target_relation_desc,
             )
             .await
             .expect("could not open persist shard");
@@ -511,6 +513,7 @@ where
 {
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
+    let target_relation_desc = target.relation_desc.clone();
 
     let scope = desired_stream.scope();
     let worker_index = scope.index();
@@ -573,9 +576,10 @@ where
             .expect("could not open persist client");
 
         let mut write = persist_client
-            .open_writer::<SourceData, (), Timestamp, Diff>(
+            .open_writer::<SourceData, (), Timestamp, Diff, _>(
                 shard_id,
                 &format!("compute::persist_sink::write_batches {}", sink_id),
+                target_relation_desc,
             )
             .await
             .expect("could not open persist shard");
@@ -829,6 +833,7 @@ where
 
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
+    let target_relation_desc = target.relation_desc.clone();
 
     let operator_name = format!("{} append_batches", operator_name);
     let mut append_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
@@ -892,9 +897,10 @@ where
             .expect("could not open persist client");
 
         let mut write = persist_client
-            .open_writer::<SourceData, (), Timestamp, Diff>(
+            .open_writer::<SourceData, (), Timestamp, Diff,_>(
                 shard_id,
                 &format!("persist_sink::append_batches {}", sink_id),
+                target_relation_desc,
             )
             .await
             .expect("could not open persist shard");

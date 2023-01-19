@@ -14,6 +14,7 @@ use std::thread;
 use std::time::Duration;
 
 use maplit::btreemap;
+use once_cell::sync::Lazy;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
@@ -29,10 +30,10 @@ use tracing::{error, info, warn};
 use mz_expr::PartitionId;
 use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
-use mz_repr::{adt::jsonb::Jsonb, GlobalId};
+use mz_repr::{adt::jsonb::Jsonb, GlobalId, RelationDesc};
 use mz_storage_client::types::connections::{ConnectionContext, StringOrSecret};
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset};
+use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset, KAFKA_PROGRESS_DESC};
 use mz_timely_util::order::Partitioned;
 
 use crate::source::commit::LogCommitter;
@@ -95,6 +96,8 @@ pub struct KafkaOffsetCommiter {
 impl SourceConnectionBuilder for KafkaSourceConnection {
     type Reader = KafkaSourceReader;
     type OffsetCommitter = KafkaOffsetCommiter;
+
+    const REMAP_RELATION_DESC: Lazy<RelationDesc> = Lazy::new(|| KAFKA_PROGRESS_DESC.clone());
 
     fn into_reader(
         self,

@@ -89,7 +89,7 @@ use mz_ore::halt;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
-use mz_persist_client::{PersistLocation, ShardId};
+use mz_persist_client::ShardId;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_storage_client::client::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 use mz_storage_client::client::{StorageCommand, StorageResponse};
@@ -201,11 +201,14 @@ impl SinkHandle {
     /// A new handle.
     pub fn new(
         sink_id: GlobalId,
-        persist_location: PersistLocation,
+        from_metadata: &CollectionMetadata,
         shard_id: ShardId,
         persist_clients: Arc<Mutex<PersistClientCache>>,
     ) -> SinkHandle {
         let (downgrade_tx, mut rx) = watch::channel(Antichain::from_elem(Timestamp::minimum()));
+
+        let persist_location = from_metadata.persist_location.clone();
+        let from_relation_desc = from_metadata.relation_desc.clone();
 
         let _handle = mz_ore::task::spawn(|| "Sink handle advancement", async move {
             let client = persist_clients
@@ -216,7 +219,11 @@ impl SinkHandle {
                 .expect("opening persist client");
 
             let mut read_handle: ReadHandle<SourceData, (), Timestamp, Diff> = client
-                .open_leased_reader(shard_id, &format!("sink::since {}", sink_id))
+                .open_leased_reader(
+                    shard_id,
+                    &format!("sink::since {}", sink_id),
+                    from_relation_desc,
+                )
                 .await
                 .expect("opening reader for shard");
 
@@ -848,11 +855,7 @@ impl StorageState {
                         export.id,
                         SinkHandle::new(
                             export.id,
-                            export
-                                .description
-                                .from_storage_metadata
-                                .persist_location
-                                .clone(),
+                            &export.description.from_storage_metadata,
                             export.description.from_storage_metadata.data_shard,
                             Arc::clone(&self.persist_clients),
                         ),

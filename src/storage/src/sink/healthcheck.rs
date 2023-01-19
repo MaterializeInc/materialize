@@ -19,6 +19,7 @@ use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_repr::GlobalId;
+use mz_storage_client::healthcheck::MZ_SINK_STATUS_HISTORY_DESC;
 
 use crate::healthcheck::write_to_persist;
 
@@ -84,6 +85,7 @@ impl Healthchecker {
                 self.now.clone(),
                 &self.persist_client,
                 self.status_shard,
+                &*MZ_SINK_STATUS_HISTORY_DESC,
             )
             .await;
 
@@ -467,7 +469,11 @@ mod tests {
             .unwrap();
 
         let (write_handle, mut read_handle) = persist_client
-            .open(shard_id, "tests::dump_storage_collection")
+            .open(
+                shard_id,
+                "tests::dump_storage_collection",
+                MZ_SINK_STATUS_HISTORY_DESC.clone(),
+            )
             .await
             .unwrap();
 

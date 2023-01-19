@@ -31,11 +31,11 @@ use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::display::DisplayExt;
 use mz_ore::task;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceErrorDetails;
 use mz_storage_client::types::sources::{
-    encoding::SourceDataEncoding, MzOffset, PostgresSourceConnection,
+    encoding::SourceDataEncoding, MzOffset, PostgresSourceConnection, PG_PROGRESS_DESC,
 };
 
 use self::metrics::PgSourceMetrics;
@@ -213,6 +213,8 @@ struct PostgresTaskInfo {
 impl SourceConnectionBuilder for PostgresSourceConnection {
     type Reader = PostgresSourceReader;
     type OffsetCommitter = PgOffsetCommitter;
+
+    const REMAP_RELATION_DESC: Lazy<RelationDesc> = Lazy::new(|| PG_PROGRESS_DESC.clone());
 
     fn into_reader(
         self,

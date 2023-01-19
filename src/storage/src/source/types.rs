@@ -20,6 +20,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use differential_dataflow::Hashable;
 use futures::stream::LocalBoxStream;
+use once_cell::sync::Lazy;
 use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
@@ -28,7 +29,7 @@ use timely::Data;
 
 use mz_expr::PartitionId;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
@@ -42,6 +43,8 @@ use crate::source::source_reader_pipeline::HealthStatus;
 pub trait SourceConnectionBuilder {
     type Reader: SourceReader + 'static;
     type OffsetCommitter: OffsetCommitter + Send + Sync + 'static;
+
+    const REMAP_RELATION_DESC: Lazy<RelationDesc>;
 
     /// Turn this connection into a new source reader.
     ///

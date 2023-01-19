@@ -127,6 +127,7 @@ where
         as_of,
         until.clone(),
         flow_control,
+        metadata.relation_desc,
     );
     let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
     (rows, token)

@@ -22,6 +22,7 @@ use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
 use globset::{Glob, GlobBuilder};
 use itertools::Itertools;
+use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -102,19 +103,30 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
                 data_shard,
                 // The status shard only contains non-definite status updates
                 status_shard: _,
+                relation_desc,
             } = &export.storage_metadata;
             let handle = client_cache
                 .open(persist_location.clone())
                 .await
                 .expect("error creating persist client")
-                .open_writer::<SourceData, (), T, Diff>(
+                .open_writer::<SourceData, (), T, Diff, _>(
                     *data_shard,
                     &format!("resumption data {}", id),
+                    relation_desc.clone(),
                 )
                 .await
                 .unwrap();
             handles.push(handle);
         }
+
+        let remap_relation_desc = match self.desc.connection {
+            GenericSourceConnection::Kafka(_) => KAFKA_PROGRESS_DESC.clone(),
+            GenericSourceConnection::Kinesis(_) => KINESIS_PROGRESS_DESC.clone(),
+            GenericSourceConnection::S3(_) => S3_PROGRESS_DESC.clone(),
+            GenericSourceConnection::Postgres(_) => PG_PROGRESS_DESC.clone(),
+            GenericSourceConnection::LoadGenerator(_) => LOADGEN_PROGRESS_DESC.clone(),
+            GenericSourceConnection::TestScript(_) => TESTSCRIPT_PROGRESS_DESC.clone(),
+        };
 
         let CollectionMetadata {
             persist_location,
@@ -122,13 +134,18 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
             data_shard: _,
             // The status shard only contains non-definite status updates
             status_shard: _,
+            relation_desc: _,
         } = &self.ingestion_metadata;
         let remap_handle = client_cache
             .open(persist_location.clone())
             .await
             .expect("error creating persist client")
             // TODO: Any way to plumb the GlobalId to this?
-            .open_writer::<SourceData, (), T, Diff>(*remap_shard, "resumption remap")
+            .open_writer::<SourceData, (), T, Diff, _>(
+                *remap_shard,
+                "resumption remap",
+                remap_relation_desc,
+            )
             .await
             .unwrap();
         handles.push(remap_handle);
@@ -1352,6 +1369,18 @@ impl SourceConnection for KafkaSourceConnection {
     }
 }
 
+pub static KAFKA_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    RelationDesc::empty()
+        .with_column(
+            "partition",
+            ScalarType::Range {
+                element_type: Box::new(ScalarType::Int32),
+            }
+            .nullable(false),
+        )
+        .with_column("offset", ScalarType::UInt64.nullable(true))
+});
+
 impl Arbitrary for KafkaSourceConnection {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
@@ -1818,6 +1847,15 @@ impl SourceConnection for KinesisSourceConnection {
     }
 }
 
+pub static KINESIS_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    /* In the future, kinesis will have a more complex ts
+    RelationDesc::empty()
+        .with_column("shard_id", ScalarType::Int32.nullable(false))
+        .with_column("sequence_number", ScalarType::UInt64.nullable(true))
+    */
+    RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
+});
+
 impl RustType<ProtoKinesisSourceConnection> for KinesisSourceConnection {
     fn into_proto(&self) -> ProtoKinesisSourceConnection {
         ProtoKinesisSourceConnection {
@@ -1850,6 +1888,9 @@ pub struct PostgresSourceConnection {
     pub publication: String,
     pub publication_details: PostgresSourcePublicationDetails,
 }
+
+pub static PG_PROGRESS_DESC: Lazy<RelationDesc> =
+    Lazy::new(|| RelationDesc::empty().with_column("lsn", ScalarType::UInt64.nullable(true)));
 
 impl Arbitrary for PostgresSourceConnection {
     type Strategy = BoxedStrategy<Self>;
@@ -1991,6 +2032,10 @@ impl SourceConnection for LoadGeneratorSourceConnection {
         "load-generator"
     }
 }
+
+pub static LOADGEN_PROGRESS_DESC: Lazy<RelationDesc> =
+    Lazy::new(|| RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true)));
+
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum LoadGenerator {
     Auction,
@@ -2284,6 +2329,9 @@ impl SourceConnection for TestScriptSourceConnection {
     }
 }
 
+pub static TESTSCRIPT_PROGRESS_DESC: Lazy<RelationDesc> =
+    Lazy::new(|| RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true)));
+
 impl RustType<ProtoTestScriptSourceConnection> for TestScriptSourceConnection {
     fn into_proto(&self) -> ProtoTestScriptSourceConnection {
         ProtoTestScriptSourceConnection {
@@ -2312,6 +2360,10 @@ impl SourceConnection for S3SourceConnection {
         "s3"
     }
 }
+
+pub static S3_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    RelationDesc::empty().with_column("byte_offset", ScalarType::UInt64.nullable(true))
+});
 
 fn any_glob() -> impl Strategy<Value = Glob> {
     r"[a-z][a-z0-9]{0,10}/?([a-z0-9]{0,5}/?){0,3}".prop_map(|s| {

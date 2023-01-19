@@ -1608,7 +1608,11 @@ pub mod datadriven {
         let as_of = args.expect_antichain("as_of");
         let read = datadriven
             .client
-            .open_leased_reader::<String, (), u64, i64>(datadriven.shard_id, "")
+            .open_leased_reader::<String, (), u64, i64, _>(
+                datadriven.shard_id,
+                "",
+                PersistClient::TEST_SCHEMA,
+            )
             .await
             .expect("invalid shard types");
         let listen = read

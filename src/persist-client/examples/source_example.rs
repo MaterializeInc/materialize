@@ -84,13 +84,17 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         .parse()
         .map_err(anyhow::Error::msg)?;
 
-    let (bindings_write, bindings_read) = persist.open(bindings_id, "source example").await?;
+    let (bindings_write, bindings_read) = persist
+        .open(bindings_id, "source example", PersistClient::TEST_SCHEMA)
+        .await?;
 
     let consensus = PersistConsensus::new(bindings_write, bindings_read);
     let timestamper =
         ConsensusTimestamper::new(now_fn.clone(), timestamp_interval.clone(), consensus).await;
 
-    let (data_write, data_read) = persist.open(data_id, "source example").await?;
+    let (data_write, data_read) = persist
+        .open(data_id, "source example", PersistClient::TEST_SCHEMA)
+        .await?;
 
     // First, render one instance of the source.
     let source1 = source.clone();
@@ -113,7 +117,11 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         let reader_name = format!("reader-{}", i);
         let reader_name_clone = reader_name.clone();
         let (_write, data_read) = persist
-            .open::<String, (), Timestamp, _>(data_id, "source example")
+            .open::<String, (), Timestamp, _, _>(
+                data_id,
+                "source example",
+                PersistClient::TEST_SCHEMA,
+            )
             .await?;
         let pipeline = mz_ore::task::spawn(|| &reader_name_clone, async move {
             let as_of = data_read.since().clone();
@@ -134,12 +142,16 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     // timestamper.
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    let (bindings_write, bindings_read) = persist.open(bindings_id, "source example").await?;
+    let (bindings_write, bindings_read) = persist
+        .open(bindings_id, "source example", PersistClient::TEST_SCHEMA)
+        .await?;
     let consensus = PersistConsensus::new(bindings_write, bindings_read);
     let timestamper =
         ConsensusTimestamper::new(now_fn.clone(), timestamp_interval.clone(), consensus).await;
 
-    let data_write = persist.open_writer(data_id, "source example").await?;
+    let data_write = persist
+        .open_writer(data_id, "source example", PersistClient::TEST_SCHEMA)
+        .await?;
 
     let source2 = source.clone();
     let source_pipeline2 = mz_ore::task::spawn(|| "source-2", async move {

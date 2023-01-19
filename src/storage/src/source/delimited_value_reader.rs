@@ -13,10 +13,11 @@
 use timely::scheduling::activate::SyncActivator;
 
 use mz_expr::PartitionId;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, RelationDesc};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{MzOffset, SourceConnection};
+use once_cell::sync::Lazy;
 
 use crate::source::types::{
     NextMessage, SourceConnectionBuilder, SourceMessage, SourceMessageType, SourceReader,
@@ -43,6 +44,8 @@ where
 {
     type Reader = DelimitedValueSourceReader<C::Reader>;
     type OffsetCommitter = C::OffsetCommitter;
+
+    const REMAP_RELATION_DESC: Lazy<RelationDesc> = Lazy::new(|| C::REMAP_RELATION_DESC.clone());
 
     fn into_reader(
         self,

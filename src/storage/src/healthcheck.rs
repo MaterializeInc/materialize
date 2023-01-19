@@ -14,7 +14,7 @@ use mz_ore::now::NowFn;
 use timely::progress::Antichain;
 
 use mz_persist_client::{PersistClient, ShardId};
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_storage_client::types::sources::SourceData;
 
 pub async fn write_to_persist(
@@ -24,6 +24,7 @@ pub async fn write_to_persist(
     now: NowFn,
     client: &PersistClient,
     status_shard: ShardId,
+    relation_desc: &RelationDesc,
 ) {
     let now_ms = now();
     let row = mz_storage_client::healthcheck::pack_status_row(
@@ -33,9 +34,17 @@ pub async fn write_to_persist(
         now_ms,
     );
 
-    let mut handle = client.open_writer(status_shard, &format!("healthcheck::write_to_persist {}", collection_id)).await.expect(
-        "Invalid usage of the persist client for collection {collection_id} status history shard",
-    );
+    let mut handle = client
+        .open_writer(
+            status_shard,
+            &format!("healthcheck::write_to_persist {}", collection_id),
+            relation_desc.clone(),
+        )
+        .await
+        .expect(
+            "Invalid usage of the persist \
+            client for collection {collection_id} status history shard",
+        );
 
     let mut recent_upper = handle.upper().clone();
     let mut append_ts = Timestamp::from(now_ms);

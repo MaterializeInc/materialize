@@ -133,7 +133,9 @@ impl Transactor {
             .parse::<u64>()
             .expect("maelstrom node_id should be n followed by an integer");
 
-        let (mut write, mut read) = client.open(shard_id, "maelstrom long-lived").await?;
+        let (mut write, mut read) = client
+            .open(shard_id, "maelstrom long-lived", PersistClient::TEST_SCHEMA)
+            .await?;
         // Use the CONTROLLER_CRITICAL_SINCE id for all nodes so we get coverage
         // of contending traffic.
         let since = client
@@ -257,7 +259,11 @@ impl Transactor {
             // state and exercise some more code paths.
             let mut read = self
                 .client
-                .open_leased_reader(self.shard_id, "maelstrom short-lived")
+                .open_leased_reader(
+                    self.shard_id,
+                    "maelstrom short-lived",
+                    PersistClient::TEST_SCHEMA,
+                )
                 .await
                 .expect("codecs should match");
 
