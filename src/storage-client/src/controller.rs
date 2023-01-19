@@ -2040,6 +2040,8 @@ where
             .await
             .expect("connect to stash");
 
+        let mut replace_data_shard = false;
+
         let to_delete_shards = match current_metadata {
             None => {
                 // If this ID has not yet been written, nothing to update.
@@ -2051,9 +2053,14 @@ where
                 }
 
                 let mut to_delete_shards = vec![];
-                for (old, new, desc) in [
-                    (metadata.data_shard, new_metadata.data_shard, "data"),
-                    (metadata.remap_shard, new_metadata.remap_shard, "remap"),
+                for (old, new, desc, data_shard_replaced) in [
+                    (metadata.data_shard, new_metadata.data_shard, "data", true),
+                    (
+                        metadata.remap_shard,
+                        new_metadata.remap_shard,
+                        "remap",
+                        false,
+                    ),
                 ] {
                     if old != new {
                         info!(
@@ -2062,6 +2069,8 @@ where
                         );
                         to_delete_shards
                             .push((old, format!("retired {} shard for {:?}", desc, id)));
+
+                        replace_data_shard = replace_data_shard | data_shard_replaced;
                     }
                 }
 
@@ -2085,14 +2094,70 @@ where
             data_shard,
         } = new_metadata;
 
-        // Update in memory collection metadata.
-        let metadata = self
-            .state
-            .collections
-            .get_mut(&id)
-            .expect("id {:?} must exist");
-        metadata.collection_metadata.data_shard = data_shard;
-        metadata.collection_metadata.remap_shard = remap_shard;
+        // Update in memory collection metadata if the collection has been
+        // registered.
+        if let Some(metadata) = self.state.collections.get_mut(&id) {
+            metadata.collection_metadata.data_shard = data_shard;
+            metadata.collection_metadata.remap_shard = remap_shard;
+
+            if replace_data_shard {
+                let persist_client = self
+                    .persist
+                    .lock()
+                    .await
+                    .open(self.persist_location.clone())
+                    .await
+                    .unwrap();
+
+                let purpose = format!("controller data {}", id);
+                let write = persist_client
+                    .open_writer(
+                        data_shard,
+                        &purpose,
+                        Arc::new(metadata.collection_metadata.relation_desc.clone()),
+                        Arc::new(UnitSchema),
+                    )
+                    .await
+                    .expect("invalid persist usage");
+
+                // Construct the handle in a separate block to ensure all error paths are diverging
+                let since_handle = {
+                    let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
+                        .open_critical_since(
+                            data_shard,
+                            PersistClient::CONTROLLER_CRITICAL_SINCE,
+                            &purpose,
+                        )
+                        .await
+                        .expect("invalid persist usage");
+
+                    let since = handle.since().clone();
+
+                    // When rewriting data, must be guaranteed to be able to
+                    // move shard into our epoch.
+                    let their_epoch: PersistEpoch = handle.opaque().clone();
+                    let our_epoch = self.state.envd_epoch;
+
+                    let fenced_others = handle
+                        .compare_and_downgrade_since(
+                            &their_epoch,
+                            (&PersistEpoch::from(our_epoch), &since),
+                        )
+                        .await
+                        .is_ok();
+
+                    assert!(
+                        fenced_others,
+                        "when rewriting metdata, must be guaranteed to be able to move shard into our epoch."
+                    );
+
+                    handle
+                };
+
+                self.state.persist_write_handles.update(id, write);
+                self.state.persist_read_handles.update(id, since_handle);
+            }
+        }
     }
 
     /// Closes the identified shards from further reads or writes.
