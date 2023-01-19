@@ -438,12 +438,13 @@ impl ConsensusKnobs for PersistConfig {
 /// [tokio::time::timeout_at].
 ///
 /// ```rust,no_run
+/// # use std::sync::Arc;
 /// # use mz_persist_types::codec_impls::StringSchema;
 /// # let client: mz_persist_client::PersistClient = unimplemented!();
 /// # let timeout: std::time::Duration = unimplemented!();
 /// # let id = mz_persist_client::ShardId::new();
 /// # async {
-/// tokio::time::timeout(timeout, client.open::<String, String, u64, i64, _>(id, "desc",
+/// tokio::time::timeout(timeout, client.open::<String, String, u64, i64>(id, "desc",
 ///     Arc::new(StringSchema),Arc::new(StringSchema))).await
 /// # };
 /// ```
