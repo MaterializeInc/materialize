@@ -49,6 +49,7 @@ pub struct PersistReadWorker<T: Timestamp + Lattice + Codec64> {
 #[derive(Debug)]
 enum PersistReadWorkerCmd<T: Timestamp + Lattice + Codec64> {
     Register(GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
+    Update(GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
     Downgrade(BTreeMap<GlobalId, Antichain<T>>),
 }
 
@@ -76,6 +77,9 @@ impl<T: Timestamp + Lattice + Codec64> PersistReadWorker<T> {
                             if previous.is_some() {
                                 panic!("already registered a SinceHandle for collection {id}");
                             }
+                        }
+                        PersistReadWorkerCmd::Update(id, since_handle) => {
+                            since_handles.insert(id, since_handle).expect("PersistReadWorkerCmd::Update only valid for updating extant since handles");
                         }
                         PersistReadWorkerCmd::Downgrade(since_frontiers) => {
                             for (id, frontier) in since_frontiers {
@@ -129,6 +133,22 @@ impl<T: Timestamp + Lattice + Codec64> PersistReadWorker<T> {
         self.send(PersistReadWorkerCmd::Register(id, since_handle))
     }
 
+    /// Update the existing since handle associated with `id` to `since_handle`.
+    ///
+    /// Note that this should only be called when updating a since handle; to
+    /// initially associate an `id` to a since handle, use [`Self::register`].
+    ///
+    /// # Panics
+    /// - If `id` is not currently associated with any since handle.
+    #[allow(dead_code)]
+    pub(crate) fn update(
+        &self,
+        id: GlobalId,
+        since_handle: SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
+    ) {
+        self.send(PersistReadWorkerCmd::Update(id, since_handle))
+    }
+
     pub(crate) fn downgrade(&self, frontiers: BTreeMap<GlobalId, Antichain<T>>) {
         self.send(PersistReadWorkerCmd::Downgrade(frontiers))
     }
@@ -159,6 +179,7 @@ where
 #[derive(Debug)]
 enum PersistWriteWorkerCmd<T: Timestamp + Lattice + Codec64> {
     Register(GlobalId, WriteHandle<SourceData, (), T, Diff>),
+    Update(GlobalId, WriteHandle<SourceData, (), T, Diff>),
     Append(
         Vec<(GlobalId, Vec<Update<T>>, T)>,
         tokio::sync::oneshot::Sender<Result<(), StorageError>>,
@@ -220,6 +241,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                                 id
                                             );
                                         }
+                                    }
+                                    PersistWriteWorkerCmd::Update(id, write_handle) => {
+                                        write_handles.insert(id, write_handle).expect("PersistWriteWorkerCmd::Update only valid for updating extant write handles");
                                     }
                                     PersistWriteWorkerCmd::Append(updates, response) => {
                                         let mut ids = HashSet::new();
@@ -400,6 +424,18 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
         write_handle: WriteHandle<SourceData, (), T, Diff>,
     ) {
         self.send(PersistWriteWorkerCmd::Register(id, write_handle))
+    }
+
+    /// Update the existing write handle associated with `id` to `write_handle`.
+    ///
+    /// Note that this should only be called when updating a write handle; to
+    /// initially associate an `id` to a write handle, use [`Self::register`].
+    ///
+    /// # Panics
+    /// - If `id` is not currently associated with any write handle.
+    #[allow(dead_code)]
+    pub(crate) fn update(&self, id: GlobalId, write_handle: WriteHandle<SourceData, (), T, Diff>) {
+        self.send(PersistWriteWorkerCmd::Update(id, write_handle))
     }
 
     pub(crate) fn append(
