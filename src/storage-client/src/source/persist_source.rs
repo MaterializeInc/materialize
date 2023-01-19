@@ -74,46 +74,6 @@ where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     YFn: Fn(Instant, usize) -> bool + 'static,
 {
-    let (updates, errs, token) = persist_source_core(
-        scope,
-        source_id,
-        persist_clients,
-        metadata,
-        as_of,
-        until,
-        map_filter_project,
-        flow_control,
-        yield_fn,
-    );
-    (updates, errs, token)
-}
-
-/// Creates a new source that reads from a persist shard, distributing the work
-/// of reading data to all timely workers.
-///
-/// All times emitted will have been [advanced by] the given `as_of` frontier.
-///
-/// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-#[allow(clippy::needless_borrow)]
-pub fn persist_source_core<G, YFn>(
-    scope: &G,
-    source_id: GlobalId,
-    persist_clients: Arc<Mutex<PersistClientCache>>,
-    metadata: CollectionMetadata,
-    as_of: Option<Antichain<Timestamp>>,
-    until: Antichain<Timestamp>,
-    map_filter_project: Option<&mut MfpPlan>,
-    flow_control: Option<FlowControl<G>>,
-    yield_fn: YFn,
-) -> (
-    Stream<G, (Row, Timestamp, Diff)>,
-    Stream<G, (DataflowError, Timestamp, Diff)>,
-    Rc<dyn Any>,
-)
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-    YFn: Fn(Instant, usize) -> bool + 'static,
-{
     let name = source_id.to_string();
     let (fetched, token) = shard_source(
         scope,

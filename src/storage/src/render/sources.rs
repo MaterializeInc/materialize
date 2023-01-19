@@ -391,7 +391,7 @@ where
                     };
                     let (previous_ok_stream, previous_err_stream, previous_token) =
                         if let Some(previous_as_of) = previous_as_of {
-                            let (ok_stream, err_stream, tok) = persist_source::persist_source_core(
+                            let (ok_stream, err_stream, tok) = persist_source::persist_source(
                                 scope,
                                 id,
                                 persist_clients,
