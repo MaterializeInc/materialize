@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use once_cell::sync::Lazy;
+use proptest::prelude::{any, prop, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -30,7 +31,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 // `sink_logs` empty. Unfortunately, we have to always provide `index_logs`, because we must
 // install the logging dataflows even on replicas that have logging disabled. See #15799.
 // TODO(teskje): Clean this up once we remove the arranged introspection sources.
-#[derive(Arbitrary, Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingConfig {
     /// The logging interval
     pub interval: Duration,
@@ -42,6 +43,35 @@ pub struct LoggingConfig {
     pub index_logs: BTreeMap<LogVariant, GlobalId>,
     /// Logs to be written to persist
     pub sink_logs: BTreeMap<LogVariant, (GlobalId, CollectionMetadata)>,
+}
+
+impl Arbitrary for LoggingConfig {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<Duration>(),
+            any::<bool>(),
+            any::<bool>(),
+            prop::collection::btree_map(any::<LogVariant>(), any::<GlobalId>(), 0..2),
+            prop::collection::btree_map(
+                any::<LogVariant>(),
+                any::<(GlobalId, CollectionMetadata)>(),
+                0..2,
+            ),
+        )
+            .prop_map(
+                |(interval, enable_logging, log_logging, index_logs, sink_logs)| LoggingConfig {
+                    interval,
+                    enable_logging,
+                    log_logging,
+                    index_logs,
+                    sink_logs,
+                },
+            )
+            .boxed()
+    }
 }
 
 impl LoggingConfig {
