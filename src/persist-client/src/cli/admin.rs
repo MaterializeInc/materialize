@@ -24,7 +24,7 @@ use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
 };
 use prometheus::proto::{MetricFamily, MetricType};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::cli::inspect::StateArgs;
@@ -284,16 +284,13 @@ impl Blob for ReadOnly<Arc<dyn Blob + Sync + Send>> {
         self.0.list_keys_and_metadata(key_prefix, f).await
     }
 
-    async fn set(
-        &self,
-        _key: &str,
-        _value: Bytes,
-        _atomic: Atomicity,
-    ) -> Result<(), ExternalError> {
+    async fn set(&self, key: &str, _value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {
+        warn!("ignoring set({key}) in read-only mode");
         Ok(())
     }
 
-    async fn delete(&self, _key: &str) -> Result<Option<usize>, ExternalError> {
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+        warn!("ignoring delete({key}) in read-only mode");
         Ok(None)
     }
 }
@@ -306,10 +303,11 @@ impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
 
     async fn compare_and_set(
         &self,
-        _key: &str,
+        key: &str,
         _expected: Option<SeqNo>,
         _new: VersionedData,
     ) -> Result<Result<(), Vec<VersionedData>>, ExternalError> {
+        warn!("ignoring cas({key}) in read-only mode");
         Ok(Ok(()))
     }
 
@@ -322,7 +320,8 @@ impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
         self.0.scan(key, from, limit).await
     }
 
-    async fn truncate(&self, _key: &str, _seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, key: &str, _seqno: SeqNo) -> Result<usize, ExternalError> {
+        warn!("ignoring truncate({key}) in read-only mode");
         Ok(0)
     }
 }
