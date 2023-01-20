@@ -370,15 +370,12 @@ impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
     }
 }
 
-async fn force_gc(
-    cfg: PersistConfig,
-    metrics_registry: &MetricsRegistry,
-    shard_id: ShardId,
+async fn make_consensus(
+    cfg: &PersistConfig,
     consensus_uri: &str,
-    blob_uri: &str,
     commit: bool,
-) -> anyhow::Result<Box<dyn Any>> {
-    let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
+    metrics: Arc<Metrics>,
+) -> anyhow::Result<Arc<dyn Consensus + Send + Sync>> {
     let consensus = ConsensusConfig::try_from(
         consensus_uri,
         Box::new(cfg.clone()),
@@ -390,8 +387,15 @@ async fn force_gc(
     } else {
         Arc::new(ReadOnly(consensus))
     };
-    let consensus: Arc<dyn Consensus + Send + Sync> =
-        Arc::new(MetricsConsensus::new(consensus, Arc::clone(&metrics)));
+    let consensus = Arc::new(MetricsConsensus::new(consensus, Arc::clone(&metrics)));
+    Ok(consensus)
+}
+
+async fn make_blob(
+    blob_uri: &str,
+    commit: bool,
+    metrics: Arc<Metrics>,
+) -> anyhow::Result<Arc<dyn Blob + Send + Sync>> {
     let blob = BlobConfig::try_from(blob_uri).await?;
     let blob = blob.clone().open().await?;
     let blob = if commit {
@@ -399,12 +403,22 @@ async fn force_gc(
     } else {
         Arc::new(ReadOnly(blob))
     };
-    let blob: Arc<dyn Blob + Send + Sync> = Arc::new(MetricsBlob::new(blob, Arc::clone(&metrics)));
+    let blob = Arc::new(MetricsBlob::new(blob, Arc::clone(&metrics)));
+    Ok(blob)
+}
 
+async fn make_machine(
+    cfg: &PersistConfig,
+    consensus: Arc<dyn Consensus + Send + Sync>,
+    blob: Arc<dyn Blob + Send + Sync>,
+    metrics: Arc<Metrics>,
+    shard_id: ShardId,
+    commit: bool,
+) -> anyhow::Result<Machine<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>> {
     let state_versions = Arc::new(StateVersions::new(
         cfg.clone(),
         consensus,
-        Arc::clone(&blob),
+        blob,
         Arc::clone(&metrics),
     ));
 
@@ -444,14 +458,29 @@ async fn force_gc(
         break;
     }
 
-    let mut machine = Machine::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>::new(
+    let machine = Machine::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>::new(
         cfg.clone(),
         shard_id,
-        Arc::clone(&metrics),
-        Arc::clone(&state_versions),
+        metrics,
+        state_versions,
     )
     .await?;
 
+    Ok(machine)
+}
+
+async fn force_gc(
+    cfg: PersistConfig,
+    metrics_registry: &MetricsRegistry,
+    shard_id: ShardId,
+    consensus_uri: &str,
+    blob_uri: &str,
+    commit: bool,
+) -> anyhow::Result<Box<dyn Any>> {
+    let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
+    let consensus = make_consensus(&cfg, consensus_uri, commit, Arc::clone(&metrics)).await?;
+    let blob = make_blob(blob_uri, commit, Arc::clone(&metrics)).await?;
+    let mut machine = make_machine(&cfg, consensus, blob, metrics, shard_id, commit).await?;
     let gc_req = GcReq {
         shard_id,
         new_seqno_since: machine.state().seqno_since(),
