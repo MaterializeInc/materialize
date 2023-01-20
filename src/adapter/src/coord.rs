@@ -550,16 +550,6 @@ impl Coordinator {
 
         info!("coordinator init: creating compute replicas");
         for instance in self.catalog.compute_instances() {
-            // Linked clusters are presently a fiction maintained by the
-            // catalog. They should not yet result in the creation of actual
-            // compute instances.
-            //
-            // TODO(benesch): turn linked clusters into real clusters. See
-            // MaterializeInc/cloud#4929.
-            if instance.linked_object_id.is_some() {
-                continue;
-            }
-
             self.controller
                 .compute
                 .create_instance(instance.id, instance.log_indexes.clone())?;
@@ -743,29 +733,6 @@ impl Coordinator {
                         .insert(entry.id());
                 }
                 CatalogItem::Index(idx) => {
-                    // Linked clusters are presently a fiction maintained by the
-                    // catalog. They do not yet result in the creation of actual
-                    // compute instances, and so we must suppress the creation
-                    // of indexes on those clusters. (Users cannot create
-                    // indexes on linked clusters, but the indexes for the
-                    // built-in logging sources must be suppressed.)
-                    //
-                    // TODO(benesch): turn linked clusters into real clusters.
-                    // See MaterializeInc/cloud#4929.
-                    if self
-                        .catalog
-                        .try_get_compute_instance(idx.compute_instance)
-                        .expect("index on missing compute instance")
-                        .linked_object_id
-                        .is_some()
-                    {
-                        assert!(
-                            logs.contains(&idx.on),
-                            "non introspection source indexes in linked clusters are impossible"
-                        );
-                        continue;
-                    }
-
                     let policy_entry = policies_to_set
                         .entry(policy.expect("indexes have a compaction window"))
                         .or_insert_with(Default::default);

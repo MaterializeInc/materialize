@@ -175,16 +175,7 @@ impl Coordinator {
                 log_sources_to_drop.extend(replica_logs);
 
                 // Drop the cluster itself.
-                //
-                // Linked clusters are presently a fiction maintained by the
-                // catalog. They do not yet result in the creation of actual
-                // compute instances, and so we must suppress their drop.
-                //
-                // TODO(benesch): turn linked clusters into real clusters.
-                // See MaterializeInc/cloud#4929.
-                if instance.linked_object_id.is_none() {
-                    clusters_to_drop.push(id);
-                }
+                clusters_to_drop.push(id);
 
                 // Drop timelines
                 timelines_to_drop.extend(self.remove_compute_instance_from_timeline(id));
@@ -202,16 +193,7 @@ impl Coordinator {
                 log_sources_to_drop.extend(replica_logs);
 
                 // Drop the cluster replica itself.
-                //
-                // Linked clusters are presently a fiction maintained by the
-                // catalog. They do not yet result in the creation of actual
-                // compute instances, and so we must suppress their drop.
-                //
-                // TODO(benesch): turn linked clusters into real clusters.
-                // See MaterializeInc/cloud#4929.
-                if compute_instance.linked_object_id.is_none() {
-                    cluster_replicas_to_drop.push((compute_instance.id, replica_id));
-                }
+                cluster_replicas_to_drop.push((compute_instance.id, replica_id));
             }
         }
 
