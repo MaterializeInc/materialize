@@ -214,7 +214,7 @@ pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data:
 
 pub fn bench_trace_push_batch(c: &mut Criterion) {
     let mut g = c.benchmark_group("trace");
-    const NUM_BATCHES: usize = 5_000;
+    const NUM_BATCHES: usize = 20_000;
     g.bench_function(BenchmarkId::new("push_batch", NUM_BATCHES), |b| {
         b.iter(|| trace_push_batch_one_iter(NUM_BATCHES));
     });
