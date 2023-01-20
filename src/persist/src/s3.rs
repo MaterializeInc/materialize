@@ -100,9 +100,9 @@ impl S3BlobConfig {
                 // maximum time allowed for a single network call
                 .operation_attempt_timeout(Duration::from_secs(90))
                 // maximum time until a connection succeeds
-                .connect_timeout(Duration::from_secs(30))
+                .connect_timeout(Duration::from_secs(2))
                 // maximum time to read the first byte of a response
-                .read_timeout(Duration::from_secs(60))
+                .read_timeout(Duration::from_secs(4))
                 .build(),
         );
 
