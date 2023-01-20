@@ -156,59 +156,16 @@ pub async fn force_compaction(
     commit: bool,
 ) -> Result<(), anyhow::Error> {
     let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
-    let consensus = ConsensusConfig::try_from(
-        consensus_uri,
-        Box::new(cfg.clone()),
-        metrics.postgres_consensus.clone(),
-    )?;
-    let consensus = consensus.clone().open().await?;
-    let consensus: Arc<dyn Consensus + Send + Sync> =
-        Arc::new(MetricsConsensus::new(consensus, Arc::clone(&metrics)));
-    let blob = BlobConfig::try_from(blob_uri).await?;
-    let blob = blob.clone().open().await?;
-    let blob: Arc<dyn Blob + Send + Sync> = Arc::new(MetricsBlob::new(blob, Arc::clone(&metrics)));
+    let consensus = make_consensus(&cfg, consensus_uri, commit, Arc::clone(&metrics)).await?;
+    let blob = make_blob(blob_uri, commit, Arc::clone(&metrics)).await?;
 
-    let state_versions = Arc::new(StateVersions::new(
-        cfg.clone(),
+    let mut machine = make_machine(
+        &cfg,
         consensus,
         Arc::clone(&blob),
         Arc::clone(&metrics),
-    ));
-
-    // Prime the K V codec magic
-    let versions = state_versions
-        .fetch_recent_live_diffs::<u64>(&shard_id)
-        .await;
-    loop {
-        let state_res = state_versions
-            .fetch_current_state::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>(
-                &shard_id,
-                versions.0.clone(),
-            )
-            .await;
-        let state = match state_res {
-            Ok(state) => state,
-            Err(codec) => {
-                let mut kvtd = crate::cli::inspect::KVTD_CODECS.lock().expect("lockable");
-                *kvtd = codec.actual;
-                continue;
-            }
-        };
-        // This isn't the perfect place to put this check, the ideal would be in
-        // the apply_unbatched_cmd loop, but I don't want to pollute the prod
-        // code with this logic.
-        if cfg.build_version != state.applier_version {
-            // We could add a flag to override this check, if that comes up.
-            return Err(anyhow!("version of this tool {} does not match version of state {}. bailing so we don't corrupt anything", cfg.build_version, state.applier_version));
-        }
-        break;
-    }
-
-    let mut machine = Machine::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>::new(
-        cfg.clone(),
         shard_id,
-        Arc::clone(&metrics),
-        Arc::clone(&state_versions),
+        commit,
     )
     .await?;
 
