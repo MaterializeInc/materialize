@@ -1179,6 +1179,7 @@ pub mod datadriven {
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
     use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
     use crate::batch::{validate_truncate_batch, BatchBuilder};
     use crate::fetch::fetch_batch_part;
@@ -1608,10 +1609,11 @@ pub mod datadriven {
         let as_of = args.expect_antichain("as_of");
         let read = datadriven
             .client
-            .open_leased_reader::<String, (), u64, i64, _>(
+            .open_leased_reader::<String, (), u64, i64>(
                 datadriven.shard_id,
                 "",
-                PersistClient::TEST_SCHEMA,
+                Arc::new(StringSchema),
+                Arc::new(UnitSchema),
             )
             .await
             .expect("invalid shard types");

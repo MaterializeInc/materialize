@@ -33,6 +33,7 @@ use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::Batch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;
@@ -307,10 +308,11 @@ where
             .expect("could not open persist client");
 
         let mut write = persist_client
-            .open_writer::<SourceData, (), Timestamp, Diff, _>(
+            .open_writer::<SourceData, (), Timestamp, Diff>(
                 shard_id,
                 &format!("compute::persist_sink::mint_batch_descriptions {}", sink_id),
-                target_relation_desc,
+                Arc::new(target_relation_desc),
+                Arc::new(UnitSchema),
             )
             .await
             .expect("could not open persist shard");
@@ -576,10 +578,11 @@ where
             .expect("could not open persist client");
 
         let mut write = persist_client
-            .open_writer::<SourceData, (), Timestamp, Diff, _>(
+            .open_writer::<SourceData, (), Timestamp, Diff>(
                 shard_id,
                 &format!("compute::persist_sink::write_batches {}", sink_id),
-                target_relation_desc,
+                Arc::new(target_relation_desc),
+                Arc::new(UnitSchema),
             )
             .await
             .expect("could not open persist shard");
@@ -911,10 +914,11 @@ where
             .expect("could not open persist client");
 
         let mut write = persist_client
-            .open_writer::<SourceData, (), Timestamp, Diff,_>(
+            .open_writer::<SourceData, (), Timestamp, Diff>(
                 shard_id,
                 &format!("persist_sink::append_batches {}", sink_id),
-                target_relation_desc,
+                Arc::new(target_relation_desc),
+                Arc::new(UnitSchema)
             )
             .await
             .expect("could not open persist shard");

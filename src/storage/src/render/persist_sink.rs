@@ -13,6 +13,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{Collection, Hashable};
+use mz_persist_types::codec_impls::UnitSchema;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::Scope;
 use timely::progress::frontier::Antichain;
@@ -110,10 +111,11 @@ where
             .open(metadata.persist_location)
             .await
             .expect("could not open persist client")
-            .open_writer::<SourceData, (), Timestamp, Diff, _>(
+            .open_writer::<SourceData, (), Timestamp, Diff>(
                 metadata.data_shard,
                 &format!("storage::persist_sink {}", src_id),
-                metadata.relation_desc.clone(),
+                Arc::new(metadata.relation_desc.clone()),
+                Arc::new(UnitSchema),
             )
             .await
             .expect("could not open persist shard");

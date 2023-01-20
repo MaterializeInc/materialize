@@ -612,6 +612,7 @@ mod tests {
 
     use futures::Stream;
     use itertools::Itertools;
+    use mz_persist_types::codec_impls::UnitSchema;
     use once_cell::sync::Lazy;
     use timely::progress::Timestamp as _;
     use tokio::sync::Mutex;
@@ -1347,10 +1348,11 @@ mod tests {
         drop(persist_clients);
 
         let read_handle = persist_client
-            .open_leased_reader::<SourceData, (), Timestamp, Diff, _>(
+            .open_leased_reader::<SourceData, (), Timestamp, Diff>(
                 binding_shard,
                 "test_since_hold",
-                mz_storage_client::types::sources::KAFKA_PROGRESS_DESC.clone(),
+                Arc::new(mz_storage_client::types::sources::KAFKA_PROGRESS_DESC.clone()),
+                Arc::new(UnitSchema),
             )
             .await
             .expect("error opening persist shard");

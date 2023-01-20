@@ -31,6 +31,7 @@ use bytes::BufMut;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
+use mz_persist_types::codec_impls::UnitSchema;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -940,7 +941,8 @@ where
                     .open_writer(
                         metadata.data_shard,
                         &purpose,
-                        metadata.relation_desc.clone(),
+                        Arc::new(metadata.relation_desc.clone()),
+                        Arc::new(UnitSchema),
                     )
                     .await
                     .expect("invalid persist usage");
@@ -1405,10 +1407,11 @@ where
         // heartbeat continously. The assumption is that calls to snapshot are rare and therefore
         // worth it to always create a new handle.
         let mut read_handle = persist_client
-            .open_leased_reader::<SourceData, (), _, _, _>(
+            .open_leased_reader::<SourceData, (), _, _>(
                 metadata.data_shard,
                 &format!("snapshot {}", id),
-                metadata.relation_desc.clone(),
+                Arc::new(metadata.relation_desc.clone()),
+                Arc::new(UnitSchema),
             )
             .await
             .expect("invalid persist usage");
@@ -1995,12 +1998,13 @@ where
 
         for (shard_id, shard_purpose) in shards {
             let (mut write, mut read) = persist_client
-                .open::<crate::types::sources::SourceData, (), T, Diff, _>(
+                .open::<crate::types::sources::SourceData, (), T, Diff>(
                     *shard_id,
                     shard_purpose.as_str(),
                     // We have to _read_ the shard to figure out if its been migrated or not, so we
                     // hedge on setting a `RelationDesc`.
-                    PersistClient::TO_REPLACE_SCHEMA,
+                    Arc::new(RelationDesc::empty()),
+                    Arc::new(UnitSchema),
                 )
                 .await
                 .expect("invalid persist usage");

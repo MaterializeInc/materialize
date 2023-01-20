@@ -169,6 +169,7 @@ mod tests {
     use std::time::Duration;
 
     use itertools::Itertools;
+    use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::Row;
     use timely::progress::Antichain;
 
@@ -472,7 +473,8 @@ mod tests {
             .open(
                 shard_id,
                 "tests::dump_storage_collection",
-                MZ_SINK_STATUS_HISTORY_DESC.clone(),
+                Arc::new(MZ_SINK_STATUS_HISTORY_DESC.clone()),
+                Arc::new(UnitSchema),
             )
             .await
             .unwrap();

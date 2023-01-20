@@ -75,6 +75,7 @@ use std::thread;
 
 use crossbeam_channel::TryRecvError;
 use differential_dataflow::lattice::Lattice;
+use mz_persist_types::codec_impls::UnitSchema;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -222,7 +223,8 @@ impl SinkHandle {
                 .open_leased_reader(
                     shard_id,
                     &format!("sink::since {}", sink_id),
-                    from_relation_desc,
+                    Arc::new(from_relation_desc),
+                    Arc::new(UnitSchema),
                 )
                 .await
                 .expect("opening reader for shard");

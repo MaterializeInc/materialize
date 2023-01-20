@@ -9,8 +9,11 @@
 
 //! Healthcheck common
 
+use std::sync::Arc;
+
 use differential_dataflow::lattice::Lattice;
 use mz_ore::now::NowFn;
+use mz_persist_types::codec_impls::UnitSchema;
 use timely::progress::Antichain;
 
 use mz_persist_client::{PersistClient, ShardId};
@@ -38,7 +41,8 @@ pub async fn write_to_persist(
         .open_writer(
             status_shard,
             &format!("healthcheck::write_to_persist {}", collection_id),
-            relation_desc.clone(),
+            Arc::new(relation_desc.clone()),
+            Arc::new(UnitSchema),
         )
         .await
         .expect(
