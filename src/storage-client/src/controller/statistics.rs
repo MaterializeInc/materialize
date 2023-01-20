@@ -11,6 +11,7 @@
 
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -22,12 +23,37 @@ use tokio::sync::oneshot;
 use crate::client::PackableStats;
 use crate::controller::collection_mgmt::CollectionManager;
 
+/// An enum that tracks the lifecycle of statistics objects
+/// in the controller.
+///
+/// When sources/sinks are dropped, some state (including statistics) are
+/// cleaned up later, as part of processing the storage controller. This
+/// means that a new statistics update could happen between `DROP SOURCE`
+/// and cleanup, which is we need to distinguished `Uninitialized` from
+/// "explicitly removed" so that we no longer consolidate stats for an
+/// item into the `shared_stats` shared map.
+#[derive(Debug)]
+pub(super) struct StatsInitState<T>(pub BTreeMap<usize, T>);
+
+impl<T> StatsInitState<T> {
+    /// Set the value for the given id, overriding it if it already exists,
+    /// and doing nothing if its been removed.
+    pub(super) fn set_if_not_removed(this: Option<&mut Self>, worker_id: usize, val: T) {
+        match this {
+            Some(StatsInitState(map)) => {
+                map.insert(worker_id, val);
+            }
+            None => {}
+        }
+    }
+}
+
 /// Spawns a task that continually (at an interval) writes statistics from storaged's
 /// that are consolidated in shared memory in the controller.
-pub(super) fn spawn_statistics_scraper<Stats: PackableStats + Send + 'static>(
+pub(super) fn spawn_statistics_scraper<Stats: PackableStats + Debug + Send + 'static>(
     statistics_collection_id: GlobalId,
     collection_mgmt: CollectionManager,
-    shared_stats: Arc<Mutex<BTreeMap<GlobalId, BTreeMap<usize, Stats>>>>,
+    shared_stats: Arc<Mutex<BTreeMap<GlobalId, StatsInitState<Stats>>>>,
 ) -> Box<dyn Any + Send + Sync> {
     // TODO(guswynn): Should this be configurable? Maybe via LaunchDarkly?
     const STATISTICS_INTERVAL: Duration = Duration::from_secs(30);
@@ -62,14 +88,11 @@ pub(super) fn spawn_statistics_scraper<Stats: PackableStats + Send + 'static>(
                     // Ideally we move quickly when holding the lock here, as it can hold
                     // up the coordinator. Because we are just moving some data around, we should
                     // be fine!
-                    //
-                    // TODO: consider using a RwLock instead of a mutex.
                     {
                         let shared_stats = shared_stats.lock().expect("poisoned");
-
-                        for (_, items) in shared_stats.iter() {
-                            for (_, stats) in items.iter() {
-                                stats.pack(row_buf.packer());
+                        for (_, stats) in shared_stats.iter() {
+                            for stat in stats.0.values() {
+                                stat.pack(row_buf.packer());
                                 correction.push((row_buf.clone(), 1));
                             }
                         }
