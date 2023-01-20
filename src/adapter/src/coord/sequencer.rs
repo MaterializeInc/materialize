@@ -587,6 +587,8 @@ impl Coordinator {
                         }
                     };
 
+                    self.maybe_create_linked_cluster(source_id).await;
+
                     self.controller
                         .storage
                         .create_collections(vec![(
@@ -1304,6 +1306,8 @@ impl Coordinator {
                 return;
             }
         }
+
+        self.maybe_create_linked_cluster(id).await;
 
         let create_export_token = return_if_err!(
             self.controller
@@ -3511,6 +3515,8 @@ impl Coordinator {
             ops.extend(self.alter_linked_cluster_ops(id, &cluster_config)?);
             self.catalog_transact(Some(session), ops).await?;
 
+            self.maybe_alter_linked_cluster(id).await;
+
             let cluster_config = self
                 .catalog
                 .get_storage_cluster_config(id)
@@ -3549,6 +3555,8 @@ impl Coordinator {
             }];
             ops.extend(self.alter_linked_cluster_ops(id, &cluster_config)?);
             self.catalog_transact(Some(session), ops).await?;
+
+            self.maybe_alter_linked_cluster(id).await;
 
             if let Some(cluster_config) = self.catalog.get_storage_cluster_config(id) {
                 self.controller
@@ -3977,6 +3985,33 @@ impl Coordinator {
             ops.extend(self.create_linked_cluster_replica_op(cluster_name, config)?)
         }
         Ok(ops)
+    }
+
+    /// Creates the cluster linked to the specified object after a create
+    /// operation, if such a linked cluster exists.
+    pub(crate) async fn maybe_create_linked_cluster(&mut self, linked_object_id: GlobalId) {
+        if let Some(cluster) = self.catalog.get_linked_cluster(linked_object_id) {
+            let name = cluster.name().to_string();
+            self.create_compute_instance(&name).await;
+        }
+    }
+
+    /// Updates the replicas of the cluster linked to the specified object after
+    /// an alter operation, if such a linked cluster exists.
+    pub(crate) async fn maybe_alter_linked_cluster(&mut self, linked_object_id: GlobalId) {
+        if let Some(cluster) = self.catalog.get_linked_cluster(linked_object_id) {
+            // A linked cluster always has exactly one replica named "linked".
+            // The old replica will have been dropped by `catalog_transact`,
+            // both from the catalog state and from the controller. The new
+            // replica will be in the catalog state, and needs to be recreated
+            // in the controller.
+            let cluster_name = cluster.name().to_string();
+            // Sanity check that the linked cluster doesn't have unexpected
+            // replicas.
+            assert_eq!(cluster.replica_id_by_name.len(), 1);
+            self.create_compute_replica(&cluster_name, LINKED_CLUSTER_REPLICA_NAME)
+                .await;
+        }
     }
 }
 
