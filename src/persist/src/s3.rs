@@ -25,14 +25,13 @@ use aws_sdk_s3::model::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::types::{ByteStream, SdkError};
 use aws_sdk_s3::Client as S3Client;
 use aws_smithy_http::endpoint::Endpoint;
-use aws_smithy_types::error::display::DisplayErrorContext;
 use aws_types::credentials::SharedCredentialsProvider;
 use aws_types::region::Region;
 use aws_types::Credentials;
 use bytes::{Buf, Bytes};
 use futures_util::FutureExt;
 use tokio::runtime::Handle as AsyncHandle;
-use tracing::{debug, debug_span, info, trace, trace_span, Instrument};
+use tracing::{debug, debug_span, trace, trace_span, Instrument};
 use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;

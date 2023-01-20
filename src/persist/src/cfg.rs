@@ -38,13 +38,13 @@ pub enum BlobConfig {
 
 /// Configuration knobs for [Blob].
 pub trait BlobKnobs: std::fmt::Debug + Send + Sync {
-    /// maximum time allowed for a network call, including retry attempts
+    /// Maximum time allowed for a network call, including retry attempts.
     fn operation_timeout(&self) -> Duration;
-    /// maximum time allowed for a single network call
+    /// Maximum time allowed for a single network call.
     fn operation_attempt_timeout(&self) -> Duration;
-    /// maximum time to wait for a socket connection to be made
+    /// Maximum time to wait for a socket connection to be made.
     fn connect_timeout(&self) -> Duration;
-    /// maximum time to wait to read the first byte of a response, including connection time
+    /// Maximum time to wait to read the first byte of a response, including connection time.
     fn read_timeout(&self) -> Duration;
 }
 
