@@ -815,12 +815,13 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
 
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
-    source_statistics:
-        Arc<std::sync::Mutex<BTreeMap<GlobalId, BTreeMap<usize, SourceStatisticsUpdate>>>>,
+    source_statistics: Arc<
+        std::sync::Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SourceStatisticsUpdate>>>,
+    >,
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
     sink_statistics:
-        Arc<std::sync::Mutex<BTreeMap<GlobalId, BTreeMap<usize, SinkStatisticsUpdate>>>>,
+        Arc<std::sync::Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SinkStatisticsUpdate>>>>,
 
     /// Clients for all known storage instances.
     clients: BTreeMap<StorageInstanceId, RehydratingStorageClient<T>>,
@@ -1361,23 +1362,36 @@ where
         let mut to_create = Vec::with_capacity(to_register.len());
         // This work mutates the controller state, so must be done serially. Because there
         // is no io-bound work, its very fast.
-        for (id, description, write, since_handle, metadata) in to_register {
-            let data_shard_since = since_handle.since().clone();
+        {
+            // We hold this lock for a very short amount of time, just doing some hashmap inserts
+            // and unbounded channel sends.
+            let mut source_statistics = self.state.source_statistics.lock().expect("poisoned");
+            for (id, description, write, since_handle, metadata) in to_register {
+                let data_shard_since = since_handle.since().clone();
 
-            let collection_state = CollectionState::new(
-                description.clone(),
-                data_shard_since,
-                write.upper().clone(),
-                vec![],
-                metadata.clone(),
-            );
+                let collection_state = CollectionState::new(
+                    description.clone(),
+                    data_shard_since,
+                    write.upper().clone(),
+                    vec![],
+                    metadata.clone(),
+                );
 
-            self.state.persist_write_handles.register(id, write);
-            self.state.persist_read_handles.register(id, since_handle);
+                self.state.persist_write_handles.register(id, write);
+                self.state.persist_read_handles.register(id, since_handle);
 
-            self.state.collections.insert(id, collection_state);
+                self.state.collections.insert(id, collection_state);
 
-            to_create.push((id, description));
+                if let DataSource::Ingestion(i) = &description.data_source {
+                    source_statistics.insert(id, statistics::StatsInitState(BTreeMap::new()));
+                    // Note that `source_exports` contains the subsources as well.
+                    for (id, _) in i.source_exports.iter() {
+                        source_statistics.insert(*id, statistics::StatsInitState(BTreeMap::new()));
+                    }
+                }
+
+                to_create.push((id, description));
+            }
         }
 
         // Patch up the since of all subsources (which includes the "main"
@@ -1829,6 +1843,12 @@ where
                     export_id: id,
                 })?;
 
+            self.state
+                .sink_statistics
+                .lock()
+                .expect("poisoned")
+                .insert(id, statistics::StatsInitState(BTreeMap::new()));
+
             client.send(StorageCommand::CreateSinks(vec![cmd]));
         }
         Ok(())
@@ -2218,21 +2238,32 @@ where
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
-
-                let mut shared_stats = self.state.source_statistics.lock().expect("poisoned");
-                for stat in source_stats {
-                    let shared_stats = shared_stats.entry(stat.id).or_default();
-                    // We just write the whole object, as the update from storage represents the
-                    // current values.
-                    shared_stats.insert(stat.worker_id, stat);
+                //
+                // We just write the whole object, as the update from storage represents the
+                // current values.
+                //
+                // We don't overwrite removed objects, as we may have received a late
+                // `StatisticsUpdates` while we were shutting down the storage object.
+                {
+                    let mut shared_stats = self.state.source_statistics.lock().expect("poisoned");
+                    for stat in source_stats {
+                        statistics::StatsInitState::set_if_not_removed(
+                            shared_stats.get_mut(&stat.id),
+                            stat.worker_id,
+                            stat,
+                        )
+                    }
                 }
 
-                let mut shared_stats = self.state.sink_statistics.lock().expect("poisoned");
-                for stat in sink_stats {
-                    let shared_stats = shared_stats.entry(stat.id).or_default();
-                    // We just write the whole object, as the update from storage represents the
-                    // current values.
-                    shared_stats.insert(stat.worker_id, stat);
+                {
+                    let mut shared_stats = self.state.sink_statistics.lock().expect("poisoned");
+                    for stat in sink_stats {
+                        statistics::StatsInitState::set_if_not_removed(
+                            shared_stats.get_mut(&stat.id),
+                            stat.worker_id,
+                            stat,
+                        )
+                    }
                 }
             }
         }
@@ -2240,8 +2271,12 @@ where
         // IDs of sources that were dropped whose statuses should be updated.
         let mut pending_source_drops = vec![];
 
-        // IDs of sinks that were dropped whose statuses should be updated.
+        // IDs of sinks that were dropped whose statuses should be updated (and statistics
+        // cleared).
         let mut pending_sink_drops = vec![];
+
+        // IDs of sources (and subsources) whose statistics should be cleared.
+        let mut source_statistics_to_drop = vec![];
 
         // TODO(aljoscha): We could consolidate these before sending to
         // instances, but this seems fine for now.
@@ -2262,6 +2297,16 @@ where
                 }
             }
 
+            // Sources can have subsources, which don't have associated clusters, which
+            // is why this operates differently than sinks.
+            if frontier.is_empty() {
+                if self.state.collections.get(&id).is_some() {
+                    source_statistics_to_drop.push(id);
+                }
+            }
+
+            // Note that while collections are dropped, the `client` may already
+            // be cleared out, before we do this post-processing!
             if let Some(client) = client {
                 client.send(StorageCommand::AllowCompaction(vec![(
                     id,
@@ -2275,6 +2320,11 @@ where
             .await;
 
         // Record the drop status for all pending source and sink drops.
+        //
+        // We also delete the items' statistics objects.
+        //
+        // The locks are held for a short time, only while we do some hash map removals.
+
         let source_status_history_id =
             self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
         let mut updates = vec![];
@@ -2287,14 +2337,26 @@ where
         self.append_to_managed_collection(source_status_history_id, updates)
             .await;
 
+        {
+            let mut source_statistics = self.state.source_statistics.lock().expect("poisoned");
+            for id in source_statistics_to_drop {
+                source_statistics.remove(&id);
+            }
+        }
+
         // Record the drop status for all pending sink drops.
         let sink_status_history_id =
             self.state.introspection_ids[&IntrospectionType::SinkStatusHistory];
         let mut updates = vec![];
-        for id in pending_sink_drops.drain(..) {
-            let status_row =
-                healthcheck::pack_status_row(id, "dropped", None, (self.state.now)(), None);
-            updates.push((status_row, 1));
+        {
+            let mut sink_statistics = self.state.sink_statistics.lock().expect("poisoned");
+            for id in pending_sink_drops.drain(..) {
+                let status_row =
+                    healthcheck::pack_status_row(id, "dropped", None, (self.state.now)(), None);
+                updates.push((status_row, 1));
+
+                sink_statistics.remove(&id);
+            }
         }
         self.append_to_managed_collection(sink_status_history_id, updates)
             .await;

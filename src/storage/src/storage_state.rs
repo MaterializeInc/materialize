@@ -836,6 +836,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.storage_state.sink_tokens.remove(id);
                 }
 
+                // The actual prometheus metrics and other state will be dropped
+                // when the dataflow shuts down and drop's its `Rc`'s to the stats
+                // objects. Also, these are always cloned during rendering,
+                // but not inside dataflows, so we don't have TOCTOU issue here!
+                self.storage_state.source_statistics.remove(&id);
+                self.storage_state.sink_statistics.remove(&id);
+
                 // Report the dataflow as dropped once we went through the whole
                 // control flow from external command to this internal command.
                 self.storage_state.dropped_ids.extend(ids);
