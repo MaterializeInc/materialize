@@ -608,12 +608,19 @@ impl Service for TransactorService {
         // should_timeout to for blobs, so use the same handle for both.
         let unreliable = UnreliableHandle::new(seed, should_happen, should_timeout);
 
+        let mut config = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+        let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
+
         // Construct requested Blob.
         let blob = match &args.blob_uri {
             Some(blob_uri) => {
-                let cfg = BlobConfig::try_from(blob_uri)
-                    .await
-                    .expect("blob_uri should be valid");
+                let cfg = BlobConfig::try_from(
+                    blob_uri,
+                    Box::new(config.clone()),
+                    metrics.s3_blob.clone(),
+                )
+                .await
+                .expect("blob_uri should be valid");
                 loop {
                     match cfg.clone().open().await {
                         Ok(x) => break x,
@@ -635,15 +642,11 @@ impl Service for TransactorService {
         // unreliable would cause more retries than are interesting, and the
         // Lamport diagrams that Maelstrom generates would be noisy.
         let blob = CachingBlob::new(blob);
-
-        // Construct requested Consensus.
-        let mut config = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
         // to simplify some downstream logic (+ a bit more stress testing),
         // always downgrade the since of critical handles when asked
         config.critical_downgrade_interval = Duration::from_secs(0);
         // set a live diff scan limit such that we'll explore both the fast and slow paths
         config.state_versions_recent_live_diffs_limit = 5;
-        let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
         let consensus = match &args.consensus_uri {
             Some(consensus_uri) => {
                 let cfg = ConsensusConfig::try_from(

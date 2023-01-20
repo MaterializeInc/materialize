@@ -132,7 +132,12 @@ impl PersistClientCache {
             Entry::Vacant(x) => {
                 // Intentionally hold the lock, so we don't double connect under
                 // concurrency.
-                let blob = BlobConfig::try_from(x.key()).await?;
+                let blob = BlobConfig::try_from(
+                    x.key(),
+                    Box::new(self.cfg.clone()),
+                    self.metrics.s3_blob.clone(),
+                )
+                .await?;
                 let blob = retry_external(&self.metrics.retries.external.blob_open, || {
                     blob.clone().open()
                 })

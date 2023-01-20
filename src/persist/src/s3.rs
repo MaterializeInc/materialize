@@ -10,6 +10,7 @@
 //! An S3 implementation of [Blob] storage.
 
 use std::cmp;
+use std::fmt::{Debug, Formatter};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -19,24 +20,29 @@ use aws_config::default_provider::{credentials, region};
 use aws_config::meta::region::ProvideRegion;
 use aws_config::sts::AssumeRoleProvider;
 use aws_config::timeout::TimeoutConfig;
+use aws_sdk_s3::config::{AsyncSleep, Sleep};
 use aws_sdk_s3::model::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::types::{ByteStream, SdkError};
 use aws_sdk_s3::Client as S3Client;
 use aws_smithy_http::endpoint::Endpoint;
+use aws_smithy_types::error::display::DisplayErrorContext;
 use aws_types::credentials::SharedCredentialsProvider;
 use aws_types::region::Region;
 use aws_types::Credentials;
 use bytes::{Buf, Bytes};
 use futures_util::FutureExt;
-use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
-use tracing::{debug, debug_span, trace, trace_span, Instrument};
+use tracing::{debug, debug_span, info, trace, trace_span, Instrument};
 use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::task::RuntimeExt;
 
+use crate::cfg::BlobKnobs;
 use crate::error::Error;
 use crate::location::{Atomicity, Blob, BlobMetadata, ExternalError};
+use crate::metrics::S3BlobMetrics;
 
 /// Configuration for opening an [S3Blob].
 #[derive(Clone, Debug)]
@@ -44,6 +50,56 @@ pub struct S3BlobConfig {
     client: S3Client,
     bucket: String,
     prefix: String,
+}
+
+// There is no simple way to hook into the S3 client to capture when its various timeouts
+// are hit. Instead, we pass along marker values that inform our [MetricsSleep] impl which
+// type of timeout was requested so it can substitute in a dynamic value set by config
+// from the caller.
+const OPERATION_TIMEOUT_MARKER: Duration = Duration::new(111, 1111);
+const OPERATION_ATTEMPT_TIMEOUT_MARKER: Duration = Duration::new(222, 2222);
+const CONNECT_TIMEOUT_MARKER: Duration = Duration::new(333, 3333);
+const READ_TIMEOUT_MARKER: Duration = Duration::new(444, 4444);
+
+#[derive(Debug)]
+struct MetricsSleep {
+    knobs: Box<dyn BlobKnobs>,
+    metrics: S3BlobMetrics,
+}
+
+impl AsyncSleep for MetricsSleep {
+    fn sleep(&self, duration: Duration) -> Sleep {
+        let (duration, metric) = match duration {
+            OPERATION_TIMEOUT_MARKER => (
+                self.knobs.operation_timeout(),
+                Some(self.metrics.operation_timeouts.clone()),
+            ),
+            OPERATION_ATTEMPT_TIMEOUT_MARKER => (
+                self.knobs.operation_attempt_timeout(),
+                Some(self.metrics.operation_attempt_timeouts.clone()),
+            ),
+            CONNECT_TIMEOUT_MARKER => (
+                self.knobs.connect_timeout(),
+                Some(self.metrics.connect_timeouts.clone()),
+            ),
+            READ_TIMEOUT_MARKER => (
+                self.knobs.read_timeout(),
+                Some(self.metrics.read_timeouts.clone()),
+            ),
+            duration => (duration, None),
+        };
+
+        // the sleep future we return here will only be polled to
+        // completion if its corresponding http request to S3 times
+        // out, meaning we can chain incrementing the appropriate
+        // timeout counter to when it finishes
+        Sleep::new(tokio::time::sleep(duration).map(|x| {
+            if let Some(counter) = metric {
+                counter.inc();
+            }
+            x
+        }))
+    }
 }
 
 impl S3BlobConfig {
@@ -61,6 +117,8 @@ impl S3BlobConfig {
         endpoint: Option<String>,
         region: Option<String>,
         credentials: Option<(String, String)>,
+        knobs: Box<dyn BlobKnobs>,
+        metrics: S3BlobMetrics,
     ) -> Result<Self, Error> {
         let region = match region {
             Some(region_name) => Some(Region::new(region_name)),
@@ -93,16 +151,18 @@ impl S3BlobConfig {
             loader = loader.endpoint_resolver(endpoint)
         }
 
+        // NB: we must always use the custom sleep impl if we use the timeout marker values
+        loader = loader.sleep_impl(MetricsSleep { knobs, metrics });
         loader = loader.timeout_config(
             TimeoutConfig::builder()
                 // maximum time allowed for a top-level S3 API call (including internal retries)
-                .operation_timeout(Duration::from_secs(180))
+                .operation_timeout(OPERATION_TIMEOUT_MARKER)
                 // maximum time allowed for a single network call
-                .operation_attempt_timeout(Duration::from_secs(90))
+                .operation_attempt_timeout(OPERATION_ATTEMPT_TIMEOUT_MARKER)
                 // maximum time until a connection succeeds
-                .connect_timeout(Duration::from_secs(30))
+                .connect_timeout(CONNECT_TIMEOUT_MARKER)
                 // maximum time to read the first byte of a response
-                .read_timeout(Duration::from_secs(60))
+                .read_timeout(READ_TIMEOUT_MARKER)
                 .build(),
         );
 
@@ -161,12 +221,47 @@ impl S3BlobConfig {
             }
         };
 
+        struct TestBlobKnobs;
+        impl std::fmt::Debug for TestBlobKnobs {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("TestBlobKnobs").finish_non_exhaustive()
+            }
+        }
+        impl BlobKnobs for TestBlobKnobs {
+            fn operation_timeout(&self) -> Duration {
+                OPERATION_TIMEOUT_MARKER
+            }
+
+            fn operation_attempt_timeout(&self) -> Duration {
+                OPERATION_ATTEMPT_TIMEOUT_MARKER
+            }
+
+            fn connect_timeout(&self) -> Duration {
+                CONNECT_TIMEOUT_MARKER
+            }
+
+            fn read_timeout(&self) -> Duration {
+                READ_TIMEOUT_MARKER
+            }
+        }
+
         // Give each test a unique prefix so they don't conflict. We don't have
         // to worry about deleting any data that we create because the bucket is
         // set to auto-delete after 1 day.
         let prefix = Uuid::new_v4().to_string();
         let role_arn = None;
-        let config = S3BlobConfig::new(bucket, prefix, role_arn, None, None, None).await?;
+        let metrics = S3BlobMetrics::new(&MetricsRegistry::new());
+        let config = S3BlobConfig::new(
+            bucket,
+            prefix,
+            role_arn,
+            None,
+            None,
+            None,
+            Box::new(TestBlobKnobs),
+            metrics,
+        )
+        .await?;
         Ok(Some(config))
     }
 

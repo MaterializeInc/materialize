@@ -204,9 +204,24 @@ pub struct StateArgs {
 }
 
 /// Fetches the current state of a given shard
-pub async fn fetch_latest_state(args: &StateArgs) -> Result<impl serde::Serialize, anyhow::Error> {
-    let shard_id = args.shard_id();
-    let state_versions = args.open().await?;
+pub async fn fetch_latest_state(
+    shard_id: ShardId,
+    consensus_uri: &str,
+    blob_uri: &str,
+) -> Result<impl serde::Serialize, anyhow::Error> {
+    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+    let consensus = ConsensusConfig::try_from(
+        consensus_uri,
+        Box::new(cfg.clone()),
+        metrics.postgres_consensus.clone(),
+    )?;
+    let consensus = consensus.clone().open().await?;
+    let blob =
+        BlobConfig::try_from(blob_uri, Box::new(cfg.clone()), metrics.s3_blob.clone()).await?;
+    let blob = blob.clone().open().await?;
+
+    let state_versions = StateVersions::new(cfg, consensus, blob, Arc::clone(&metrics));
     let versions = state_versions
         .fetch_recent_live_diffs::<u64>(&shard_id)
         .await;
@@ -450,8 +465,9 @@ struct BlobCounts {
 /// Fetches the blob count for given path
 pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow::Error> {
     let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
-    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let blob = make_blob(blob_uri, NO_COMMIT, metrics).await?;
+    let metrics = Metrics::new(&cfg, &MetricsRegistry::new());
+    let blob = BlobConfig::try_from(blob_uri, Box::new(cfg), metrics.s3_blob).await?;
+    let blob = blob.clone().open().await?;
 
     let mut blob_counts = BTreeMap::new();
     let () = blob

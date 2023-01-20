@@ -205,7 +205,14 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
 async fn persist_client(args: Args) -> Result<PersistClient, ExternalError> {
     let config = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
-    let blob = BlobConfig::try_from(&args.blob_uri).await?.open().await?;
+    let blob = BlobConfig::try_from(
+        &args.blob_uri,
+        Box::new(config.clone()),
+        metrics.s3_blob.clone(),
+    )
+    .await?
+    .open()
+    .await?;
     let consensus = ConsensusConfig::try_from(
         &args.consensus_uri,
         Box::new(config.clone()),

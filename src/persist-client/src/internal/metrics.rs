@@ -24,7 +24,7 @@ use mz_ore::metrics::{
 use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
 };
-use mz_persist::metrics::PostgresConsensusMetrics;
+use mz_persist::metrics::{PostgresConsensusMetrics, S3BlobMetrics};
 use mz_persist::retry::RetryStream;
 use mz_persist_types::Codec64;
 use prometheus::core::{AtomicI64, AtomicU64};
@@ -70,6 +70,8 @@ pub struct Metrics {
     /// Metrics for auditing persist usage
     pub audit: UsageAuditMetrics,
 
+    /// Metrics for S3-backed blob implementation
+    pub s3_blob: S3BlobMetrics,
     /// Metrics for Postgres-backed consensus implementation
     pub postgres_consensus: PostgresConsensusMetrics,
 }
@@ -104,6 +106,7 @@ impl Metrics {
             state: StateMetrics::new(registry),
             shards: ShardsMetrics::new(registry),
             audit: UsageAuditMetrics::new(registry),
+            s3_blob: S3BlobMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
             _vecs: vecs,
             _uptime: uptime,
