@@ -35,7 +35,7 @@ use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::GlobalId;
 use mz_service::client::GenericClient;
 
 use crate::client::{
@@ -211,7 +211,7 @@ where
                 .await
                 .expect("error creating persist client");
             let from_read_handle = persist_client
-                .open_leased_reader::<SourceData, (), T, Diff, _>(
+                .open_leased_reader::<SourceData, (), T, _>(
                     export.description.from_storage_metadata.data_shard,
                     "rehydration since",
                     // This is also `from_desc`, but this would be the _only_ usage

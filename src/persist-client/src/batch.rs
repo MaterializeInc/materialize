@@ -742,7 +742,7 @@ mod tests {
             .await
             .expect("client construction failed");
         let (mut write, mut read) = client
-            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .expect_open::<String, String, u64>(ShardId::new())
             .await;
 
         // A new builder has no writing or finished parts.
@@ -751,7 +751,7 @@ mod tests {
         assert_eq!(builder.parts.finished_parts.len(), 0);
 
         // We set blob_target_size to 0, so the first update gets forced out
-        // into a batch.
+        // into a batch.m
         builder
             .add(&data[0].0 .0, &data[0].0 .1, &data[0].1, &data[0].2)
             .await
@@ -807,9 +807,7 @@ mod tests {
             .await
             .expect("client construction failed");
         let shard_id = ShardId::new();
-        let (mut write, _) = client
-            .expect_open::<String, String, u64, i64>(shard_id)
-            .await;
+        let (mut write, _) = client.expect_open::<String, String, u64>(shard_id).await;
 
         let batch = write
             .expect_batch(

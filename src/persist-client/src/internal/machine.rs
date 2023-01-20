@@ -1608,7 +1608,7 @@ pub mod datadriven {
         let as_of = args.expect_antichain("as_of");
         let read = datadriven
             .client
-            .open_leased_reader::<String, (), u64, i64, _>(
+            .open_leased_reader::<String, (), u64, _>(
                 datadriven.shard_id,
                 "",
                 PersistClient::TEST_SCHEMA,
@@ -1849,7 +1849,7 @@ pub mod tests {
 
         let (mut write, _) = new_test_client()
             .await
-            .expect_open::<String, (), u64, i64>(ShardId::new())
+            .expect_open::<String, (), u64>(ShardId::new())
             .await;
 
         // Write a bunch of batches. This should result in a bounded number of
@@ -1904,7 +1904,7 @@ pub mod tests {
             intercept.clone(),
         ));
         let (_, mut read) = client
-            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .expect_open::<String, String, u64>(ShardId::new())
             .await;
 
         // Create a new SeqNo

@@ -772,7 +772,7 @@ mod tests {
 
         let (mut write, _) = new_test_client()
             .await
-            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .expect_open::<String, String, u64>(ShardId::new())
             .await;
         let blob = Arc::clone(&write.blob);
 
@@ -818,7 +818,7 @@ mod tests {
 
         let (mut write, mut read) = new_test_client()
             .await
-            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .expect_open::<String, String, u64>(ShardId::new())
             .await;
 
         let mut batch0 = write.expect_batch(&data0, 0, 5).await;
@@ -882,7 +882,7 @@ mod tests {
 
         let (mut write, mut read) = new_test_client()
             .await
-            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .expect_open::<String, String, u64>(ShardId::new())
             .await;
 
         // This test is a bit more complex than it should be. It would be easier

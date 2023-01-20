@@ -162,20 +162,20 @@ mod tests {
 
         // write one row into shard 1
         let (mut write, _) = client
-            .expect_open::<String, String, u64, i64>(shard_id_one)
+            .expect_open::<String, String, u64>(shard_id_one)
             .await;
         write.expect_append(&data[..1], vec![0], vec![2]).await;
 
         // write two rows into shard 2 from writer 1
         let (mut write, _) = client
-            .expect_open::<String, String, u64, i64>(shard_id_two)
+            .expect_open::<String, String, u64>(shard_id_two)
             .await;
         write.expect_append(&data[1..3], vec![0], vec![4]).await;
         let writer_one = write.writer_id.clone();
 
         // write one row into shard 2 from writer 2
         let (mut write, _) = client
-            .expect_open::<String, String, u64, i64>(shard_id_two)
+            .expect_open::<String, String, u64>(shard_id_two)
             .await;
         write.expect_append(&data[4..], vec![0], vec![5]).await;
         let writer_two = write.writer_id.clone();

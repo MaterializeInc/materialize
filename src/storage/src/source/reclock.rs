@@ -1347,7 +1347,7 @@ mod tests {
         drop(persist_clients);
 
         let read_handle = persist_client
-            .open_leased_reader::<SourceData, (), Timestamp, Diff, _>(
+            .open_leased_reader::<SourceData, (), Timestamp, _>(
                 binding_shard,
                 "test_since_hold",
                 mz_storage_client::types::sources::KAFKA_PROGRESS_DESC.clone(),

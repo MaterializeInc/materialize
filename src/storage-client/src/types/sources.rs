@@ -109,7 +109,7 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
                 .open(persist_location.clone())
                 .await
                 .expect("error creating persist client")
-                .open_writer::<SourceData, (), T, Diff, _>(
+                .open_writer::<SourceData, (), T, _>(
                     *data_shard,
                     &format!("resumption data {}", id),
                     relation_desc.clone(),
@@ -141,7 +141,7 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
             .await
             .expect("error creating persist client")
             // TODO: Any way to plumb the GlobalId to this?
-            .open_writer::<SourceData, (), T, Diff, _>(
+            .open_writer::<SourceData, (), T, _>(
                 *remap_shard,
                 "resumption remap",
                 remap_relation_desc,

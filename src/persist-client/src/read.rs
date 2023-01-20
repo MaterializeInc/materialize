@@ -973,7 +973,7 @@ mod tests {
 
         let (mut write, read) = new_test_client()
             .await
-            .expect_open::<String, String, u64, i64>(crate::ShardId::new())
+            .expect_open::<String, String, u64>(crate::ShardId::new())
             .await;
 
         write.expect_compare_and_append(&data[0..1], 0, 1).await;
@@ -1002,7 +1002,7 @@ mod tests {
 
         let (mut write, read) = new_test_client()
             .await
-            .expect_open::<String, String, u64, i64>(crate::ShardId::new())
+            .expect_open::<String, String, u64>(crate::ShardId::new())
             .await;
 
         // Seed with some values
@@ -1206,7 +1206,7 @@ mod tests {
             Arc::new(CpuHeavyRuntime::new()),
         )
         .expect("client construction failed")
-        .expect_open::<String, String, u64, i64>(ShardId::new())
+        .expect_open::<String, String, u64>(ShardId::new())
         .await;
 
         write.expect_compare_and_append(&data[0..1], 0, 1).await;

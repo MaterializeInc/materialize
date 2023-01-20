@@ -306,7 +306,7 @@ where
                 (&tokio_runtime).spawn_named(|| "check_loop".to_string(), async move {
                     loop {
                         let (mut data_write_handle, data_read_handle) = persist_client
-                            .open::<SourceData, (), Timestamp, Diff, _>(
+                            .open::<SourceData, (), Timestamp, _>(
                                 data_shard.clone(),
                                 "tests::check_loop",
                                 // TODO(guswynn|danhhz): replace this with a real desc when persist requires a

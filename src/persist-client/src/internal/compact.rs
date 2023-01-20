@@ -941,7 +941,7 @@ mod tests {
             })
             .await
             .expect("client construction failed")
-            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .expect_open::<String, String, u64>(ShardId::new())
             .await;
         let b0 = write
             .expect_batch(&data[..1], 0, 1)

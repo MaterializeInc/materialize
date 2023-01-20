@@ -110,7 +110,7 @@ where
             .open(metadata.persist_location)
             .await
             .expect("could not open persist client")
-            .open_writer::<SourceData, (), Timestamp, Diff, _>(
+            .open_writer::<SourceData, (), Timestamp, _>(
                 metadata.data_shard,
                 &format!("storage::persist_sink {}", src_id),
                 metadata.relation_desc.clone(),

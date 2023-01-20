@@ -84,7 +84,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cast::CastFrom;
@@ -154,6 +153,7 @@ mod internal {
     pub mod datadriven;
 }
 
+/// A canonical diff type for Persist, in the timely dataflow sense.
 pub type Diff = i64;
 
 const BUILD_INFO: BuildInfo = build_info!();
@@ -444,7 +444,7 @@ impl ConsensusKnobs for PersistConfig {
 /// # let timeout: std::time::Duration = unimplemented!();
 /// # let id = mz_persist_client::ShardId::new();
 /// # async {
-/// tokio::time::timeout(timeout, client.open::<String, String, u64, i64, _>(id, "desc",
+/// tokio::time::timeout(timeout, client.open::<String, String, u64, _>(id, "desc",
 ///     mz_persist_client::PersistClient::TEST_SCHEMA)).await
 /// # };
 /// ```
@@ -505,17 +505,16 @@ impl PersistClient {
     /// that represents the schema of the data in the shard. This will be required
     /// in the future.
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
-    pub async fn open<K, V, T, D, S>(
+    pub async fn open<K, V, T, S>(
         &self,
         shard_id: ShardId,
         purpose: &str,
         schema: S,
-    ) -> Result<(WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>), InvalidUsage<T>>
+    ) -> Result<(WriteHandle<K, V, T, Diff>, ReadHandle<K, V, T, Diff>), InvalidUsage<T>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64 + Send + Sync,
         S: Clone,
     {
         Ok((
@@ -533,17 +532,16 @@ impl PersistClient {
     /// that represents the schema of the data in the shard. This will be required
     /// in the future.
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
-    pub async fn open_leased_reader<K, V, T, D, S>(
+    pub async fn open_leased_reader<K, V, T, S>(
         &self,
         shard_id: ShardId,
         purpose: &str,
         _schema: S,
-    ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
+    ) -> Result<ReadHandle<K, V, T, Diff>, InvalidUsage<T>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64 + Send + Sync,
     {
         let state_versions = StateVersions::new(
             self.cfg.clone(),
@@ -591,16 +589,15 @@ impl PersistClient {
     /// that represents the schema of the data in the shard. This will be required
     /// in the future.
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
-    pub async fn create_batch_fetcher<K, V, T, D, S>(
+    pub async fn create_batch_fetcher<K, V, T, S>(
         &self,
         shard_id: ShardId,
         _schema: S,
-    ) -> BatchFetcher<K, V, T, D>
+    ) -> BatchFetcher<K, V, T, Diff>
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64 + Send + Sync,
     {
         let state_versions = StateVersions::new(
             self.cfg.clone(),
@@ -616,7 +613,7 @@ impl PersistClient {
         // the `BatchFetcher` but acts as a safety net against accidental
         // mis-use.
         let _ = state_versions
-            .maybe_init_shard::<K, V, T, D>(&shard_metrics)
+            .maybe_init_shard::<K, V, T, Diff>(&shard_metrics)
             .await;
 
         let fetcher = BatchFetcher {
@@ -673,17 +670,16 @@ impl PersistClient {
     /// return a handle with its `since` frontier set to the initial value of
     /// `Antichain::from_elem(T::minimum())`.
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
-    pub async fn open_critical_since<K, V, T, D, O>(
+    pub async fn open_critical_since<K, V, T, O>(
         &self,
         shard_id: ShardId,
         reader_id: CriticalReaderId,
         purpose: &str,
-    ) -> Result<SinceHandle<K, V, T, D, O>, InvalidUsage<T>>
+    ) -> Result<SinceHandle<K, V, T, Diff, O>, InvalidUsage<T>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64 + Send + Sync,
         O: Opaque + Codec64,
     {
         let state_versions = StateVersions::new(
@@ -724,17 +720,16 @@ impl PersistClient {
     /// that represents the schema of the data in the shard. This will be required
     /// in the future.
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
-    pub async fn open_writer<K, V, T, D, S>(
+    pub async fn open_writer<K, V, T, S>(
         &self,
         shard_id: ShardId,
         purpose: &str,
         _schema: S,
-    ) -> Result<WriteHandle<K, V, T, D>, InvalidUsage<T>>
+    ) -> Result<WriteHandle<K, V, T, Diff>, InvalidUsage<T>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64 + Send + Sync,
     {
         let state_versions = StateVersions::new(
             self.cfg.clone(),
@@ -787,15 +782,14 @@ impl PersistClient {
     /// Test helper for a [Self::open] call that is expected to succeed.
     #[cfg(test)]
     #[track_caller]
-    pub async fn expect_open<K, V, T, D>(
+    pub async fn expect_open<K, V, T>(
         &self,
         shard_id: ShardId,
-    ) -> (WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>)
+    ) -> (WriteHandle<K, V, T, Diff>, ReadHandle<K, V, T, Diff>)
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64 + Send + Sync,
     {
         self.open(shard_id, "tests", Self::TEST_SCHEMA)
             .await
@@ -861,16 +855,15 @@ mod tests {
             .expect("client construction failed")
     }
 
-    pub fn all_ok<'a, K, V, T, D, I>(
+    pub fn all_ok<'a, K, V, T, I>(
         iter: I,
         as_of: T,
-    ) -> Vec<((Result<K, String>, Result<V, String>), T, D)>
+    ) -> Vec<((Result<K, String>, Result<V, String>), T, Diff)>
     where
         K: Ord + Clone + 'a,
         V: Ord + Clone + 'a,
         T: Timestamp + Lattice + Clone + 'a,
-        D: Semigroup + Clone + 'a,
-        I: IntoIterator<Item = &'a ((K, V), T, D)>,
+        I: IntoIterator<Item = &'a ((K, V), T, Diff)>,
     {
         let as_of = Antichain::from_elem(as_of);
         let mut ret = iter
@@ -925,7 +918,7 @@ mod tests {
 
         let (mut write, mut read) = new_test_client()
             .await
-            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .expect_open::<String, String, u64>(ShardId::new())
             .await;
         assert_eq!(write.upper(), &Antichain::from_elem(u64::minimum()));
         assert_eq!(read.since(), &Antichain::from_elem(u64::minimum()));
@@ -975,27 +968,19 @@ mod tests {
         let shard_id = ShardId::new();
         let client = new_test_client().await;
         let mut write1 = client
-            .open_writer::<String, String, u64, i64, _>(shard_id, "", PersistClient::TEST_SCHEMA)
+            .open_writer::<String, String, u64, _>(shard_id, "", PersistClient::TEST_SCHEMA)
             .await
             .expect("codec mismatch");
         let mut read1 = client
-            .open_leased_reader::<String, String, u64, i64, _>(
-                shard_id,
-                "",
-                PersistClient::TEST_SCHEMA,
-            )
+            .open_leased_reader::<String, String, u64, _>(shard_id, "", PersistClient::TEST_SCHEMA)
             .await
             .expect("codec mismatch");
         let mut read2 = client
-            .open_leased_reader::<String, String, u64, i64, _>(
-                shard_id,
-                "",
-                PersistClient::TEST_SCHEMA,
-            )
+            .open_leased_reader::<String, String, u64, _>(shard_id, "", PersistClient::TEST_SCHEMA)
             .await
             .expect("codec mismatch");
         let mut write2 = client
-            .open_writer::<String, String, u64, i64, _>(shard_id, "", PersistClient::TEST_SCHEMA)
+            .open_writer::<String, String, u64, _>(shard_id, "", PersistClient::TEST_SCHEMA)
             .await
             .expect("codec mismatch");
 
@@ -1023,9 +1008,7 @@ mod tests {
             .expect("invalid shard id");
         let client = new_test_client().await;
 
-        let (mut write0, mut read0) = client
-            .expect_open::<String, String, u64, i64>(shard_id0)
-            .await;
+        let (mut write0, mut read0) = client.expect_open::<String, String, u64>(shard_id0).await;
 
         write0.expect_compare_and_append(&data, 0, 4).await;
 
@@ -1037,7 +1020,7 @@ mod tests {
 
             assert_eq!(
                 client
-                    .open::<Vec<u8>, String, u64, i64, _>(shard_id0, "", PersistClient::TEST_SCHEMA)
+                    .open::<Vec<u8>, String, u64, _>(shard_id0, "", PersistClient::TEST_SCHEMA)
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
@@ -1047,7 +1030,7 @@ mod tests {
             );
             assert_eq!(
                 client
-                    .open::<String, Vec<u8>, u64, i64, _>(shard_id0, "", PersistClient::TEST_SCHEMA)
+                    .open::<String, Vec<u8>, u64, _>(shard_id0, "", PersistClient::TEST_SCHEMA)
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
@@ -1057,7 +1040,7 @@ mod tests {
             );
             assert_eq!(
                 client
-                    .open::<String, String, i64, i64, _>(shard_id0, "", PersistClient::TEST_SCHEMA)
+                    .open::<String, String, i64, _>(shard_id0, "", PersistClient::TEST_SCHEMA)
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
@@ -1067,7 +1050,7 @@ mod tests {
             );
             assert_eq!(
                 client
-                    .open::<String, String, u64, u64, _>(shard_id0, "", PersistClient::TEST_SCHEMA)
+                    .open::<String, String, u64, _>(shard_id0, "", PersistClient::TEST_SCHEMA)
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch(Box::new(CodecMismatch {
@@ -1081,7 +1064,7 @@ mod tests {
             // set.
             assert_eq!(
                 client
-                    .open_leased_reader::<Vec<u8>, String, u64, i64, _>(
+                    .open_leased_reader::<Vec<u8>, String, u64, _>(
                         shard_id0,
                         "",
                         PersistClient::TEST_SCHEMA
@@ -1095,7 +1078,7 @@ mod tests {
             );
             assert_eq!(
                 client
-                    .open_writer::<Vec<u8>, String, u64, i64, _>(
+                    .open_writer::<Vec<u8>, String, u64, _>(
                         shard_id0,
                         "",
                         PersistClient::TEST_SCHEMA
@@ -1119,9 +1102,7 @@ mod tests {
             let shard_id1 = "s11111111-1111-1111-1111-111111111111"
                 .parse::<ShardId>()
                 .expect("invalid shard id");
-            let (_, read1) = client
-                .expect_open::<String, String, u64, i64>(shard_id1)
-                .await;
+            let (_, read1) = client.expect_open::<String, String, u64>(shard_id1).await;
             let fetcher1 = read1.clone("").await.batch_fetcher().await;
             for batch in snap {
                 let (batch, res) = fetcher1.fetch_leased_part(batch).await;
@@ -1250,14 +1231,12 @@ mod tests {
         let client = new_test_client().await;
 
         let (mut write1, mut read1) = client
-            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .expect_open::<String, String, u64>(ShardId::new())
             .await;
 
         // Different types, so that checks would fail in case we were not separating these
         // collections internally.
-        let (mut write2, mut read2) = client
-            .expect_open::<String, (), u64, i64>(ShardId::new())
-            .await;
+        let (mut write2, mut read2) = client.expect_open::<String, (), u64>(ShardId::new()).await;
 
         write1
             .expect_compare_and_append(&data1[..], u64::minimum(), 3)
@@ -1291,13 +1270,9 @@ mod tests {
 
         let shard_id = ShardId::new();
 
-        let (mut write1, _read1) = client
-            .expect_open::<String, String, u64, i64>(shard_id)
-            .await;
+        let (mut write1, _read1) = client.expect_open::<String, String, u64>(shard_id).await;
 
-        let (mut write2, _read2) = client
-            .expect_open::<String, String, u64, i64>(shard_id)
-            .await;
+        let (mut write2, _read2) = client.expect_open::<String, String, u64>(shard_id).await;
 
         write1
             .expect_append(&data[..], write1.upper().clone(), vec![3])
@@ -1324,9 +1299,7 @@ mod tests {
 
         let shard_id = ShardId::new();
 
-        let (mut write, _read) = client
-            .expect_open::<String, String, u64, i64>(shard_id)
-            .await;
+        let (mut write, _read) = client.expect_open::<String, String, u64>(shard_id).await;
 
         write
             .expect_append(&data[..], write.upper().clone(), vec![3])
@@ -1368,7 +1341,7 @@ mod tests {
         let client = new_test_client().await;
 
         let (write, read) = client
-            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .expect_open::<String, String, u64>(ShardId::new())
             .await;
 
         assert!(is_send_sync(client));
@@ -1388,9 +1361,9 @@ mod tests {
 
         let id = ShardId::new();
         let client = new_test_client().await;
-        let (mut write1, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
+        let (mut write1, mut read) = client.expect_open::<String, String, u64>(id).await;
 
-        let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
+        let (mut write2, _read) = client.expect_open::<String, String, u64>(id).await;
 
         assert_eq!(write1.upper(), &Antichain::from_elem(u64::minimum()));
         assert_eq!(write2.upper(), &Antichain::from_elem(u64::minimum()));
@@ -1449,9 +1422,9 @@ mod tests {
         let id = ShardId::new();
         let client = new_test_client().await;
 
-        let (mut write1, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
+        let (mut write1, mut read) = client.expect_open::<String, String, u64>(id).await;
 
-        let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
+        let (mut write2, _read) = client.expect_open::<String, String, u64>(id).await;
 
         // Grab a listener before we do any writing
         let mut listen = read.clone("").await.expect_listen(0).await;
@@ -1499,7 +1472,7 @@ mod tests {
         let id = ShardId::new();
         let client = new_test_client().await;
 
-        let (mut write, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
+        let (mut write, mut read) = client.expect_open::<String, String, u64>(id).await;
 
         // Write a [0,3) batch.
         write
@@ -1548,9 +1521,9 @@ mod tests {
         let id = ShardId::new();
         let client = new_test_client().await;
 
-        let (mut write1, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
+        let (mut write1, mut read) = client.expect_open::<String, String, u64>(id).await;
 
-        let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
+        let (mut write2, _read) = client.expect_open::<String, String, u64>(id).await;
 
         // Write a [0,3) batch with writer 1.
         write1
@@ -1592,7 +1565,7 @@ mod tests {
         let id = ShardId::new();
         let client = new_test_client().await;
 
-        let (mut write, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
+        let (mut write, mut read) = client.expect_open::<String, String, u64>(id).await;
 
         // Write a [0,3) batch.
         write.expect_compare_and_append(&data[..2], 0, 3).await;
@@ -1640,9 +1613,9 @@ mod tests {
         let id = ShardId::new();
         let client = new_test_client().await;
 
-        let (mut write1, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
+        let (mut write1, mut read) = client.expect_open::<String, String, u64>(id).await;
 
-        let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
+        let (mut write2, _read) = client.expect_open::<String, String, u64>(id).await;
 
         // Write a [0,3) batch with writer 1.
         write1.expect_compare_and_append(&data[..2], 0, 3).await;
@@ -1681,7 +1654,7 @@ mod tests {
             })
             .await
             .expect("client construction failed")
-            .expect_open::<String, String, u64, i64>(shard_id)
+            .expect_open::<String, String, u64>(shard_id)
             .await;
 
         let lease_duration_ms = u64::try_from(write.cfg.writer_lease_duration.as_millis()).unwrap();
@@ -1735,7 +1708,7 @@ mod tests {
             })
             .await
             .expect("client construction failed")
-            .expect_open::<String, String, u64, i64>(shard_id)
+            .expect_open::<String, String, u64>(shard_id)
             .await;
 
         let (_, _, maintenance) = read
@@ -1845,7 +1818,7 @@ mod tests {
 
             let client1 = client.clone();
             let handle = mz_ore::task::spawn(|| format!("writer-{}", idx), async move {
-                let (mut write, _) = client1.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
+                let (mut write, _) = client1.expect_open::<Vec<u8>, Vec<u8>, u64>(id).await;
                 let mut current_upper = 0;
                 for batch in data.batches() {
                     let new_upper = match batch.get(batch.len() - 1) {
@@ -1896,7 +1869,7 @@ mod tests {
             handles.push(handle);
 
             let handle = mz_ore::task::spawn(|| format!("appender-{}", idx), async move {
-                let (mut write, _) = client.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
+                let (mut write, _) = client.expect_open::<Vec<u8>, Vec<u8>, u64>(id).await;
 
                 while let Some(batch) = batch_rx.recv().await {
                     let lower = batch.lower().clone();
@@ -1917,7 +1890,7 @@ mod tests {
 
         let expected = data.records().collect::<Vec<_>>();
         let max_ts = expected.last().map(|(_, t, _)| *t).unwrap_or_default();
-        let (_, mut read) = client.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
+        let (_, mut read) = client.expect_open::<Vec<u8>, Vec<u8>, u64>(id).await;
         assert_eq!(
             read.expect_snapshot_and_fetch(max_ts).await,
             all_ok(expected.iter(), max_ts)
@@ -1941,7 +1914,7 @@ mod tests {
 
         let id = ShardId::new();
         let client = new_test_client().await;
-        let (mut write, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
+        let (mut write, mut read) = client.expect_open::<String, String, u64>(id).await;
 
         // Grab a listener as_of (aka gt) 1, which is not yet closed out.
         let mut listen = read.clone("").await.expect_listen(1).await;
@@ -2013,7 +1986,7 @@ mod tests {
             })
             .await
             .expect("client construction failed")
-            .expect_open::<(), (), u64, i64>(ShardId::new())
+            .expect_open::<(), (), u64>(ShardId::new())
             .await;
         let read_heartbeat_task = read
             .heartbeat_task
@@ -2041,7 +2014,7 @@ mod tests {
         const EMPTY: &[(((), ()), u64, i64)] = &[];
         let (mut write, mut read) = new_test_client()
             .await
-            .expect_open::<(), (), u64, i64>(ShardId::new())
+            .expect_open::<(), (), u64>(ShardId::new())
             .await;
         // Create a tombstone by advancing both the upper and since to [].
         let () = read.downgrade_since(&Antichain::new()).await;

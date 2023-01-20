@@ -187,7 +187,7 @@ where
         };
         let read = read
             .expect("location should be valid")
-            .open_leased_reader::<K, V, G::Timestamp, Diff, _>(
+            .open_leased_reader::<K, V, G::Timestamp, _>(
                 shard_id,
                 &format!("shard_source({})", name_owned),
                 schema,
@@ -463,7 +463,7 @@ where
             std::mem::drop(clients);
 
             client
-                .create_batch_fetcher::<K, V, T, Diff, _>(shard_id, schema)
+                .create_batch_fetcher::<K, V, T, _>(shard_id, schema)
                 .await
         };
 

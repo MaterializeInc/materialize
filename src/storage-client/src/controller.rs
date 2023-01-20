@@ -1405,7 +1405,7 @@ where
         // heartbeat continously. The assumption is that calls to snapshot are rare and therefore
         // worth it to always create a new handle.
         let mut read_handle = persist_client
-            .open_leased_reader::<SourceData, (), _, _, _>(
+            .open_leased_reader::<SourceData, (), _, _>(
                 metadata.data_shard,
                 &format!("snapshot {}", id),
                 metadata.relation_desc.clone(),
@@ -1995,7 +1995,7 @@ where
 
         for (shard_id, shard_purpose) in shards {
             let (mut write, mut read) = persist_client
-                .open::<crate::types::sources::SourceData, (), T, Diff, _>(
+                .open::<crate::types::sources::SourceData, (), T, _>(
                     *shard_id,
                     shard_purpose.as_str(),
                     // We have to _read_ the shard to figure out if its been migrated or not, so we

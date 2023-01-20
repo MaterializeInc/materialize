@@ -307,7 +307,7 @@ where
             .expect("could not open persist client");
 
         let mut write = persist_client
-            .open_writer::<SourceData, (), Timestamp, Diff, _>(
+            .open_writer::<SourceData, (), Timestamp, _>(
                 shard_id,
                 &format!("compute::persist_sink::mint_batch_descriptions {}", sink_id),
                 target_relation_desc,
@@ -576,7 +576,7 @@ where
             .expect("could not open persist client");
 
         let mut write = persist_client
-            .open_writer::<SourceData, (), Timestamp, Diff, _>(
+            .open_writer::<SourceData, (), Timestamp, _>(
                 shard_id,
                 &format!("compute::persist_sink::write_batches {}", sink_id),
                 target_relation_desc,
@@ -897,7 +897,7 @@ where
             .expect("could not open persist client");
 
         let mut write = persist_client
-            .open_writer::<SourceData, (), Timestamp, Diff,_>(
+            .open_writer::<SourceData, (), Timestamp, _>(
                 shard_id,
                 &format!("persist_sink::append_batches {}", sink_id),
                 target_relation_desc,
