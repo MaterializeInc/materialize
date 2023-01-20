@@ -745,6 +745,9 @@ where
                     // spend a lot of time "consolidating" the same updates
                     // over and over again, with no changes.
                     consolidate_updates(&mut correction);
+                    if correction.len() < correction.capacity() / 4 {
+                        correction.shrink_to_fit();
+                    }
                 }
 
                 for batch_description in ready_batches.into_iter() {
