@@ -21,11 +21,14 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use anyhow::bail;
 use differential_dataflow::lattice::Lattice;
+use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 
@@ -45,6 +48,56 @@ use crate::types::parameters::StorageParameters;
 
 /// The network address of a storage cluster.
 pub type StorageClusterAddr = String;
+
+/// Identifier of a storage cluster.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum StorageClusterId {
+    /// A system storage cluster.
+    System(u64),
+    /// A user storage cluster.
+    User(u64),
+}
+
+impl StorageClusterId {
+    pub fn inner_id(&self) -> u64 {
+        match self {
+            StorageClusterId::System(id) | StorageClusterId::User(id) => *id,
+        }
+    }
+
+    pub fn is_user(&self) -> bool {
+        matches!(self, Self::User(_))
+    }
+
+    pub fn is_system(&self) -> bool {
+        matches!(self, Self::System(_))
+    }
+}
+
+impl FromStr for StorageClusterId {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() < 2 {
+            bail!("couldn't parse compute instance id {}", s);
+        }
+        let val: u64 = s[1..].parse()?;
+        match s.chars().next().unwrap() {
+            's' => Ok(Self::System(val)),
+            'u' => Ok(Self::User(val)),
+            _ => bail!("couldn't parse compute instance id {}", s),
+        }
+    }
+}
+
+impl fmt::Display for StorageClusterId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::System(id) => write!(f, "s{}", id),
+            Self::User(id) => write!(f, "u{}", id),
+        }
+    }
+}
 
 /// Configuration for [`StorageClusters`].
 pub struct StorageClustersConfig {
