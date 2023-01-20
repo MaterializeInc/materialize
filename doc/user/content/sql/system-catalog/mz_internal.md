@@ -291,6 +291,16 @@ Field         | Type          | Meaning
 `duration`    | [`interval`]  | The upper bound of the bucket as an interval.
 `count`       | [`bigint`]    | The (noncumulative) count of peeks in this bucket.
 
+### `mz_postgres_sources`
+
+The `mz_postgres_sources` table contains a row for each PostgreSQL source in the
+system.
+
+Field              | Type           | Meaning
+-------------------|----------------|--------
+`id`               | [`text`]       | The ID of the source.
+`replication_slot` | [`text`]       | The name of the replication slot in the PostgreSQL database that Materialize will create and stream data from.
+
 ### `mz_records_per_dataflow`
 
 The `mz_records_per_dataflow` view describes the number of records in each
