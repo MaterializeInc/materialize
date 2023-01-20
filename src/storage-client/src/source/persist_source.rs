@@ -12,21 +12,22 @@
 use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
 
 use mz_persist_client::operators::shard_source::shard_source;
 use mz_persist_types::codec_impls::UnitSchema;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::OkErr;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::generic::OutputHandle;
+use timely::dataflow::operators::{Capability, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use timely::scheduling::Activator;
 use tokio::sync::Mutex;
 
 use mz_expr::MfpPlan;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::FetchedPart;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_repr::{DatumVec, Diff, GlobalId, Row, Timestamp};
 
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
@@ -56,7 +57,7 @@ pub use mz_persist_client::operators::shard_source::FlowControl;
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source<G, YFn>(
+pub fn persist_source<G>(
     scope: &G,
     source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
@@ -65,7 +66,7 @@ pub fn persist_source<G, YFn>(
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     flow_control: Option<FlowControl<G>>,
-    yield_fn: YFn,
+    refuel: usize,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
@@ -73,7 +74,6 @@ pub fn persist_source<G, YFn>(
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
-    YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let (stream, token) = persist_source_core(
         scope,
@@ -84,7 +84,7 @@ where
         until,
         map_filter_project,
         flow_control,
-        yield_fn,
+        refuel,
     );
     let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
         Ok(row) => Ok((row, t, r)),
@@ -100,7 +100,7 @@ where
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 #[allow(clippy::needless_borrow)]
-pub fn persist_source_core<G, YFn>(
+pub fn persist_source_core<G>(
     scope: &G,
     source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
@@ -109,14 +109,13 @@ pub fn persist_source_core<G, YFn>(
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     flow_control: Option<FlowControl<G>>,
-    yield_fn: YFn,
+    refuel: usize,
 ) -> (
     Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     Rc<dyn Any>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
-    YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let name = source_id.to_string();
     let (fetched, token) = shard_source(
@@ -131,25 +130,112 @@ where
         Arc::new(metadata.relation_desc),
         Arc::new(UnitSchema),
     );
-    let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
+    let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, refuel);
     (rows, token)
 }
 
-pub fn decode_and_mfp<G, YFn>(
+/// Pending work to read from feteched parts
+struct PendingWork {
+    /// The time at which the work should happen.
+    capability: Capability<Timestamp>,
+    /// Pending fetched part.
+    fetched_part: FetchedPart<SourceData, (), Timestamp, Diff>,
+}
+
+impl PendingWork {
+    /// Perform roughly `fuel` work, reading from the fetched part, decoding, and sending outputs.
+    fn do_work(
+        &mut self,
+        fuel: &mut usize,
+        until: &Antichain<Timestamp>,
+        map_filter_project: Option<&MfpPlan>,
+        datum_vec: &mut DatumVec,
+        row_builder: &mut Row,
+        output: &mut OutputHandle<
+            '_,
+            Timestamp,
+            (Result<Row, DataflowError>, Timestamp, Diff),
+            timely::dataflow::channels::pushers::Tee<
+                Timestamp,
+                (Result<Row, DataflowError>, Timestamp, Diff),
+            >,
+        >,
+    ) {
+        let mut work = 0;
+        let mut session = output.session(&self.capability);
+        while let Some(((key, val), time, diff)) = self.fetched_part.next() {
+            if until.less_equal(&time) {
+                continue;
+            }
+            match (key, val) {
+                (Ok(SourceData(Ok(row))), Ok(())) => {
+                    if let Some(mfp) = map_filter_project {
+                        let arena = mz_repr::RowArena::new();
+                        let mut datums_local = datum_vec.borrow_with(&row);
+                        for result in mfp.evaluate(
+                            &mut datums_local,
+                            &arena,
+                            time,
+                            diff,
+                            |time| !until.less_equal(time),
+                            row_builder,
+                        ) {
+                            match result {
+                                Ok((row, time, diff)) => {
+                                    // Additional `until` filtering due to temporal filters.
+                                    if !until.less_equal(&time) {
+                                        session.give((Ok(row), time, diff));
+                                        work += 1;
+                                    }
+                                }
+                                Err((err, time, diff)) => {
+                                    // Additional `until` filtering due to temporal filters.
+                                    if !until.less_equal(&time) {
+                                        session.give((Err(err), time, diff));
+                                        work += 1;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        session.give((Ok(row), time, diff));
+                        work += 1;
+                    }
+                }
+                (Ok(SourceData(Err(err))), Ok(())) => {
+                    session.give((Err(err), time, diff));
+                    work += 1;
+                }
+                // TODO(petrosagg): error handling
+                (Err(_), Ok(_)) | (Ok(_), Err(_)) | (Err(_), Err(_)) => {
+                    panic!("decoding failed")
+                }
+            }
+            if work >= *fuel {
+                *fuel = 0;
+                return;
+            }
+        }
+        *fuel -= work;
+    }
+}
+
+pub fn decode_and_mfp<G>(
     fetched: &Stream<G, FetchedPart<SourceData, (), Timestamp, Diff>>,
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
-    yield_fn: YFn,
+    refuel: usize,
 ) -> Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
-    YFn: Fn(Instant, usize) -> bool + 'static,
 {
-    let mut builder = AsyncOperatorBuilder::new(
+    let scope = fetched.scope();
+    let mut builder = OperatorBuilder::new(
         format!("persist_source::decode_and_mfp({})", name),
-        fetched.scope(),
+        scope.clone(),
     );
+    let operator_info = builder.operator_info();
 
     let mut fetched_input = builder.new_input(fetched, Pipeline);
     let (mut updates_output, updates_stream) = builder.new_output();
@@ -159,108 +245,45 @@ where
     let mut row_builder = Row::default();
 
     // Extract the MFP if it exists; leave behind an identity MFP in that case.
-    let mut map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
+    let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
 
-    builder.build(move |mut initial_capabilities| async move {
-        initial_capabilities.clear();
+    builder.build(move |_caps| {
+        // Acquire an activator to reschedule the operator when it has unfinished work.
+        let activations = scope.activations();
+        let activator = Activator::new(&operator_info.address[..], activations);
+        // Maintain a list of work to do
+        let mut todo = std::collections::VecDeque::new();
+        let mut buffer = Default::default();
 
-        let mut buffer = Vec::new();
-
-        while let Some(event) = fetched_input.next().await {
-            let cap = match event {
-                Event::Data(cap, data) => {
-                    data.swap(&mut buffer);
-                    cap
+        move |_frontier| {
+            fetched_input.for_each(|time, data| {
+                data.swap(&mut buffer);
+                let capability = time.retain();
+                for fetched_part in buffer.drain(..) {
+                    todo.push_back(PendingWork {
+                        capability: capability.clone(),
+                        fetched_part,
+                    })
                 }
-                Event::Progress(_) => continue,
-            };
+            });
 
-            // SUBTLE: This operator yields back to timely whenever an await returns a
-            // Pending result from the overall async/await state machine `poll`. Since
-            // this is fetching from remote storage, it will yield and thus we can reset
-            // our yield counters here.
-            let mut decode_start = Instant::now();
-
-            for fetched_part in buffer.drain(..) {
-                // Apply as much logic to `updates` as we can, before we emit anything.
-                let (updates_size_hint_min, updates_size_hint_max) = fetched_part.size_hint();
-                let mut updates =
-                    Vec::with_capacity(updates_size_hint_max.unwrap_or(updates_size_hint_min));
-                for ((key, val), time, diff) in fetched_part {
-                    if !until.less_equal(&time) {
-                        match (key, val) {
-                            (Ok(SourceData(Ok(row))), Ok(())) => {
-                                if let Some(mfp) = &mut map_filter_project {
-                                    let arena = mz_repr::RowArena::new();
-                                    let mut datums_local = datum_vec.borrow_with(&row);
-                                    for result in mfp.evaluate(
-                                        &mut datums_local,
-                                        &arena,
-                                        time,
-                                        diff,
-                                        |time| !until.less_equal(time),
-                                        &mut row_builder,
-                                    ) {
-                                        match result {
-                                            Ok((row, time, diff)) => {
-                                                // Additional `until` filtering due to temporal filters.
-                                                if !until.less_equal(&time) {
-                                                    updates.push((Ok(row), time, diff));
-                                                }
-                                            }
-                                            Err((err, time, diff)) => {
-                                                // Additional `until` filtering due to temporal filters.
-                                                if !until.less_equal(&time) {
-                                                    updates.push((Err(err), time, diff));
-                                                }
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    updates.push((Ok(row), time, diff));
-                                }
-                            }
-                            (Ok(SourceData(Err(err))), Ok(())) => {
-                                updates.push((Err(err), time, diff));
-                            }
-                            // TODO(petrosagg): error handling
-                            (Err(_), Ok(_)) | (Ok(_), Err(_)) | (Err(_), Err(_)) => {
-                                panic!("decoding failed")
-                            }
-                        }
-                    }
-                    if yield_fn(decode_start, updates.len()) {
-                        // A large part of the point of yielding is to let later operators
-                        // reduce down the data, so emit what we have. Note that this means
-                        // we don't get to consolidate everything, but that's part of the
-                        // tradeoff in tuning yield_fn.
-                        differential_dataflow::consolidation::consolidate_updates(&mut updates);
-
-                        {
-                            // Do very fine-grained output activation/session
-                            // creation to ensure that we don't hold activated
-                            // outputs or sessions across await points, which
-                            // would prevent messages from being flushed from
-                            // the shared timely output buffer.
-                            let mut updates_output = updates_output.activate();
-                            updates_output.session(&cap).give_vec(&mut updates);
-                        }
-
-                        // Force a yield to give back the timely thread, reactivating on our
-                        // way out.
-                        tokio::task::yield_now().await;
-                        decode_start = Instant::now();
-                    }
+            let mut fuel = refuel;
+            let mut handle = updates_output.activate();
+            while !todo.is_empty() && fuel > 0 {
+                todo.front_mut().unwrap().do_work(
+                    &mut fuel,
+                    &until,
+                    map_filter_project.as_ref(),
+                    &mut datum_vec,
+                    &mut row_builder,
+                    &mut handle,
+                );
+                if fuel > 0 {
+                    todo.pop_front();
                 }
-                differential_dataflow::consolidation::consolidate_updates(&mut updates);
-
-                // Do very fine-grained output activation/session creation
-                // to ensure that we don't hold activated outputs or
-                // sessions across await points, which would prevent
-                // messages from being flushed from the shared timely output
-                // buffer.
-                let mut updates_output = updates_output.activate();
-                updates_output.session(&cap).give_vec(&mut updates);
+            }
+            if !todo.is_empty() {
+                activator.activate();
             }
         }
     });
