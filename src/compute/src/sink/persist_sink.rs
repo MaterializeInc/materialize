@@ -745,6 +745,17 @@ where
                     // spend a lot of time "consolidating" the same updates
                     // over and over again, with no changes.
                     consolidate_updates(&mut correction);
+
+                    // `correction` starts large as it diffs the initial snapshots,
+                    // but in steady state contains substantially fewer updates.
+                    // We should regularly shrink it to an appropriate size.
+                    // We use a 4x threshold here to ensure that we cannot enter
+                    // a resizing cycle without a linear-in-`correction.len()`
+                    // number of updates. E.g. a 2x threshold could result in
+                    // an allocation that must soon after be re-doubled back to
+                    // the current size, then halved, then doubled. We want that
+                    // pattern to require a linear number of updates rather than
+                    // a constant number.
                     if correction.len() < correction.capacity() / 4 {
                         correction.shrink_to_fit();
                     }
