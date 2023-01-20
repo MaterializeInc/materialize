@@ -288,6 +288,10 @@ mz_peek_durations
 VIEW
 materialize
 mz_internal
+mz_postgres_sources
+BASE TABLE
+materialize
+mz_internal
 mz_raw_compute_operator_durations
 VIEW
 materialize

@@ -1290,6 +1290,14 @@ pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
         .with_column("sink_progress_topic", ScalarType::String.nullable(false)),
     is_retained_metrics_relation: false,
 });
+pub static MZ_POSTGRES_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_postgres_sources",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("replication_slot", ScalarType::String.nullable(false)),
+    is_retained_metrics_relation: false,
+});
 pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_object_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3025,6 +3033,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_INDEX_COLUMNS),
         Builtin::Table(&MZ_TABLES),
         Builtin::Table(&MZ_SOURCES),
+        Builtin::Table(&MZ_POSTGRES_SOURCES),
         Builtin::Table(&MZ_SINKS),
         Builtin::Table(&MZ_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEWS),
