@@ -24,6 +24,7 @@ coverage
 **/*.swp
 test/feature-benchmark/tmp/*.td
 test/zippy/tmp/*.td
+test/**/tmp_*.toml
 junit_*.xml
 perf.data*
 **/*.rej

@@ -64,6 +64,7 @@ steps:
           - { value: unused-deps }
           - { value: launchdarkly }
           - { value: bounded-memory }
+          - { value: cloud-canary }
         multiple: true
         required: false
     if: build.source == "ui"
@@ -586,3 +587,13 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: bounded-memory
+
+  - id: cloud-canary
+    label: "Canary Deploy in Staging Cloud"
+    artifact_paths: junit_mzcompose_*.xml
+    timeout_in_minutes: 1200
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cloud-canary
