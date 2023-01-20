@@ -30,13 +30,10 @@
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::fmt;
 use std::num::{NonZeroI64, NonZeroUsize};
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
@@ -53,7 +50,7 @@ use mz_orchestrator::{CpuLimit, MemoryLimit, NamespacedOrchestrator, ServiceProc
 use mz_ore::halt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
-use mz_storage_client::controller::{ReadPolicy, StorageController};
+use mz_storage_client::controller::{ReadPolicy, StorageClusterId, StorageController};
 
 use crate::logging::{LogVariant, LogView, LoggingConfig};
 use crate::protocol::command::ComputeParameters;
@@ -78,55 +75,10 @@ pub mod error;
 
 pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
 
-/// Identifier of a compute instance.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub enum ComputeInstanceId {
-    System(u64),
-    User(u64),
-}
+/// Identifer of a compute instance.
+pub type ComputeInstanceId = StorageClusterId;
 
-impl ComputeInstanceId {
-    pub fn inner_id(&self) -> u64 {
-        match self {
-            ComputeInstanceId::System(id) | ComputeInstanceId::User(id) => *id,
-        }
-    }
-
-    pub fn is_user(&self) -> bool {
-        matches!(self, Self::User(_))
-    }
-
-    pub fn is_system(&self) -> bool {
-        matches!(self, Self::System(_))
-    }
-}
-
-impl FromStr for ComputeInstanceId {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 2 {
-            return Err(anyhow!("couldn't parse compute instance id {}", s));
-        }
-        let val: u64 = s[1..].parse()?;
-        match s.chars().next().unwrap() {
-            's' => Ok(Self::System(val)),
-            'u' => Ok(Self::User(val)),
-            _ => Err(anyhow!("couldn't parse compute instance id {}", s)),
-        }
-    }
-}
-
-impl fmt::Display for ComputeInstanceId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::System(id) => write!(f, "s{}", id),
-            Self::User(id) => write!(f, "u{}", id),
-        }
-    }
-}
-
-/// Identifier of a replicas.
+/// Identifier of a replica.
 pub type ReplicaId = u64;
 
 /// Identifier of a process within a replica.

@@ -74,6 +74,8 @@ mod persist_handles;
 mod rehydration;
 mod statistics;
 
+pub use crate::controller::clusters::StorageClusterId;
+
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
 
 pub static METADATA_COLLECTION: TypedCollection<GlobalId, DurableCollectionMetadata> =
