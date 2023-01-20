@@ -808,14 +808,10 @@ impl Coordinator {
         // per-replica introspection configuration.
         let arranged_introspection_sources =
             self.catalog.allocate_arranged_introspection_sources().await;
-        let arranged_introspection_source_ids: Vec<_> = arranged_introspection_sources
-            .iter()
-            .map(|(_, id)| *id)
-            .collect();
         let mut ops = vec![catalog::Op::CreateComputeInstance {
             name: name.clone(),
             linked_object_id: None,
-            arranged_introspection_sources: arranged_introspection_sources.clone(),
+            arranged_introspection_sources,
         }];
 
         let azs = self.catalog.state().availability_zones();
@@ -835,10 +831,7 @@ impl Coordinator {
             }
         }
 
-        // This vector collects introspection sources of all replicas of this compute instance
-        let mut persisted_introspection_sources = Vec::new();
-
-        for (replica_name, replica_config) in replicas.into_iter() {
+        for (replica_name, replica_config) in replicas {
             let introspection = replica_config.get_introspection().cloned();
             let idle_arrangement_merge_effort = replica_config.get_idle_arrangement_merge_effort();
 
@@ -867,7 +860,7 @@ impl Coordinator {
                             (az, false)
                         });
                     SerializedComputeReplicaLocation::Managed {
-                        size,
+                        size: size.clone(),
                         availability_zone,
                         az_user_specified: user_specified,
                     }
@@ -890,13 +883,6 @@ impl Coordinator {
                 ComputeReplicaLogging::default()
             };
 
-            persisted_introspection_sources.extend(
-                logging
-                    .sources
-                    .iter()
-                    .map(|(variant, id)| (*id, variant.desc().into())),
-            );
-
             let config = ComputeReplicaConfig {
                 location: self.catalog.concretize_replica_location(location)?,
                 logging,
@@ -904,7 +890,7 @@ impl Coordinator {
             };
 
             ops.push(catalog::Op::CreateComputeReplica {
-                name: replica_name,
+                name: replica_name.clone(),
                 config,
                 on_cluster_name: name.clone(),
             });
@@ -912,35 +898,29 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), ops).await?;
 
-        let persisted_introspection_source_ids: Vec<GlobalId> = persisted_introspection_sources
-            .iter()
-            .map(|(id, _)| *id)
-            .collect();
+        self.create_compute_instance(&name).await;
 
-        self.controller
-            .storage
-            .create_collections(persisted_introspection_sources)
-            .await
-            .unwrap();
+        Ok(ExecuteResponse::CreatedComputeInstance)
+    }
 
+    async fn create_compute_instance(&mut self, cluster_name: &str) {
         let instance = self
             .catalog
-            .resolve_compute_instance(&name)
+            .resolve_compute_instance(cluster_name)
             .expect("compute instance must exist after creation");
         let instance_id = instance.id;
+        let arranged_introspection_source_ids: Vec<_> =
+            instance.log_indexes.iter().map(|(_, id)| *id).collect();
 
-        let arranged_logs = arranged_introspection_sources
-            .into_iter()
-            .map(|(log, id)| (log.variant.clone(), id))
-            .collect();
         self.controller
             .compute
-            .create_instance(instance_id, arranged_logs)?;
-        for (replica_id, replica) in instance.replicas_by_id.clone() {
-            self.controller
-                .active_compute()
-                .add_replica_to_instance(instance_id, replica_id, replica.config)
-                .unwrap();
+            .create_instance(instance_id, instance.log_indexes.clone())
+            .unwrap();
+
+        let replica_names: Vec<_> = instance.replica_id_by_name.keys().cloned().collect();
+        for replica_name in replica_names {
+            self.create_compute_replica(cluster_name, &replica_name)
+                .await;
         }
 
         if !arranged_introspection_source_ids.is_empty() {
@@ -951,22 +931,6 @@ impl Coordinator {
             )
             .await;
         }
-
-        if !persisted_introspection_source_ids.is_empty() {
-            self.initialize_compute_read_policies(
-                persisted_introspection_source_ids.clone(),
-                instance_id,
-                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-            )
-            .await;
-            self.initialize_storage_read_policies(
-                persisted_introspection_source_ids,
-                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-            )
-            .await;
-        }
-
-        Ok(ExecuteResponse::CreatedComputeInstance)
     }
 
     async fn sequence_create_compute_replica(
@@ -1053,13 +1017,6 @@ impl Coordinator {
             ComputeReplicaLogging::default()
         };
 
-        let log_source_ids: Vec<_> = logging.source_ids().collect();
-        let log_source_collections = logging
-            .sources
-            .iter()
-            .map(|(variant, id)| (*id, variant.desc().into()))
-            .collect();
-
         let config = ComputeReplicaConfig {
             location: self.catalog.concretize_replica_location(location)?,
             logging,
@@ -1074,29 +1031,38 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), vec![op]).await?;
 
-        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
-        let replica_id = instance.replica_id_by_name[&name];
-        let replica_concrete_config = instance.replicas_by_id[&replica_id].config.clone();
+        self.create_compute_replica(&of_cluster, &name).await;
 
+        Ok(ExecuteResponse::CreatedComputeReplica)
+    }
+
+    async fn create_compute_replica(&mut self, cluster_name: &str, replica_name: &str) {
+        let instance = self.catalog.resolve_compute_instance(cluster_name).unwrap();
+        let replica_id = instance.replica_id_by_name[replica_name];
+        let replica_config = instance.replicas_by_id[&replica_id].config.clone();
+
+        let log_source_ids: Vec<_> = replica_config.logging.source_ids().collect();
+        let log_source_collections = replica_config
+            .logging
+            .sources
+            .iter()
+            .map(|(variant, id)| (*id, variant.desc().into()))
+            .collect();
         self.controller
             .storage
             .create_collections(log_source_collections)
             .await
             .unwrap();
 
-        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
-        let instance_id = instance.id;
-        let replica_id = instance.replica_id_by_name[&name];
-
         self.controller
             .active_compute()
-            .add_replica_to_instance(instance_id, replica_id, replica_concrete_config)
+            .add_replica_to_instance(instance.id, replica_id, replica_config)
             .unwrap();
 
         if !log_source_ids.is_empty() {
             self.initialize_compute_read_policies(
                 log_source_ids.clone(),
-                instance_id,
+                instance.id,
                 Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
             )
             .await;
@@ -1106,8 +1072,6 @@ impl Coordinator {
             )
             .await;
         }
-
-        Ok(ExecuteResponse::CreatedComputeReplica)
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
