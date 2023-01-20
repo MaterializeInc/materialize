@@ -216,7 +216,7 @@ where
                     "rehydration since",
                     // This is also `from_desc`, but this would be the _only_ usage
                     // of `from_desc` in storage, and we try to be consistent about
-                    // where we get `RelationDesc`s for perist clients
+                    // where we get `RelationDesc`s for persist clients
                     export
                         .description
                         .from_storage_metadata

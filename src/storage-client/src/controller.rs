@@ -1983,7 +1983,7 @@ where
     }
 
     #[allow(dead_code)]
-    async fn truncate_shards(&mut self, shards: &[(ShardId, String)]) {
+    async fn truncate_shards(&mut self, shards: &[(ShardId, String, RelationDesc)]) {
         // Open a persist client to delete unused shards.
         let persist_client = self
             .persist
@@ -1993,14 +1993,12 @@ where
             .await
             .unwrap();
 
-        for (shard_id, shard_purpose) in shards {
+        for (shard_id, shard_purpose, desc) in shards {
             let (mut write, mut read) = persist_client
                 .open::<crate::types::sources::SourceData, (), T, Diff, _>(
                     *shard_id,
                     shard_purpose.as_str(),
-                    // We have to _read_ the shard to figure out if its been migrated or not, so we
-                    // hedge on setting a `RelationDesc`.
-                    PersistClient::TO_REPLACE_SCHEMA,
+                    desc,
                 )
                 .await
                 .expect("invalid persist usage");
