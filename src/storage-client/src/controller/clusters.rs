@@ -44,7 +44,20 @@ use crate::types::clusters::{StorageClusterConfig, StorageClusterResourceAllocat
 use crate::types::parameters::StorageParameters;
 
 /// The network address of a storage cluster.
-pub type StorageClusterAddr = String;
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum StorageClusterAddr {
+    Remote(String),
+    Managed(String),
+}
+
+impl StorageClusterAddr {
+    fn addr(&self) -> String {
+        match self {
+            StorageClusterAddr::Remote(network_addr) => network_addr.clone(),
+            StorageClusterAddr::Managed(network_addr) => network_addr.clone(),
+        }
+    }
+}
 
 /// Configuration for [`StorageClusters`].
 pub struct StorageClustersConfig {
@@ -171,7 +184,7 @@ where
         let cluster_addr = match cluster_config {
             StorageClusterConfig::Remote { addr } => {
                 self.drop_storage_cluster(id).await?;
-                addr
+                StorageClusterAddr::Remote(addr)
             }
             StorageClusterConfig::Managed { allocation, .. } => {
                 self.ensure_storage_cluster(id, allocation).await?
@@ -194,7 +207,7 @@ where
             .entry(cluster_addr.clone())
             .or_insert_with(|| {
                 let mut client = RehydratingStorageClient::new(
-                    cluster_addr,
+                    cluster_addr.addr(),
                     self.build_info,
                     Arc::clone(&self.persist),
                 );
@@ -315,7 +328,9 @@ where
                 },
             )
             .await?;
-        Ok(storage_service.addresses("storagectl").into_element())
+
+        let addr = storage_service.addresses("storagectl").into_element();
+        Ok(StorageClusterAddr::Managed(addr))
     }
 
     /// Drops an orchestrated storage cluster for the specified ID.
@@ -421,7 +436,10 @@ impl MetricsFetcher {
                 .lock()
                 .expect("lock poisoned")
                 .iter()
-                .map(|(id, cluster_addr)| (id.clone(), cluster_addr.clone()))
+                .filter(|(_id, cluster_addr)| {
+                    matches!(cluster_addr, StorageClusterAddr::Managed(_))
+                })
+                .map(|(id, cluster_addr)| (id.clone(), cluster_addr.addr()))
                 .collect::<Vec<_>>()
         };
         tracing::trace!("fetch_metrics: service_ids: {:?}", service_ids);
