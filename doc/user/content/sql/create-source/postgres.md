@@ -30,7 +30,7 @@ _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
 **CONNECTION** _connection_name_ | The name of the PostgreSQL connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgres) documentation page.
 **FOR ALL TABLES** | Create subsources for all tables in the publication.
-**FOR TABLES(** _table_list_ **)** | Create subsources for specific tables in the publication.
+**FOR TABLES (** _table_list_ **)** | Create subsources for specific tables in the publication.
 
 ### `CONNECTION` options
 
@@ -49,13 +49,13 @@ Field                                | Value     | Description
 
 ### Change data capture
 
-This source uses PostgreSQL's native replication protocol to continually ingest changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database (also know as _change data capture_).
+This source uses PostgreSQL's native replication protocol to continually ingest changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database — a process also known as _change data capture_.
 
-For this reason, the upstream database must be configured to support logical replication. To get logical replication set up, follow the step-by-step instructions in the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source).
+For this reason, you must configure the upstream PostgreSQL database to support logical replication before creating a source in Materialize. Follow the step-by-step instructions in the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source) to get logical replication set up.
 
 #### Creating a source
 
-To avoid creating multiple replication slots upstream and minimize the required bandwidth, Materialize ingests the raw replication stream data for **all** tables included in a specific publication. When you define a PostgreSQL source:
+To avoid creating multiple replication slots in the upstream PostgreSQL database and minimize the required bandwidth, Materialize ingests the raw replication stream data for either all tables (`FOR ALL TABLES`) or a specified subset of tables (`FOR TABLES`) included in a specific publication.
 
 ```sql
 CREATE SOURCE mz_source
@@ -64,21 +64,52 @@ CREATE SOURCE mz_source
   WITH (SIZE = '3xsmall');
 ```
 
-Materialize will automatically create a **subsource** for each original table in the publication:
+When you define a source, Materialize will automatically:
 
-```sql
-SHOW SOURCES;
-```
+1. Create a **replication slot** in the upstream PostgreSQL database (see [PostgreSQL replication slots](#postgresql-replication-slots)).
 
-```nofmt
-         name         |   type    |  size
-----------------------+-----------+---------
- table_1              | subsource |
- table_2              | subsource |
- mz_source            | postgres  | 3xsmall
-```
+    The name of the replication slot created by Materialize is prefixed with `materialize_` for easy identification, and can be looked up in `mz_internal.mz_postgres_sources`.
+
+    ```sql
+    SELECT * FROM mz_internal.mz_postgres_sources;
+    ```
+
+    ```
+       id   |             replication_slot
+    --------+----------------------------------------------
+     u8     | materialize_7f8a72d0bf2a4b6e9ebc4e61ba769b71
+    ```
+1. Create a **subsource** for each original table in the publication.
+
+    ```sql
+    SHOW SOURCES;
+    ```
+
+    ```nofmt
+             name         |   type    |  size
+    ----------------------+-----------+---------
+     table_1              | subsource |
+     table_2              | subsource |
+     mz_source            | postgres  | 3xsmall
+    ```
+
+    And perform an initial, snapshot-based sync of the tables in the publication before it starts ingesting change events.
+
+1. Incrementally update any materialized or indexed views that depend on the source as change events stream in, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the upstream PostgreSQL database.
 
 It's important to note that the schema metadata is captured when the source is initially created, and is validated against the upstream schema upon restart. If you wish to add additional tables to the original publication and use them in Materialize, the source must be dropped and recreated.
+
+##### PostgreSQL replication slots
+
+Each source ingests the raw replication stream data for all tables in the specified publication using **a single** replication slot. This allows you to minimize the performance impact on the upstream database, as well as reuse the same source across multiple materializations.
+
+{{< warning >}}
+Make sure to delete any replication slots if you stop using Materialize, or if either the Materialize or PostgreSQL instances crash. To look up the name of the replication slot created for each source, use `mz_internal.mz_postgres_sources`.
+{{< /warning >}}
+
+If you delete all objects that depend on a source without also dropping the source, the upstream replication slot will linger and continue to accumulate data so that the source can resume in the future. To avoid unbounded disk space usage, make sure to use [`DROP SOURCE`](/sql/drop-source/) or manually delete the replication slot.
+
+For PostgreSQL 13+, it is recommended that you set a reasonable value for [`max_slot_wal_keep_size`](https://www.postgresql.org/docs/13/runtime-config-replication.html#GUC-MAX-SLOT-WAL-KEEP-SIZE) to limit the amount of storage used by replication slots.
 
 ##### PostgreSQL schemas
 
@@ -90,27 +121,6 @@ CREATE SOURCE mz_source
   FOR TABLES (schema1.table_1 AS s1_table_1, schema2_table_1 AS s2_table_1)
   WITH (SIZE = '3xsmall');
 ```
-#### Creating materialized views
-
-As soon as you define a PostgreSQL source, Materialize will:
-
-1. Create a replication slot in the upstream PostgreSQL database (see [PostgreSQL replication slots](#postgresql-replication-slots)). The name of the replication slots created by Materialize is prefixed with `materialize_` for easy identification.
-
-1. Perform an initial, snapshot-based sync of the tables in the publication before it starts ingesting change events.
-
-1. Incrementally update any materialized or indexed views that depend on the source as change events stream in, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original PostgreSQL database.
-
-##### PostgreSQL replication slots
-
-Each source ingests the raw replication stream data for all tables in the specified publication using **a single** replication slot. This allows you to minimize the performance impact on the upstream database, as well as reuse the same source across multiple materializations.
-
-{{< warning >}}
-Make sure to delete any replication slots if you stop using Materialize, or if either the Materialize or PostgreSQL instances crash.
-{{< /warning >}}
-
-If you delete all objects that depend on a source without also dropping the source, the upstream replication slot will linger and continue to accumulate data so that the source can resume in the future. To avoid unbounded disk space usage, make sure to use [`DROP SOURCE`](/sql/drop-source/) or manually delete the replication slot.
-
-For PostgreSQL 13+, it is recommended that you set a reasonable value for [`max_slot_wal_keep_size`](https://www.postgresql.org/docs/13/runtime-config-replication.html#GUC-MAX-SLOT-WAL-KEEP-SIZE) to limit the amount of storage used by replication slots.
 
 ## Known limitations
 

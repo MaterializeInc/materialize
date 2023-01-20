@@ -298,7 +298,7 @@ system.
 
 Field              | Type           | Meaning
 -------------------|----------------|--------
-`id`               | [`text`]       | The ID of the source.
+`id`               | [`text`]       | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).
 `replication_slot` | [`text`]       | The name of the replication slot in the PostgreSQL database that Materialize will create and stream data from.
 
 ### `mz_records_per_dataflow`

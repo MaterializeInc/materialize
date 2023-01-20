@@ -161,7 +161,7 @@ Once logical replication is enabled:
 
 ### Create a source
 
-Postgres sources ingest the raw replication stream data for all tables included in a publication to avoid creating multiple replication slots and minimize the required bandwidth.
+Postgres sources ingest the raw replication stream data for all tables included in a publication to avoid creating multiple [replication slots](/sql/create-source/postgres/#postgresql-replication-slots) and minimize the required bandwidth.
 
 When you define a Postgres source, Materialize will automatically create a **subsource** for each original table in the publication (so you don't have to!):
 
