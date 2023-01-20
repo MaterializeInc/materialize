@@ -31,6 +31,7 @@ use mz_proto::RustType;
 use serde_json::json;
 
 use crate::cli::admin::{make_blob, make_consensus};
+use crate::error::CodecConcreteType;
 use crate::fetch::EncodedPart;
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey,
@@ -778,8 +779,14 @@ struct T;
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
 struct D(i64);
 
-pub(crate) static KVTD_CODECS: Mutex<(String, String, String, String)> =
-    Mutex::new((String::new(), String::new(), String::new(), String::new()));
+pub(crate) static KVTD_CODECS: Mutex<(String, String, String, String, Option<CodecConcreteType>)> =
+    Mutex::new((
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        None,
+    ));
 
 impl Codec for K {
     type Schema = TodoSchema<K>;

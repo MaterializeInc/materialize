@@ -182,9 +182,15 @@ impl<T> Determinacy for InvalidUsage<T> {
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub struct CodecMismatch {
     /// The requested (K, V, T, D) codecs.
-    pub(crate) requested: (String, String, String, String),
+    ///
+    /// The last element in the tuple is Some when the name of the codecs match,
+    /// but the concrete types don't: e.g. mz_repr::Timestamp and u64.
+    pub(crate) requested: (String, String, String, String, Option<CodecConcreteType>),
     /// The actual (K, V, T, D) codecs in durable storage.
-    pub(crate) actual: (String, String, String, String),
+    ///
+    /// The last element in the tuple is Some when the name of the codecs match,
+    /// but the concrete types don't: e.g. mz_repr::Timestamp and u64.
+    pub(crate) actual: (String, String, String, String, Option<CodecConcreteType>),
 }
 
 impl std::error::Error for CodecMismatch {}
@@ -202,6 +208,12 @@ impl std::fmt::Display for CodecMismatch {
         )
     }
 }
+
+/// The concrete type of a [mz_persist_types::Codec] or
+/// [mz_persist_types::Codec64] impl.
+#[derive(Debug)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
+pub struct CodecConcreteType(&'static str);
 
 impl<T> From<CodecMismatch> for InvalidUsage<T> {
     fn from(x: CodecMismatch) -> Self {
