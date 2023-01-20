@@ -93,6 +93,8 @@ impl Coordinator {
         let mut secrets_to_drop = vec![];
         let mut timelines_to_drop = vec![];
         let mut vpc_endpoints_to_drop = vec![];
+        let mut clusters_to_drop = vec![];
+        let mut cluster_replicas_to_drop = vec![];
 
         for op in &ops {
             if let catalog::Op::DropItem(id) = op {
@@ -172,12 +174,24 @@ impl Coordinator {
                     .map(|log_id| (id, log_id));
                 log_sources_to_drop.extend(replica_logs);
 
+                // Drop the cluster itself.
+                //
+                // Linked clusters are presently a fiction maintained by the
+                // catalog. They do not yet result in the creation of actual
+                // compute instances, and so we must suppress their drop.
+                //
+                // TODO(benesch): turn linked clusters into real clusters.
+                // See MaterializeInc/cloud#4929.
+                if instance.linked_object_id.is_none() {
+                    clusters_to_drop.push(id);
+                }
+
                 // Drop timelines
                 timelines_to_drop.extend(self.remove_compute_instance_from_timeline(id));
             } else if let catalog::Op::DropComputeReplica { name, compute_name } = op {
                 let compute_instance = self.catalog.resolve_compute_instance(compute_name)?;
-                let replica_id = &compute_instance.replica_id_by_name[name];
-                let replica = &compute_instance.replicas_by_id[replica_id];
+                let replica_id = compute_instance.replica_id_by_name[name];
+                let replica = &compute_instance.replicas_by_id[&replica_id];
 
                 // Drop the introspection sources
                 let replica_logs = replica
@@ -186,6 +200,18 @@ impl Coordinator {
                     .source_ids()
                     .map(|log_id| (compute_instance.id, log_id));
                 log_sources_to_drop.extend(replica_logs);
+
+                // Drop the cluster replica itself.
+                //
+                // Linked clusters are presently a fiction maintained by the
+                // catalog. They do not yet result in the creation of actual
+                // compute instances, and so we must suppress their drop.
+                //
+                // TODO(benesch): turn linked clusters into real clusters.
+                // See MaterializeInc/cloud#4929.
+                if compute_instance.linked_object_id.is_none() {
+                    cluster_replicas_to_drop.push((compute_instance.id, replica_id));
+                }
             }
         }
 
@@ -270,6 +296,17 @@ impl Coordinator {
             }
             if !vpc_endpoints_to_drop.is_empty() {
                 self.drop_vpc_endpoints(vpc_endpoints_to_drop).await;
+            }
+            if !cluster_replicas_to_drop.is_empty() {
+                fail::fail_point!("after_catalog_drop_replica");
+                for (cluster_id, replica_id) in cluster_replicas_to_drop {
+                    self.drop_replica(cluster_id, replica_id).await;
+                }
+            }
+            if !clusters_to_drop.is_empty() {
+                for cluster_id in clusters_to_drop {
+                    self.controller.compute.drop_instance(cluster_id);
+                }
             }
 
             // We don't want to block the coordinator on an external postgres server, so
