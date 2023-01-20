@@ -16,7 +16,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::ShutdownButton;
 use differential_dataflow::Hashable;
@@ -40,7 +39,7 @@ use tracing::trace;
 use crate::cache::PersistClientCache;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
 use crate::read::ListenEvent;
-use crate::{PersistLocation, ShardId};
+use crate::{Diff, PersistLocation, ShardId};
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -64,7 +63,7 @@ use crate::{PersistLocation, ShardId};
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn shard_source<K, V, D, G, S>(
+pub fn shard_source<K, V, G, S>(
     scope: &G,
     name: &str,
     clients: Arc<Mutex<PersistClientCache>>,
@@ -74,12 +73,14 @@ pub fn shard_source<K, V, D, G, S>(
     until: Antichain<G::Timestamp>,
     flow_control: Option<FlowControl<G>>,
     schema: S,
-) -> (Stream<G, FetchedPart<K, V, G::Timestamp, D>>, Rc<dyn Any>)
+) -> (
+    Stream<G, FetchedPart<K, V, G::Timestamp, Diff>>,
+    Rc<dyn Any>,
+)
 where
     S: Clone + 'static,
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
@@ -110,7 +111,7 @@ where
     ) = mpsc::unbounded_channel();
 
     let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
-    let (descs, descs_shutdown) = shard_source_descs::<K, V, D, G, _>(
+    let (descs, descs_shutdown) = shard_source_descs::<K, V, G, _>(
         scope,
         name,
         Arc::clone(&clients),
@@ -143,7 +144,7 @@ pub struct FlowControl<G: Scope> {
     pub max_inflight_bytes: usize,
 }
 
-pub(crate) fn shard_source_descs<K, V, D, G, S>(
+pub(crate) fn shard_source_descs<K, V, G, S>(
     scope: &G,
     name: &str,
     clients: Arc<Mutex<PersistClientCache>>,
@@ -160,7 +161,6 @@ where
     S: 'static,
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
@@ -187,7 +187,7 @@ where
         };
         let read = read
             .expect("location should be valid")
-            .open_leased_reader::<K, V, G::Timestamp, D, _>(
+            .open_leased_reader::<K, V, G::Timestamp, Diff, _>(
                 shard_id,
                 &format!("shard_source({})", name_owned),
                 schema,
@@ -408,7 +408,7 @@ where
     (descs_stream, shutdown_button)
 }
 
-pub(crate) fn shard_source_fetch<K, V, T, D, G, S>(
+pub(crate) fn shard_source_fetch<K, V, T, G, S>(
     descs: &Stream<G, (usize, SerdeLeasedBatchPart)>,
     name: &str,
     clients: Arc<Mutex<PersistClientCache>>,
@@ -416,7 +416,7 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G, S>(
     shard_id: ShardId,
     schema: S,
 ) -> (
-    Stream<G, FetchedPart<K, V, T, D>>,
+    Stream<G, FetchedPart<K, V, T, Diff>>,
     Stream<G, SerdeLeasedBatchPart>,
 )
 where
@@ -424,7 +424,6 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
     G: Scope<Timestamp = T>,
 {
     let mut builder =
@@ -464,7 +463,7 @@ where
             std::mem::drop(clients);
 
             client
-                .create_batch_fetcher::<K, V, T, D, _>(shard_id, schema)
+                .create_batch_fetcher::<K, V, T, Diff, _>(shard_id, schema)
                 .await
         };
 

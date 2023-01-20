@@ -154,6 +154,8 @@ mod internal {
     pub mod datadriven;
 }
 
+pub type Diff = i64;
+
 const BUILD_INFO: BuildInfo = build_info!();
 
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
