@@ -1675,15 +1675,9 @@ impl Coordinator {
         session: &mut Session,
         DropComputeInstancesPlan { names }: DropComputeInstancesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let (ids, ops) = self.catalog.drop_compute_instance_ops(&names);
+        let ops = self.catalog.drop_compute_instance_ops(&names);
 
         self.catalog_transact(Some(session), ops).await?;
-        for (instance_id, replicas) in ids {
-            for replica_id in replicas {
-                self.drop_replica(instance_id, replica_id).await.unwrap();
-            }
-            self.controller.compute.drop_instance(instance_id);
-        }
 
         if names.iter().any(|n| n == session.vars().cluster()) {
             session.add_notice(AdapterNotice::DroppedActiveCluster {
@@ -1699,24 +1693,19 @@ impl Coordinator {
         session: &Session,
         DropComputeReplicasPlan { names }: DropComputeReplicasPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let (ids, ops) = self.catalog.drop_compute_instance_replica_ops(&names);
+        let ops = self.catalog.drop_compute_instance_replica_ops(&names);
 
         self.catalog_transact(Some(session), ops).await?;
-        fail::fail_point!("after_catalog_drop_replica");
-
-        for (instance_id, replica_id) in ids {
-            self.drop_replica(instance_id, replica_id).await.unwrap();
-        }
         fail::fail_point!("after_sequencer_drop_replica");
 
         Ok(ExecuteResponse::DroppedComputeReplica)
     }
 
-    async fn drop_replica(
+    pub(crate) async fn drop_replica(
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
-    ) -> Result<(), anyhow::Error> {
+    ) {
         if let Some(Some(ReplicaMetadata {
             last_heartbeat,
             metrics,
@@ -1750,8 +1739,8 @@ impl Coordinator {
         }
         self.controller
             .active_compute()
-            .drop_replica(instance_id, replica_id)?;
-        Ok(())
+            .drop_replica(instance_id, replica_id)
+            .expect("dropping replica must not fail");
     }
 
     async fn sequence_drop_items(
@@ -3980,7 +3969,7 @@ impl Coordinator {
         if let Some(linked_cluster) = self.catalog.get_linked_cluster(linked_object_id) {
             let cluster_name = linked_cluster.name.clone();
             for name in linked_cluster.replica_id_by_name.keys() {
-                let (_ids, drop_ops) = self
+                let drop_ops = self
                     .catalog
                     .drop_compute_instance_replica_ops(&[(cluster_name.clone(), name.into())]);
                 ops.extend(drop_ops);

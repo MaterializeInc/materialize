@@ -3721,10 +3721,8 @@ impl Catalog {
         ops
     }
 
-    pub fn drop_compute_instance_ops(
-        &self,
-        instance_names: &[String],
-    ) -> (HashMap<ComputeInstanceId, Vec<u64>>, Vec<Op>) {
+    /// Creates the catalog operations to drop the given compute instances.
+    pub fn drop_compute_instance_ops(&self, instance_names: &[String]) -> Vec<Op> {
         let mut names = vec![];
         let mut instance_ops = vec![];
         let mut ids_to_drop = vec![];
@@ -3740,24 +3738,17 @@ impl Catalog {
             });
             ids_to_drop.extend(instance.exports().iter().copied());
         }
-        let (ids, replica_ops) = self.drop_compute_instance_replica_ops(&names);
+        let replica_ops = self.drop_compute_instance_replica_ops(&names);
         let mut ops = self.drop_items_ops(&ids_to_drop);
         ops.extend(replica_ops);
         ops.extend(instance_ops);
-        (ids.into_iter().into_group_map(), ops)
+        ops
     }
 
     /// Creates the catalog operations to drop the given compute instance
     /// replicas.
-    ///
-    /// Returns the (instance ID, replica ID) pairs to drop, and the catalog
-    /// operations to do so.
-    pub fn drop_compute_instance_replica_ops(
-        &self,
-        names: &[(String, String)],
-    ) -> (Vec<(ComputeInstanceId, u64)>, Vec<Op>) {
+    pub fn drop_compute_instance_replica_ops(&self, names: &[(String, String)]) -> Vec<Op> {
         let mut ops = vec![];
-        let mut replicas_to_drop = vec![];
         let mut ids_to_drop = vec![];
         for (instance_name, replica_name) in names {
             let instance = self
@@ -3794,12 +3785,10 @@ impl Catalog {
                         .filter(|x| !view_ids.contains(x)),
                 )
             }
-
-            replicas_to_drop.push((instance.id, replica_id));
         }
 
         ops.extend(self.drop_items_ops(&ids_to_drop));
-        (replicas_to_drop, ops)
+        ops
     }
 
     pub fn drop_items_ops(&self, ids: &[GlobalId]) -> Vec<Op> {
@@ -3831,7 +3820,7 @@ impl Catalog {
                 self.state.compute_instances_by_linked_object_id.get(&id)
             {
                 let name = &self.state.compute_instances_by_id[linked_cluster_id].name;
-                let (_ids, cluster_ops) = self.drop_compute_instance_ops(&[name.clone()]);
+                let cluster_ops = self.drop_compute_instance_ops(&[name.clone()]);
                 ops.extend(cluster_ops);
             }
         }
