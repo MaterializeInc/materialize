@@ -55,8 +55,9 @@ use mz_sql::plan::{
     StorageClusterConfig, SubscribeFrom, SubscribePlan, View,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
-use mz_storage_client::types::clusters::StorageClusterResourceAllocation;
+use mz_storage_client::controller::{
+    CollectionDescription, DataSource, ReadPolicy, StorageClusterResourceAllocation, StorageError,
+};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 
@@ -566,17 +567,18 @@ impl Coordinator {
                                 };
                                 source_exports.insert(subsource, export);
                             }
-                            let cluster_config = self
+                            let cluster_id = self
                                 .catalog
-                                .get_storage_cluster_config(source_id)
-                                .expect("sources with ingestions always have linked clusters");
+                                .get_linked_cluster(source_id)
+                                .expect("sources with ingestions always have linked clusters")
+                                .id;
                             (
                                 DataSource::Ingestion(IngestionDescription {
                                     desc: ingestion.desc,
                                     ingestion_metadata: (),
                                     source_imports,
                                     source_exports,
-                                    cluster_config,
+                                    cluster_id,
                                 }),
                                 source_status_collection_id,
                             )
@@ -914,6 +916,7 @@ impl Coordinator {
         let arranged_introspection_source_ids: Vec<_> =
             cluster.log_indexes.iter().map(|(_, id)| *id).collect();
 
+        self.controller.storage.create_instance(cluster_id);
         self.controller
             .compute
             .create_instance(cluster_id, cluster.log_indexes.clone())
@@ -1060,6 +1063,14 @@ impl Coordinator {
             .await
             .unwrap();
 
+        self.controller
+            .storage
+            .ensure_replica(
+                instance.id,
+                replica_config.location.to_storage_cluster_config(),
+            )
+            .await
+            .expect("ensure clusters cannot fail");
         self.controller
             .active_compute()
             .add_replica_to_instance(instance.id, replica_id, replica_config)
@@ -1752,6 +1763,11 @@ impl Coordinator {
             self.send_builtin_table_updates(updates, BuiltinTableUpdateSource::Background)
                 .await;
         }
+        self.controller
+            .storage
+            .drop_replica(instance_id)
+            .await
+            .expect("drop clusters cannot fail");
         self.controller
             .active_compute()
             .drop_replica(instance_id, replica_id)
@@ -3527,16 +3543,6 @@ impl Coordinator {
             self.catalog_transact(Some(session), ops).await?;
 
             self.maybe_alter_linked_cluster(id).await;
-
-            let cluster_config = self
-                .catalog
-                .get_storage_cluster_config(id)
-                .expect("sinks always have linked clusters");
-
-            self.controller
-                .storage
-                .alter_collections(vec![(id, cluster_config)])
-                .await?;
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Sink))
@@ -3568,13 +3574,6 @@ impl Coordinator {
             self.catalog_transact(Some(session), ops).await?;
 
             self.maybe_alter_linked_cluster(id).await;
-
-            if let Some(cluster_config) = self.catalog.get_storage_cluster_config(id) {
-                self.controller
-                    .storage
-                    .alter_collections(vec![(id, cluster_config.clone())])
-                    .await?;
-            }
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))

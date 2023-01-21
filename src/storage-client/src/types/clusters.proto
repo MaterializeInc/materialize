@@ -13,24 +13,9 @@ import "orchestrator/src/orchtestrator.proto";
 
 package mz_storage_client.types.clusters;
 
-message ProtoStorageClusterResourceAllocation {
-    optional mz_orchestrator.ProtoMemoryLimit memory_limit = 1;
-    optional mz_orchestrator.ProtoCpuLimit cpu_limit = 2;
-    uint64 workers = 3;
-}
-
-message ProtoStorageClusterConfig {
-    message ProtoStorageClusterConfigRemote {
-        string addr = 1;
-    }
-
-    message ProtoStorageClusterConfigManaged {
-        ProtoStorageClusterResourceAllocation allocation = 1;
-        string size = 2;
-    }
-
+message ProtoStorageClusterId {
     oneof kind {
-        ProtoStorageClusterConfigRemote remote = 1;
-        ProtoStorageClusterConfigManaged managed = 2;
+        uint64 system = 1;
+        uint64 user = 2;
     }
 }

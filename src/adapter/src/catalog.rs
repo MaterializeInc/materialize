@@ -70,7 +70,7 @@ use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_stash::{Stash, StashFactory};
-use mz_storage_client::types::clusters::{StorageClusterConfig, StorageClusterResourceAllocation};
+use mz_storage_client::controller::StorageClusterResourceAllocation;
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
 };
@@ -428,32 +428,13 @@ impl CatalogState {
             .map(|id| &self.compute_instances_by_id[id])
     }
 
-    fn get_storage_cluster_config(&self, object_id: GlobalId) -> Option<StorageClusterConfig> {
+    fn get_storage_object_size(&self, object_id: GlobalId) -> Option<&str> {
         let cluster = self.get_linked_cluster(object_id)?;
         let replica_id = cluster.replica_id_by_name[LINKED_CLUSTER_REPLICA_NAME];
         let replica = &cluster.replicas_by_id[&replica_id];
         match &replica.config.location {
-            ComputeReplicaLocation::Remote { addrs, .. } => {
-                // HACK: linked cluster replicas that are remote use the `addrs`
-                // field to transmit exactly one address.
-                //
-                // TODO(benesch): remove the `REMOTE` option from `CREATE
-                // SOURCE` and `CREATE SINK` in favor of `IN CLUSTER` with a
-                // cluster whose replicas are remote.
-                Some(StorageClusterConfig::Remote {
-                    addr: addrs.into_element().clone(),
-                })
-            }
-            ComputeReplicaLocation::Managed {
-                allocation, size, ..
-            } => Some(StorageClusterConfig::Managed {
-                allocation: StorageClusterResourceAllocation {
-                    memory_limit: allocation.memory_limit,
-                    cpu_limit: allocation.cpu_limit,
-                    workers: allocation.workers,
-                },
-                size: size.into(),
-            }),
+            ComputeReplicaLocation::Remote { .. } => None,
+            ComputeReplicaLocation::Managed { size, .. } => Some(size),
         }
     }
 
@@ -3485,9 +3466,17 @@ impl Catalog {
         self.storage().await.get_all_persisted_timestamps().await
     }
 
-    /// Get the next user id without allocating it.
+    /// Get the next user ID without allocating it.
     pub async fn get_next_user_global_id(&mut self) -> Result<GlobalId, Error> {
         self.storage().await.get_next_user_global_id().await
+    }
+
+    /// Get the next user compute instance ID without allocating it.
+    pub async fn get_next_user_compute_instance_id(&mut self) -> Result<ComputeInstanceId, Error> {
+        self.storage()
+            .await
+            .get_next_user_compute_instance_id()
+            .await
     }
 
     /// Get the next replica id without allocating it.
@@ -3906,10 +3895,10 @@ impl Catalog {
         self.state.get_linked_cluster(object_id)
     }
 
-    /// Gets the storage cluster configuration associated with the provided
-    /// source or sink ID, if a linked cluster exists.
-    pub fn get_storage_cluster_config(&self, object_id: GlobalId) -> Option<StorageClusterConfig> {
-        self.state.get_storage_cluster_config(object_id)
+    /// Gets the size associated with the provided source or sink ID, if a
+    /// linked cluster exists.
+    pub fn get_storage_object_size(&self, object_id: GlobalId) -> Option<&str> {
+        self.state.get_storage_object_size(object_id)
     }
 
     pub fn concretize_replica_location(
@@ -4205,11 +4194,7 @@ impl Catalog {
                         });
                     }
 
-                    let old_size = state
-                        .get_storage_cluster_config(id)
-                        .as_ref()
-                        .and_then(|c| c.size())
-                        .map(|s| s.to_string());
+                    let old_size = state.get_storage_object_size(id).map(|s| s.to_string());
                     let new_size = match &cluster_config {
                         PlanStorageClusterConfig::Managed { size } => Some(size.clone()),
                         _ => None,
@@ -4314,11 +4299,7 @@ impl Catalog {
                         });
                     }
 
-                    let old_size = state
-                        .get_storage_cluster_config(id)
-                        .as_ref()
-                        .and_then(|c| c.size())
-                        .map(|s| s.to_string());
+                    let old_size = state.get_storage_object_size(id).map(|s| s.to_string());
                     let new_size = match &cluster_config {
                         PlanStorageClusterConfig::Managed { size } => Some(size.clone()),
                         _ => None,
@@ -4658,11 +4639,7 @@ impl Catalog {
                             &state
                                 .resolve_full_name(&name, session.map(|session| session.conn_id())),
                         );
-                        let size = state
-                            .get_storage_cluster_config(id)
-                            .as_ref()
-                            .and_then(|c| c.size())
-                            .map(|s| s.to_string());
+                        let size = state.get_storage_object_size(id).map(|s| s.to_string());
                         let details = match &item {
                             CatalogItem::Source(s) => {
                                 EventDetails::CreateSourceSinkV2(mz_audit_log::CreateSourceSinkV2 {

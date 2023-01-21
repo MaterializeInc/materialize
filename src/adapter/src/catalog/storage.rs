@@ -901,6 +901,13 @@ impl Connection {
         self.get_next_id("user").await.map(GlobalId::User)
     }
 
+    /// Get the next user computer instance id without allocating it.
+    pub async fn get_next_user_compute_instance_id(&mut self) -> Result<ComputeInstanceId, Error> {
+        self.get_next_id(USER_COMPUTE_ID_ALLOC_KEY)
+            .await
+            .map(ComputeInstanceId::User)
+    }
+
     /// Get the next replica id without allocating it.
     pub async fn get_next_replica_id(&mut self) -> Result<ReplicaId, Error> {
         self.get_next_id(REPLICA_ID_ALLOC_KEY).await

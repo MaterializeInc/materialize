@@ -271,5 +271,6 @@ message ProtoIngestionDescription {
     repeated ProtoSourceExport source_exports = 2;
     mz_storage_client.controller.ProtoCollectionMetadata ingestion_metadata = 3;
     ProtoSourceDesc desc = 4;
-    mz_storage_client.types.clusters.ProtoStorageClusterConfig cluster_config = 5;
+    reserved 5;
+    mz_storage_client.types.clusters.ProtoStorageClusterId cluster_id = 6;
 }

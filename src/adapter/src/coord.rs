@@ -550,6 +550,7 @@ impl Coordinator {
 
         info!("coordinator init: creating compute replicas");
         for instance in self.catalog.compute_instances() {
+            self.controller.storage.create_instance(instance.id);
             self.controller
                 .compute
                 .create_instance(instance.id, instance.log_indexes.clone())?;
@@ -589,6 +590,13 @@ impl Coordinator {
                     .extend(replica.config.logging.source_ids());
 
                 self.controller
+                    .storage
+                    .ensure_replica(
+                        instance.id,
+                        replica.config.location.to_storage_cluster_config(),
+                    )
+                    .await?;
+                self.controller
                     .active_compute()
                     .add_replica_to_instance(instance.id, replica_id, replica.config)
                     .unwrap();
@@ -600,6 +608,7 @@ impl Coordinator {
         self.controller
             .storage
             .drop_sources_unvalidated(builtin_migration_metadata.previous_materialized_view_ids);
+
         self.controller
             .storage
             .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids);
@@ -678,17 +687,18 @@ impl Coordinator {
                                 };
                                 source_exports.insert(subsource, export);
                             }
-                            let cluster_config = self
+                            let cluster_id = self
                                 .catalog
-                                .get_storage_cluster_config(entry.id())
-                                .expect("sources with ingestions always have linked clusters");
+                                .get_linked_cluster(entry.id())
+                                .expect("sources with ingestions always have linked clusters")
+                                .id;
                             (
                                 DataSource::Ingestion(IngestionDescription {
                                     desc: ingestion.desc.clone(),
                                     ingestion_metadata: (),
                                     source_imports,
                                     source_exports,
-                                    cluster_config,
+                                    cluster_id,
                                 }),
                                 source_status_collection_id,
                             )
@@ -1278,7 +1288,7 @@ pub async fn serve(
                     .controller
                     .remove_orphans(
                         coord.catalog.get_next_replica_id().await?,
-                        coord.catalog.get_next_user_global_id().await?,
+                        coord.catalog.get_next_user_compute_instance_id().await?,
                     )
                     .await
                     .map_err(AdapterError::Orchestrator)?;

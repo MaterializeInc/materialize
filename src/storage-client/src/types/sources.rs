@@ -48,7 +48,7 @@ use mz_repr::{ColumnType, Datum, Diff, GlobalId, RelationDesc, RelationType, Row
 use mz_timely_util::order::{Interval, Partitioned, RangeBound};
 
 use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
-use crate::types::clusters::StorageClusterConfig;
+use crate::types::clusters::StorageClusterId;
 use crate::types::connections::aws::AwsConfig;
 use crate::types::connections::{KafkaConnection, PostgresConnection};
 use crate::types::errors::DataflowError;
@@ -77,7 +77,7 @@ pub struct IngestionDescription<S = ()> {
     /// Collections to be exported by this ingestion.
     pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
     /// The address of a `clusterd` process on which to install the source.
-    pub cluster_config: StorageClusterConfig,
+    pub cluster_id: StorageClusterId,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -202,15 +202,15 @@ where
             proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<S>>(), 1..4)
                 .boxed(),
             any::<S>().boxed(),
-            any::<StorageClusterConfig>().boxed(),
+            any::<StorageClusterId>().boxed(),
         )
             .prop_map(
-                |(desc, source_imports, source_exports, ingestion_metadata, cluster_config)| Self {
+                |(desc, source_imports, source_exports, ingestion_metadata, cluster_id)| Self {
                     desc,
                     source_imports,
                     source_exports,
                     ingestion_metadata,
-                    cluster_config,
+                    cluster_id,
                 },
             )
             .boxed()
@@ -224,7 +224,7 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
             source_exports: self.source_exports.into_proto(),
             ingestion_metadata: Some(self.ingestion_metadata.into_proto()),
             desc: Some(self.desc.into_proto()),
-            cluster_config: Some(self.cluster_config.into_proto()),
+            cluster_id: Some(self.cluster_id.into_proto()),
         }
     }
 
@@ -238,9 +238,9 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
             ingestion_metadata: proto
                 .ingestion_metadata
                 .into_rust_if_some("ProtoIngestionDescription::ingestion_metadata")?,
-            cluster_config: proto
-                .cluster_config
-                .into_rust_if_some("ProtoIngestionDescription::cluster_config")?,
+            cluster_id: proto
+                .cluster_id
+                .into_rust_if_some("ProtoIngestionDescription::cluster_id")?,
         })
     }
 }
