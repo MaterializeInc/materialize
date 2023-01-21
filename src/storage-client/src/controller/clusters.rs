@@ -33,7 +33,7 @@ use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 
 use mz_build_info::BuildInfo;
-use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort, ServiceProcessMetrics};
+use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort};
 use mz_ore::collections::CollectionExt;
 use mz_ore::halt;
 use mz_persist_client::cache::PersistClientCache;
@@ -190,12 +190,6 @@ where
         }
 
         self.config.update(config_params);
-    }
-
-    /// Creates a [`MetricsFetcher`] that can be used to repeatedly fetch
-    /// metrics for all known storage objects.
-    pub fn metrics_fetcher(&self) -> MetricsFetcher {
-        MetricsFetcher::new(Arc::clone(&self.orchestrator), Arc::clone(&self.objects))
     }
 
     /// Provisions a storage cluster for the storage object with the specified
@@ -436,62 +430,5 @@ where
         }
 
         Ok(())
-    }
-}
-
-/// A helper that shares state with a [`StorageClusters`] and allows repeatedly
-/// fetching metrics for all known storage clusters.
-pub struct MetricsFetcher {
-    /// The orchestrator that we use to fetch metrics.
-    orchestrator: Arc<dyn NamespacedOrchestrator>,
-    /// The shared assignment of storage objects to storage clusters. This is
-    /// shared with a [`StorageClusters`].
-    objects: Arc<std::sync::Mutex<HashMap<GlobalId, StorageClusterAddr>>>,
-}
-
-impl MetricsFetcher {
-    /// Creates a new [`MetricsFetcher`].
-    fn new(
-        orchestrator: Arc<dyn NamespacedOrchestrator>,
-        objects: Arc<std::sync::Mutex<HashMap<GlobalId, StorageClusterAddr>>>,
-    ) -> Self {
-        Self {
-            orchestrator,
-            objects,
-        }
-    }
-
-    /// Fetches and returns metrics for all known storage clusters.
-    pub async fn fetch_metrics(
-        &mut self,
-    ) -> Vec<(
-        GlobalId,
-        String,
-        Result<Vec<ServiceProcessMetrics>, anyhow::Error>,
-    )> {
-        let service_ids = {
-            self.objects
-                .lock()
-                .expect("lock poisoned")
-                .iter()
-                .map(|(id, cluster_addr)| (id.clone(), cluster_addr.clone()))
-                .collect::<Vec<_>>()
-        };
-        tracing::trace!("fetch_metrics: service_ids: {:?}", service_ids);
-
-        let mut metrics = Vec::new();
-
-        // TODO(aljoscha): Fetching all this sequentially will be slow when we
-        // have many sources. We should allow fetching metrics for multiple
-        // services on the Orchestrator and then use it here.
-        for (service_id, cluster_addr) in service_ids {
-            let service_metrics = self
-                .orchestrator
-                .fetch_service_metrics(&service_id.to_string())
-                .await;
-            metrics.push((service_id, cluster_addr, service_metrics));
-        }
-
-        metrics
     }
 }
