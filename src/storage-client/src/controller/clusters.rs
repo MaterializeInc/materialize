@@ -19,87 +19,89 @@
 //! may override this policy by specifying the address of an existing storage
 //! cluster. This policy is subject to change in the future.
 
-use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::bail;
 use differential_dataflow::lattice::Lattice;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 
 use mz_build_info::BuildInfo;
+use mz_orchestrator::{CpuLimit, MemoryLimit};
 use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort};
 use mz_ore::collections::CollectionExt;
 use mz_ore::halt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
-use mz_repr::GlobalId;
 
 use crate::client::{ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse};
 use crate::controller::rehydration::RehydratingStorageClient;
-use crate::types::clusters::{StorageClusterConfig, StorageClusterResourceAllocation};
+use crate::types::clusters::StorageClusterId;
 use crate::types::parameters::StorageParameters;
 
 /// The network address of a storage cluster.
 pub type StorageClusterAddr = String;
 
-/// Identifier of a storage cluster.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub enum StorageClusterId {
-    /// A system storage cluster.
-    System(u64),
-    /// A user storage cluster.
-    User(u64),
+/// Resource allocations for a storage cluster.
+///
+/// Has some overlap with mz_compute_client::controller::ComputeReplicaAllocation,
+/// but keeping it separate for now due slightly different semantics.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct StorageClusterResourceAllocation {
+    /// The memory limit for each process in the replica.
+    pub memory_limit: Option<MemoryLimit>,
+    /// The CPU limit for each process in the replica.
+    pub cpu_limit: Option<CpuLimit>,
+    /// The number of worker threads in the replica.
+    pub workers: NonZeroUsize,
 }
 
-impl StorageClusterId {
-    pub fn inner_id(&self) -> u64 {
+/// Size or address of a storage instance
+///
+/// This represents how resources for a storage instance are going to be
+/// provisioned.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StorageClusterConfig {
+    /// Remote unmanaged storage
+    Remote {
+        /// The network address of the clusterd process.
+        addr: String,
+    },
+    /// A remote but managed replica
+    Managed {
+        /// The resource allocation for the replica.
+        allocation: StorageClusterResourceAllocation,
+        /// SQL size parameter used for allocation
+        size: String,
+    },
+}
+
+impl StorageClusterConfig {
+    /// Returns the size specified by the storage cluster configuration, if
+    /// the storage cluster is a managed storage cluster.
+    pub fn size(&self) -> Option<&str> {
         match self {
-            StorageClusterId::System(id) | StorageClusterId::User(id) => *id,
-        }
-    }
-
-    pub fn is_user(&self) -> bool {
-        matches!(self, Self::User(_))
-    }
-
-    pub fn is_system(&self) -> bool {
-        matches!(self, Self::System(_))
-    }
-}
-
-impl FromStr for StorageClusterId {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 2 {
-            bail!("couldn't parse compute instance id {}", s);
-        }
-        let val: u64 = s[1..].parse()?;
-        match s.chars().next().unwrap() {
-            's' => Ok(Self::System(val)),
-            'u' => Ok(Self::User(val)),
-            _ => bail!("couldn't parse compute instance id {}", s),
+            StorageClusterConfig::Remote { .. } => None,
+            StorageClusterConfig::Managed { size, .. } => Some(size),
         }
     }
 }
 
-impl fmt::Display for StorageClusterId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::System(id) => write!(f, "s{}", id),
-            Self::User(id) => write!(f, "u{}", id),
-        }
-    }
+/// Describes a storage cluster.
+#[derive(Debug, Clone)]
+pub struct StorageClusterDesc {
+    /// The ID of the storage cluster.
+    pub id: StorageClusterId,
+    /// The configuration of the storage cluster.
+    pub config: StorageClusterConfig,
 }
 
 /// Configuration for [`StorageClusters`].
+#[derive(Debug, Clone)]
 pub struct StorageClustersConfig {
     /// The build information for this process.
     pub build_info: &'static BuildInfo,
@@ -125,25 +127,14 @@ pub struct StorageClusters<T> {
     clusterd_image: String,
     /// The init container image to use for clusterd.
     init_container_image: Option<String>,
-    /// The known storage clusters, identified by network address.
-    clusters: HashMap<StorageClusterAddr, StorageCluster<T>>,
-    /// The assignment of storage objects to storage clusters.
-    objects: Arc<std::sync::Mutex<HashMap<GlobalId, StorageClusterAddr>>>,
+    /// Clients for all known storage clusters.
+    clients: HashMap<StorageClusterId, RehydratingStorageClient<T>>,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
     /// Storage configuration to apply to newly provisioned clusters.
     config: StorageParameters,
     /// A handle to Persist
     persist: Arc<Mutex<PersistClientCache>>,
-}
-
-/// Metadata about a single storage cluster.
-#[derive(Debug)]
-struct StorageCluster<T> {
-    /// The client to the storage cluster.
-    client: RehydratingStorageClient<T>,
-    /// The IDs of the storage objects installed on the storage cluster.
-    objects: HashSet<GlobalId>,
 }
 
 impl<T> StorageClusters<T>
@@ -162,8 +153,7 @@ where
             orchestrator: config.orchestrator,
             clusterd_image: config.clusterd_image,
             init_container_image: config.init_container_image,
-            objects: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            clusters: HashMap::new(),
+            clients: HashMap::new(),
             initialized: false,
             config: Default::default(),
             persist,
@@ -192,182 +182,120 @@ where
         self.config.update(config_params);
     }
 
-    /// Provisions a storage cluster for the storage object with the specified
-    /// ID. If the storage cluster is managed, this will ensure that the backing
+    /// Creates a new storage instance.
+    pub fn create_instance(&mut self, id: StorageClusterId) {
+        let mut client = RehydratingStorageClient::new(self.build_info, Arc::clone(&self.persist));
+        if self.initialized {
+            client.send(StorageCommand::InitializationComplete);
+        }
+        client.send(StorageCommand::UpdateConfiguration(self.config.clone()));
+        let old_client = self.clients.insert(id, client);
+        assert!(old_client.is_none(), "storage instance {id} already exists");
+    }
+
+    /// Drops a storage instance.
+    pub fn drop_instance(&mut self, id: StorageClusterId) {
+        let client = self.clients.remove(&id);
+        assert!(client.is_some(), "storage instance {id} does not exist");
+    }
+
+    /// Provisions a storage replica for the storage instance with the specified
+    /// ID.
+    ///
+    /// If the storage replica is managed, this will ensure that the backing
     /// orchestrator allocates resources, either by creating or updating the
-    /// existing service. (For 'remote' clusterd instances, the user is required
+    /// existing service. For 'remote' clusterd instances, the user is required
     /// to independently make sure that any resources exist -- if the
     /// orchestrator had provisioned a service for this cluster in the past, it
-    /// will be dropped.)
-    ///
-    /// At present, the policy for storage cluster assignment creates a new
-    /// storage cluster for each storage object. This policy is subject to
-    /// change.
-    ///
-    /// Returns a client to the provisioned cluster. The client may be retrieved
-    /// in the future via the [`client`](StorageClusters::client) method.
-    pub async fn provision(
+    /// will be dropped.
+    pub async fn ensure_replica(
         &mut self,
-        id: GlobalId,
+        id: StorageClusterId,
         cluster_config: StorageClusterConfig,
-    ) -> Result<&mut RehydratingStorageClient<T>, anyhow::Error>
+    ) -> Result<(), anyhow::Error>
     where
         StorageCommand<T>: RustType<ProtoStorageCommand>,
         StorageResponse<T>: RustType<ProtoStorageResponse>,
     {
-        let cluster_addr = match cluster_config {
+        let addr = match cluster_config {
             StorageClusterConfig::Remote { addr } => {
-                self.drop_storage_cluster(id).await?;
+                self.drop_replica(id).await?;
                 addr
             }
             StorageClusterConfig::Managed { allocation, .. } => {
-                self.ensure_storage_cluster(id, allocation).await?
+                let service = self
+                    .orchestrator
+                    .ensure_service(
+                        &id.to_string(),
+                        ServiceConfig {
+                            image: self.clusterd_image.clone(),
+                            init_container_image: self.init_container_image.clone(),
+                            args: &|assigned| {
+                                vec![
+                                    format!("--storage-workers={}", allocation.workers),
+                                    format!(
+                                        "--storage-controller-listen-addr={}",
+                                        assigned["storagectl"]
+                                    ),
+                                    format!(
+                                        "--compute-controller-listen-addr={}",
+                                        assigned["computectl"]
+                                    ),
+                                    format!(
+                                        "--internal-http-listen-addr={}",
+                                        assigned["internal-http"]
+                                    ),
+                                    format!("--opentelemetry-resource=storage_id={}", id),
+                                ]
+                            },
+                            ports: vec![
+                                ServicePort {
+                                    name: "storagectl".into(),
+                                    port_hint: 2100,
+                                },
+                                ServicePort {
+                                    name: "computectl".into(),
+                                    port_hint: 2101,
+                                },
+                                ServicePort {
+                                    name: "internal-http".into(),
+                                    port_hint: 6878,
+                                },
+                            ],
+                            cpu_limit: allocation.cpu_limit,
+                            memory_limit: allocation.memory_limit,
+                            scale: NonZeroUsize::new(1).unwrap(),
+                            labels: BTreeMap::from_iter([(
+                                "size".to_string(),
+                                allocation.workers.to_string(),
+                            )]),
+                            availability_zone: None,
+                            // TODO: Decide on an A-A policy for storage clusters
+                            anti_affinity: None,
+                        },
+                    )
+                    .await?;
+                service.addresses("storagectl").into_element()
             }
         };
-
-        if let Some(previous_address) = {
-            let mut objects = self.objects.lock().expect("lock poisoned");
-            objects.insert(id, cluster_addr.clone())
-        } {
-            if previous_address != cluster_addr {
-                self.remove_id_from_cluster(id, cluster_addr.clone());
-            }
-        };
-
-        let config_params = self.config.clone();
-
-        let cluster = self
-            .clusters
-            .entry(cluster_addr.clone())
-            .or_insert_with(|| {
-                let mut client = RehydratingStorageClient::new(
-                    cluster_addr,
-                    self.build_info,
-                    Arc::clone(&self.persist),
-                );
-                if self.initialized {
-                    client.send(StorageCommand::InitializationComplete);
-                }
-                client.send(StorageCommand::UpdateConfiguration(config_params));
-                StorageCluster {
-                    client,
-                    objects: HashSet::with_capacity(1),
-                }
-            });
-
-        cluster.objects.insert(id);
-
-        Ok(&mut cluster.client)
-    }
-
-    /// Deprovisions the storage cluster for the storage object with the
-    /// specified ID: ensures we're not orchestrating any resources for this id,
-    /// and cleans up any internal state.
-    pub async fn deprovision(&mut self, id: GlobalId) -> Result<(), anyhow::Error> {
-        self.drop_storage_cluster(id).await?;
-
-        let cluster_addr = { self.objects.lock().expect("lock poisoned").remove(&id) };
-
-        if let Some(cluster_addr) = cluster_addr {
-            self.remove_id_from_cluster(id, cluster_addr);
-        }
-
+        self.client(id).unwrap().connect(addr);
         Ok(())
     }
 
-    /// If a id no longer maps to a particular cluster_addr, this removes the id from the cluster's
-    /// set -- and, if the set is empty, shuts down the client.
-    fn remove_id_from_cluster(&mut self, id: GlobalId, cluster_addr: StorageClusterAddr) {
-        if let Entry::Occupied(mut entry) = self.clusters.entry(cluster_addr) {
-            let objects = &mut entry.get_mut().objects;
-            objects.remove(&id);
-            if objects.is_empty() {
-                entry.remove();
-            }
-        }
+    /// Deprovisions the storage replica for the specified ID.
+    pub async fn drop_replica(&self, id: StorageClusterId) -> Result<(), anyhow::Error> {
+        self.orchestrator.drop_service(&id.to_string()).await
     }
 
-    /// Retrives the client for the storage cluster for the given ID, if the ID
-    /// is currently provisioned.
-    pub fn client(&mut self, id: GlobalId) -> Option<&mut RehydratingStorageClient<T>> {
-        let objects = self.objects.lock().expect("lock poisoned");
-        let cluster_addr = objects.get(&id)?;
-
-        match self.clusters.get_mut(cluster_addr) {
-            None => panic!(
-                "StorageClusters internally inconsistent: \
-                 ingestion {id} referenced missing storage cluster {cluster_addr:?}"
-            ),
-            Some(cluster) => Some(&mut cluster.client),
-        }
+    /// Retrives the client for the storage cluster for the given ID, if it
+    /// exists.
+    pub fn client(&mut self, id: StorageClusterId) -> Option<&mut RehydratingStorageClient<T>> {
+        self.clients.get_mut(&id)
     }
 
     /// Returns an iterator over clients for all known storage clusters.
     pub fn clients(&mut self) -> impl Iterator<Item = &mut RehydratingStorageClient<T>> {
-        self.clusters.values_mut().map(|h| &mut h.client)
-    }
-
-    /// Starts a orchestrated storage cluster for the specified ID.
-    async fn ensure_storage_cluster(
-        &self,
-        id: GlobalId,
-        allocation: StorageClusterResourceAllocation,
-    ) -> Result<StorageClusterAddr, anyhow::Error> {
-        let storage_service = self
-            .orchestrator
-            .ensure_service(
-                &id.to_string(),
-                ServiceConfig {
-                    image: self.clusterd_image.clone(),
-                    init_container_image: self.init_container_image.clone(),
-                    args: &|assigned| {
-                        vec![
-                            format!("--storage-workers={}", allocation.workers),
-                            format!(
-                                "--storage-controller-listen-addr={}",
-                                assigned["storagectl"]
-                            ),
-                            format!(
-                                "--compute-controller-listen-addr={}",
-                                assigned["computectl"]
-                            ),
-                            format!("--internal-http-listen-addr={}", assigned["internal-http"]),
-                            format!("--opentelemetry-resource=storage_id={}", id),
-                        ]
-                    },
-                    ports: vec![
-                        ServicePort {
-                            name: "storagectl".into(),
-                            port_hint: 2100,
-                        },
-                        ServicePort {
-                            name: "computectl".into(),
-                            port_hint: 2101,
-                        },
-                        ServicePort {
-                            name: "internal-http".into(),
-                            port_hint: 6878,
-                        },
-                    ],
-                    cpu_limit: allocation.cpu_limit,
-                    memory_limit: allocation.memory_limit,
-                    scale: NonZeroUsize::new(1).unwrap(),
-                    labels: BTreeMap::from_iter([(
-                        "size".to_string(),
-                        allocation.workers.to_string(),
-                    )]),
-                    availability_zone: None,
-                    // TODO: Decide on an A-A policy for storage clusters
-                    anti_affinity: None,
-                },
-            )
-            .await?;
-        Ok(storage_service.addresses("storagectl").into_element())
-    }
-
-    /// Drops an orchestrated storage cluster for the specified ID.
-    async fn drop_storage_cluster(&self, id: GlobalId) -> Result<(), anyhow::Error> {
-        self.orchestrator.drop_service(&id.to_string()).await
+        self.clients.values_mut()
     }
 
     /// Removes orphaned storage clusters from the orchestrator.
@@ -375,11 +303,11 @@ where
     /// A storage cluster is considered orphaned if it is present in the orchestrator but not in the
     /// controller and the storage cluster id is less than `next_id`. We assume that the controller knows
     /// all storage clusters with ids [0..next_id).
-    pub async fn remove_orphans(&self, next_id: GlobalId) -> Result<(), anyhow::Error> {
+    pub async fn remove_orphans(&self, next_id: StorageClusterId) -> Result<(), anyhow::Error> {
         // Parse GlobalId and return contained user id, if any
         fn user_id(id: &String) -> Option<u64> {
-            GlobalId::from_str(id).ok().and_then(|id| match id {
-                GlobalId::User(x) => Some(x),
+            StorageClusterId::from_str(id).ok().and_then(|id| match id {
+                StorageClusterId::User(x) => Some(x),
                 _ => None,
             })
         }
@@ -387,7 +315,7 @@ where
         tracing::debug!("Removing storage clusterd orphans. next_id = {}", next_id);
 
         let next_id = match next_id {
-            GlobalId::User(x) => x,
+            StorageClusterId::User(x) => x,
             _ => anyhow::bail!("Expected GlobalId::User, got {}", next_id),
         };
 
@@ -399,13 +327,11 @@ where
             .filter_map(user_id)
             .collect();
 
-        let catalog_ids: HashSet<_> = {
-            let objects = self.objects.lock().expect("lock poisoned");
-
-            objects
+        let keep: HashSet<_> = {
+            self.clients
                 .keys()
                 .filter_map(|x| match x {
-                    GlobalId::User(x) => Some(x),
+                    StorageClusterId::User(x) => Some(x),
                     _ => None,
                 })
                 .cloned()
@@ -422,10 +348,9 @@ where
                     next_id
                 );
             }
-            if !catalog_ids.contains(&id) && id < next_id {
-                let gid = GlobalId::User(id);
-                tracing::warn!("Removing storage cluster orphan {}", gid);
-                self.orchestrator.drop_service(&gid.to_string()).await?;
+            if !keep.contains(&id) {
+                tracing::warn!("Removing storage cluster orphan {}", id);
+                self.drop_replica(StorageClusterId::User(id)).await?;
             }
         }
 

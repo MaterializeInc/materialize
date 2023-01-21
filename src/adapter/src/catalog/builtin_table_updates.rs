@@ -249,9 +249,7 @@ impl CatalogState {
                     name,
                     source_type,
                     connection_id,
-                    self.get_storage_cluster_config(id)
-                        .as_ref()
-                        .and_then(|s| s.size()),
+                    self.get_storage_object_size(id),
                     envelope,
                     diff,
                 );
@@ -615,11 +613,7 @@ impl CatalogState {
                     Datum::String(name),
                     Datum::String(connection.name()),
                     Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
-                    Datum::from(
-                        self.get_storage_cluster_config(id)
-                            .as_ref()
-                            .and_then(|c| c.size()),
-                    ),
+                    Datum::from(self.get_storage_object_size(id)),
                 ]),
                 diff,
             });

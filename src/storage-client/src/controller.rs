@@ -19,13 +19,14 @@
 //! empty frontier.
 
 use std::any::Any;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Debug};
 use std::num::NonZeroI64;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use anyhow::Context;
 use async_trait::async_trait;
 use bytes::BufMut;
 use derivative::Derivative;
@@ -60,7 +61,7 @@ use crate::client::{
 };
 use crate::controller::clusters::{StorageClusters, StorageClustersConfig};
 use crate::healthcheck;
-use crate::types::clusters::StorageClusterConfig;
+use crate::types::clusters::StorageClusterId;
 use crate::types::errors::DataflowError;
 use crate::types::parameters::StorageParameters;
 use crate::types::sinks::{
@@ -74,7 +75,9 @@ mod persist_handles;
 mod rehydration;
 mod statistics;
 
-pub use crate::controller::clusters::StorageClusterId;
+pub use crate::controller::clusters::{
+    StorageClusterAddr, StorageClusterConfig, StorageClusterDesc, StorageClusterResourceAllocation,
+};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
 
@@ -103,7 +106,7 @@ impl MetadataExport<mz_repr::Timestamp> for MetadataExportFetcher {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum IntrospectionType {
     /// We're not responsible for appending to this collection automatically, but we should
     /// automatically bump the write frontier from time to time.
@@ -161,7 +164,7 @@ pub struct ExportDescription<T = mz_repr::Timestamp> {
     pub sink: StorageSinkDesc<MetadataUnfilled, T>,
     /// The address of a `clusterd` process on which to install the sink or the
     /// settings for spinning up a controller-managed process.
-    pub cluster_config: StorageClusterConfig,
+    pub cluster_id: StorageClusterId,
 }
 
 /// Opaque token to ensure `prepare_export` is called before `create_exports`.  This token proves
@@ -197,6 +200,43 @@ pub trait StorageController: Debug + Send {
     /// Acquire an immutable reference to the collection state, should it exist.
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError>;
 
+    /// Creates a storage instance with the specified ID.
+    ///
+    /// A storage instance can have zero or one replicas. The instance is
+    /// created with zero replicas.
+    ///
+    /// Panics if a storage instance with the given ID already exists.
+    fn create_instance(&mut self, id: StorageClusterId);
+
+    /// Drops the storage instance with the given ID.
+    ///
+    /// If you call this method while the storage instance has a replica
+    /// attached, that replica will be leaked. Call `drop_replica` first.
+    ///
+    /// Panics if a storage instance with the given ID does not exist.
+    fn drop_instance(&mut self, id: StorageClusterId);
+
+    /// Ensures that the identified storage instance has one replica with the
+    /// specified configuration.
+    ///
+    /// If the storage instance does not yet have a replica, a replica is
+    /// created. If the storage instance has an existing replica, the existing
+    /// replica is recreated to match the new configuration, if necessary.
+    ///
+    /// In the future, this API will be adjusted to support active replication
+    /// of storage instances (i.e., multiple replicas attached to a given
+    /// storage instance.)
+    async fn ensure_replica(
+        &mut self,
+        id: StorageClusterId,
+        config: StorageClusterConfig,
+    ) -> Result<(), StorageError>;
+
+    /// Drops the replica of the identified storage instance.
+    ///
+    /// Does nothing if the identified storage instance does not have a replica.
+    async fn drop_replica(&mut self, id: StorageClusterId) -> Result<(), StorageError>;
+
     /// Acquire a mutable reference to the collection state, should it exist.
     fn collection_mut(
         &mut self,
@@ -224,11 +264,6 @@ pub trait StorageController: Debug + Send {
     async fn create_collections(
         &mut self,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError>;
-
-    async fn alter_collections(
-        &mut self,
-        collections: Vec<(GlobalId, StorageClusterConfig)>,
     ) -> Result<(), StorageError>;
 
     /// Acquire an immutable reference to the export state, should it exist.
@@ -366,7 +401,7 @@ pub trait StorageController: Debug + Send {
     async fn process(&mut self) -> Result<(), anyhow::Error>;
 
     /// Considers all nodes not currently used as orphans and removes those from the orchestrator.
-    async fn remove_orphans(&mut self, next_id: GlobalId) -> Result<(), anyhow::Error>;
+    async fn remove_orphans(&mut self, next_id: StorageClusterId) -> Result<(), anyhow::Error>;
 }
 
 /// Compaction policies for collections maintained by `Controller`.
@@ -615,11 +650,14 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     /// without blocking the storage controller.
     persist_read_handles: persist_handles::PersistReadWorker<T>,
     stashed_response: Option<StorageResponse<T>>,
-    /// Storage clusters that should be deprovisioned during the next call to `StorageController::process`,
-    /// along with the status collection to report the drop to.
-    pending_cluster_deprovisions: BTreeSet<(GlobalId, GlobalId)>,
-    /// Commands that should be send to storage instances during the next call
-    /// to `StorageController::process`.
+    /// IDs of sources that were dropped whose statuses should be
+    /// updated during the next call to `StorageController::process`.
+    pending_source_drops: Vec<GlobalId>,
+    /// IDs of sinks that were dropped whose statuses should be
+    /// updated during the next call to `StorageController::process`.
+    pending_sink_drops: Vec<GlobalId>,
+    /// Compaction commands to send during the next call to
+    /// `StorageController::process`.
     pending_compaction_commands: Vec<(GlobalId, Antichain<T>)>,
 
     /// Interface for managed collections
@@ -779,8 +817,9 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             persist_write_handles,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
             stashed_response: None,
-            pending_cluster_deprovisions: BTreeSet::new(),
-            pending_compaction_commands: Vec::new(),
+            pending_source_drops: vec![],
+            pending_sink_drops: vec![],
+            pending_compaction_commands: vec![],
             collection_manager,
             introspection_ids: HashMap::new(),
             introspection_tokens: HashMap::new(),
@@ -834,6 +873,28 @@ where
         &self,
     ) -> Box<dyn Iterator<Item = (&GlobalId, &CollectionState<Self::Timestamp>)> + '_> {
         Box::new(self.state.collections.iter())
+    }
+
+    fn create_instance(&mut self, id: StorageClusterId) {
+        self.clusters.create_instance(id)
+    }
+
+    fn drop_instance(&mut self, id: StorageClusterId) {
+        self.clusters.drop_instance(id)
+    }
+
+    async fn ensure_replica(
+        &mut self,
+        id: StorageClusterId,
+        config: StorageClusterConfig,
+    ) -> Result<(), StorageError> {
+        self.clusters.ensure_replica(id, config).await?;
+        Ok(())
+    }
+
+    async fn drop_replica(&mut self, id: StorageClusterId) -> Result<(), StorageError> {
+        self.clusters.drop_replica(id).await?;
+        Ok(())
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -1065,17 +1126,22 @@ where
                         ingestion_metadata,
                         // The rest of the fields are identical
                         desc: ingestion.desc,
-                        cluster_config: ingestion.cluster_config,
+                        cluster_id: ingestion.cluster_id,
                     };
                     let mut persist_clients = self.persist.lock().await;
                     let mut state = desc.initialize_state(&mut persist_clients).await;
                     let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
 
-                    // Provision a storage cluster for the ingestion.
+                    // Fetch the client for this ingestion's cluster.
                     let client = self
                         .clusters
-                        .provision(id, desc.cluster_config.clone())
-                        .await?;
+                        .client(ingestion.cluster_id)
+                        .with_context(|| {
+                            format!(
+                                "cluster {} missing for ingestion {}",
+                                ingestion.cluster_id, id
+                            )
+                        })?;
                     let augmented_ingestion = CreateSourceCommand {
                         id,
                         description: desc,
@@ -1137,16 +1203,6 @@ where
             }
         }
 
-        Ok(())
-    }
-
-    async fn alter_collections(
-        &mut self,
-        collections: Vec<(GlobalId, StorageClusterConfig)>,
-    ) -> Result<(), StorageError> {
-        for (id, config) in collections {
-            let _ = self.clusters.provision(id, config).await?;
-        }
         Ok(())
     }
 
@@ -1272,11 +1328,16 @@ where
                 },
             };
 
-            // Provision a storage cluster for the ingestion.
+            // Fetch the client for this exports's cluster.
             let client = self
                 .clusters
-                .provision(id, description.cluster_config)
-                .await?;
+                .client(description.cluster_id)
+                .with_context(|| {
+                    format!(
+                        "cluster {} missing for export {}",
+                        description.cluster_id, id
+                    )
+                })?;
 
             client.send(StorageCommand::CreateSinks(vec![cmd]));
         }
@@ -1321,10 +1382,6 @@ where
 
             // Remove sink by removing its write frontier and arranging for deprovisioning.
             self.update_write_frontiers(&[(id, Antichain::new())]);
-            let status_id = self.state.introspection_ids[&IntrospectionType::SinkStatusHistory];
-            self.state
-                .pending_cluster_deprovisions
-                .insert((id, status_id));
         }
     }
 
@@ -1560,36 +1617,47 @@ where
         // instances, but this seems fine for now.
         for (id, frontier) in self.state.pending_compaction_commands.drain(..) {
             // TODO(petrosagg): make this a strict check
-            if let Some(client) = self.clusters.client(id) {
+            let client = self.state.collections[&id]
+                .cluster_id()
+                .and_then(|cluster_id| self.clusters.client(cluster_id));
+            if let Some(client) = client {
                 client.send(StorageCommand::AllowCompaction(vec![(
                     id,
                     frontier.clone(),
                 )]));
 
                 if frontier.is_empty() {
-                    let status_id =
-                        self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
-                    self.state
-                        .pending_cluster_deprovisions
-                        .insert((id, status_id));
+                    self.state.pending_source_drops.push(id);
                 }
             }
         }
 
-        let to_deprovision = std::mem::take(&mut self.state.pending_cluster_deprovisions);
-        for (id, status_id) in to_deprovision {
-            // Record the destruction of the source
+        // Record the drop status for all pending source and sink drops.
+        let source_status_history_id =
+            self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
+        let mut updates = vec![];
+        for id in self.state.pending_source_drops.drain(..) {
             let status_row = healthcheck::pack_status_row(id, "dropped", None, (self.state.now)());
-            self.append_to_managed_collection(status_id, vec![(status_row, 1)])
-                .await;
-
-            self.clusters.deprovision(id).await?;
+            updates.push((status_row, 1));
         }
+        self.append_to_managed_collection(source_status_history_id, updates)
+            .await;
+
+        // Record the drop status for all pending sink drops.
+        let sink_status_history_id =
+            self.state.introspection_ids[&IntrospectionType::SinkStatusHistory];
+        let mut updates = vec![];
+        for id in self.state.pending_sink_drops.drain(..) {
+            let status_row = healthcheck::pack_status_row(id, "dropped", None, (self.state.now)());
+            updates.push((status_row, 1));
+        }
+        self.append_to_managed_collection(sink_status_history_id, updates)
+            .await;
 
         Ok(())
     }
 
-    async fn remove_orphans(&mut self, next_id: GlobalId) -> Result<(), anyhow::Error> {
+    async fn remove_orphans(&mut self, next_id: StorageClusterId) -> Result<(), anyhow::Error> {
         self.clusters.remove_orphans(next_id).await
     }
 }
@@ -2031,6 +2099,15 @@ impl<T: Timestamp> CollectionState<T> {
             read_policy: ReadPolicy::ValidFrom(since),
             write_frontier,
             collection_metadata: metadata,
+        }
+    }
+
+    /// Returns the cluster to which the collection is bound, if applicable.
+    fn cluster_id(&self) -> Option<StorageClusterId> {
+        match &self.description.data_source {
+            DataSource::Ingestion(ingestion) => Some(ingestion.cluster_id),
+            DataSource::Introspection(_) => None,
+            DataSource::Other => None,
         }
     }
 }

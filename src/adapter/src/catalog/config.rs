@@ -21,7 +21,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_sql::catalog::EnvironmentId;
-use mz_storage_client::types::clusters::StorageClusterResourceAllocation;
+use mz_storage_client::controller::StorageClusterResourceAllocation;
 
 use crate::catalog::storage;
 use crate::config::SystemParameterFrontend;

@@ -289,6 +289,7 @@ impl Coordinator {
             }
             if !clusters_to_drop.is_empty() {
                 for cluster_id in clusters_to_drop {
+                    self.controller.storage.drop_instance(cluster_id);
                     self.controller.compute.drop_instance(cluster_id);
                 }
             }
@@ -423,10 +424,7 @@ impl Coordinator {
         }
 
         // Drop storage sources.
-        for id in &source_ids {
-            self.drop_storage_read_policy(id);
-        }
-        self.controller.storage.drop_sources(source_ids).unwrap();
+        self.drop_sources(source_ids)
     }
 
     async fn drop_secrets(&mut self, secrets: Vec<GlobalId>) {
@@ -511,10 +509,11 @@ impl Coordinator {
             from_storage_metadata: (),
         };
 
-        let cluster_config = self
+        let cluster_id = self
             .catalog
-            .get_storage_cluster_config(create_export_token.id())
-            .expect("sinks always have linked clusters");
+            .get_linked_cluster(create_export_token.id())
+            .expect("sinks always have linked clusters")
+            .id;
 
         Ok(self
             .controller
@@ -523,7 +522,7 @@ impl Coordinator {
                 create_export_token,
                 ExportDescription {
                     sink: storage_sink_desc,
-                    cluster_config,
+                    cluster_id,
                 },
             )])
             .await?)

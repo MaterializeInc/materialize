@@ -50,7 +50,10 @@ use mz_orchestrator::{CpuLimit, MemoryLimit, NamespacedOrchestrator, ServiceProc
 use mz_ore::halt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
-use mz_storage_client::controller::{ReadPolicy, StorageClusterId, StorageController};
+use mz_storage_client::controller::{
+    ReadPolicy, StorageClusterConfig, StorageClusterResourceAllocation, StorageController,
+};
+use mz_storage_client::types::clusters::StorageClusterId;
 
 use crate::logging::{LogVariant, LogView, LoggingConfig};
 use crate::protocol::command::ComputeParameters;
@@ -162,6 +165,26 @@ impl ComputeReplicaLocation {
             ComputeReplicaLocation::Managed {
                 availability_zone, ..
             } => Some(availability_zone),
+        }
+    }
+
+    /// HACK: converts a compute cluster location to a storage cluster config.
+    /// Will be removed shortly as part of the cluster unification work.
+    pub fn to_storage_cluster_config(&self) -> StorageClusterConfig {
+        match self {
+            ComputeReplicaLocation::Remote { addrs, .. } => StorageClusterConfig::Remote {
+                addr: addrs.iter().next().unwrap().clone(),
+            },
+            ComputeReplicaLocation::Managed {
+                allocation, size, ..
+            } => StorageClusterConfig::Managed {
+                allocation: StorageClusterResourceAllocation {
+                    memory_limit: allocation.memory_limit,
+                    cpu_limit: allocation.cpu_limit,
+                    workers: allocation.workers,
+                },
+                size: size.into(),
+            },
         }
     }
 }

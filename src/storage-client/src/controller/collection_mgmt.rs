@@ -134,6 +134,8 @@ impl CollectionManager {
     ///   `id`.
     /// - If the collection closed.
     pub(super) async fn append_to_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
-        self.tx.send((id, updates)).await.expect("rx hung up");
+        if !updates.is_empty() {
+            self.tx.send((id, updates)).await.expect("rx hung up");
+        }
     }
 }
