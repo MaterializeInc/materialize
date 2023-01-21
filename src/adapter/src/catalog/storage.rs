@@ -992,21 +992,48 @@ where
 
 #[tracing::instrument(name = "storage::transaction", level = "trace", skip_all)]
 pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error> {
-    let databases = COLLECTION_DATABASE.peek_one(stash).await?;
-    let schemas = COLLECTION_SCHEMA.peek_one(stash).await?;
-    let roles = COLLECTION_ROLE.peek_one(stash).await?;
-    let items = COLLECTION_ITEM.peek_one(stash).await?;
-    let clusters = COLLECTION_CLUSTERS.peek_one(stash).await?;
-    let cluster_replicas = COLLECTION_CLUSTER_REPLICAS.peek_one(stash).await?;
-    let introspection_sources = COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX
-        .peek_one(stash)
+    let (
+        databases,
+        schemas,
+        roles,
+        items,
+        clusters,
+        cluster_replicas,
+        introspection_sources,
+        id_allocator,
+        configs,
+        settings,
+        timestamps,
+        system_gid_mapping,
+        system_configurations,
+    ) = stash
+        .with_transaction(|tx| {
+            Box::pin(async move {
+                // Peek the catalog collections in any order and a single transaction.
+                futures::try_join!(
+                    tx.peek_one(tx.collection(COLLECTION_DATABASE.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_SCHEMA.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_ROLE.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_ITEM.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_CLUSTERS.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_CLUSTER_REPLICAS.name()).await?),
+                    tx.peek_one(
+                        tx.collection(COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX.name())
+                            .await?,
+                    ),
+                    tx.peek_one(tx.collection(COLLECTION_ID_ALLOC.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_CONFIG.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_SETTING.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_TIMESTAMP.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_SYSTEM_GID_MAPPING.name()).await?),
+                    tx.peek_one(
+                        tx.collection(COLLECTION_SYSTEM_CONFIGURATION.name())
+                            .await?,
+                    )
+                )
+            })
+        })
         .await?;
-    let id_allocator = COLLECTION_ID_ALLOC.peek_one(stash).await?;
-    let configs = COLLECTION_CONFIG.peek_one(stash).await?;
-    let settings = COLLECTION_SETTING.peek_one(stash).await?;
-    let timestamps = COLLECTION_TIMESTAMP.peek_one(stash).await?;
-    let system_gid_mapping = COLLECTION_SYSTEM_GID_MAPPING.peek_one(stash).await?;
-    let system_configurations = COLLECTION_SYSTEM_CONFIGURATION.peek_one(stash).await?;
 
     Ok(Transaction {
         stash,
