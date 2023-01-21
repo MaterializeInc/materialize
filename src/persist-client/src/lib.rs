@@ -132,6 +132,7 @@ pub mod metrics {
     pub use crate::internal::metrics::encode_ts_metric;
     pub use crate::internal::metrics::Metrics;
 }
+pub mod internals_bench;
 pub mod read;
 pub mod usage;
 pub mod write;

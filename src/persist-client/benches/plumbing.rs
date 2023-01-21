@@ -17,6 +17,7 @@ use bytes::Bytes;
 use criterion::{Bencher, BenchmarkId, Criterion, Throughput};
 use differential_dataflow::trace::Description;
 use futures::stream::{FuturesUnordered, StreamExt};
+use mz_persist_client::internals_bench::trace_push_batch_one_iter;
 use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -208,5 +209,13 @@ pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data:
             let mut buf = Vec::new();
             trace.encode(&mut buf);
         })
+    });
+}
+
+pub fn bench_trace_push_batch(c: &mut Criterion) {
+    let mut g = c.benchmark_group("trace");
+    const NUM_BATCHES: usize = 20_000;
+    g.bench_function(BenchmarkId::new("push_batch", NUM_BATCHES), |b| {
+        b.iter(|| trace_push_batch_one_iter(NUM_BATCHES));
     });
 }
