@@ -70,7 +70,6 @@ use crate::types::sources::{IngestionDescription, SourceData, SourceExport};
 
 mod clusters;
 mod collection_mgmt;
-mod metrics_scraper;
 mod persist_handles;
 mod rehydration;
 mod statistics;
@@ -111,7 +110,6 @@ pub enum IntrospectionType {
     SinkStatusHistory,
     SourceStatusHistory,
     ShardMapping,
-    StorageClusterMetrics,
 
     // Note that this single-shard introspection source will be changed to per-replica,
     // once we allow multiplexing multiple sources/sinks on a single cluster.
@@ -1098,41 +1096,6 @@ where
                     match i {
                         IntrospectionType::ShardMapping => {
                             self.initialize_shard_mapping().await;
-                        }
-                        IntrospectionType::StorageClusterMetrics => {
-                            // This has some subtlety, points from guswynn:
-                            //
-                            //   - This takes the collection to empty, at roughly
-                            //   now(), but doesn't delete the old data (that we
-                            //   definitely want to be able to see!
-                            //
-                            //   - This uses the CollectionManager once, which
-                            //   requires that this collection is registered to
-                            //   PersistWriteHandles, which it is, above.
-                            //
-                            //   - The CollectionManager manages writes and
-                            //   bumping the upper, the metric task simply
-                            //   produces the values that are send to the
-                            //   manager.
-
-                            // The metrics scraper assumes that the collection
-                            // sums up to empty when starting up. When needed,
-                            // we can change the scraper to reconcile its
-                            // internal state with the current state of the
-                            // output collection.
-                            self.reconcile_managed_collection(id, vec![]).await;
-
-                            let metrics_fetcher = self.clusters.metrics_fetcher();
-                            let scraper_token = metrics_scraper::spawn_metrics_scraper(
-                                id.clone(),
-                                metrics_fetcher,
-                                // This does a shallow copy.
-                                self.state.collection_manager.clone(),
-                            );
-
-                            // Make sure this is dropped when the controller is
-                            // dropped, so that the internal task will stop.
-                            self.state.introspection_tokens.insert(id, scraper_token);
                         }
                         IntrospectionType::StorageSourceStatistics => {
                             // Set the collection to empty.

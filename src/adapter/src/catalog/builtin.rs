@@ -1580,17 +1580,6 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
     is_retained_metrics_relation: true,
 });
 
-pub static MZ_STORAGE_HOST_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_storage_host_sizes",
-    schema: MZ_INTERNAL_SCHEMA,
-    desc: RelationDesc::empty()
-        .with_column("size", ScalarType::String.nullable(false))
-        .with_column("workers", ScalarType::UInt64.nullable(false))
-        .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(false))
-        .with_column("memory_bytes", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_relation: true,
-});
-
 pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replica_heartbeats",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1728,24 +1717,6 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinTable> = Lazy::new(|| Built
         .with_column("export_id", ScalarType::String.nullable(false))
         .with_column("time", ScalarType::MzTimestamp.nullable(false)),
     is_retained_metrics_relation: false,
-});
-
-pub static MZ_STORAGE_HOST_METRICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
-    name: "mz_storage_host_metrics",
-    // TODO[btv] - make this public once we work out whether and how to fuse it with
-    // the corresponding Compute tables.
-    schema: MZ_INTERNAL_SCHEMA,
-    data_source: Some(IntrospectionType::StorageClusterMetrics),
-    desc: RelationDesc::empty()
-        // Right now (in production) each storage cluster is running exactly one
-        // source or sink, so we identify the hosts by the source/sink id. We
-        // have to change this once we allow multiple storage objects to share a
-        // "cluster".
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("process_id", ScalarType::UInt64.nullable(false))
-        .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
-        .with_column("memory_bytes", ScalarType::UInt64.nullable(true)),
-    is_retained_metrics_relation: true,
 });
 
 // These will be replaced with per-replica tables once source/sink multiplexing on
@@ -2427,36 +2398,6 @@ FROM
         JOIN mz_internal.mz_cluster_replica_metrics AS m ON m.replica_id = r.id",
 };
 
-pub const MZ_SOURCE_UTILIZATION: BuiltinView = BuiltinView {
-    name: "mz_source_utilization",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_source_utilization AS
-SELECT
-    sources.id AS source_id,
-    m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
-    m.cpu_nano_cores::float8 / (s.workers * 10000000) AS cpu_percent_normalized,
-    m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent
-FROM
-    mz_sources AS sources
-        JOIN mz_internal.mz_storage_host_sizes AS s ON sources.size = s.size
-        JOIN mz_internal.mz_storage_host_metrics AS m ON m.id = sources.id",
-};
-
-pub const MZ_SINK_UTILIZATION: BuiltinView = BuiltinView {
-    name: "mz_sink_utilization",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_sink_utilization AS
-SELECT
-    sinks.id AS sink_id,
-    m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
-    m.cpu_nano_cores::float8 / (s.workers * 10000000) AS cpu_percent_normalized,
-    m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent
-FROM
-    mz_sinks AS sinks
-        JOIN mz_internal.mz_storage_host_sizes AS s ON sinks.size = s.size
-        JOIN mz_internal.mz_storage_host_metrics AS m ON m.id = sinks.id",
-};
-
 // NOTE: If you add real data to this implementation, then please update
 // the related `pg_` function implementations (like `pg_get_constraintdef`)
 pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
@@ -3112,13 +3053,9 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
         Builtin::View(&MZ_SOURCE_STATUSES),
         Builtin::Source(&MZ_STORAGE_SHARDS),
-        Builtin::Source(&MZ_STORAGE_HOST_METRICS),
         Builtin::Source(&MZ_SOURCE_STATISTICS),
         Builtin::Source(&MZ_SINK_STATISTICS),
         Builtin::View(&MZ_STORAGE_USAGE),
-        Builtin::Table(&MZ_STORAGE_HOST_SIZES),
-        Builtin::View(&MZ_SOURCE_UTILIZATION),
-        Builtin::View(&MZ_SINK_UTILIZATION),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),
         Builtin::Index(&MZ_SHOW_CONNECTIONS_IND),
