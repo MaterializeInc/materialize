@@ -623,7 +623,7 @@ impl CatalogState {
                 self.compute_instances_by_id
                     .get_mut(&compute_instance)
                     .unwrap()
-                    .exports
+                    .bound_objects
                     .insert(id);
             };
         }
@@ -707,7 +707,7 @@ impl CatalogState {
                     self.compute_instances_by_id
                         .get_mut(&compute_instance)
                         .unwrap()
-                        .exports
+                        .bound_objects
                         .remove(&id),
                     "catalog out of sync"
                 );
@@ -786,7 +786,7 @@ impl CatalogState {
                 name: name.clone(),
                 id,
                 linked_object_id,
-                exports: HashSet::new(),
+                bound_objects: HashSet::new(),
                 log_indexes,
                 replica_id_by_name: HashMap::new(),
                 replicas_by_id: HashMap::new(),
@@ -1410,7 +1410,7 @@ pub struct ComputeInstance {
     pub linked_object_id: Option<GlobalId>,
     /// Indexes and materialized views exported by this compute instance.
     /// Does not include introspection source indexes.
-    pub exports: HashSet<GlobalId>,
+    pub bound_objects: HashSet<GlobalId>,
     pub replica_id_by_name: HashMap<String, ReplicaId>,
     pub replicas_by_id: HashMap<ReplicaId, ComputeReplica>,
 }
@@ -3749,7 +3749,7 @@ impl Catalog {
                 replica_ids.push((*id, *replica_id));
             }
             instance_ops.push(Op::DropComputeInstance { id: *id });
-            ids_to_drop.extend(instance.exports().iter().copied());
+            ids_to_drop.extend(instance.bound_objects().iter().copied());
         }
         let replica_ops = self.drop_compute_instance_replica_ops(&replica_ids);
         let mut ops = self.drop_items_ops(&ids_to_drop);
@@ -5323,7 +5323,7 @@ impl Catalog {
                     }
 
                     assert!(
-                        instance.exports.is_empty() && instance.replicas_by_id.is_empty(),
+                        instance.bound_objects.is_empty() && instance.replicas_by_id.is_empty(),
                         "not all items dropped before compute instance"
                     );
                 }
@@ -6339,8 +6339,8 @@ impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
         self.linked_object_id
     }
 
-    fn exports(&self) -> &HashSet<GlobalId> {
-        &self.exports
+    fn bound_objects(&self) -> &HashSet<GlobalId> {
+        &self.bound_objects
     }
 
     fn replicas(&self) -> &HashMap<String, ReplicaId> {

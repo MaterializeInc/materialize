@@ -3308,7 +3308,7 @@ pub fn plan_drop_cluster(
         match scx.catalog.resolve_compute_instance(Some(name.as_str())) {
             Ok(instance) => {
                 ensure_cluster_is_not_linked(scx, instance)?;
-                if !cascade && !instance.exports().is_empty() {
+                if !cascade && !instance.bound_objects().is_empty() {
                     sql_bail!("cannot drop cluster with active indexes or materialized views");
                 }
                 ids.push(instance.id());
