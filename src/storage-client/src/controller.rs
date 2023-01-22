@@ -61,8 +61,8 @@ use crate::client::{
 };
 use crate::controller::clusters::{StorageClusters, StorageClustersConfig};
 use crate::healthcheck;
-use crate::types::clusters::StorageClusterId;
 use crate::types::errors::DataflowError;
+use crate::types::instances::StorageInstanceId;
 use crate::types::parameters::StorageParameters;
 use crate::types::sinks::{
     MetadataUnfilled, ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc,
@@ -162,9 +162,8 @@ impl<T> From<RelationDesc> for CollectionDescription<T> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportDescription<T = mz_repr::Timestamp> {
     pub sink: StorageSinkDesc<MetadataUnfilled, T>,
-    /// The address of a `clusterd` process on which to install the sink or the
-    /// settings for spinning up a controller-managed process.
-    pub cluster_id: StorageClusterId,
+    /// The ID of the instance in which to install the export.
+    pub instance_id: StorageInstanceId,
 }
 
 /// Opaque token to ensure `prepare_export` is called before `create_exports`.  This token proves
@@ -206,7 +205,7 @@ pub trait StorageController: Debug + Send {
     /// created with zero replicas.
     ///
     /// Panics if a storage instance with the given ID already exists.
-    fn create_instance(&mut self, id: StorageClusterId);
+    fn create_instance(&mut self, id: StorageInstanceId);
 
     /// Drops the storage instance with the given ID.
     ///
@@ -214,7 +213,7 @@ pub trait StorageController: Debug + Send {
     /// attached, that replica will be leaked. Call `drop_replica` first.
     ///
     /// Panics if a storage instance with the given ID does not exist.
-    fn drop_instance(&mut self, id: StorageClusterId);
+    fn drop_instance(&mut self, id: StorageInstanceId);
 
     /// Ensures that the identified storage instance has one replica with the
     /// specified configuration.
@@ -228,14 +227,14 @@ pub trait StorageController: Debug + Send {
     /// storage instance.)
     async fn ensure_replica(
         &mut self,
-        id: StorageClusterId,
+        id: StorageInstanceId,
         config: StorageClusterConfig,
     ) -> Result<(), StorageError>;
 
     /// Drops the replica of the identified storage instance.
     ///
     /// Does nothing if the identified storage instance does not have a replica.
-    async fn drop_replica(&mut self, id: StorageClusterId) -> Result<(), StorageError>;
+    async fn drop_replica(&mut self, id: StorageInstanceId) -> Result<(), StorageError>;
 
     /// Acquire a mutable reference to the collection state, should it exist.
     fn collection_mut(
@@ -401,7 +400,7 @@ pub trait StorageController: Debug + Send {
     async fn process(&mut self) -> Result<(), anyhow::Error>;
 
     /// Considers all nodes not currently used as orphans and removes those from the orchestrator.
-    async fn remove_orphans(&mut self, next_id: StorageClusterId) -> Result<(), anyhow::Error>;
+    async fn remove_orphans(&mut self, next_id: StorageInstanceId) -> Result<(), anyhow::Error>;
 }
 
 /// Compaction policies for collections maintained by `Controller`.
@@ -875,24 +874,24 @@ where
         Box::new(self.state.collections.iter())
     }
 
-    fn create_instance(&mut self, id: StorageClusterId) {
+    fn create_instance(&mut self, id: StorageInstanceId) {
         self.clusters.create_instance(id)
     }
 
-    fn drop_instance(&mut self, id: StorageClusterId) {
+    fn drop_instance(&mut self, id: StorageInstanceId) {
         self.clusters.drop_instance(id)
     }
 
     async fn ensure_replica(
         &mut self,
-        id: StorageClusterId,
+        id: StorageInstanceId,
         config: StorageClusterConfig,
     ) -> Result<(), StorageError> {
         self.clusters.ensure_replica(id, config).await?;
         Ok(())
     }
 
-    async fn drop_replica(&mut self, id: StorageClusterId) -> Result<(), StorageError> {
+    async fn drop_replica(&mut self, id: StorageInstanceId) -> Result<(), StorageError> {
         self.clusters.drop_replica(id).await?;
         Ok(())
     }
@@ -1126,22 +1125,22 @@ where
                         ingestion_metadata,
                         // The rest of the fields are identical
                         desc: ingestion.desc,
-                        cluster_id: ingestion.cluster_id,
+                        instance_id: ingestion.instance_id,
                     };
                     let mut persist_clients = self.persist.lock().await;
                     let mut state = desc.initialize_state(&mut persist_clients).await;
                     let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
 
-                    // Fetch the client for this ingestion's cluster.
-                    let client = self
-                        .clusters
-                        .client(ingestion.cluster_id)
-                        .with_context(|| {
-                            format!(
-                                "cluster {} missing for ingestion {}",
-                                ingestion.cluster_id, id
-                            )
-                        })?;
+                    // Fetch the client for this ingestion's instance.
+                    let client =
+                        self.clusters
+                            .client(ingestion.instance_id)
+                            .with_context(|| {
+                                format!(
+                                    "instance {} missing for ingestion {}",
+                                    ingestion.instance_id, id
+                                )
+                            })?;
                     let augmented_ingestion = CreateSourceCommand {
                         id,
                         description: desc,
@@ -1331,11 +1330,11 @@ where
             // Fetch the client for this exports's cluster.
             let client = self
                 .clusters
-                .client(description.cluster_id)
+                .client(description.instance_id)
                 .with_context(|| {
                     format!(
                         "cluster {} missing for export {}",
-                        description.cluster_id, id
+                        description.instance_id, id
                     )
                 })?;
 
@@ -1657,7 +1656,7 @@ where
         Ok(())
     }
 
-    async fn remove_orphans(&mut self, next_id: StorageClusterId) -> Result<(), anyhow::Error> {
+    async fn remove_orphans(&mut self, next_id: StorageInstanceId) -> Result<(), anyhow::Error> {
         self.clusters.remove_orphans(next_id).await
     }
 }
@@ -2103,9 +2102,9 @@ impl<T: Timestamp> CollectionState<T> {
     }
 
     /// Returns the cluster to which the collection is bound, if applicable.
-    fn cluster_id(&self) -> Option<StorageClusterId> {
+    fn cluster_id(&self) -> Option<StorageInstanceId> {
         match &self.description.data_source {
-            DataSource::Ingestion(ingestion) => Some(ingestion.cluster_id),
+            DataSource::Ingestion(ingestion) => Some(ingestion.instance_id),
             DataSource::Introspection(_) => None,
             DataSource::Other => None,
         }

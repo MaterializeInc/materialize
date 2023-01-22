@@ -692,7 +692,7 @@ impl Coordinator {
                                     ingestion_metadata: (),
                                     source_imports,
                                     source_exports,
-                                    cluster_id,
+                                    instance_id: cluster_id,
                                 }),
                                 source_status_collection_id,
                             )

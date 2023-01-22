@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Types related to storage clusters.
+//! Types related to storage instances.
 
 use std::fmt;
 use std::str::FromStr;
@@ -20,24 +20,24 @@ use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(
     env!("OUT_DIR"),
-    "/mz_storage_client.types.clusters.rs"
+    "/mz_storage_client.types.instances.rs"
 ));
 
-/// Identifier of a storage cluster.
+/// Identifier of a storage instance.
 #[derive(
     Arbitrary, Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize,
 )]
-pub enum StorageClusterId {
-    /// A system storage cluster.
+pub enum StorageInstanceId {
+    /// A system storage instance.
     System(u64),
-    /// A user storage cluster.
+    /// A user storage instance.
     User(u64),
 }
 
-impl StorageClusterId {
+impl StorageInstanceId {
     pub fn inner_id(&self) -> u64 {
         match self {
-            StorageClusterId::System(id) | StorageClusterId::User(id) => *id,
+            StorageInstanceId::System(id) | StorageInstanceId::User(id) => *id,
         }
     }
 
@@ -50,7 +50,7 @@ impl StorageClusterId {
     }
 }
 
-impl FromStr for StorageClusterId {
+impl FromStr for StorageInstanceId {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -66,7 +66,7 @@ impl FromStr for StorageClusterId {
     }
 }
 
-impl fmt::Display for StorageClusterId {
+impl fmt::Display for StorageInstanceId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::System(id) => write!(f, "s{}", id),
@@ -75,24 +75,24 @@ impl fmt::Display for StorageClusterId {
     }
 }
 
-impl RustType<ProtoStorageClusterId> for StorageClusterId {
-    fn into_proto(&self) -> ProtoStorageClusterId {
-        use proto_storage_cluster_id::Kind::*;
-        ProtoStorageClusterId {
+impl RustType<ProtoStorageInstanceId> for StorageInstanceId {
+    fn into_proto(&self) -> ProtoStorageInstanceId {
+        use proto_storage_instance_id::Kind::*;
+        ProtoStorageInstanceId {
             kind: Some(match self {
-                StorageClusterId::System(x) => System(*x),
-                StorageClusterId::User(x) => User(*x),
+                StorageInstanceId::System(x) => System(*x),
+                StorageInstanceId::User(x) => User(*x),
             }),
         }
     }
 
-    fn from_proto(proto: ProtoStorageClusterId) -> Result<Self, TryFromProtoError> {
-        use proto_storage_cluster_id::Kind::*;
+    fn from_proto(proto: ProtoStorageInstanceId) -> Result<Self, TryFromProtoError> {
+        use proto_storage_instance_id::Kind::*;
         match proto.kind {
-            Some(System(x)) => Ok(StorageClusterId::System(x)),
-            Some(User(x)) => Ok(StorageClusterId::User(x)),
+            Some(System(x)) => Ok(StorageInstanceId::System(x)),
+            Some(User(x)) => Ok(StorageInstanceId::User(x)),
             None => Err(TryFromProtoError::missing_field(
-                "ProtoStorageClusterId::kind",
+                "ProtoStorageInstanceId::kind",
             )),
         }
     }
