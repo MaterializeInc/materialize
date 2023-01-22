@@ -9,7 +9,7 @@
 
 use std::{
     cmp,
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap},
     sync::{Arc, Mutex},
 };
 
@@ -43,6 +43,8 @@ impl Stash {
                     client,
                     consolidations: cons_tx,
                     savepoint: Arc::new(Mutex::new(false)),
+                    sinces: Arc::new(Mutex::new(HashMap::new())),
+                    uppers: Arc::new(Mutex::new(HashMap::new())),
                     stash_collections: collections,
                     txn_collections: Arc::clone(&txn_collections),
                 };
@@ -72,6 +74,11 @@ pub struct Transaction<'a> {
     // Savepoint state to enforce the invariant that only one SAVEPOINT is
     // active at once.
     savepoint: Arc<Mutex<bool>>,
+
+    // Cached sinces and uppers for this transaction. These are set on first
+    // query and updated on seal/compact.
+    sinces: Arc<Mutex<HashMap<Id, Antichain<Timestamp>>>>,
+    uppers: Arc<Mutex<HashMap<Id, Antichain<Timestamp>>>>,
 
     // Collections cached by the outer Stash.
     stash_collections: &'a HashMap<String, Id>,
@@ -193,22 +200,35 @@ impl<'a> Transaction<'a> {
 
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn upper(&self, collection_id: Id) -> Result<Antichain<Timestamp>, StashError> {
+        // We can't use .entry here because that would require holding the
+        // MutexGuard across the .await.
+        if let Some(entry) = self.uppers.lock().unwrap().get(&collection_id) {
+            return Ok(entry.clone());
+        }
         let upper: Option<Timestamp> = self
             .client
             .query_one(self.stmts.upper(), &[&collection_id])
             .await?
             .get("upper");
-        Ok(Antichain::from_iter(upper))
+        let upper = Antichain::from_iter(upper);
+        maybe_update_antichain(&self.uppers, collection_id, upper.clone());
+        Ok(upper)
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn since(&self, collection_id: Id) -> Result<Antichain<Timestamp>, StashError> {
+        // We can't use .entry here because that would require holding the
+        // MutexGuard across the .await.
+        if let Some(entry) = self.sinces.lock().unwrap().get(&collection_id) {
+            return Ok(entry.clone());
+        }
         let since: Option<Timestamp> = self
             .client
             .query_one(self.stmts.since(), &[&collection_id])
             .await?
             .get("since");
-        Ok(Antichain::from_iter(since))
+        let since = Antichain::from_iter(since);
+        maybe_update_antichain(&self.sinces, collection_id, since.clone());
+        Ok(since)
     }
 
     /// Returns sinces for the requested collections.
@@ -482,7 +502,7 @@ impl<'a> Transaction<'a> {
                                             )));
                                         }
 
-                                        self.seal(collection_id, &upper1, Some(lower)).await
+                                        self.seal(collection_id, upper1, Some(lower)).await
                                     },
                                     async move {
                                         self.update(collection_id, &entries, Some(lower2)).await
@@ -620,6 +640,7 @@ impl<'a> Transaction<'a> {
             .execute(self.stmts.compact(), &[&new_since.as_option(), &id])
             .map_err(StashError::from)
             .await?;
+        maybe_update_antichain(&self.sinces, id, new_since.clone());
         Ok(())
     }
 
@@ -629,17 +650,17 @@ impl<'a> Transaction<'a> {
     pub async fn seal(
         &self,
         id: Id,
-        new_upper: &Antichain<Timestamp>,
+        new_upper: Antichain<Timestamp>,
         upper: Option<Antichain<Timestamp>>,
     ) -> Result<(), StashError> {
         let upper = match upper {
             Some(upper) => upper,
             None => self.upper(id).await?,
         };
-        if PartialOrder::less_than(new_upper, &upper) {
+        if PartialOrder::less_than(&new_upper, &upper) {
             return Err(StashError::from(format!(
                 "seal request {} is less than the current upper frontier {}",
-                AntichainFormatter(new_upper),
+                AntichainFormatter(&new_upper),
                 AntichainFormatter(&upper),
             )));
         }
@@ -648,6 +669,28 @@ impl<'a> Transaction<'a> {
             .execute(self.stmts.seal(), &[&new_upper.as_option(), &id])
             .map_err(StashError::from)
             .await?;
+        maybe_update_antichain(&self.uppers, id, new_upper);
         Ok(())
     }
+}
+
+// Updates an antichain cache if the new value has advanced. Needed because the
+// functions here are often called in try_joins where the futures execute in
+// unknown order and we want to prevent a race condition poisioning the cache by
+// going backward.
+fn maybe_update_antichain(
+    map: &Arc<Mutex<HashMap<Id, Antichain<Timestamp>>>>,
+    id: Id,
+    updated: Antichain<Timestamp>,
+) {
+    match map.lock().unwrap().entry(id) {
+        Entry::Occupied(mut entry) => {
+            if PartialOrder::less_than(entry.get(), &updated) {
+                entry.insert(updated);
+            }
+        }
+        Entry::Vacant(entry) => {
+            entry.insert(updated);
+        }
+    };
 }

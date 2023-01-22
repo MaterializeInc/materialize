@@ -315,7 +315,7 @@ where
         .with_transaction(move |tx| {
             Box::pin(async move {
                 // Seal so we can invalidate the upper below.
-                tx.seal(other.id, &Antichain::from_elem(1), None)
+                tx.seal(other.id, Antichain::from_elem(1), None)
                     .await
                     .unwrap();
                 let mut orders_batch = orders.make_batch_tx(&tx).await.unwrap();
@@ -410,7 +410,7 @@ where
                 tx.update_savepoint(orders.id, &[(("k3".into(), "v3".into()), 1, 1)], None)
                     .await
                     .unwrap();
-                tx.seal(orders.id, &Antichain::from_elem(2), None)
+                tx.seal(orders.id, Antichain::from_elem(2), None)
                     .await
                     .unwrap();
 
@@ -557,7 +557,7 @@ where
                 )
                 .await
                 .unwrap();
-                tx.seal(orders.id, &Antichain::from_elem(3), None)
+                tx.seal(orders.id, Antichain::from_elem(3), None)
                     .await
                     .unwrap();
                 // Peek should not observe widgets from timestamps 3 or 4.
@@ -593,7 +593,7 @@ where
 
                 // Test invalid seals, compactions, and updates.
                 assert_eq!(
-                    tx.seal(orders.id, &Antichain::from_elem(2), None)
+                    tx.seal(orders.id, Antichain::from_elem(2), None)
                         .await
                         .unwrap_err()
                         .to_string(),
@@ -622,7 +622,7 @@ where
                 );
 
                 // Test advancing since and upper to the empty frontier.
-                tx.seal(orders.id, &Antichain::new(), None).await.unwrap();
+                tx.seal(orders.id, Antichain::new(), None).await.unwrap();
                 tx.compact(orders.id, &Antichain::new(), None)
                     .await
                     .unwrap();
@@ -657,7 +657,7 @@ where
                 );
 
                 // Test peek_one.
-                tx.seal(other.id, &Antichain::from_elem(2), None)
+                tx.seal(other.id, Antichain::from_elem(2), None)
                     .await
                     .unwrap();
                 assert_eq!(
