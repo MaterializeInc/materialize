@@ -9,9 +9,9 @@
 
 syntax = "proto3";
 
-package mz_storage_client.types.clusters;
+package mz_storage_client.types.instances;
 
-message ProtoStorageClusterId {
+message ProtoStorageInstanceId {
     oneof kind {
         uint64 system = 1;
         uint64 user = 2;

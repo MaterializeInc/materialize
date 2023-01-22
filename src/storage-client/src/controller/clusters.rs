@@ -40,7 +40,7 @@ use mz_proto::RustType;
 
 use crate::client::{ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse};
 use crate::controller::rehydration::RehydratingStorageClient;
-use crate::types::clusters::StorageClusterId;
+use crate::types::instances::StorageInstanceId;
 use crate::types::parameters::StorageParameters;
 
 /// The network address of a storage cluster.
@@ -95,7 +95,7 @@ impl StorageClusterConfig {
 #[derive(Debug, Clone)]
 pub struct StorageClusterDesc {
     /// The ID of the storage cluster.
-    pub id: StorageClusterId,
+    pub id: StorageInstanceId,
     /// The configuration of the storage cluster.
     pub config: StorageClusterConfig,
 }
@@ -128,7 +128,7 @@ pub struct StorageClusters<T> {
     /// The init container image to use for clusterd.
     init_container_image: Option<String>,
     /// Clients for all known storage clusters.
-    clients: HashMap<StorageClusterId, RehydratingStorageClient<T>>,
+    clients: HashMap<StorageInstanceId, RehydratingStorageClient<T>>,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
     /// Storage configuration to apply to newly provisioned clusters.
@@ -183,7 +183,7 @@ where
     }
 
     /// Creates a new storage instance.
-    pub fn create_instance(&mut self, id: StorageClusterId) {
+    pub fn create_instance(&mut self, id: StorageInstanceId) {
         let mut client = RehydratingStorageClient::new(self.build_info, Arc::clone(&self.persist));
         if self.initialized {
             client.send(StorageCommand::InitializationComplete);
@@ -194,7 +194,7 @@ where
     }
 
     /// Drops a storage instance.
-    pub fn drop_instance(&mut self, id: StorageClusterId) {
+    pub fn drop_instance(&mut self, id: StorageInstanceId) {
         let client = self.clients.remove(&id);
         assert!(client.is_some(), "storage instance {id} does not exist");
     }
@@ -210,7 +210,7 @@ where
     /// will be dropped.
     pub async fn ensure_replica(
         &mut self,
-        id: StorageClusterId,
+        id: StorageInstanceId,
         cluster_config: StorageClusterConfig,
     ) -> Result<(), anyhow::Error>
     where
@@ -283,13 +283,13 @@ where
     }
 
     /// Deprovisions the storage replica for the specified ID.
-    pub async fn drop_replica(&self, id: StorageClusterId) -> Result<(), anyhow::Error> {
+    pub async fn drop_replica(&self, id: StorageInstanceId) -> Result<(), anyhow::Error> {
         self.orchestrator.drop_service(&id.to_string()).await
     }
 
     /// Retrives the client for the storage cluster for the given ID, if it
     /// exists.
-    pub fn client(&mut self, id: StorageClusterId) -> Option<&mut RehydratingStorageClient<T>> {
+    pub fn client(&mut self, id: StorageInstanceId) -> Option<&mut RehydratingStorageClient<T>> {
         self.clients.get_mut(&id)
     }
 
@@ -303,19 +303,21 @@ where
     /// A storage cluster is considered orphaned if it is present in the orchestrator but not in the
     /// controller and the storage cluster id is less than `next_id`. We assume that the controller knows
     /// all storage clusters with ids [0..next_id).
-    pub async fn remove_orphans(&self, next_id: StorageClusterId) -> Result<(), anyhow::Error> {
+    pub async fn remove_orphans(&self, next_id: StorageInstanceId) -> Result<(), anyhow::Error> {
         // Parse GlobalId and return contained user id, if any
         fn user_id(id: &String) -> Option<u64> {
-            StorageClusterId::from_str(id).ok().and_then(|id| match id {
-                StorageClusterId::User(x) => Some(x),
-                _ => None,
-            })
+            StorageInstanceId::from_str(id)
+                .ok()
+                .and_then(|id| match id {
+                    StorageInstanceId::User(x) => Some(x),
+                    _ => None,
+                })
         }
 
         tracing::debug!("Removing storage clusterd orphans. next_id = {}", next_id);
 
         let next_id = match next_id {
-            StorageClusterId::User(x) => x,
+            StorageInstanceId::User(x) => x,
             _ => anyhow::bail!("Expected GlobalId::User, got {}", next_id),
         };
 
@@ -331,7 +333,7 @@ where
             self.clients
                 .keys()
                 .filter_map(|x| match x {
-                    StorageClusterId::User(x) => Some(x),
+                    StorageInstanceId::User(x) => Some(x),
                     _ => None,
                 })
                 .cloned()
@@ -350,7 +352,7 @@ where
             }
             if !keep.contains(&id) {
                 tracing::warn!("Removing storage cluster orphan {}", id);
-                self.drop_replica(StorageClusterId::User(id)).await?;
+                self.drop_replica(StorageInstanceId::User(id)).await?;
             }
         }
 

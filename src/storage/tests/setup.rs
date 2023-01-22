@@ -291,8 +291,10 @@ where
                                 source_exports,
                                 // Only used for Debezium
                                 source_imports: BTreeMap::new(),
-                                cluster_id:
-                                    mz_storage_client::types::clusters::StorageClusterId::User(100),
+                                instance_id:
+                                    mz_storage_client::types::instances::StorageInstanceId::User(
+                                        100,
+                                    ),
                             },
                         // TODO: test resumption as well!
                         resumption_frontier: Antichain::from_elem(Timestamp::minimum()),

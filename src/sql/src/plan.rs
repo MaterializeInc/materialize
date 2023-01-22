@@ -44,7 +44,7 @@ use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::explain_new::{ExplainConfig, ExplainFormat};
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
-use mz_storage_client::types::clusters::StorageClusterId;
+use mz_storage_client::types::instances::StorageInstanceId;
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
 
@@ -337,7 +337,7 @@ pub enum StorageClusterConfig {
     /// Use an existing cluster.
     Cluster {
         /// The ID of the cluster to use.
-        id: StorageClusterId,
+        id: StorageInstanceId,
     },
     /// Remote unmanaged storage.
     Remote {

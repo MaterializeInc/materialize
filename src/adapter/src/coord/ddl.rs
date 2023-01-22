@@ -512,7 +512,7 @@ impl Coordinator {
                 create_export_token,
                 ExportDescription {
                     sink: storage_sink_desc,
-                    cluster_id,
+                    instance_id: cluster_id,
                 },
             )])
             .await?)

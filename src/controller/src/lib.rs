@@ -121,7 +121,7 @@ use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
 use mz_storage_client::controller::StorageController;
-use mz_storage_client::types::clusters::StorageClusterId;
+use mz_storage_client::types::instances::StorageInstanceId;
 
 pub mod clusters;
 
@@ -221,7 +221,7 @@ impl<T> Controller<T> {
     pub async fn remove_orphans(
         &mut self,
         next_replica_id: ReplicaId,
-        next_storage_cluster_id: StorageClusterId,
+        next_storage_cluster_id: StorageInstanceId,
     ) -> Result<(), anyhow::Error> {
         self.compute.remove_orphans(next_replica_id).await?;
         self.storage.remove_orphans(next_storage_cluster_id).await?;

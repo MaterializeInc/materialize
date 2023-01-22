@@ -53,7 +53,7 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{
     ReadPolicy, StorageClusterConfig, StorageClusterResourceAllocation, StorageController,
 };
-use mz_storage_client::types::clusters::StorageClusterId;
+use mz_storage_client::types::instances::StorageInstanceId;
 
 use crate::logging::{LogVariant, LogView, LoggingConfig};
 use crate::protocol::command::ComputeParameters;
@@ -79,7 +79,7 @@ pub mod error;
 pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
 
 /// Identifer of a compute instance.
-pub type ComputeInstanceId = StorageClusterId;
+pub type ComputeInstanceId = StorageInstanceId;
 
 /// Identifier of a replica.
 pub type ReplicaId = u64;
