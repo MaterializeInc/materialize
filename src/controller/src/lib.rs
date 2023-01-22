@@ -79,7 +79,7 @@
 //! The `Controller` provides the ability to create and manipulate storage and compute instances.
 //! Each of Storage and Compute provide their own controllers, accessed through the `storage()`
 //! and `compute(instance_id)` methods. It is an error to access a compute instance before it has
-//! been created; a single storage instance is always available.
+//! been created.
 //!
 //! The controller also provides a `recv()` method that returns responses from the storage and
 //! compute layers, which may remain of value to the interested user. With time, these responses
@@ -122,6 +122,8 @@ use mz_storage_client::client::{
 };
 use mz_storage_client::controller::StorageController;
 use mz_storage_client::types::clusters::StorageClusterId;
+
+pub mod clusters;
 
 /// Configures a controller.
 #[derive(Debug, Clone)]
