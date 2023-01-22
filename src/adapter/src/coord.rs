@@ -681,18 +681,13 @@ impl Coordinator {
                                 };
                                 source_exports.insert(subsource, export);
                             }
-                            let cluster_id = self
-                                .catalog
-                                .get_linked_cluster(entry.id())
-                                .expect("sources with ingestions always have linked clusters")
-                                .id;
                             (
                                 DataSource::Ingestion(IngestionDescription {
                                     desc: ingestion.desc.clone(),
                                     ingestion_metadata: (),
                                     source_imports,
                                     source_exports,
-                                    instance_id: cluster_id,
+                                    instance_id: ingestion.cluster_id,
                                 }),
                                 source_status_collection_id,
                             )

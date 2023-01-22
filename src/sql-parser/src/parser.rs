@@ -2507,21 +2507,19 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
-        let name =
-            match self.expect_one_of_keywords(&[IGNORE, REMOTE, SIZE, TIMELINE, TIMESTAMP])? {
-                IGNORE => {
-                    self.expect_keyword(KEYS)?;
-                    CreateSourceOptionName::IgnoreKeys
-                }
-                REMOTE => CreateSourceOptionName::Remote,
-                SIZE => CreateSourceOptionName::Size,
-                TIMELINE => CreateSourceOptionName::Timeline,
-                TIMESTAMP => {
-                    self.expect_keyword(INTERVAL)?;
-                    CreateSourceOptionName::TimestampInterval
-                }
-                _ => unreachable!(),
-            };
+        let name = match self.expect_one_of_keywords(&[IGNORE, SIZE, TIMELINE, TIMESTAMP])? {
+            IGNORE => {
+                self.expect_keyword(KEYS)?;
+                CreateSourceOptionName::IgnoreKeys
+            }
+            SIZE => CreateSourceOptionName::Size,
+            TIMELINE => CreateSourceOptionName::Timeline,
+            TIMESTAMP => {
+                self.expect_keyword(INTERVAL)?;
+                CreateSourceOptionName::TimestampInterval
+            }
+            _ => unreachable!(),
+        };
         Ok(name)
     }
 
@@ -2577,10 +2575,9 @@ impl<'a> Parser<'a> {
 
     /// Parse the name of a CREATE SINK optional parameter
     fn parse_create_sink_option_name(&mut self) -> Result<CreateSinkOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[REMOTE, SIZE, SNAPSHOT])? {
+        let name = match self.expect_one_of_keywords(&[SIZE, SNAPSHOT])? {
             SIZE => CreateSinkOptionName::Size,
             SNAPSHOT => CreateSinkOptionName::Snapshot,
-            REMOTE => CreateSinkOptionName::Remote,
             _ => unreachable!(),
         };
         Ok(name)
@@ -3101,19 +3098,28 @@ impl<'a> Parser<'a> {
 
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[
+            ADDRESSES,
             AVAILABILITY,
             COMPUTE,
+            COMPUTECTL,
             IDLE,
             INTROSPECTION,
-            REMOTE,
             SIZE,
+            STORAGECTL,
             WORKERS,
         ])? {
             AVAILABILITY => {
                 self.expect_keyword(ZONE)?;
                 ReplicaOptionName::AvailabilityZone
             }
-            COMPUTE => ReplicaOptionName::Compute,
+            COMPUTE => {
+                self.expect_keyword(ADDRESSES)?;
+                ReplicaOptionName::ComputeAddresses
+            }
+            COMPUTECTL => {
+                self.expect_keyword(ADDRESSES)?;
+                ReplicaOptionName::ComputectlAddresses
+            }
             IDLE => {
                 self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
                 ReplicaOptionName::IdleArrangementMergeEffort
@@ -3123,8 +3129,11 @@ impl<'a> Parser<'a> {
                 INTERVAL => ReplicaOptionName::IntrospectionInterval,
                 _ => unreachable!(),
             },
-            REMOTE => ReplicaOptionName::Remote,
             SIZE => ReplicaOptionName::Size,
+            STORAGECTL => {
+                self.expect_keyword(ADDRESS)?;
+                ReplicaOptionName::StoragectlAddress
+            }
             WORKERS => ReplicaOptionName::Workers,
             _ => unreachable!(),
         };

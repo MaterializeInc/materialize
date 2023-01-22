@@ -27,24 +27,20 @@ statement error REPLICAS specified more than once
 CREATE CLUSTER foo REPLICAS (), REPLICAS()
 
 # Creating cluster w/ remote replica works.
-
-statement error must specify as many REMOTE addresses as COMPUTE addresses
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234;']))
-
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234;'], COMPUTE ['localhost:1235']))
+CREATE CLUSTER foo REPLICAS (r1 (STORAGECTL ADDRESS 's:1234', COMPUTECTL ADDRESSES ['c:1234'], COMPUTE ADDRESSES ['t:1235']))
 
 statement error cluster 'foo' already exists
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:1235']))
+CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'))
 
 statement error cannot create multiple replicas named 'r1' on cluster 'bar'
-CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:1235']), r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:1235']))
+CREATE CLUSTER bar REPLICAS (r1 (SIZE '1'), r1 (SIZE '1'))
 
-statement error REMOTE specified more than once
-CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:1235'], REMOTE ['localhost:1234'], COMPUTE ['localhost:1235']))
+statement error COMPUTE ADDRESSES specified more than once
+CREATE CLUSTER bar REPLICAS (r1 (COMPUTE ADDRESSES ['localhost:1235'], COMPUTE ADDRESSES ['localhost:1234']))
 
 statement ok
-CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1235'], COMPUTE ['localhost:1245']), r2 (REMOTE ['localhost:1236'], COMPUTE ['localhost:1246']))
+CREATE CLUSTER bar REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))
 
 query TT rowsort
 SELECT * FROM mz_clusters
@@ -71,24 +67,23 @@ default
 
 # Test invalid option combinations.
 
-statement error only one of REMOTE or SIZE may be specified
-CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], SIZE 'small'))
+statement error invalid mixture of managed and unmanaged replica options
+CREATE CLUSTER baz REPLICAS (r1 (COMPUTE ADDRESSES ['localhost:1234'], SIZE 'small'))
 
-statement error must specify as many REMOTE addresses as COMPUTE addresses
-CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234', 'localhost:4567'], COMPUTE [], WORKERS 1))
-
-statement error must specify as many REMOTE addresses as COMPUTE addresses
-CREATE CLUSTER baz REPLICAS (r1 (REMOTE [], COMPUTE ['localhost:1234', 'localhost:4567']))
-
-statement error WORKERS must be greater 0
-CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:4567'], WORKERS 0))
-
-# SIZE + Remote options produce error
-statement error cannot specify SIZE and WORKERS
+statement error invalid mixture of managed and unmanaged replica options
 CREATE CLUSTER baz REPLICAS (r1 (SIZE '2', WORKERS 1))
 
-statement error cannot specify SIZE and COMPUTE
-CREATE CLUSTER baz REPLICAS (r1 (SIZE '2', COMPUTE ['localhost:1234']))
+statement error invalid mixture of managed and unmanaged replica options
+CREATE CLUSTER baz REPLICAS (r1 (SIZE '2', COMPUTE ADDRESSES ['localhost:1234']))
+
+statement error COMPUTECTL ADDRESSES and COMPUTE ADDRESSES must have the same length
+CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESS 'localhost:1234', COMPUTECTL ADDRESSES ['localhost:1234', 'localhost:4567'], COMPUTE ADDRESSES [], WORKERS 1))
+
+statement error COMPUTECTL ADDRESSES and COMPUTE ADDRESSES must have the same length
+CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESS 'localhost:1234', COMPUTECTL ADDRESSES [], COMPUTE ADDRESSES ['localhost:1234', 'localhost:4567'], WORKERS 1))
+
+statement error WORKERS must be greater than 0
+CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESS 's:1234', COMPUTECTL ADDRESSES ['c:1234'], COMPUTE ADDRESSES ['t:1235'], WORKERS 0))
 
 # Test `cluster` session variable.
 
@@ -270,7 +265,7 @@ default
 statement error unknown cluster 'baz'
 DROP CLUSTER baz
 
-statement error cannot drop cluster with active indexes or materialized views
+statement error cannot drop cluster with active objects
 DROP CLUSTER bar
 
 query TTTT
@@ -294,12 +289,12 @@ statement ok
 DROP CLUSTER foo CASCADE
 
 statement ok
-CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:678']))
+CREATE CLUSTER baz REPLICAS (r1 (SIZE '1'))
 
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER baz ON v
 
-statement error cannot drop cluster with active indexes or materialized views
+statement error cannot drop cluster with active objects
 DROP CLUSTER baz
 
 statement ok
@@ -311,13 +306,13 @@ SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%';
 
 # Test that dropping a cluster and re-creating it with the same name is valid if introspection sources are enabled
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:1237'], INTROSPECTION INTERVAL '1s'))
+CREATE CLUSTER foo REPLICAS (r1 (SIZE '1', INTROSPECTION INTERVAL '1s'))
 
 statement ok
 DROP CLUSTER foo CASCADE
 
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'], COMPUTE ['localhost:1237'], INTROSPECTION INTERVAL '1s'))
+CREATE CLUSTER foo REPLICAS (r1 (SIZE '1', INTROSPECTION INTERVAL '1s'))
 
 statement ok
 DROP CLUSTER foo CASCADE
@@ -525,14 +520,14 @@ CREATE CLUSTER REPLICA default.replica SIZE '1', AVAILABILITY ZONE 'a'
 statement error AVAILABILITY ZONE specified more than once
 CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
 
-statement error cannot specify AVAILABILITY ZONE and REMOTE
-CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
+statement error invalid mixture of managed and unmanaged replica options
+CREATE CLUSTER REPLICA default.replica STORAGECTL ADDRESS 'host', AVAILABILITY ZONE 'a'
 
-statement error cannot specify AVAILABILITY ZONE and REMOTE
-CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
+statement error invalid mixture of managed and unmanaged replica options
+CREATE CLUSTER REPLICA default.replica STORAGECTL ADDRESS 'host', AVAILABILITY ZONE 'a'
 
-statement error cannot specify AVAILABILITY ZONE and REMOTE
-CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', REMOTE ['host1']
+statement error invalid mixture of managed and unmanaged replica options
+CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', STORAGECTL ADDRESS 'host'
 
 # Test that the contents of mz_cluster_replicas look sensible
 

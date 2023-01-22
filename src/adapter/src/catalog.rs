@@ -12,7 +12,6 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::Ipv4Addr;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -62,7 +61,7 @@ use mz_sql::names::{
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, StatementDesc, StorageClusterConfig as PlanStorageClusterConfig,
+    Plan, PlanContext, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
@@ -589,9 +588,7 @@ impl CatalogState {
         }
 
         if !id.is_system() {
-            if let CatalogItem::Index(Index { cluster_id, .. })
-            | CatalogItem::MaterializedView(MaterializedView { cluster_id, .. }) = item
-            {
+            if let Some(cluster_id) = item.cluster_id() {
                 self.clusters_by_id
                     .get_mut(&cluster_id)
                     .unwrap()
@@ -667,10 +664,8 @@ impl CatalogState {
             .remove(&metadata.name().item)
             .expect("catalog out of sync");
 
-        if let CatalogItem::Index(Index { cluster_id, .. })
-        | CatalogItem::MaterializedView(MaterializedView { cluster_id, .. }) = metadata.item
-        {
-            if !id.is_system() {
+        if !id.is_system() {
+            if let Some(cluster_id) = metadata.item.cluster_id() {
                 assert!(
                     self.clusters_by_id
                         .get_mut(&cluster_id)
@@ -680,7 +675,7 @@ impl CatalogState {
                     "catalog out of sync"
                 );
             }
-        };
+        }
     }
 
     fn get_database(&self, database_id: &DatabaseId) -> &Database {
@@ -1320,6 +1315,14 @@ impl ConnCatalog<'_> {
     }
 }
 
+/// The ID of an entity in the catalog.
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
+pub enum CatalogEntityId {
+    Cluster(ClusterId),
+    ClusterReplica(ReplicaId),
+    Item(GlobalId),
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Database {
     pub name: String,
@@ -1545,6 +1548,7 @@ pub struct Ingestion {
     ///
     /// This map does *not* include the export of the source associated with the ingestion itself
     pub subsource_exports: HashMap<GlobalId, usize>,
+    pub cluster_id: ClusterId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1557,6 +1561,7 @@ pub struct Sink {
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
+    pub cluster_id: ClusterId,
 }
 
 impl Sink {
@@ -1843,11 +1848,15 @@ impl CatalogItem {
         match self {
             CatalogItem::MaterializedView(mv) => Some(mv.cluster_id),
             CatalogItem::Index(index) => Some(index.cluster_id),
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::Ingestion(ingestion) => Some(ingestion.cluster_id),
+                DataSourceDesc::Source => None,
+                DataSourceDesc::Introspection(_) => None,
+            },
+            CatalogItem::Sink(sink) => Some(sink.cluster_id),
             CatalogItem::Table(_)
-            | CatalogItem::Source(_)
             | CatalogItem::Log(_)
             | CatalogItem::View(_)
-            | CatalogItem::Sink(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
@@ -2046,7 +2055,7 @@ pub struct SystemObjectMapping {
 #[derive(Debug)]
 pub enum CatalogItemRebuilder {
     SystemSource(CatalogItem),
-    Object(String),
+    Object(GlobalId, String),
 }
 
 impl CatalogItemRebuilder {
@@ -2058,15 +2067,15 @@ impl CatalogItemRebuilder {
             assert_ne!(create_sql.to_lowercase(), CREATE_SQL_TODO.to_lowercase());
             let mut create_stmt = mz_sql::parse::parse(&create_sql).unwrap().into_element();
             mz_sql::ast::transform::create_stmt_replace_ids(&mut create_stmt, ancestor_ids);
-            Self::Object(create_stmt.to_ast_string_stable())
+            Self::Object(id, create_stmt.to_ast_string_stable())
         }
     }
 
     fn build(self, catalog: &Catalog) -> CatalogItem {
         match self {
             Self::SystemSource(item) => item,
-            Self::Object(create_sql) => catalog
-                .parse_item(create_sql.clone(), None)
+            Self::Object(id, create_sql) => catalog
+                .parse_item(id, create_sql.clone(), None)
                 .unwrap_or_else(|error| {
                     panic!("invalid persisted create sql ({error:?}): {create_sql}")
                 }),
@@ -2324,6 +2333,7 @@ impl Catalog {
                 Builtin::View(view) => {
                     let item = catalog
                         .parse_item(
+                            id,
                             view.sql.into(),
                             None,
                         )
@@ -2467,6 +2477,7 @@ impl Catalog {
                 Builtin::Index(index) => {
                     let item = catalog
                         .parse_item(
+                            id,
                             index.sql.into(),
                             None,
                         )
@@ -3193,7 +3204,7 @@ impl Catalog {
             // safely even if the error message we're sniffing out changes.
             static LOGGING_ERROR: Lazy<Regex> =
                 Lazy::new(|| Regex::new("unknown catalog item 'mz_catalog.[^']*'").unwrap());
-            let item = match c.deserialize_item(def) {
+            let item = match c.deserialize_item(id, def) {
                 Ok(item) => item,
                 Err(e) if LOGGING_ERROR.is_match(&e.to_string()) => {
                     return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
@@ -3684,20 +3695,30 @@ impl Catalog {
     }
 
     /// Creates the catalog operations to drop the given compute instances.
-    pub fn drop_cluster_ops(&self, ids: &[ClusterId]) -> Vec<Op> {
+    pub fn drop_cluster_ops(
+        &self,
+        ids: &[ClusterId],
+        seen: &mut HashSet<CatalogEntityId>,
+    ) -> Vec<Op> {
         let mut replica_ids = vec![];
         let mut cluster_ops = vec![];
         let mut ids_to_drop = vec![];
         for id in ids {
-            let cluster = &self.state.clusters_by_id[id];
-            for replica_id in cluster.replica_id_by_name.values() {
-                replica_ids.push((*id, *replica_id));
+            if !seen.contains(&CatalogEntityId::Cluster(*id)) {
+                seen.insert(CatalogEntityId::Cluster(*id));
+                let cluster = &self.state.clusters_by_id[id];
+                for replica_id in cluster.replica_id_by_name.values() {
+                    replica_ids.push((*id, *replica_id));
+                }
+                cluster_ops.push(Op::DropCluster { id: *id });
+                ids_to_drop.extend(cluster.bound_objects().iter().copied());
             }
-            cluster_ops.push(Op::DropCluster { id: *id });
-            ids_to_drop.extend(cluster.bound_objects().iter().copied());
         }
-        let replica_ops = self.drop_cluster_replica_ops(&replica_ids);
-        let mut ops = self.drop_items_ops(&ids_to_drop);
+        let replica_ops = self.drop_cluster_replica_ops(&replica_ids, seen);
+        let mut ops = vec![];
+        for id in ids_to_drop {
+            self.drop_item_cascade(id, &mut ops, seen);
+        }
         ops.extend(replica_ops);
         ops.extend(cluster_ops);
         ops
@@ -3705,44 +3726,53 @@ impl Catalog {
 
     /// Creates the catalog operations to drop the given compute instance
     /// replicas.
-    pub fn drop_cluster_replica_ops(&self, ids: &[(ClusterId, ReplicaId)]) -> Vec<Op> {
+    pub fn drop_cluster_replica_ops(
+        &self,
+        ids: &[(ClusterId, ReplicaId)],
+        seen: &mut HashSet<CatalogEntityId>,
+    ) -> Vec<Op> {
         let mut ops = vec![];
         let mut ids_to_drop = vec![];
         for (cluster_id, replica_id) in ids {
-            ops.push(Op::DropClusterReplica {
-                cluster_id: *cluster_id,
-                replica_id: *replica_id,
-            });
+            if !seen.contains(&CatalogEntityId::ClusterReplica(*replica_id)) {
+                seen.insert(CatalogEntityId::ClusterReplica(*replica_id));
+                ops.push(Op::DropClusterReplica {
+                    cluster_id: *cluster_id,
+                    replica_id: *replica_id,
+                });
 
-            // Determine from the replica which additional items to drop. This is the set
-            // of items that depend on the introspection sources. The sources
-            // itself are removed with Op::DropCluster.
-            let cluster = &self.state.clusters_by_id[cluster_id];
-            let logging = &cluster
-                .replicas_by_id
-                .get(replica_id)
-                .unwrap()
-                .config
-                .logging;
+                // Determine from the replica which additional items to drop. This is the set
+                // of items that depend on the introspection sources. The sources
+                // itself are removed with Op::DropCluster.
+                let cluster = &self.state.clusters_by_id[cluster_id];
+                let logging = &cluster
+                    .replicas_by_id
+                    .get(replica_id)
+                    .unwrap()
+                    .config
+                    .logging;
 
-            let log_and_view_ids = logging.source_and_view_ids();
-            let view_ids: HashSet<_> = logging.view_ids().collect();
+                let log_and_view_ids = logging.source_and_view_ids();
+                let view_ids: HashSet<_> = logging.view_ids().collect();
 
-            for log_id in log_and_view_ids {
-                // We consider the dependencies of both views and logs, but remove the
-                // views itself. The views are included as they depend on the source,
-                // but we dont need an explicit Op::DropItem as they are dropped together
-                // with the replica.
-                ids_to_drop.extend(
-                    self.get_entry(&log_id)
-                        .used_by()
-                        .into_iter()
-                        .filter(|x| !view_ids.contains(x)),
-                )
+                for log_id in log_and_view_ids {
+                    // We consider the dependencies of both views and logs, but remove the
+                    // views itself. The views are included as they depend on the source,
+                    // but we dont need an explicit Op::DropItem as they are dropped together
+                    // with the replica.
+                    ids_to_drop.extend(
+                        self.get_entry(&log_id)
+                            .used_by()
+                            .into_iter()
+                            .filter(|x| !view_ids.contains(x)),
+                    )
+                }
             }
         }
 
-        ops.extend(self.drop_items_ops(&ids_to_drop));
+        for id in ids_to_drop {
+            self.drop_item_cascade(id, &mut ops, seen);
+        }
         ops
     }
 
@@ -3755,15 +3785,25 @@ impl Catalog {
         ops
     }
 
-    fn drop_schema_items(&self, schema: &Schema, ops: &mut Vec<Op>, seen: &mut HashSet<GlobalId>) {
+    fn drop_schema_items(
+        &self,
+        schema: &Schema,
+        ops: &mut Vec<Op>,
+        seen: &mut HashSet<CatalogEntityId>,
+    ) {
         for &id in schema.items.values() {
             self.drop_item_cascade(id, ops, seen);
         }
     }
 
-    fn drop_item_cascade(&self, id: GlobalId, ops: &mut Vec<Op>, seen: &mut HashSet<GlobalId>) {
-        if !seen.contains(&id) {
-            seen.insert(id);
+    fn drop_item_cascade(
+        &self,
+        id: GlobalId,
+        ops: &mut Vec<Op>,
+        seen: &mut HashSet<CatalogEntityId>,
+    ) {
+        if !seen.contains(&CatalogEntityId::Item(id)) {
+            seen.insert(CatalogEntityId::Item(id));
             for u in &self.state.entry_by_id[&id].used_by {
                 self.drop_item_cascade(*u, ops, seen);
             }
@@ -3772,7 +3812,7 @@ impl Catalog {
             }
             ops.push(Op::DropItem(id));
             if let Some(linked_cluster_id) = self.state.clusters_by_linked_object_id.get(&id) {
-                let cluster_ops = self.drop_cluster_ops(&[*linked_cluster_id]);
+                let cluster_ops = self.drop_cluster_ops(&[*linked_cluster_id], seen);
                 ops.extend(cluster_ops);
             }
         }
@@ -3853,14 +3893,16 @@ impl Catalog {
         location: SerializedReplicaLocation,
     ) -> Result<ReplicaLocation, AdapterError> {
         let location = match location {
-            SerializedReplicaLocation::Remote {
-                addrs,
+            SerializedReplicaLocation::Unmanaged {
+                storagectl_addr,
+                computectl_addrs,
                 compute_addrs,
                 workers,
             } => ReplicaLocation::Remote {
-                addrs,
-                compute_addrs,
-                workers,
+                storagectl_addr,
+                computectl_addrs: computectl_addrs.into_iter().collect(),
+                compute_addrs: compute_addrs.into_iter().collect(),
+                workers: std::num::NonZeroUsize::new(workers).unwrap(),
             },
             SerializedReplicaLocation::Managed {
                 size,
@@ -4121,14 +4163,13 @@ impl Catalog {
 
                     create_stmt
                         .with_options
-                        .retain(|x| ![Remote, Size].contains(&x.name));
+                        .retain(|x| ![Size].contains(&x.name));
 
                     let new_cluster_option = match &cluster_config {
-                        PlanStorageClusterConfig::Cluster { .. } => {
-                            coord_bail!("IN CLUSTER is not yet supported")
+                        PlanStorageClusterConfig::Existing { .. } => {
+                            coord_bail!("cannot set cluster of existing source");
                         }
-                        PlanStorageClusterConfig::Managed { size } => Some((Size, size.clone())),
-                        PlanStorageClusterConfig::Remote { addr } => Some((Remote, addr.clone())),
+                        PlanStorageClusterConfig::Linked { size } => Some((Size, size.clone())),
                         PlanStorageClusterConfig::Undefined => None,
                     };
 
@@ -4141,7 +4182,7 @@ impl Catalog {
 
                     let old_size = state.get_storage_object_size(id).map(|s| s.to_string());
                     let new_size = match &cluster_config {
-                        PlanStorageClusterConfig::Managed { size } => Some(size.clone()),
+                        PlanStorageClusterConfig::Linked { size } => Some(size.clone()),
                         _ => None,
                     };
 
@@ -4226,14 +4267,13 @@ impl Catalog {
 
                     create_stmt
                         .with_options
-                        .retain(|x| ![Size, Remote].contains(&x.name));
+                        .retain(|x| ![Size].contains(&x.name));
 
                     let new_cluster_option = match &cluster_config {
-                        PlanStorageClusterConfig::Cluster { .. } => {
-                            coord_bail!("IN CLUSTER is not yet supported")
+                        PlanStorageClusterConfig::Existing { .. } => {
+                            coord_bail!("cannot set cluster of existing source");
                         }
-                        PlanStorageClusterConfig::Managed { size } => Some((Size, size.clone())),
-                        PlanStorageClusterConfig::Remote { addr } => Some((Remote, addr.clone())),
+                        PlanStorageClusterConfig::Linked { size } => Some((Size, size.clone())),
                         PlanStorageClusterConfig::Undefined => None,
                     };
 
@@ -4246,7 +4286,7 @@ impl Catalog {
 
                     let old_size = state.get_storage_object_size(id).map(|s| s.to_string());
                     let new_size = match &cluster_config {
-                        PlanStorageClusterConfig::Managed { size } => Some(size.clone()),
+                        PlanStorageClusterConfig::Linked { size } => Some(size.clone()),
                         _ => None,
                     };
 
@@ -5393,14 +5433,16 @@ impl Catalog {
 
     fn deserialize_item(
         &self,
+        id: GlobalId,
         SerializedCatalogItem::V1 { create_sql }: SerializedCatalogItem,
     ) -> Result<CatalogItem, anyhow::Error> {
-        self.parse_item(create_sql, Some(&PlanContext::zero()))
+        self.parse_item(id, create_sql, Some(&PlanContext::zero()))
     }
 
     // Parses the given SQL string into a `CatalogItem`.
     fn parse_item(
         &self,
+        id: GlobalId,
         create_sql: String,
         pcx: Option<&PlanContext>,
     ) -> Result<CatalogItem, anyhow::Error> {
@@ -5420,7 +5462,10 @@ impl Catalog {
                 is_retained_metrics_relation: false,
             }),
             Plan::CreateSource(CreateSourcePlan {
-                source, timeline, ..
+                source,
+                timeline,
+                cluster_config,
+                ..
             }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
                 data_source: match source.ingestion {
@@ -5428,6 +5473,13 @@ impl Catalog {
                         desc: ingestion.desc,
                         source_imports: ingestion.source_imports,
                         subsource_exports: ingestion.subsource_exports,
+                        cluster_id: match cluster_config {
+                            plan::SourceSinkClusterConfig::Existing { id } => id,
+                            plan::SourceSinkClusterConfig::Linked { .. }
+                            | plan::SourceSinkClusterConfig::Undefined => {
+                                self.state.clusters_by_linked_object_id[&id]
+                            }
+                        },
                     }),
                     None => DataSourceDesc::Source,
                 },
@@ -5474,6 +5526,7 @@ impl Catalog {
             Plan::CreateSink(CreateSinkPlan {
                 sink,
                 with_snapshot,
+                cluster_config,
                 ..
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
@@ -5482,6 +5535,13 @@ impl Catalog {
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on,
+                cluster_id: match cluster_config {
+                    plan::SourceSinkClusterConfig::Existing { id } => id,
+                    plan::SourceSinkClusterConfig::Linked { .. }
+                    | plan::SourceSinkClusterConfig::Undefined => {
+                        self.state.clusters_by_linked_object_id[&id]
+                    }
+                },
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
@@ -5709,11 +5769,11 @@ pub fn is_reserved_name(name: &str) -> bool {
 pub enum Op {
     AlterSink {
         id: GlobalId,
-        cluster_config: plan::StorageClusterConfig,
+        cluster_config: plan::SourceSinkClusterConfig,
     },
     AlterSource {
         id: GlobalId,
-        cluster_config: plan::StorageClusterConfig,
+        cluster_config: plan::SourceSinkClusterConfig,
     },
     CreateDatabase {
         name: String,
@@ -5862,10 +5922,11 @@ impl From<ReplicaConfig> for SerializedReplicaConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SerializedReplicaLocation {
-    Remote {
-        addrs: BTreeSet<String>,
-        compute_addrs: BTreeSet<String>,
-        workers: NonZeroUsize,
+    Unmanaged {
+        storagectl_addr: String,
+        computectl_addrs: Vec<String>,
+        compute_addrs: Vec<String>,
+        workers: usize,
     },
     Managed {
         size: String,
@@ -5880,13 +5941,15 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
     fn from(loc: ReplicaLocation) -> Self {
         match loc {
             ReplicaLocation::Remote {
-                addrs,
+                storagectl_addr,
+                computectl_addrs,
                 compute_addrs,
                 workers,
-            } => Self::Remote {
-                addrs,
-                compute_addrs,
-                workers,
+            } => Self::Unmanaged {
+                storagectl_addr,
+                computectl_addrs: computectl_addrs.into_iter().collect(),
+                compute_addrs: compute_addrs.into_iter().collect(),
+                workers: workers.get(),
             },
             ReplicaLocation::Managed {
                 allocation: _,

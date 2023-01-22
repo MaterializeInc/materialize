@@ -1335,7 +1335,6 @@ impl_display!(KeyConstraint);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceOptionName {
     IgnoreKeys,
-    Remote,
     Size,
     Timeline,
     TimestampInterval,
@@ -1345,7 +1344,6 @@ impl AstDisplay for CreateSourceOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             CreateSourceOptionName::IgnoreKeys => "IGNORE KEYS",
-            CreateSourceOptionName::Remote => "REMOTE",
             CreateSourceOptionName::Size => "SIZE",
             CreateSourceOptionName::Timeline => "TIMELINE",
             CreateSourceOptionName::TimestampInterval => "TIMESTAMP INTERVAL",

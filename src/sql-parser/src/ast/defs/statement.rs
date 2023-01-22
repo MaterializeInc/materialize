@@ -683,7 +683,6 @@ impl_display_t!(CreateSubsourceStatement);
 /// An option in a `CREATE SINK` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSinkOptionName {
-    Remote,
     Size,
     Snapshot,
 }
@@ -691,9 +690,6 @@ pub enum CreateSinkOptionName {
 impl AstDisplay for CreateSinkOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSinkOptionName::Remote => {
-                f.write_str("REMOTE");
-            }
             CreateSinkOptionName::Size => {
                 f.write_str("SIZE");
             }
@@ -1192,16 +1188,18 @@ impl_display_t!(CreateClusterReplicaStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ReplicaOptionName {
-    /// The `REMOTE [<host> [, <host> ...]]` option.
-    Remote,
     /// The `SIZE [[=] <size>]` option.
     Size,
     /// The `AVAILABILITY ZONE [[=] <id>]` option.
     AvailabilityZone,
-    /// The `WORKERS [[=] <workers>]` option
+    /// The `STORAGECTL ADDRESS` option.
+    StoragectlAddress,
+    /// The `COMPUTECTL ADDRESSES` option.
+    ComputectlAddresses,
+    /// The `COMPUTE ADDRESSES` option.
+    ComputeAddresses,
+    /// The `WORKERS` option
     Workers,
-    /// The `COMPUTE [<host> [, <host> ...]]` option.
-    Compute,
     /// The `INTROSPECTION INTERVAL [[=] <interval>]` option.
     IntrospectionInterval,
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>]` option.
@@ -1213,11 +1211,12 @@ pub enum ReplicaOptionName {
 impl AstDisplay for ReplicaOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ReplicaOptionName::Remote => f.write_str("REMOTE"),
             ReplicaOptionName::Size => f.write_str("SIZE"),
             ReplicaOptionName::AvailabilityZone => f.write_str("AVAILABILITY ZONE"),
+            ReplicaOptionName::StoragectlAddress => f.write_str("STORAGECTL ADDRESS"),
+            ReplicaOptionName::ComputectlAddresses => f.write_str("COMPUTECTL ADDRESSES"),
+            ReplicaOptionName::ComputeAddresses => f.write_str("COMPUTE ADDRESSES"),
             ReplicaOptionName::Workers => f.write_str("WORKERS"),
-            ReplicaOptionName::Compute => f.write_str("COMPUTE"),
             ReplicaOptionName::IntrospectionInterval => f.write_str("INTROSPECTION INTERVAL"),
             ReplicaOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
             ReplicaOptionName::IdleArrangementMergeEffort => {

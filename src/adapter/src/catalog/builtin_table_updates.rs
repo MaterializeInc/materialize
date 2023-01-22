@@ -228,15 +228,16 @@ impl CatalogState {
             .id;
         let name = &entry.name().item;
         let mut updates = match entry.item() {
-            CatalogItem::Log(_) => {
-                self.pack_source_update(id, oid, schema_id, name, "log", None, None, None, diff)
-            }
+            CatalogItem::Log(_) => self.pack_source_update(
+                id, oid, schema_id, name, "log", None, None, None, None, diff,
+            ),
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
             CatalogItem::Source(source) => {
                 let source_type = source.source_type();
                 let connection_id = source.connection_id();
                 let envelope = source.envelope();
+                let cluster_id = entry.item().cluster_id().map(|id| id.to_string());
 
                 let mut updates = self.pack_source_update(
                     id,
@@ -247,6 +248,7 @@ impl CatalogState {
                     connection_id,
                     self.get_storage_object_size(id),
                     envelope,
+                    cluster_id.as_deref(),
                     diff,
                 );
 
@@ -336,6 +338,7 @@ impl CatalogState {
         connection_id: Option<GlobalId>,
         size: Option<&str>,
         envelope: Option<&str>,
+        cluster_id: Option<&str>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -349,6 +352,7 @@ impl CatalogState {
                 Datum::from(connection_id.map(|id| id.to_string()).as_deref()),
                 Datum::from(size),
                 Datum::from(envelope),
+                Datum::from(cluster_id),
             ]),
             diff,
         }]
@@ -610,6 +614,7 @@ impl CatalogState {
                     Datum::String(connection.name()),
                     Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
                     Datum::from(self.get_storage_object_size(id)),
+                    Datum::String(&sink.cluster_id.to_string()),
                 ]),
                 diff,
             });

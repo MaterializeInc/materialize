@@ -74,11 +74,9 @@ class CreatePostgresCdcTable(Action):
                       );
 
                     > CREATE SOURCE {name}_source
+                      IN CLUSTER storaged
                       FROM POSTGRES CONNECTION {name}_connection (PUBLICATION '{name}_publication')
                       FOR TABLES ({self.postgres_cdc_table.postgres_table.name} AS {name})
-                      WITH (
-                        REMOTE 'storaged:2100'
-                      )
                     """
                 )
             )

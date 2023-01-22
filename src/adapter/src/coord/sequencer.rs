@@ -9,8 +9,7 @@
 
 //! Logic for executing a planned SQL query.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::iter;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::time::Duration;
 
@@ -52,7 +51,7 @@ use mz_sql::plan::{
     ExplainPlan, FetchPlan, IndexOption, InsertPlan, MaterializedView, MutationKind,
     OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
     ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    StorageClusterConfig, SubscribeFrom, SubscribePlan, View,
+    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, View,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{
@@ -497,16 +496,27 @@ impl Coordinator {
             let source = catalog::Source {
                 create_sql: plan.source.create_sql,
                 data_source: match plan.source.ingestion {
-                    Some(ingestion) => DataSourceDesc::Ingestion(catalog::Ingestion {
-                        desc: ingestion.desc,
-                        source_imports: ingestion.source_imports,
-                        subsource_exports: ingestion.subsource_exports,
-                    }),
+                    Some(ingestion) => {
+                        let cluster_id = self
+                            .create_linked_cluster_ops(
+                                source_id,
+                                &plan.name,
+                                &plan.cluster_config,
+                                &mut ops,
+                            )
+                            .await?;
+                        DataSourceDesc::Ingestion(catalog::Ingestion {
+                            desc: ingestion.desc,
+                            source_imports: ingestion.source_imports,
+                            subsource_exports: ingestion.subsource_exports,
+                            cluster_id,
+                        })
+                    }
                     None => {
                         assert!(
                             matches!(
                                 plan.cluster_config,
-                                mz_sql::plan::StorageClusterConfig::Undefined
+                                mz_sql::plan::SourceSinkClusterConfig::Undefined
                             ),
                             "subsources must not have a host config defined"
                         );
@@ -519,12 +529,6 @@ impl Coordinator {
                 custom_logical_compaction_window: None,
                 is_retained_metrics_relation: false,
             };
-            if let DataSourceDesc::Ingestion(_) = &source.data_source {
-                ops.extend(
-                    self.create_linked_cluster_ops(source_id, &plan.name, &plan.cluster_config)
-                        .await?,
-                );
-            }
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
                 oid: source_oid,
@@ -562,18 +566,13 @@ impl Coordinator {
                                 };
                                 source_exports.insert(subsource, export);
                             }
-                            let cluster_id = self
-                                .catalog
-                                .get_linked_cluster(source_id)
-                                .expect("sources with ingestions always have linked clusters")
-                                .id;
                             (
                                 DataSource::Ingestion(IngestionDescription {
                                     desc: ingestion.desc,
                                     ingestion_metadata: (),
                                     source_imports,
                                     source_exports,
-                                    instance_id: cluster_id,
+                                    instance_id: ingestion.cluster_id,
                                 }),
                                 source_status_collection_id,
                             )
@@ -821,7 +820,11 @@ impl Coordinator {
             .map(|s| (s.clone(), 0))
             .collect::<HashMap<_, _>>();
         for (_name, r) in replicas.iter() {
-            if let Some(az) = r.get_az() {
+            if let mz_sql::plan::ReplicaConfig::Managed {
+                availability_zone: Some(az),
+                ..
+            } = r
+            {
                 let ct: &mut usize = n_replicas_per_az.get_mut(az).ok_or_else(|| {
                     AdapterError::InvalidClusterReplicaAz {
                         az: az.to_string(),
@@ -833,26 +836,28 @@ impl Coordinator {
         }
 
         for (replica_name, replica_config) in replicas {
-            let introspection = replica_config.get_introspection().cloned();
-            let idle_arrangement_merge_effort = replica_config.get_idle_arrangement_merge_effort();
-
             // If the AZ was not specified, choose one, round-robin, from the ones with
             // the lowest number of configured replicas for this cluster.
-            let location = match replica_config {
-                mz_sql::plan::ReplicaConfig::Remote {
-                    addrs,
+            let (compute, location) = match replica_config {
+                mz_sql::plan::ReplicaConfig::Unmanaged {
+                    storagectl_addr,
+                    computectl_addrs,
                     compute_addrs,
                     workers,
-                    ..
-                } => SerializedReplicaLocation::Remote {
-                    addrs,
-                    compute_addrs,
-                    workers,
-                },
+                    compute,
+                } => {
+                    let location = SerializedReplicaLocation::Unmanaged {
+                        storagectl_addr,
+                        computectl_addrs,
+                        compute_addrs,
+                        workers,
+                    };
+                    (compute, location)
+                }
                 mz_sql::plan::ReplicaConfig::Managed {
                     size,
                     availability_zone,
-                    ..
+                    compute,
                 } => {
                     let (availability_zone, user_specified) =
                         availability_zone.map(|az| (az, true)).unwrap_or_else(|| {
@@ -860,15 +865,16 @@ impl Coordinator {
                             *n_replicas_per_az.get_mut(&az).unwrap() += 1;
                             (az, false)
                         });
-                    SerializedReplicaLocation::Managed {
+                    let location = SerializedReplicaLocation::Managed {
                         size: size.clone(),
                         availability_zone,
                         az_user_specified: user_specified,
-                    }
+                    };
+                    (compute, location)
                 }
             };
 
-            let logging = if let Some(config) = introspection {
+            let logging = if let Some(config) = compute.introspection {
                 let sources = self
                     .catalog
                     .allocate_persisted_introspection_sources()
@@ -887,7 +893,7 @@ impl Coordinator {
             let config = ReplicaConfig {
                 location: self.catalog.concretize_replica_location(location)?,
                 logging,
-                idle_arrangement_merge_effort,
+                idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
             };
 
             ops.push(catalog::Op::CreateClusterReplica {
@@ -944,25 +950,27 @@ impl Coordinator {
             config,
         }: CreateClusterReplicaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let introspection = config.get_introspection().cloned();
-        let idle_arrangement_merge_effort = config.get_idle_arrangement_merge_effort();
-
         // Choose default AZ if necessary
-        let location = match config {
-            mz_sql::plan::ReplicaConfig::Remote {
-                addrs,
+        let (compute, location) = match config {
+            mz_sql::plan::ReplicaConfig::Unmanaged {
+                storagectl_addr,
+                computectl_addrs,
                 compute_addrs,
                 workers,
-                ..
-            } => SerializedReplicaLocation::Remote {
-                addrs,
-                compute_addrs,
-                workers,
-            },
+                compute,
+            } => {
+                let location = SerializedReplicaLocation::Unmanaged {
+                    storagectl_addr,
+                    computectl_addrs,
+                    compute_addrs,
+                    workers,
+                };
+                (compute, location)
+            }
             mz_sql::plan::ReplicaConfig::Managed {
                 size,
                 availability_zone,
-                ..
+                compute,
             } => {
                 let (availability_zone, user_specified) = match availability_zone {
                     Some(az) => {
@@ -995,15 +1003,16 @@ impl Coordinator {
                         (az, false)
                     }
                 };
-                SerializedReplicaLocation::Managed {
+                let location = SerializedReplicaLocation::Managed {
                     size,
                     availability_zone,
                     az_user_specified: user_specified,
-                }
+                };
+                (compute, location)
             }
         };
 
-        let logging = if let Some(config) = introspection {
+        let logging = if let Some(config) = compute.introspection {
             let sources = self
                 .catalog
                 .allocate_persisted_introspection_sources()
@@ -1022,7 +1031,7 @@ impl Coordinator {
         let config = ReplicaConfig {
             location: self.catalog.concretize_replica_location(location)?,
             logging,
-            idle_arrangement_merge_effort,
+            idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
         };
 
         let id = self.catalog.allocate_replica_id().await?;
@@ -1234,8 +1243,9 @@ impl Coordinator {
         let id = return_if_err!(self.catalog.allocate_user_id().await, tx, session);
         let oid = return_if_err!(self.catalog.allocate_oid(), tx, session);
 
-        let mut ops = return_if_err!(
-            self.create_linked_cluster_ops(id, &name, &plan_cluster_config)
+        let mut ops = vec![];
+        let cluster_id = return_if_err!(
+            self.create_linked_cluster_ops(id, &name, &plan_cluster_config, &mut ops)
                 .await,
             tx,
             session
@@ -1261,6 +1271,7 @@ impl Coordinator {
             envelope: sink.envelope,
             with_snapshot,
             depends_on,
+            cluster_id,
         };
 
         ops.push(catalog::Op::CreateItem {
@@ -1685,7 +1696,7 @@ impl Coordinator {
             .active_cluster(session)
             .ok()
             .map(|cluster| cluster.id);
-        let ops = self.catalog.drop_cluster_ops(&ids);
+        let ops = self.catalog.drop_cluster_ops(&ids, &mut HashSet::new());
 
         self.catalog_transact(Some(session), ops).await?;
 
@@ -1705,7 +1716,9 @@ impl Coordinator {
         session: &Session,
         DropClusterReplicasPlan { ids }: DropClusterReplicasPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let ops = self.catalog.drop_cluster_replica_ops(&ids);
+        let ops = self
+            .catalog
+            .drop_cluster_replica_ops(&ids, &mut HashSet::new());
 
         self.catalog_transact(Some(session), ops).await?;
         fail::fail_point!("after_sequencer_drop_replica");
@@ -3472,9 +3485,9 @@ impl Coordinator {
     async fn sequence_alter_sink(
         &mut self,
         session: &Session,
-        AlterSinkPlan { id, size, remote }: AlterSinkPlan,
+        AlterSinkPlan { id, size }: AlterSinkPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let cluster_config = alter_storage_cluster_config(size, remote)?;
+        let cluster_config = alter_storage_cluster_config(size);
         if let Some(cluster_config) = cluster_config {
             let mut ops = vec![catalog::Op::AlterSink {
                 id,
@@ -3492,7 +3505,7 @@ impl Coordinator {
     async fn sequence_alter_source(
         &mut self,
         session: &Session,
-        AlterSourcePlan { id, size, remote }: AlterSourcePlan,
+        AlterSourcePlan { id, size }: AlterSourcePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let source = self
             .catalog
@@ -3505,7 +3518,7 @@ impl Coordinator {
                 coord_bail!("cannot ALTER this type of source");
             }
         }
-        let cluster_config = alter_storage_cluster_config(size, remote)?;
+        let cluster_config = alter_storage_cluster_config(size);
         if let Some(cluster_config) = cluster_config {
             let mut ops = vec![catalog::Op::AlterSource {
                 id,
@@ -3808,26 +3821,35 @@ impl Coordinator {
 
     /// Generates the catalog operations to create a linked cluster for the
     /// source or sink with the given name.
+    ///
+    /// The operations are written to the provided `ops` vector. The ID
+    /// allocated for the TODO TODO
     pub(crate) async fn create_linked_cluster_ops(
         &mut self,
         linked_object_id: GlobalId,
         name: &QualifiedObjectName,
-        config: &StorageClusterConfig,
-    ) -> Result<Vec<catalog::Op>, AdapterError> {
+        config: &SourceSinkClusterConfig,
+        ops: &mut Vec<catalog::Op>,
+    ) -> Result<ClusterId, AdapterError> {
+        let size = match config {
+            SourceSinkClusterConfig::Linked { size } => size.clone(),
+            SourceSinkClusterConfig::Undefined => self.default_linked_cluster_size()?,
+            SourceSinkClusterConfig::Existing { id } => return Ok(*id),
+        };
         let id = self.catalog.allocate_user_cluster_id().await?;
         let name = self.catalog.resolve_full_name(name, None);
         let name = format!("{}_{}_{}", name.database, name.schema, name.item);
         let name = self.catalog.find_available_cluster_name(&name);
         let arranged_introspection_sources =
             self.catalog.allocate_arranged_introspection_sources().await;
-        let mut ops = vec![catalog::Op::CreateCluster {
+        ops.push(catalog::Op::CreateCluster {
             id,
             name: name.clone(),
             linked_object_id: Some(linked_object_id),
             arranged_introspection_sources,
-        }];
-        ops.extend(self.create_linked_cluster_replica_op(id, config).await?);
-        Ok(ops)
+        });
+        self.create_linked_cluster_replica_op(id, size, ops).await?;
+        Ok(id)
     }
 
     /// Generates the catalog operation to create a replica of the given linked
@@ -3835,8 +3857,9 @@ impl Coordinator {
     async fn create_linked_cluster_replica_op(
         &mut self,
         cluster_id: ClusterId,
-        config: &StorageClusterConfig,
-    ) -> Result<Option<catalog::Op>, AdapterError> {
+        size: String,
+        ops: &mut Vec<catalog::Op>,
+    ) -> Result<(), AdapterError> {
         let availability_zone = {
             let azs = self.catalog.state().availability_zones();
             let n_replicas_per_az = azs
@@ -3845,57 +3868,10 @@ impl Coordinator {
                 .collect::<HashMap<_, _>>();
             Self::choose_az(&n_replicas_per_az)
         };
-        let location = match config {
-            StorageClusterConfig::Managed { size } => SerializedReplicaLocation::Managed {
-                size: size.clone(),
-                availability_zone,
-                az_user_specified: false,
-            },
-            StorageClusterConfig::Undefined => {
-                if !self.catalog.config().unsafe_mode {
-                    let mut entries = self
-                        .catalog
-                        .state()
-                        .storage_cluster_sizes()
-                        .0
-                        .iter()
-                        .collect::<Vec<_>>();
-                    entries.sort_by_key(
-                        |(
-                            _name,
-                            StorageClusterResourceAllocation {
-                                workers,
-                                memory_limit,
-                                ..
-                            },
-                        )| (workers, memory_limit),
-                    );
-                    let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-                    return Err(AdapterError::SourceOrSinkSizeRequired { expected });
-                }
-                let (size, _alloc) = self.catalog.default_storage_cluster_size();
-                SerializedReplicaLocation::Managed {
-                    size,
-                    availability_zone,
-                    az_user_specified: false,
-                }
-            }
-            StorageClusterConfig::Remote { addr } => {
-                // HACK: linked cluster replicas that are remote use the `addrs`
-                // field to transmit exactly one address.
-                //
-                // TODO(benesch): remove the `REMOTE` option from `CREATE
-                // SOURCE` and `CREATE SINK` in favor of `IN CLUSTER` with a
-                // cluster whose replicas are remote.
-                SerializedReplicaLocation::Remote {
-                    addrs: BTreeSet::from_iter(iter::once(addr.to_string())),
-                    compute_addrs: BTreeSet::new(),
-                    workers: NonZeroUsize::new(1).expect("statically nonzero"),
-                }
-            }
-            StorageClusterConfig::Cluster { .. } => {
-                coord_bail!("IN CLUSTER is not yet supported");
-            }
+        let location = SerializedReplicaLocation::Managed {
+            size: size.to_string(),
+            availability_zone,
+            az_user_specified: false,
         };
         let location = self.catalog.concretize_replica_location(location)?;
         let logging = {
@@ -3908,7 +3884,7 @@ impl Coordinator {
                 views: vec![],
             }
         };
-        Ok(Some(catalog::Op::CreateClusterReplica {
+        ops.push(catalog::Op::CreateClusterReplica {
             cluster_id,
             id: self.catalog.allocate_replica_id().await?,
             name: LINKED_CLUSTER_REPLICA_NAME.into(),
@@ -3917,7 +3893,8 @@ impl Coordinator {
                 location,
                 logging,
             },
-        }))
+        });
+        Ok(())
     }
 
     /// Generates the catalog operations to alter the linked cluster for the
@@ -3925,22 +3902,53 @@ impl Coordinator {
     async fn alter_linked_cluster_ops(
         &mut self,
         linked_object_id: GlobalId,
-        config: &StorageClusterConfig,
+        config: &SourceSinkClusterConfig,
     ) -> Result<Vec<catalog::Op>, AdapterError> {
         let mut ops = vec![];
         if let Some(linked_cluster) = self.catalog.get_linked_cluster(linked_object_id) {
             for id in linked_cluster.replicas_by_id.keys() {
                 let drop_ops = self
                     .catalog
-                    .drop_cluster_replica_ops(&[(linked_cluster.id, *id)]);
+                    .drop_cluster_replica_ops(&[(linked_cluster.id, *id)], &mut HashSet::new());
                 ops.extend(drop_ops);
             }
-            ops.extend(
-                self.create_linked_cluster_replica_op(linked_cluster.id, config)
-                    .await?,
-            )
+            let size = match config {
+                SourceSinkClusterConfig::Linked { size } => size.clone(),
+                SourceSinkClusterConfig::Undefined => self.default_linked_cluster_size()?,
+                SourceSinkClusterConfig::Existing { .. } => {
+                    coord_bail!("cannot change the cluster of a source or sink")
+                }
+            };
+            self.create_linked_cluster_replica_op(linked_cluster.id, size, &mut ops)
+                .await?;
         }
         Ok(ops)
+    }
+
+    fn default_linked_cluster_size(&self) -> Result<String, AdapterError> {
+        if !self.catalog.config().unsafe_mode {
+            let mut entries = self
+                .catalog
+                .state()
+                .storage_cluster_sizes()
+                .0
+                .iter()
+                .collect::<Vec<_>>();
+            entries.sort_by_key(
+                |(
+                    _name,
+                    StorageClusterResourceAllocation {
+                        workers,
+                        memory_limit,
+                        ..
+                    },
+                )| (workers, memory_limit),
+            );
+            let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
+            return Err(AdapterError::SourceOrSinkSizeRequired { expected });
+        }
+        let (size, _alloc) = self.catalog.default_storage_cluster_size();
+        Ok(size)
     }
 
     /// Creates the cluster linked to the specified object after a create
@@ -4009,21 +4017,12 @@ where
     Ok(())
 }
 
-/// Return a [`StorageClusterConfig`] based on the possibly altered parameters.
-fn alter_storage_cluster_config(
-    size: AlterOptionParameter,
-    remote: AlterOptionParameter,
-) -> Result<Option<StorageClusterConfig>, AdapterError> {
-    match (size, remote) {
-        // Should be caught during planning, but it is better to be safe
-        (AlterOptionParameter::Set(_), AlterOptionParameter::Set(_)) => {
-            coord_bail!("only one of REMOTE and SIZE can be set")
-        }
-        (AlterOptionParameter::Set(size), _) => Ok(Some(StorageClusterConfig::Managed { size })),
-        (_, AlterOptionParameter::Set(addr)) => Ok(Some(StorageClusterConfig::Remote { addr })),
-        (_, AlterOptionParameter::Reset) | (AlterOptionParameter::Reset, _) => {
-            Ok(Some(StorageClusterConfig::Undefined))
-        }
-        (_, _) => Ok(None),
+/// Return a [`SourceSinkClusterConfig`] based on the possibly altered
+/// parameters.
+fn alter_storage_cluster_config(size: AlterOptionParameter) -> Option<SourceSinkClusterConfig> {
+    match size {
+        AlterOptionParameter::Set(size) => Some(SourceSinkClusterConfig::Linked { size }),
+        AlterOptionParameter::Reset => Some(SourceSinkClusterConfig::Undefined),
+        AlterOptionParameter::Unchanged => None,
     }
 }

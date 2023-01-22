@@ -129,8 +129,11 @@ pub struct ComputeReplicaConfig {
 pub enum ComputeReplicaLocation {
     /// Out-of-process replica
     Remote {
+        /// HACK: storage controller network address. A future commit will
+        /// fix the crate boundaries.
+        storagectl_addr: String,
         /// The network addresses of the processes in the replica.
-        addrs: BTreeSet<String>,
+        computectl_addrs: BTreeSet<String>,
         /// The network addresses of the Timely endpoints of the processes in the replica.
         compute_addrs: BTreeSet<String>,
         /// The workers per process in the replica.
@@ -154,7 +157,9 @@ pub enum ComputeReplicaLocation {
 impl ComputeReplicaLocation {
     pub fn num_processes(&self) -> usize {
         match self {
-            ComputeReplicaLocation::Remote { addrs, .. } => addrs.len(),
+            ComputeReplicaLocation::Remote {
+                computectl_addrs, ..
+            } => computectl_addrs.len(),
             ComputeReplicaLocation::Managed { allocation, .. } => allocation.scale.get(),
         }
     }
@@ -172,8 +177,10 @@ impl ComputeReplicaLocation {
     /// Will be removed shortly as part of the cluster unification work.
     pub fn to_storage_cluster_config(&self) -> StorageClusterConfig {
         match self {
-            ComputeReplicaLocation::Remote { addrs, .. } => StorageClusterConfig::Remote {
-                addr: addrs.iter().next().unwrap().clone(),
+            ComputeReplicaLocation::Remote {
+                storagectl_addr, ..
+            } => StorageClusterConfig::Remote {
+                addr: storagectl_addr.clone(),
             },
             ComputeReplicaLocation::Managed {
                 allocation, size, ..

@@ -69,9 +69,9 @@ class PgCdcScenario(Scenario):
     MZ_SETUP = dedent(
         f"""
         > CREATE SOURCE mz_source
+          IN CLUSTER clusterd
           FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-          FOR ALL TABLES
-          WITH ( REMOTE 'clusterd:2100' );
+          FOR ALL TABLES;
 
         > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
         """
@@ -114,10 +114,10 @@ class KafkaScenario(Scenario):
     SOURCE = dedent(
         """
         > CREATE SOURCE s1
+          IN CLUSTER clusterd
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-          ENVELOPE UPSERT
-          WITH ( REMOTE 'clusterd:2100' )
+          ENVELOPE UPSERT;
 
         > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM s1;
         """
@@ -367,6 +367,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             services=["redpanda", "materialized", "postgres", "clusterd"]
         )
         c.wait_for_materialized()
+
+        c.sql(
+            """
+            CREATE CLUSTER clusterd REPLICAS (r1 (
+                STORAGECTL ADDRESS 'clusterd:2100',
+                COMPUTECTL ADDRESSES ['clusterd:2101'],
+                COMPUTE ADDRESSES ['clusterd:2102']
+            ))
+        """
+        )
 
         c.up("testdrive", persistent=True)
         c.testdrive(scenario.pre_restart)

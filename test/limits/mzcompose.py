@@ -1279,10 +1279,10 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.wait_for_materialized()
 
     nodes = [
-        Clusterd(name="compute_1_1"),
-        Clusterd(name="compute_1_2"),
-        Clusterd(name="compute_2_1"),
-        Clusterd(name="compute_2_2"),
+        Clusterd(name="clusterd_1_1"),
+        Clusterd(name="clusterd_1_2"),
+        Clusterd(name="clusterd_2_1"),
+        Clusterd(name="clusterd_2_2"),
     ]
     with c.override(*nodes):
         c.up(*[n.name for n in nodes])
@@ -1291,13 +1291,15 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"""
             CREATE CLUSTER cluster1 REPLICAS (
                 replica1 (
-                    REMOTE ['compute_1_1:2101', 'compute_1_2:2101'],
-                    COMPUTE ['compute_1_1:2102', 'compute_1_2:2102'],
+                    STORAGECTL ADDRESS 'clusterd_1_1:2100',
+                    COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
+                    COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102'],
                     WORKERS {args.workers}
                 ),
                 replica2 (
-                    REMOTE ['compute_2_1:2101', 'compute_2_2:2101'],
-                    COMPUTE ['compute_2_1:2102', 'compute_2_2:2102'],
+                    STORAGECTL ADDRESS 'clusterd_2_1:2100',
+                    COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
+                    COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102'],
                     WORKERS {args.workers}
                 )
             )
@@ -1413,9 +1415,10 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     replica_name = f"replica_u{cluster_id}_{replica_id}"
 
                     replica_definitions.append(
-                        f"{replica_name} (REMOTE ["
+                        f"{replica_name} (STORAGECTL ADDRESS '{nodes[0]}:2100'"
+                        + ", COMPUTECTL ADDRESSES ["
                         + ", ".join(f"'{n}:2101'" for n in nodes)
-                        + "], COMPUTE ["
+                        + "], COMPUTE ADDRESSES ["
                         + ", ".join(f"'{n}:2102'" for n in nodes)
                         + f"], WORKERS {args.workers})"
                     )

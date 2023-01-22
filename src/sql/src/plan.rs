@@ -30,7 +30,7 @@
 // https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
 #![allow(clippy::extra_unused_lifetimes)]
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
@@ -264,7 +264,7 @@ pub struct CreateClusterReplicaPlan {
 
 /// Configuration of introspection for a cluster replica.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
-pub struct ReplicaIntrospectionConfig {
+pub struct ComputeReplicaIntrospectionConfig {
     /// Whether to introspect the introspection.
     pub debugging: bool,
     /// The interval at which to introspect.
@@ -272,51 +272,25 @@ pub struct ReplicaIntrospectionConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ComputeReplicaConfig {
+    pub introspection: Option<ComputeReplicaIntrospectionConfig>,
+    pub idle_arrangement_merge_effort: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ReplicaConfig {
-    Remote {
-        addrs: BTreeSet<String>,
-        compute_addrs: BTreeSet<String>,
-        workers: NonZeroUsize,
-        introspection: Option<ReplicaIntrospectionConfig>,
-        idle_arrangement_merge_effort: Option<u32>,
+    Unmanaged {
+        storagectl_addr: String,
+        computectl_addrs: Vec<String>,
+        compute_addrs: Vec<String>,
+        workers: usize,
+        compute: ComputeReplicaConfig,
     },
     Managed {
         size: String,
         availability_zone: Option<String>,
-        introspection: Option<ReplicaIntrospectionConfig>,
-        idle_arrangement_merge_effort: Option<u32>,
+        compute: ComputeReplicaConfig,
     },
-}
-
-impl ReplicaConfig {
-    pub fn get_az(&self) -> Option<&str> {
-        match self {
-            ReplicaConfig::Remote { .. } => None,
-            ReplicaConfig::Managed {
-                availability_zone, ..
-            } => availability_zone.as_deref(),
-        }
-    }
-
-    pub fn get_introspection(&self) -> Option<&ReplicaIntrospectionConfig> {
-        match self {
-            ReplicaConfig::Remote { introspection, .. } => introspection.as_ref(),
-            ReplicaConfig::Managed { introspection, .. } => introspection.as_ref(),
-        }
-    }
-
-    pub fn get_idle_arrangement_merge_effort(&self) -> Option<u32> {
-        match self {
-            ReplicaConfig::Remote {
-                idle_arrangement_merge_effort,
-                ..
-            } => *idle_arrangement_merge_effort,
-            ReplicaConfig::Managed {
-                idle_arrangement_merge_effort,
-                ..
-            } => *idle_arrangement_merge_effort,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -325,31 +299,32 @@ pub struct CreateSourcePlan {
     pub source: Source,
     pub if_not_exists: bool,
     pub timeline: Timeline,
-    pub cluster_config: StorageClusterConfig,
+    pub cluster_config: SourceSinkClusterConfig,
 }
 
-/// Settings related to storage clusters.
-///
-/// This represents how resources for a storage cluster are going to be
-/// provisioned, based on the SQL logic. Storage equivalent of ReplicaConfig.
+/// Specifies the cluster for a source or a sink.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum StorageClusterConfig {
+pub enum SourceSinkClusterConfig {
     /// Use an existing cluster.
-    Cluster {
+    Existing {
         /// The ID of the cluster to use.
         id: StorageInstanceId,
     },
-    /// Remote unmanaged storage.
-    Remote {
-        /// The network address of the clusterd process.
-        addr: String,
-    },
     /// Create a new linked storage cluster of the specified size.
-    Managed {
-        /// SQL size parameter used for allocation
+    ///
+    /// NOTE(benesch): in the future, we hope to remove the concept of a linked
+    /// cluster, and always associate sources and sinks with an existing
+    /// cluster.
+    Linked {
+        /// The size of the replica to create in the linked cluster.
         size: String,
     },
-    /// This configuration was not defined in the SQL query, so it should use the default behavior
+    /// The user did not specify a cluster behavior, so use the default.
+    ///
+    /// NOTE(benesch): we plan to remove this variant in the future by having
+    /// the planner bind a source or sink with no `SIZE` or `IN CLUSTER` option
+    /// to the active cluster. This behavior won't be ergonomic until we have
+    /// multipurpose clusters though.
     Undefined,
 }
 
@@ -374,7 +349,7 @@ pub struct CreateSinkPlan {
     pub sink: Sink,
     pub with_snapshot: bool,
     pub if_not_exists: bool,
-    pub cluster_config: StorageClusterConfig,
+    pub cluster_config: SourceSinkClusterConfig,
 }
 
 #[derive(Debug)]
@@ -568,14 +543,12 @@ pub enum AlterOptionParameter {
 pub struct AlterSinkPlan {
     pub id: GlobalId,
     pub size: AlterOptionParameter,
-    pub remote: AlterOptionParameter,
 }
 
 #[derive(Debug)]
 pub struct AlterSourcePlan {
     pub id: GlobalId,
     pub size: AlterOptionParameter,
-    pub remote: AlterOptionParameter,
 }
 
 #[derive(Debug)]

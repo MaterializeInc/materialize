@@ -118,6 +118,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             external_cockroach=True,
         ),
     ):
+        c.up("materialized")
+        c.wait_for_materialized()
+        c.sql(
+            """
+            CREATE CLUSTER storaged REPLICAS (r1 (
+                STORAGECTL ADDRESS 'storaged:2100',
+                COMPUTECTL ADDRESSES ['storaged:2101'],
+                COMPUTE ADDRESSES ['storaged:2102']
+            ))
+        """
+        )
+        c.rm("materialized")
+
         c.up("testdrive", persistent=True)
 
         print("Generating test...")

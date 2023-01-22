@@ -41,21 +41,6 @@ mz_system              r1      1
 materialize_public_lg  linked  ${arg.default-storage-size}
 > DROP SOURCE lg
 
-# Test that creating a source with the REMOTE option creates a linked cluster
-# with a replica with NULL size. (Unsafe mode only.)
-> CREATE SOURCE lg FROM LOAD GENERATOR COUNTER WITH (REMOTE 'localhost:32323')
-> SHOW CLUSTERS
-default
-mz_introspection
-mz_system
-materialize_public_lg
-> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
-default                r1      ${arg.default-replica-size}
-mz_introspection       r1      1
-mz_system              r1      1
-materialize_public_lg  linked  <null>
-> DROP SOURCE lg
-
 # Test that creating sources with an explicit size creates linked clusters, each
 # with a replica named "linked" with the size specified in the source.
 > CREATE SOURCE lg1 FROM LOAD GENERATOR COUNTER WITH (SIZE = '1')
@@ -69,6 +54,11 @@ default                 r1      ${arg.default-replica-size}
 mz_introspection        r1      1
 mz_system               r1      1
 materialize_public_lg1  linked  1
+> SELECT s.name, c.name
+  FROM mz_sources s
+  JOIN mz_clusters c ON c.id = s.cluster_id
+  WHERE s.id LIKE 'u%'
+lg1  materialize_public_lg1
 > CREATE SOURCE lg2 FROM LOAD GENERATOR COUNTER WITH (SIZE = '2')
 > SHOW CLUSTERS
 default
@@ -89,11 +79,7 @@ materialize_public_lg2  linked  2
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_lg2'
 materialize_public_lg2  linked  4
 
-# Test that a source can be converted to a REMOTE source and then back to a
-# managed source. (Unsafe mode only.)
-> ALTER SOURCE lg2 SET (REMOTE = 'localhost:32323')
-> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_lg2'
-materialize_public_lg2  linked  <null>
+# Test altering the size of a source.
 > ALTER SOURCE lg2 SET (SIZE = '4')
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_lg2'
 materialize_public_lg2  linked  4
@@ -158,23 +144,6 @@ mz_system               r1      1
 materialize_public_snk  linked  ${arg.default-storage-size}
 > DROP SINK snk
 
-# Test that creating a sink with the REMOTE option creates a linked cluster
-# with a linked replica of NULL size. (Unsafe mode only.)
-> CREATE SINK snk FROM v
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
-  FORMAT JSON ENVELOPE DEBEZIUM WITH (REMOTE 'localhost:32323')
-> SHOW CLUSTERS
-default
-mz_introspection
-mz_system
-materialize_public_snk
-> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
-default                r1      ${arg.default-replica-size}
-mz_introspection       r1      1
-mz_system              r1      1
-materialize_public_snk linked  <null>
-> DROP SINK snk
-
 # Test that creating sinks with an explicit size creates linked clusters, each
 # with a replica named "linked" with the size specified in the sink.
 > CREATE SINK snk1 FROM v
@@ -190,6 +159,11 @@ default                  r1      ${arg.default-replica-size}
 mz_introspection         r1      1
 mz_system                r1      1
 materialize_public_snk1  linked  1
+> SELECT s.name, c.name
+  FROM mz_sinks s
+  JOIN mz_clusters c ON c.id = s.cluster_id
+  WHERE s.id LIKE 'u%'
+snk1  materialize_public_snk1
 > CREATE SINK snk2 FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM WITH (SIZE = '2')
@@ -212,11 +186,7 @@ materialize_public_snk2  linked  2
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_snk2'
 materialize_public_snk2  linked  4
 
-# Test that a sink can be converted to a REMOTE sink and then back to a managed
-# sink. (Unsafe mode only.)
-> ALTER SINK snk2 SET (REMOTE 'localhost:32323')
-> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_snk2'
-materialize_public_snk2  linked  <null>
+# Test altering the size of a sink.
 > ALTER SINK snk2 SET (SIZE = '4')
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_snk2'
 materialize_public_snk2  linked  4
