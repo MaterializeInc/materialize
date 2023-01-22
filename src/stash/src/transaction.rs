@@ -10,7 +10,6 @@
 use std::{
     cmp,
     collections::{BTreeMap, BTreeSet, HashMap},
-    marker::PhantomData,
     sync::{Arc, Mutex},
 };
 
@@ -34,19 +33,22 @@ impl Stash {
     where
         F: FnOnce(Transaction) -> BoxFuture<Result<T, StashError>> + Clone + Sync + Send + 'static,
     {
-        let (res, mut cons_rx) = self
-            .transact(|stmts, client| {
+        let (res, mut cons_rx, txn_collections) = self
+            .transact(|stmts, client, collections| {
                 let f = f.clone();
                 let (cons_tx, cons_rx) = mpsc::unbounded_channel();
+                let txn_collections = Arc::new(Mutex::new(HashMap::new()));
                 let tx = Transaction {
                     stmts,
                     client,
                     consolidations: cons_tx,
                     savepoint: Arc::new(Mutex::new(false)),
+                    stash_collections: collections,
+                    txn_collections: Arc::clone(&txn_collections),
                 };
                 Box::pin(async move {
                     let res = f(tx).await?;
-                    Ok((res, cons_rx))
+                    Ok((res, cons_rx, txn_collections))
                 })
             })
             .await?;
@@ -55,6 +57,8 @@ impl Stash {
                 .send(cons)
                 .expect("consolidator unexpectedly gone");
         }
+        self.collections
+            .extend(txn_collections.lock().unwrap().drain());
         Ok(res)
     }
 }
@@ -68,6 +72,11 @@ pub struct Transaction<'a> {
     // Savepoint state to enforce the invariant that only one SAVEPOINT is
     // active at once.
     savepoint: Arc<Mutex<bool>>,
+
+    // Collections cached by the outer Stash.
+    stash_collections: &'a HashMap<String, Id>,
+    // Collections discovered by this transaction.
+    txn_collections: Arc<Mutex<HashMap<String, Id>>>,
 }
 
 impl<'a> Transaction<'a> {
@@ -119,6 +128,10 @@ impl<'a> Transaction<'a> {
         K: Data,
         V: Data,
     {
+        if let Some(id) = self.stash_collections.get(name) {
+            return Ok(StashCollection::new(*id));
+        }
+
         let collection_id_opt: Option<_> = self
             .client
             .query_one(self.stmts.collection(), &[&name])
@@ -153,10 +166,11 @@ impl<'a> Transaction<'a> {
             }
         };
 
-        Ok(StashCollection {
-            id: collection_id,
-            _kv: PhantomData,
-        })
+        self.txn_collections
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), collection_id);
+        Ok(StashCollection::new(collection_id))
     }
 
     /// Returns the names of all collections.
