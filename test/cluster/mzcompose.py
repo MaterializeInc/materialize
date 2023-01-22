@@ -35,10 +35,10 @@ SERVICES = [
     SchemaRegistry(),
     Localstack(),
     Cockroach(setup_materialize=True),
-    Clusterd(name="compute_1"),
-    Clusterd(name="compute_2"),
-    Clusterd(name="compute_3"),
-    Clusterd(name="compute_4"),
+    Clusterd(name="clusterd1"),
+    Clusterd(name="clusterd2"),
+    Clusterd(name="clusterd3"),
+    Clusterd(name="clusterd4"),
     # We use mz_panic() in some test scenarios, so environmentd must stay up.
     Materialized(propagate_crashes=False, external_cockroach=True),
     Redpanda(),
@@ -47,7 +47,6 @@ SERVICES = [
         volumes_extra=[".:/workdir/smoke"],
         materialize_params={"cluster": "cluster1"},
     ),
-    Clusterd(name="storage"),
 ]
 
 
@@ -73,7 +72,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Run testdrive in a variety of compute cluster configurations."""
+    """Run testdrive in a variety of cluster configurations."""
 
     parser.add_argument(
         "glob",
@@ -90,27 +89,29 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("materialized")
     c.wait_for_materialized()
 
-    # Create a remote cluster and verify that tests pass.
-    c.up("compute_1")
-    c.up("compute_2")
+    # Create a cluster and verify that tests pass.
+    c.up("clusterd1")
+    c.up("clusterd2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
         """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            REMOTE ['compute_1:2101', 'compute_2:2101'],
-            COMPUTE ['compute_1:2102', 'compute_2:2102'],
+            STORAGECTL ADDRESS 'clusterd1:2100',
+            COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
             WORKERS 2
-            ));
+        ));
     """
     )
     c.run("testdrive", *args.glob)
 
-    # Add a replica to that remote cluster and verify that tests still pass.
-    c.up("compute_3")
-    c.up("compute_4")
+    # Add a replica to that cluster and verify that tests still pass.
+    c.up("clusterd3")
+    c.up("clusterd4")
     c.sql(
         """CREATE CLUSTER REPLICA cluster1.replica2
-            REMOTE ['compute_3:2101', 'compute_4:2101'],
-            COMPUTE ['compute_3:2102', 'compute_4:2102'],
+            STORAGECTL ADDRESS 'clusterd3:2100',
+            COMPUTECTL ADDRESSES ['clusterd3:2101', 'clusterd4:2101'],
+            COMPUTE ADDRESSES ['clusterd3:2102', 'clusterd4:2102'],
             WORKERS 2
     """
     )
@@ -118,7 +119,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # Kill one of the nodes in the first replica of the compute cluster and
     # verify that tests still pass.
-    c.kill("compute_1")
+    c.kill("clusterd1")
     c.run("testdrive", *args.glob)
 
     # Leave only replica 2 up and verify that tests still pass.
@@ -133,15 +134,16 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     c.wait_for_materialized()
 
     # Create a remote cluster and verify that tests pass.
-    c.up("compute_1")
-    c.up("compute_2")
+    c.up("clusterd1")
+    c.up("clusterd2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
         """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            REMOTE ['compute_1:2101', 'compute_2:2101'],
-            COMPUTE ['compute_1:2102', 'compute_2:2102'],
+            STORAGECTL ADDRESS 'clusterd1:2100',
+            COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
             WORKERS 2
-            ));
+        ));
     """
     )
     c.sql("DROP CLUSTER cluster1 CASCADE;")
@@ -149,15 +151,16 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     # Note the different WORKERS argument
     c.sql(
         """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            REMOTE ['compute_1:2101', 'compute_2:2101'],
-            COMPUTE ['compute_1:2102', 'compute_2:2102'],
+            STORAGECTL ADDRESS 'clusterd1:2100',
+            COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
             WORKERS 1
-            ));
+        ));
     """
     )
 
     # This should ensure that compute crashed (and does not just hang forever)
-    c1 = c.invoke("logs", "compute_1", capture=True)
+    c1 = c.invoke("logs", "clusterd1", capture=True)
     assert (
         "halting process: new timely configuration does not match existing timely configuration"
         in c1.stdout
@@ -170,14 +173,7 @@ def workflow_test_github_12251(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized")
     c.wait_for_materialized()
-    c.up("compute_1")
-    c.sql(
-        """
-        DROP CLUSTER IF EXISTS cluster1 CASCADE;
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['compute_1:2101'], COMPUTE ['compute_1:2102'], WORKERS 2));
-        SET cluster = cluster1;
-        """
-    )
+
     start_time = time.process_time()
     try:
         c.sql(
@@ -217,13 +213,13 @@ def workflow_test_github_15531(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("materialized")
-    c.up("compute_1")
+    c.up("clusterd1")
     c.wait_for_materialized()
 
     # helper function to get command history metrics for clusterd
     def find_clusterd_command_history_metrics(c: Composition) -> Tuple[int, int]:
         metrics = c.exec(
-            "compute_1", "curl", "localhost:6878/metrics", capture=True
+            "clusterd1", "curl", "localhost:6878/metrics", capture=True
         ).stdout
 
         history_len = None
@@ -249,8 +245,9 @@ def workflow_test_github_15531(c: Composition) -> None:
     c.sql(
         """
         CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            REMOTE ['compute_1:2101'],
-            COMPUTE ['compute_1:2102'],
+            STORAGECTL ADDRESS 'clusterd1:2100',
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
             WORKERS 2
         ));
         SET cluster = cluster1;
@@ -324,15 +321,16 @@ def workflow_test_github_15535(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("materialized")
-    c.up("compute_1")
+    c.up("clusterd1")
     c.wait_for_materialized()
 
     # Set up a dataflow on clusterd.
     c.sql(
         """
         CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            REMOTE ['compute_1:2101'],
-            COMPUTE ['compute_1:2102'],
+            STORAGECTL ADDRESS 'clusterd1:2100',
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
             WORKERS 2
         ));
         SET cluster = cluster1;
@@ -388,21 +386,23 @@ def workflow_test_github_15799(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("materialized")
-    c.up("compute_1")
-    c.up("compute_2")
+    c.up("clusterd1")
+    c.up("clusterd2")
     c.wait_for_materialized()
 
     c.sql(
         """
         CREATE CLUSTER cluster1 REPLICAS (
             logging_on (
-                REMOTE ['compute_1:2101'],
-                COMPUTE ['compute_1:2102'],
+                STORAGECTL ADDRESS 'clusterd1:2100',
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
                 WORKERS 2
             ),
             logging_off (
-                REMOTE ['compute_2:2101'],
-                COMPUTE ['compute_2:2102'],
+                STORAGECTL ADDRESS 'clusterd2:2100',
+                COMPUTECTL ADDRESSES ['clusterd2:2101'],
+                COMPUTE ADDRESSES ['clusterd2:2102'],
                 WORKERS 2,
                 INTROSPECTION INTERVAL 0
             )
@@ -434,15 +434,16 @@ def workflow_test_github_15930(c: Composition) -> None:
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
-        c.up("compute_1")
+        c.up("clusterd1")
         c.wait_for_materialized()
 
         c.sql(
             """
             CREATE CLUSTER cluster1 REPLICAS (
                 logging_on (
-                    REMOTE ['compute_1:2101'],
-                    COMPUTE ['compute_1:2102'],
+                    STORAGECTL ADDRESS 'clusterd1:2100',
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
                     WORKERS 2
                 )
             );
@@ -545,7 +546,7 @@ def workflow_test_remote_storage(c: Composition) -> None:
         dependencies = [
             "cockroach",
             "materialized",
-            "storage",
+            "clusterd1",
             "zookeeper",
             "kafka",
             "schema-registry",
@@ -560,10 +561,10 @@ def workflow_test_remote_storage(c: Composition) -> None:
         c.up("materialized")
         c.run("testdrive", "storage/02-after-environmentd-restart.td")
 
-        c.kill("storage")
+        c.kill("clusterd1")
         c.run("testdrive", "storage/03-while-clusterd-down.td")
 
-        c.up("storage")
+        c.up("clusterd1")
         c.run("testdrive", "storage/04-after-clusterd-restart.td")
 
 
@@ -730,16 +731,26 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("materialized")
-    c.up("compute_1")
-    c.up("compute_2")
+    c.up("clusterd1")
+    c.up("clusterd2")
     c.wait_for_materialized()
 
     c.sql(
         """
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
         CREATE CLUSTER cluster1 REPLICAS (
-            replica1 (REMOTE ['compute_1:2101'], COMPUTE ['compute_1:2102'], WORKERS 2),
-            replica2 (REMOTE ['compute_2:2101'], COMPUTE ['compute_2:2102'], WORKERS 2)
+            replica1 (
+                STORAGECTL ADDRESS 'clusterd1:2100',
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 2
+            ),
+            replica2 (
+                STORAGECTL ADDRESS 'clusterd2:2100',
+                COMPUTECTL ADDRESSES ['clusterd2:2101'],
+                COMPUTE ADDRESSES ['clusterd2:2102'],
+                WORKERS 2
+            )
         );
         CREATE TABLE t (a int);
         """
@@ -771,7 +782,7 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
 
     def kill_replica_with_delay() -> None:
         time.sleep(2)
-        c.kill("compute_2")
+        c.kill("clusterd2")
 
     killer = Thread(target=kill_replica_with_delay)
     killer.start()

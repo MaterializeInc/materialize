@@ -39,11 +39,11 @@ class Disruption:
 disruptions = [
     Disruption(
         name="pause-one-cluster",
-        disruption=lambda c: c.pause("compute_1_1"),
+        disruption=lambda c: c.pause("clusterd_1_1"),
     ),
     Disruption(
         name="kill-all-clusters",
-        disruption=lambda c: c.kill("compute_1_1", "compute_1_2"),
+        disruption=lambda c: c.kill("clusterd_1_1", "clusterd_1_2"),
     ),
     Disruption(
         name="pause-in-materialized-view",
@@ -219,10 +219,10 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
     c.wait_for_materialized()
 
     nodes = [
-        Clusterd(name="compute_1_1"),
-        Clusterd(name="compute_1_2"),
-        Clusterd(name="compute_2_1"),
-        Clusterd(name="compute_2_2"),
+        Clusterd(name="clusterd_1_1"),
+        Clusterd(name="clusterd_1_2"),
+        Clusterd(name="clusterd_2_1"),
+        Clusterd(name="clusterd_2_2"),
     ]
 
     with c.override(*nodes):
@@ -232,8 +232,9 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             """
             DROP CLUSTER IF EXISTS cluster1 CASCADE;
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
-                REMOTE ['compute_1_1:2101', 'compute_1_2:2101'],
-                COMPUTE ['compute_1_1:2102', 'compute_1_2:2102']
+                STORAGECTL ADDRESS 'clusterd_1_1:2100',
+                COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
+                COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
             ));
             """
         )
@@ -242,8 +243,9 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             """
             DROP CLUSTER IF EXISTS cluster2 CASCADE;
             CREATE CLUSTER cluster2 REPLICAS (replica1 (
-                REMOTE ['compute_2_1:2101', 'compute_2_2:2101'],
-                COMPUTE ['compute_2_1:2102', 'compute_2_2:2102']
+                STORAGECTL ADDRESS 'clusterd_2_1:2100',
+                COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
+                COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
             ));
             """
         )

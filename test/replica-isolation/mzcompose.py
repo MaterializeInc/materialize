@@ -252,8 +252,9 @@ def drop_create_replica(c: Composition) -> None:
             """
             > DROP CLUSTER REPLICA cluster1.replica1
             > CREATE CLUSTER REPLICA cluster1.replica3
-              REMOTE ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-              COMPUTE ['clusterd_1_1:2102', 'clusterd_1_2:2102']
+              STORAGECTL ADDRESS 'clusterd_1_1:2100',
+              COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
+              COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
             """
         )
     )
@@ -264,8 +265,9 @@ def create_invalid_replica(c: Composition) -> None:
         dedent(
             """
             > CREATE CLUSTER REPLICA cluster1.replica3
-              REMOTE ['no_such_host:2101'],
-              COMPUTE ['no_such_host:2102']
+              STORAGECTL ADDRESS 'no_such_host:2100',
+              COMPUTECTL ADDRESSES ['no_such_host:2101'],
+              COMPUTE ADDRESSES ['no_such_host:2102']
             """
         )
     )
@@ -450,13 +452,15 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             """
             CREATE CLUSTER cluster1 REPLICAS (
                 replica1 (
-                    REMOTE ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-                    COMPUTE ['clusterd_1_1:2102', 'clusterd_1_2:2102']
-                    ),
+                    STORAGECTL ADDRESS 'clusterd_1_1:2100',
+                    COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
+                    COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
+                ),
                 replica2 (
-                    REMOTE ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
-                    COMPUTE ['clusterd_2_1:2102', 'clusterd_2_2:2102']
-                    )
+                    STORAGECTL ADDRESS 'clusterd_2_1:2100',
+                    COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
+                    COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
+                )
             )
             """
         )

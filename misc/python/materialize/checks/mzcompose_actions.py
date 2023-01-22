@@ -71,8 +71,9 @@ class UseClusterdCompute(MzcomposeAction):
             """
             DROP CLUSTER REPLICA default.r1;
             CREATE CLUSTER REPLICA default.r1
-                REMOTE ['clusterd_compute_1:2101'],
-                COMPUTE ['clusterd_compute_1:2102'],
+                STORAGECTL ADDRESS 'clusterd_compute_1:2100',
+                COMPUTECTL ADDRESSES ['clusterd_compute_1:2101'],
+                COMPUTE ADDRESSES ['clusterd_compute_1:2102'],
                 WORKERS 1;
         """
         )

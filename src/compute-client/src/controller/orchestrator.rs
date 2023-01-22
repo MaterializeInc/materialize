@@ -62,7 +62,8 @@ impl ComputeOrchestrator {
     ) -> Result<(Vec<String>, usize, Vec<String>), anyhow::Error> {
         match location {
             ComputeReplicaLocation::Remote {
-                addrs,
+                storagectl_addr: _,
+                computectl_addrs: addrs,
                 compute_addrs,
                 workers,
             } => {

@@ -25,6 +25,8 @@
 
 Access
 Acks
+Address
+Addresses
 All
 Alter
 And
@@ -72,6 +74,7 @@ Committed
 Compaction
 Compression
 Compute
+Computectl
 Confluent
 Connection
 Connections
@@ -269,7 +272,6 @@ Refresh
 Regex
 Region
 Registry
-Remote
 Rename
 Repeatable
 Replace
@@ -320,6 +322,7 @@ Ssl
 Start
 Stdin
 Stdout
+Storagectl
 Strategy
 String
 Subscribe

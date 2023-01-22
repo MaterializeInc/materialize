@@ -499,12 +499,6 @@ impl Coordinator {
             from_storage_metadata: (),
         };
 
-        let cluster_id = self
-            .catalog
-            .get_linked_cluster(create_export_token.id())
-            .expect("sinks always have linked clusters")
-            .id;
-
         Ok(self
             .controller
             .storage
@@ -512,7 +506,7 @@ impl Coordinator {
                 create_export_token,
                 ExportDescription {
                     sink: storage_sink_desc,
-                    instance_id: cluster_id,
+                    instance_id: sink.cluster_id,
                 },
             )])
             .await?)

@@ -12,9 +12,8 @@
 //! This module houses the handlers for statements that modify the catalog, like
 //! `ALTER`, `CREATE`, and `DROP`.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
-use std::num::NonZeroUsize;
 use std::str::FromStr;
 
 use aws_arn::ResourceName as AmazonResourceName;
@@ -109,14 +108,14 @@ use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterOptionParameter, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, CreateClusterPlan,
-    CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DropClusterReplicasPlan,
-    DropClustersPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    FullObjectName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan, QueryContext,
-    ReplicaConfig, ReplicaIntrospectionConfig, RotateKeysPlan, Secret, Sink, Source,
-    StorageClusterConfig, Table, Type, View,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
+    ComputeReplicaIntrospectionConfig, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DropClusterReplicasPlan, DropClustersPlan,
+    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, FullObjectName, HirScalarExpr,
+    Index, Ingestion, MaterializedView, Params, Plan, QueryContext, ReplicaConfig, RotateKeysPlan,
+    Secret, Sink, Source, SourceSinkClusterConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -323,7 +322,6 @@ pub fn describe_create_subsource(
 generate_extracted_config!(
     CreateSourceOption,
     (IgnoreKeys, bool),
-    (Remote, String),
     (Size, String),
     (Timeline, String),
     (TimestampInterval, Interval)
@@ -971,7 +969,6 @@ pub fn plan_create_source(
     let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
 
     let CreateSourceOptionExtracted {
-        remote,
         size,
         timeline,
         timestamp_interval,
@@ -1029,7 +1026,7 @@ pub fn plan_create_source(
         }
     }
 
-    let cluster_config = storage_cluster_config(in_cluster.as_ref(), remote, size)?;
+    let cluster_config = source_sink_cluster_config(scx, "source", in_cluster.as_ref(), size)?;
 
     let timestamp_interval = match timestamp_interval {
         Some(timestamp_interval) => timestamp_interval.duration()?,
@@ -1185,7 +1182,7 @@ pub fn plan_create_subsource(
         source,
         if_not_exists,
         timeline: Timeline::EpochMilliseconds,
-        cluster_config: StorageClusterConfig::Undefined,
+        cluster_config: SourceSinkClusterConfig::Undefined,
     }))
 }
 
@@ -1328,17 +1325,26 @@ fn get_encoding(
     Ok(encoding)
 }
 
-fn storage_cluster_config(
+fn source_sink_cluster_config(
+    scx: &StatementContext,
+    ty: &'static str,
     in_cluster: Option<&ResolvedClusterName>,
-    remote: Option<String>,
     size: Option<String>,
-) -> Result<StorageClusterConfig, PlanError> {
-    match (in_cluster, remote, size) {
-        (None, None, None) => Ok(StorageClusterConfig::Undefined),
-        (Some(in_cluster), None, None) => Ok(StorageClusterConfig::Cluster { id: in_cluster.id }),
-        (None, Some(addr), None) => Ok(StorageClusterConfig::Remote { addr }),
-        (None, None, Some(size)) => Ok(StorageClusterConfig::Managed { size }),
-        _ => sql_bail!("only one of IN CLUSTER, REMOTE and SIZE can be set"),
+) -> Result<SourceSinkClusterConfig, PlanError> {
+    match (in_cluster, size) {
+        (None, None) => Ok(SourceSinkClusterConfig::Undefined),
+        (Some(in_cluster), None) => {
+            let cluster = scx.catalog.get_cluster(in_cluster.id);
+            if cluster.replicas().len() > 1 {
+                sql_bail!("cannot create {ty} in cluster with more than one replica")
+            }
+            if !is_storage_cluster(scx, cluster) {
+                sql_bail!("cannot create {ty} in cluster containing indexes or materialized views");
+            }
+            Ok(SourceSinkClusterConfig::Existing { id: in_cluster.id })
+        }
+        (None, Some(size)) => Ok(SourceSinkClusterConfig::Linked { size }),
+        _ => sql_bail!("only one of IN CLUSTER or SIZE can be set"),
     }
 }
 
@@ -1695,7 +1701,11 @@ pub fn plan_create_materialized_view(
         None => scx.resolve_cluster(None)?.id(),
         Some(in_cluster) => in_cluster.id,
     };
-    ensure_cluster_is_not_linked(scx, scx.catalog.get_cluster(cluster_id))?;
+    let cluster = scx.catalog.get_cluster(cluster_id);
+    ensure_cluster_is_not_linked(scx, cluster)?;
+    if !is_compute_cluster(scx, cluster) {
+        sql_bail!("cannot create materialized view in cluster containing sources or sinks");
+    }
     stmt.in_cluster = Some(ResolvedClusterName {
         id: cluster_id,
         print_name: None,
@@ -1767,12 +1777,7 @@ pub fn describe_create_sink(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(
-    CreateSinkOption,
-    (Remote, String),
-    (Size, String),
-    (Snapshot, bool)
-);
+generate_extracted_config!(CreateSinkOption, (Size, String), (Snapshot, bool));
 
 pub fn plan_create_sink(
     scx: &StatementContext,
@@ -1893,13 +1898,12 @@ pub fn plan_create_sink(
     };
 
     let CreateSinkOptionExtracted {
-        remote,
         size,
         snapshot,
         seen: _,
     } = with_options.try_into()?;
 
-    let cluster_config = storage_cluster_config(in_cluster.as_ref(), remote, size)?;
+    let cluster_config = source_sink_cluster_config(scx, "sink", in_cluster.as_ref(), size)?;
 
     // WITH SNAPSHOT defaults to true
     let with_snapshot = snapshot.unwrap_or(true);
@@ -2241,7 +2245,11 @@ pub fn plan_create_index(
         None => scx.resolve_cluster(None)?.id(),
         Some(in_cluster) => in_cluster.id,
     };
-    ensure_cluster_is_not_linked(scx, scx.catalog.get_cluster(cluster_id))?;
+    let cluster = scx.catalog.get_cluster(cluster_id);
+    ensure_cluster_is_not_linked(scx, cluster)?;
+    if !is_compute_cluster(scx, cluster) {
+        sql_bail!("cannot create index in cluster containing sources or sinks");
+    }
     *in_cluster = Some(ResolvedClusterName {
         id: cluster_id,
         print_name: None,
@@ -2473,10 +2481,11 @@ const DEFAULT_REPLICA_INTROSPECTION_INTERVAL: Interval = Interval {
 
 generate_extracted_config!(
     ReplicaOption,
-    (AvailabilityZone, String),
     (Size, String),
-    (Remote, Vec<String>),
-    (Compute, Vec<String>),
+    (AvailabilityZone, String),
+    (StoragectlAddress, String),
+    (ComputectlAddresses, Vec<String>),
+    (ComputeAddresses, Vec<String>),
     (Workers, u16),
     (IntrospectionInterval, OptionalInterval),
     (IntrospectionDebugging, bool, Default(false)),
@@ -2488,32 +2497,23 @@ fn plan_replica_config(
     options: Vec<ReplicaOption<Aug>>,
 ) -> Result<ReplicaConfig, PlanError> {
     let ReplicaOptionExtracted {
-        availability_zone,
         size,
-        remote,
+        availability_zone,
+        storagectl_address,
+        computectl_addresses,
+        compute_addresses,
         workers,
-        compute,
         introspection_interval,
         introspection_debugging,
         idle_arrangement_merge_effort,
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
-    if remote.is_some() {
-        scx.require_unsafe_mode("REMOTE cluster replica option")?;
-    }
-    if compute.is_some() {
-        scx.require_unsafe_mode("COMPUTE cluster replica option")?;
-    }
-    if workers.is_some() {
-        scx.require_unsafe_mode("WORKERS cluster replica option")?;
-    }
-
     let introspection_interval = introspection_interval
         .map(|OptionalInterval(i)| i)
         .unwrap_or(Some(DEFAULT_REPLICA_INTROSPECTION_INTERVAL));
     let introspection = match introspection_interval {
-        Some(interval) => Some(ReplicaIntrospectionConfig {
+        Some(interval) => Some(ComputeReplicaIntrospectionConfig {
             interval: interval.duration()?,
             debugging: introspection_debugging,
         }),
@@ -2522,53 +2522,68 @@ fn plan_replica_config(
         }
         None => None,
     };
+    let compute = ComputeReplicaConfig {
+        introspection,
+        idle_arrangement_merge_effort,
+    };
 
-    match (size, remote) {
-        (None, Some(remote)) => {
-            // REMOTE given, no SIZE
-            if availability_zone.is_some() {
-                sql_bail!("cannot specify AVAILABILITY ZONE and REMOTE");
-            }
-            // Unwrap REMOTE options
-            let remote_addrs = remote.into_iter().collect::<BTreeSet<String>>();
-            let compute_addrs = compute
-                .unwrap_or_default()
-                .into_iter()
-                .collect::<BTreeSet<String>>();
+    match (
+        size,
+        availability_zone,
+        storagectl_address,
+        computectl_addresses,
+        compute_addresses,
+        workers,
+    ) {
+        // Common cases we expect end users to hit.
+        (None, _, None, None, None, None) => {
+            // We don't mention the unmanaged options in the error message
+            // because they are only available in unsafe mode.
+            sql_bail!("SIZE option must be specified");
+        }
+        (Some(size), availability_zone, None, None, None, None) => Ok(ReplicaConfig::Managed {
+            size,
+            availability_zone,
+            compute,
+        }),
+
+        (None, None, storagectl_address, computectl_addresses, compute_addresses, workers) => {
+            scx.require_unsafe_mode("unmanaged cluster replicas")?;
+
+            // When manually testing Materialize in unsafe mode, it's easy to
+            // accidentally omit one of these options, so we try to produce
+            // helpful error messages.
+            let Some(storagectl_addr) = storagectl_address else {
+                sql_bail!("missing STORAGECTL ADDRESS option");
+            };
+            let Some(computectl_addrs) = computectl_addresses else {
+                sql_bail!("missing COMPUTECTL ADDRESSES option");
+            };
+            let Some(compute_addrs) = compute_addresses else {
+                sql_bail!("missing COMPUTE ADDRESSES option");
+            };
             let workers = workers.unwrap_or(1);
 
-            if remote_addrs.len() != compute_addrs.len() {
-                sql_bail!("must specify as many REMOTE addresses as COMPUTE addresses");
+            if computectl_addrs.len() != compute_addrs.len() {
+                sql_bail!("COMPUTECTL ADDRESSES and COMPUTE ADDRESSES must have the same length");
             }
 
-            let workers = NonZeroUsize::new(workers.into())
-                .ok_or_else(|| sql_err!("WORKERS must be greater 0"))?;
-            Ok(ReplicaConfig::Remote {
-                addrs: remote_addrs,
+            if workers == 0 {
+                sql_bail!("WORKERS must be greater than 0");
+            }
+
+            Ok(ReplicaConfig::Unmanaged {
+                storagectl_addr,
+                computectl_addrs,
                 compute_addrs,
-                workers,
-                introspection,
-                idle_arrangement_merge_effort,
+                workers: workers.into(),
+                compute,
             })
         }
-        (Some(size), None) => {
-            // SIZE given, no REMOTE
-            if workers.is_some() {
-                sql_bail!("cannot specify SIZE and WORKERS");
-            }
-            if compute.is_some() {
-                sql_bail!("cannot specify SIZE and COMPUTE");
-            }
-            Ok(ReplicaConfig::Managed {
-                size,
-                availability_zone,
-                introspection,
-                idle_arrangement_merge_effort,
-            })
-        }
-        (_, _) => {
-            // SIZE and REMOTE given, or none of them
-            sql_bail!("only one of REMOTE or SIZE may be specified")
+        _ => {
+            // We don't bother trying to produce a more helpful error message
+            // here because no user is likely to hit this path.
+            sql_bail!("invalid mixture of managed and unmanaged replica options");
         }
     }
 }
@@ -2589,6 +2604,12 @@ pub fn plan_create_cluster_replica(
 ) -> Result<Plan, PlanError> {
     let cluster = scx.catalog.resolve_cluster(Some(&of_cluster.to_string()))?;
     ensure_cluster_is_not_linked(scx, cluster)?;
+    if is_storage_cluster(scx, cluster)
+        && cluster.bound_objects().len() > 0
+        && cluster.replicas().len() > 0
+    {
+        sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
+    }
     Ok(Plan::CreateClusterReplica(CreateClusterReplicaPlan {
         name: normalize::ident(name),
         cluster_id: cluster.id(),
@@ -3307,7 +3328,7 @@ pub fn plan_drop_cluster(
             Ok(cluster) => {
                 ensure_cluster_is_not_linked(scx, cluster)?;
                 if !cascade && !cluster.bound_objects().is_empty() {
-                    sql_bail!("cannot drop cluster with active indexes or materialized views");
+                    sql_bail!("cannot drop cluster with active objects");
                 }
                 ids.push(cluster.id());
             }
@@ -3335,6 +3356,24 @@ fn ensure_cluster_is_not_linked(
     } else {
         Ok(())
     }
+}
+
+fn is_storage_cluster(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
+    cluster.bound_objects().iter().all(|id| {
+        matches!(
+            scx.catalog.get_item(id).item_type(),
+            CatalogItemType::Source | CatalogItemType::Sink
+        )
+    })
+}
+
+fn is_compute_cluster(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
+    cluster.bound_objects().iter().all(|id| {
+        matches!(
+            scx.catalog.get_item(id).item_type(),
+            CatalogItemType::Index | CatalogItemType::MaterializedView
+        )
+    })
 }
 
 pub fn describe_drop_cluster_replica(
@@ -3714,19 +3753,14 @@ pub fn plan_alter_sink(
     let id = entry.id();
 
     let mut size = AlterOptionParameter::Unchanged;
-    let mut remote = AlterOptionParameter::Unchanged;
     match action {
         AlterSinkAction::SetOptions(options) => {
             let CreateSinkOptionExtracted {
-                remote: remote_opt,
                 size: size_opt,
                 snapshot,
                 seen: _,
             } = options.try_into()?;
 
-            if let Some(value) = remote_opt {
-                remote = AlterOptionParameter::Set(value);
-            }
             if let Some(value) = size_opt {
                 size = AlterOptionParameter::Set(value);
             }
@@ -3737,9 +3771,6 @@ pub fn plan_alter_sink(
         AlterSinkAction::ResetOptions(reset) => {
             for name in reset {
                 match name {
-                    CreateSinkOptionName::Remote => {
-                        remote = AlterOptionParameter::Reset;
-                    }
                     CreateSinkOptionName::Size => {
                         size = AlterOptionParameter::Reset;
                     }
@@ -3751,7 +3782,7 @@ pub fn plan_alter_sink(
         }
     };
 
-    Ok(Plan::AlterSink(AlterSinkPlan { id, size, remote }))
+    Ok(Plan::AlterSink(AlterSinkPlan { id, size }))
 }
 
 pub fn describe_alter_source(
@@ -3798,21 +3829,16 @@ pub fn plan_alter_source(
     let id = entry.id();
 
     let mut size = AlterOptionParameter::Unchanged;
-    let mut remote = AlterOptionParameter::Unchanged;
     match action {
         AlterSourceAction::SetOptions(options) => {
             let CreateSourceOptionExtracted {
                 seen: _,
-                remote: remote_opt,
                 size: size_opt,
                 timeline: timeline_opt,
                 timestamp_interval: timestamp_interval_opt,
                 ignore_keys: ignore_keys_opt,
             } = CreateSourceOptionExtracted::try_from(options)?;
 
-            if let Some(value) = remote_opt {
-                remote = AlterOptionParameter::Set(value);
-            }
             if let Some(value) = size_opt {
                 size = AlterOptionParameter::Set(value);
             }
@@ -3829,9 +3855,6 @@ pub fn plan_alter_source(
         AlterSourceAction::ResetOptions(reset) => {
             for name in reset {
                 match name {
-                    CreateSourceOptionName::Remote => {
-                        remote = AlterOptionParameter::Reset;
-                    }
                     CreateSourceOptionName::Size => {
                         size = AlterOptionParameter::Reset;
                     }
@@ -3849,7 +3872,7 @@ pub fn plan_alter_source(
         }
     };
 
-    Ok(Plan::AlterSource(AlterSourcePlan { id, size, remote }))
+    Ok(Plan::AlterSource(AlterSourcePlan { id, size }))
 }
 
 pub fn describe_alter_system_set(

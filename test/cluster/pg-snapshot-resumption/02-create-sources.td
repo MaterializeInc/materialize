@@ -11,6 +11,14 @@
 > DROP SECRET IF EXISTS pgpass CASCADE;
 > DROP CONNECTION IF EXISTS pg CASCADE;
 
+> CREATE CLUSTER storage REPLICAS (
+    r1 (
+      STORAGECTL ADDRESS 'storage:2100',
+      COMPUTECTL ADDRESSES ['storage:2101'],
+      COMPUTE ADDRESSES ['storage:2102']
+    )
+  )
+
 > CREATE SECRET pgpass AS 'postgres'
 > CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
@@ -20,10 +28,8 @@
   )
 
 > CREATE SOURCE mz_source
+  IN CLUSTER storage
   FROM POSTGRES
   CONNECTION pg
   (PUBLICATION 'mz_source')
-  FOR ALL TABLES
-  WITH (
-    REMOTE = 'storage:2100'
-  );
+  FOR ALL TABLES;
