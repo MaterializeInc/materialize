@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
@@ -293,10 +293,11 @@ pub trait CatalogComputeInstance<'a> {
 
     /// Returns the set of non-transient exports (indexes, materialized views)
     /// of this cluster.
-    fn exports(&self) -> &std::collections::HashSet<GlobalId>;
+    fn exports(&self) -> &HashSet<GlobalId>;
 
-    /// Returns the set of replicas of this cluster.
-    fn replica_names(&self) -> HashSet<&String>;
+    /// Returns the replicas of the cluster as a map from replica name to
+    /// replica ID.
+    fn replicas(&self) -> &HashMap<String, ReplicaId>;
 }
 
 /// An item in a [`SessionCatalog`].

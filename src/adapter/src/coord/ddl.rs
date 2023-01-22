@@ -162,38 +162,40 @@ impl Coordinator {
                     }
                     _ => (),
                 }
-            } else if let catalog::Op::DropComputeInstance { name } = op {
-                let instance = self.catalog.resolve_compute_instance(name)?;
-                let id = instance.id;
+            } else if let catalog::Op::DropComputeInstance { id } = op {
+                let cluster = self.catalog.try_get_cluster(*id).expect("valid cluster id");
 
                 // Drop the introspection sources
-                let replica_logs = instance
+                let replica_logs = cluster
                     .replicas_by_id
                     .values()
                     .flat_map(|replica| replica.config.logging.source_ids())
-                    .map(|log_id| (id, log_id));
+                    .map(|log_id| (*id, log_id));
                 log_sources_to_drop.extend(replica_logs);
 
                 // Drop the cluster itself.
-                clusters_to_drop.push(id);
+                clusters_to_drop.push(*id);
 
                 // Drop timelines
-                timelines_to_drop.extend(self.remove_compute_instance_from_timeline(id));
-            } else if let catalog::Op::DropComputeReplica { name, compute_name } = op {
-                let compute_instance = self.catalog.resolve_compute_instance(compute_name)?;
-                let replica_id = compute_instance.replica_id_by_name[name];
-                let replica = &compute_instance.replicas_by_id[&replica_id];
+                timelines_to_drop.extend(self.remove_compute_instance_from_timeline(*id));
+            } else if let catalog::Op::DropComputeReplica {
+                cluster_id,
+                replica_id,
+            } = op
+            {
+                let cluster = self.catalog.get_cluster(*cluster_id);
+                let replica = &cluster.replicas_by_id[replica_id];
 
                 // Drop the introspection sources
                 let replica_logs = replica
                     .config
                     .logging
                     .source_ids()
-                    .map(|log_id| (compute_instance.id, log_id));
+                    .map(|log_id| (cluster.id, log_id));
                 log_sources_to_drop.extend(replica_logs);
 
                 // Drop the cluster replica itself.
-                cluster_replicas_to_drop.push((compute_instance.id, replica_id));
+                cluster_replicas_to_drop.push((cluster.id, *replica_id));
             }
         }
 
@@ -628,10 +630,8 @@ impl Coordinator {
                         new_clusters += 1;
                     }
                 }
-                Op::CreateComputeReplica {
-                    on_cluster_name, ..
-                } => {
-                    *new_replicas_per_cluster.entry(on_cluster_name).or_insert(0) += 1;
+                Op::CreateComputeReplica { cluster_id, .. } => {
+                    *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
                 }
                 Op::CreateItem { name, item, .. } => {
                     *new_objects_per_schema
@@ -685,8 +685,8 @@ impl Coordinator {
                 Op::DropComputeInstance { .. } => {
                     new_clusters -= 1;
                 }
-                Op::DropComputeReplica { compute_name, .. } => {
-                    *new_replicas_per_cluster.entry(compute_name).or_insert(0) -= 1;
+                Op::DropComputeReplica { cluster_id, .. } => {
+                    *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
                 }
                 Op::DropItem(id) => {
                     let entry = self.catalog.get_entry(id);
@@ -803,11 +803,11 @@ impl Coordinator {
             SystemVars::max_clusters,
             "Cluster",
         )?;
-        for (cluster_name, new_replicas) in new_replicas_per_cluster {
+        for (cluster_id, new_replicas) in new_replicas_per_cluster {
             // It's possible that the compute instance hasn't been created yet.
             let current_amount = self
                 .catalog
-                .resolve_compute_instance(cluster_name)
+                .try_get_cluster(cluster_id)
                 .map(|instance| instance.replicas_by_id.len())
                 .unwrap_or(0);
             self.validate_resource_limit(

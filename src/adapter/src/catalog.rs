@@ -413,6 +413,15 @@ impl CatalogState {
         self.entry_by_id.get(id)
     }
 
+    fn get_cluster(&self, cluster_id: ComputeInstanceId) -> &ComputeInstance {
+        self.try_get_cluster(cluster_id)
+            .unwrap_or_else(|| panic!("unknown cluster {cluster_id}"))
+    }
+
+    fn try_get_cluster(&self, cluster_id: ComputeInstanceId) -> Option<&ComputeInstance> {
+        self.compute_instances_by_id.get(&cluster_id)
+    }
+
     fn get_linked_cluster(&self, object_id: GlobalId) -> Option<&ComputeInstance> {
         self.compute_instances_by_linked_object_id
             .get(&object_id)
@@ -3457,6 +3466,14 @@ impl Catalog {
             .map(|ids| ids.into_element())
     }
 
+    pub async fn allocate_user_cluster_id(&mut self) -> Result<ComputeInstanceId, Error> {
+        self.storage().await.allocate_user_cluster_id().await
+    }
+
+    pub async fn allocate_replica_id(&mut self) -> Result<ReplicaId, Error> {
+        self.storage().await.allocate_replica_id().await
+    }
+
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
         self.state.allocate_oid()
     }
@@ -3722,23 +3739,19 @@ impl Catalog {
     }
 
     /// Creates the catalog operations to drop the given compute instances.
-    pub fn drop_compute_instance_ops(&self, instance_names: &[String]) -> Vec<Op> {
-        let mut names = vec![];
+    pub fn drop_compute_instance_ops(&self, ids: &[ComputeInstanceId]) -> Vec<Op> {
+        let mut replica_ids = vec![];
         let mut instance_ops = vec![];
         let mut ids_to_drop = vec![];
-        for instance_name in instance_names {
-            let instance = self
-                .resolve_compute_instance(instance_name)
-                .expect("instance name already validated");
-            for replica_name in instance.replica_id_by_name.keys() {
-                names.push((instance_name.clone(), replica_name.clone()));
+        for id in ids {
+            let instance = &self.state.compute_instances_by_id[id];
+            for replica_id in instance.replica_id_by_name.values() {
+                replica_ids.push((*id, *replica_id));
             }
-            instance_ops.push(Op::DropComputeInstance {
-                name: instance_name.into(),
-            });
+            instance_ops.push(Op::DropComputeInstance { id: *id });
             ids_to_drop.extend(instance.exports().iter().copied());
         }
-        let replica_ops = self.drop_compute_instance_replica_ops(&names);
+        let replica_ops = self.drop_compute_instance_replica_ops(&replica_ids);
         let mut ops = self.drop_items_ops(&ids_to_drop);
         ops.extend(replica_ops);
         ops.extend(instance_ops);
@@ -3747,25 +3760,25 @@ impl Catalog {
 
     /// Creates the catalog operations to drop the given compute instance
     /// replicas.
-    pub fn drop_compute_instance_replica_ops(&self, names: &[(String, String)]) -> Vec<Op> {
+    pub fn drop_compute_instance_replica_ops(
+        &self,
+        ids: &[(ComputeInstanceId, ReplicaId)],
+    ) -> Vec<Op> {
         let mut ops = vec![];
         let mut ids_to_drop = vec![];
-        for (instance_name, replica_name) in names {
-            let instance = self
-                .resolve_compute_instance(instance_name)
-                .expect("instance name already validated");
+        for (cluster_id, replica_id) in ids {
             ops.push(Op::DropComputeReplica {
-                name: replica_name.clone(),
-                compute_name: instance_name.clone(),
+                cluster_id: *cluster_id,
+                replica_id: *replica_id,
             });
-            let replica_id = instance.replica_id_by_name[replica_name];
 
             // Determine from the replica which additional items to drop. This is the set
             // of items that depend on the introspection sources. The sources
             // itself are removed with Op::DropComputeReplica.
-            let logging = &instance
+            let cluster = &self.state.compute_instances_by_id[cluster_id];
+            let logging = &cluster
                 .replicas_by_id
-                .get(&replica_id)
+                .get(replica_id)
                 .unwrap()
                 .config
                 .logging;
@@ -3819,8 +3832,7 @@ impl Catalog {
             if let Some(linked_cluster_id) =
                 self.state.compute_instances_by_linked_object_id.get(&id)
             {
-                let name = &self.state.compute_instances_by_id[linked_cluster_id].name;
-                let cluster_ops = self.drop_compute_instance_ops(&[name.clone()]);
+                let cluster_ops = self.drop_compute_instance_ops(&[*linked_cluster_id]);
                 ops.extend(cluster_ops);
             }
         }
@@ -4069,9 +4081,9 @@ impl Catalog {
                 arranged_introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
             },
             CreateComputeReplica {
+                cluster_id: ComputeInstanceId,
                 id: ReplicaId,
                 name: String,
-                on_cluster_id: ComputeInstanceId,
                 config: ComputeReplicaConfig,
             },
             CreateItem {
@@ -4091,12 +4103,12 @@ impl Catalog {
                 name: String,
             },
             DropComputeInstance {
-                name: String,
+                id: ComputeInstanceId,
                 introspection_source_index_ids: Vec<GlobalId>,
             },
             DropComputeReplica {
-                name: String,
-                compute_id: ComputeInstanceId,
+                cluster_id: ComputeInstanceId,
+                replica_id: ReplicaId,
             },
             DropItem(GlobalId),
             UpdateItem {
@@ -4483,6 +4495,7 @@ impl Catalog {
                     )?;
                 }
                 Op::CreateComputeInstance {
+                    id,
                     name,
                     linked_object_id,
                     arranged_introspection_sources,
@@ -4492,7 +4505,8 @@ impl Catalog {
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
-                    let id = tx.insert_user_compute_instance(
+                    tx.insert_user_compute_instance(
+                        id,
                         &name,
                         linked_object_id,
                         &arranged_introspection_sources,
@@ -4522,8 +4536,9 @@ impl Catalog {
                     )?;
                 }
                 Op::CreateComputeReplica {
+                    cluster_id,
+                    id,
                     name,
-                    on_cluster_name,
                     config,
                 } => {
                     if is_reserved_name(&name) {
@@ -4531,24 +4546,23 @@ impl Catalog {
                             ErrorKind::ReservedReplicaName(name),
                         )));
                     }
-                    let on_cluster_id = state.resolve_compute_instance(&on_cluster_name)?.id();
-                    if on_cluster_id.is_system()
+                    let cluster = state.get_cluster(cluster_id);
+                    if cluster_id.is_system()
                         && !session
                             .map(|session| session.user().is_internal())
                             .unwrap_or(false)
                     {
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlyComputeInstance(on_cluster_name),
+                            ErrorKind::ReadOnlyComputeInstance(cluster.name.clone()),
                         )));
                     }
-                    let (replica_id, compute_instance_id) =
-                        tx.insert_compute_replica(&on_cluster_name, &name, &config.clone().into())?;
+                    tx.insert_compute_replica(cluster_id, id, &name, &config.clone().into())?;
                     if let ComputeReplicaLocation::Managed { size, .. } = &config.location {
                         let details = EventDetails::CreateComputeReplicaV1(
                             mz_audit_log::CreateComputeReplicaV1 {
-                                cluster_id: compute_instance_id.to_string(),
-                                cluster_name: on_cluster_name.clone(),
-                                replica_id: Some(replica_id.to_string()),
+                                cluster_id: cluster_id.to_string(),
+                                cluster_name: cluster.name.clone(),
+                                replica_id: Some(id.to_string()),
                                 replica_name: name.clone(),
                                 logical_size: size.clone(),
                             },
@@ -4568,9 +4582,9 @@ impl Catalog {
                         state,
                         builtin_table_updates,
                         Action::CreateComputeReplica {
-                            id: replica_id,
+                            id,
                             name,
-                            on_cluster_id,
+                            cluster_id,
                             config,
                         },
                     )?;
@@ -4771,18 +4785,20 @@ impl Catalog {
                     )?;
                     catalog_action(state, builtin_table_updates, Action::DropRole { name })?;
                 }
-                Op::DropComputeInstance { name } => {
-                    if is_reserved_name(&name) {
+                Op::DropComputeInstance { id } => {
+                    let cluster = state.get_cluster(id);
+                    let name = &cluster.name;
+                    if is_reserved_name(name) {
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlyComputeInstance(name),
+                            ErrorKind::ReadOnlyComputeInstance(name.clone()),
                         )));
                     }
                     let (instance_id, linked_object_id, introspection_source_index_ids) =
-                        tx.remove_compute_instance(&name)?;
-                    builtin_table_updates.push(state.pack_compute_instance_update(&name, -1));
+                        tx.remove_compute_instance(name)?;
+                    builtin_table_updates.push(state.pack_compute_instance_update(name, -1));
                     if let Some(linked_object_id) = linked_object_id {
                         builtin_table_updates.push(state.pack_cluster_link_update(
-                            &name,
+                            name,
                             linked_object_id,
                             -1,
                         ));
@@ -4807,34 +4823,36 @@ impl Catalog {
                         state,
                         builtin_table_updates,
                         Action::DropComputeInstance {
-                            name,
+                            id,
                             introspection_source_index_ids,
                         },
                     )?;
                 }
-                Op::DropComputeReplica { name, compute_name } => {
-                    if is_reserved_name(&name) {
+                Op::DropComputeReplica {
+                    cluster_id,
+                    replica_id,
+                } => {
+                    let cluster = state.get_cluster(cluster_id);
+                    let replica = &cluster.replicas_by_id[&replica_id];
+                    if is_reserved_name(&replica.name) {
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReservedReplicaName(name),
+                            ErrorKind::ReservedReplicaName(replica.name.clone()),
                         )));
                     }
-                    let instance = state.resolve_compute_instance(&compute_name)?;
-                    if instance.id().is_system()
+                    if cluster_id.is_system()
                         && !session
                             .map(|session| session.user().is_internal())
                             .unwrap_or(false)
                     {
                         return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlyComputeInstance(compute_name),
+                            ErrorKind::ReadOnlyComputeInstance(cluster.name.clone()),
                         )));
                     }
-                    tx.remove_compute_replica(&name, instance.id)?;
+                    tx.remove_compute_replica(replica_id)?;
 
-                    let replica_id = instance.replica_id_by_name[&name];
-                    let replica = &instance.replicas_by_id[&replica_id];
                     for process_id in replica.process_status.keys() {
                         let update = state.pack_compute_replica_status_update(
-                            instance.id,
+                            cluster_id,
                             replica_id,
                             *process_id,
                             -1,
@@ -4843,17 +4861,17 @@ impl Catalog {
                     }
 
                     builtin_table_updates.push(state.pack_compute_replica_update(
-                        instance.id,
-                        &name,
+                        cluster_id,
+                        &replica.name,
                         -1,
                     ));
 
                     let details =
                         EventDetails::DropComputeReplicaV1(mz_audit_log::DropComputeReplicaV1 {
-                            cluster_id: instance.id.to_string(),
-                            cluster_name: instance.name.clone(),
+                            cluster_id: cluster_id.to_string(),
+                            cluster_name: cluster.name.clone(),
                             replica_id: Some(replica_id.to_string()),
-                            replica_name: name.clone(),
+                            replica_name: replica.name.clone(),
                         });
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -4866,11 +4884,13 @@ impl Catalog {
                         details,
                     )?;
 
-                    let compute_id = instance.id;
                     catalog_action(
                         state,
                         builtin_table_updates,
-                        Action::DropComputeReplica { name, compute_id },
+                        Action::DropComputeReplica {
+                            cluster_id,
+                            replica_id,
+                        },
                     )?;
                 }
                 Op::DropItem(id) => {
@@ -5224,25 +5244,22 @@ impl Catalog {
                 }
 
                 Action::CreateComputeReplica {
+                    cluster_id,
                     id,
                     name,
-                    on_cluster_id,
                     config,
                 } => {
                     let num_processes = config.location.num_processes();
                     let introspection_ids: Vec<_> = config.logging.source_and_view_ids().collect();
-                    state.insert_compute_replica(on_cluster_id, name.clone(), id, config);
+                    state.insert_compute_replica(cluster_id, name.clone(), id, config);
                     for id in introspection_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
-                    builtin_table_updates.push(state.pack_compute_replica_update(
-                        on_cluster_id,
-                        &name,
-                        1,
-                    ));
+                    builtin_table_updates
+                        .push(state.pack_compute_replica_update(cluster_id, &name, 1));
                     for process_id in 0..num_processes {
                         let update = state.pack_compute_replica_status_update(
-                            on_cluster_id,
+                            cluster_id,
                             id,
                             u64::cast_from(process_id),
                             1,
@@ -5284,22 +5301,19 @@ impl Catalog {
                 }
 
                 Action::DropComputeInstance {
-                    name,
+                    id,
                     introspection_source_index_ids,
                 } => {
                     for id in introspection_source_index_ids {
                         state.drop_item(id);
                     }
 
-                    let id = state
-                        .compute_instances_by_name
-                        .remove(&name)
-                        .expect("can only drop known instances");
-
                     let instance = state
                         .compute_instances_by_id
                         .remove(&id)
                         .expect("can only drop known instances");
+
+                    state.compute_instances_by_name.remove(&instance.name);
 
                     if let Some(linked_object_id) = instance.linked_object_id {
                         state
@@ -5314,13 +5328,16 @@ impl Catalog {
                     );
                 }
 
-                Action::DropComputeReplica { name, compute_id } => {
+                Action::DropComputeReplica {
+                    cluster_id,
+                    replica_id,
+                } => {
                     let instance = state
                         .compute_instances_by_id
-                        .get_mut(&compute_id)
+                        .get_mut(&cluster_id)
                         .expect("can only drop replicas from known instances");
-                    let replica_id = instance.replica_id_by_name.remove(&name).unwrap();
                     let replica = instance.replicas_by_id.remove(&replica_id).unwrap();
+                    instance.replica_id_by_name.remove(&replica.name).unwrap();
                     let persisted_log_ids = replica.config.logging.source_and_view_ids();
                     assert!(instance.replica_id_by_name.len() == instance.replicas_by_id.len());
 
@@ -5638,11 +5655,12 @@ impl Catalog {
         self.state.compute_instances_by_id.values()
     }
 
-    pub fn try_get_compute_instance(
-        &self,
-        instance_id: ComputeInstanceId,
-    ) -> Option<&ComputeInstance> {
-        self.state.compute_instances_by_id.get(&instance_id)
+    pub fn get_cluster(&self, cluster_id: ComputeInstanceId) -> &ComputeInstance {
+        self.state.get_cluster(cluster_id)
+    }
+
+    pub fn try_get_cluster(&self, cluster_id: ComputeInstanceId) -> Option<&ComputeInstance> {
+        self.state.try_get_cluster(cluster_id)
     }
 
     pub fn user_compute_instances(&self) -> impl Iterator<Item = &ComputeInstance> {
@@ -5803,13 +5821,15 @@ pub enum Op {
         oid: u32,
     },
     CreateComputeInstance {
+        id: ComputeInstanceId,
         name: String,
         linked_object_id: Option<GlobalId>,
         arranged_introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
     },
     CreateComputeReplica {
+        cluster_id: ComputeInstanceId,
+        id: ReplicaId,
         name: String,
-        on_cluster_name: String,
         config: ComputeReplicaConfig,
     },
     CreateItem {
@@ -5829,11 +5849,11 @@ pub enum Op {
         name: String,
     },
     DropComputeInstance {
-        name: String,
+        id: ComputeInstanceId,
     },
     DropComputeReplica {
-        name: String,
-        compute_name: String,
+        cluster_id: ComputeInstanceId,
+        replica_id: ReplicaId,
     },
     /// Unconditionally removes the identified items. It is required that the
     /// IDs come from the output of `plan_remove`; otherwise consistency rules
@@ -6240,7 +6260,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         id: ComputeInstanceId,
     ) -> &dyn mz_sql::catalog::CatalogComputeInstance {
-        &self.state.compute_instances_by_id[&id]
+        self.state.get_cluster(id)
     }
 
     fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
@@ -6323,8 +6343,8 @@ impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
         &self.exports
     }
 
-    fn replica_names(&self) -> HashSet<&String> {
-        self.replica_id_by_name.keys().collect::<HashSet<_>>()
+    fn replicas(&self) -> &HashMap<String, ReplicaId> {
+        &self.replica_id_by_name
     }
 }
 
