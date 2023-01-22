@@ -38,7 +38,7 @@ use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
 use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
@@ -256,8 +256,8 @@ pub struct CreateComputeInstancePlan {
 
 #[derive(Debug)]
 pub struct CreateComputeReplicaPlan {
+    pub cluster_id: ComputeInstanceId,
     pub name: String,
-    pub of_cluster: String,
     pub config: ComputeReplicaConfig,
 }
 
@@ -432,12 +432,12 @@ pub struct DropRolesPlan {
 
 #[derive(Debug)]
 pub struct DropComputeInstancesPlan {
-    pub names: Vec<String>,
+    pub ids: Vec<ComputeInstanceId>,
 }
 
 #[derive(Debug)]
 pub struct DropComputeReplicasPlan {
-    pub names: Vec<(String, String)>,
+    pub ids: Vec<(ComputeInstanceId, ReplicaId)>,
 }
 
 #[derive(Debug)]

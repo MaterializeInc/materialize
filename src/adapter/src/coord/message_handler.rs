@@ -598,7 +598,7 @@ impl Coordinator {
 
         // It is possible that we receive a status update for a replica that has
         // already been dropped from the catalog. Just ignore these events.
-        let Some(instance) = self.catalog.try_get_compute_instance(event.instance_id) else {
+        let Some(instance) = self.catalog.try_get_cluster(event.instance_id) else {
             return;
         };
         let Some(replica) = instance.replicas_by_id.get(&event.replica_id) else {
@@ -617,10 +617,7 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("updating compute instance status cannot fail");
 
-            let instance = self
-                .catalog
-                .try_get_compute_instance(event.instance_id)
-                .expect("instance known to exist");
+            let instance = self.catalog.get_cluster(event.instance_id);
             let replica = &instance.replicas_by_id[&event.replica_id];
             let new_status = replica.status();
 

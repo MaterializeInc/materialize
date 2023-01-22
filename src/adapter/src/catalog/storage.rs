@@ -433,7 +433,9 @@ fn add_new_builtin_compute_instances_migration(
                 BUILTIN_PREFIXES.join(", ")
         );
         if !compute_instance_names.contains(builtin_compute_instance.name) {
-            txn.insert_system_compute_instance(builtin_compute_instance.name, &Vec::new())?;
+            let id = txn.get_and_increment_id(SYSTEM_COMPUTE_ID_ALLOC_KEY.to_string())?;
+            let id = ComputeInstanceId::System(id);
+            txn.insert_system_compute_instance(id, builtin_compute_instance.name, &vec![])?;
         }
     }
     Ok(())
@@ -470,9 +472,11 @@ fn add_new_builtin_compute_replicas_migration(
         if matches!(compute_replica_names, None)
             || matches!(compute_replica_names, Some(names) if !names.contains(builtin_compute_replica.name))
         {
+            let replica_id = txn.get_and_increment_id(REPLICA_ID_ALLOC_KEY.to_string())?;
             let config = builtin_compute_replica_config(bootstrap_args);
             txn.insert_compute_replica(
-                builtin_compute_replica.compute_instance_name,
+                *compute_instance_id,
+                replica_id,
                 builtin_compute_replica.name,
                 &config,
             )?;
@@ -875,6 +879,23 @@ impl Connection {
         Ok(GlobalId::User(id))
     }
 
+    pub async fn allocate_system_cluster_id(&mut self) -> Result<ComputeInstanceId, Error> {
+        let id = self.allocate_id(SYSTEM_COMPUTE_ID_ALLOC_KEY, 1).await?;
+        let id = id.into_element();
+        Ok(ComputeInstanceId::System(id))
+    }
+
+    pub async fn allocate_user_cluster_id(&mut self) -> Result<ComputeInstanceId, Error> {
+        let id = self.allocate_id(USER_COMPUTE_ID_ALLOC_KEY, 1).await?;
+        let id = id.into_element();
+        Ok(ComputeInstanceId::User(id))
+    }
+
+    pub async fn allocate_replica_id(&mut self) -> Result<ReplicaId, Error> {
+        let id = self.allocate_id(REPLICA_ID_ALLOC_KEY, 1).await?;
+        Ok(id.into_element())
+    }
+
     /// Get the next user id without allocating it.
     pub async fn get_next_user_global_id(&mut self) -> Result<GlobalId, Error> {
         self.get_next_id("user").await.map(GlobalId::User)
@@ -1174,49 +1195,38 @@ impl<'a> Transaction<'a> {
     /// Panics if any introspection source id is not a system id
     pub fn insert_user_compute_instance(
         &mut self,
+        cluster_id: ComputeInstanceId,
         cluster_name: &str,
         linked_object_id: Option<GlobalId>,
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
-    ) -> Result<ComputeInstanceId, Error> {
+    ) -> Result<(), Error> {
         self.insert_compute_instance(
+            cluster_id,
             cluster_name,
             linked_object_id,
             introspection_source_indexes,
-            USER_COMPUTE_ID_ALLOC_KEY,
-            ComputeInstanceId::User,
         )
     }
 
     /// Panics if any introspection source id is not a system id
     pub fn insert_system_compute_instance(
         &mut self,
+        cluster_id: ComputeInstanceId,
         cluster_name: &str,
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
-    ) -> Result<ComputeInstanceId, Error> {
-        self.insert_compute_instance(
-            cluster_name,
-            None,
-            introspection_source_indexes,
-            SYSTEM_COMPUTE_ID_ALLOC_KEY,
-            ComputeInstanceId::System,
-        )
+    ) -> Result<(), Error> {
+        self.insert_compute_instance(cluster_id, cluster_name, None, introspection_source_indexes)
     }
 
-    fn insert_compute_instance<F>(
+    fn insert_compute_instance(
         &mut self,
+        cluster_id: ComputeInstanceId,
         cluster_name: &str,
         linked_object_id: Option<GlobalId>,
         introspection_source_indexes: &Vec<(&'static BuiltinLog, GlobalId)>,
-        id_alloc_key: &str,
-        compute_instance_id_variant: F,
-    ) -> Result<ComputeInstanceId, Error>
-    where
-        F: Fn(u64) -> ComputeInstanceId,
-    {
-        let id = self.get_and_increment_id(id_alloc_key.to_string())?;
-        let id = compute_instance_id_variant(id);
+    ) -> Result<(), Error> {
         if let Err(_) = self.compute_instances.insert(
-            ComputeInstanceKey { id },
+            ComputeInstanceKey { id: cluster_id },
             ComputeInstanceValue {
                 name: cluster_name.to_string(),
                 linked_object_id,
@@ -1236,7 +1246,7 @@ impl<'a> Transaction<'a> {
             self.introspection_sources
                 .insert(
                     ComputeIntrospectionSourceIndexKey {
-                        compute_id: id,
+                        compute_id: cluster_id,
                         name: builtin.name.to_string(),
                     },
                     ComputeIntrospectionSourceIndexValue { index_id },
@@ -1244,40 +1254,34 @@ impl<'a> Transaction<'a> {
                 .expect("no uniqueness violation");
         }
 
-        Ok(id)
+        Ok(())
     }
 
     pub fn insert_compute_replica(
         &mut self,
-        compute_name: &str,
+        cluster_id: ComputeInstanceId,
+        replica_id: ReplicaId,
         replica_name: &str,
         config: &SerializedComputeReplicaConfig,
-    ) -> Result<(ReplicaId, ComputeInstanceId), Error> {
-        let id = self.get_and_increment_id(REPLICA_ID_ALLOC_KEY.to_string())?;
-        let mut compute_instance_id = None;
-        for (ComputeInstanceKey { id }, ComputeInstanceValue { name, .. }) in
-            self.compute_instances.items()
-        {
-            if &name == compute_name {
-                compute_instance_id = Some(id);
-                break;
-            }
-        }
-        let compute_instance_id = compute_instance_id.unwrap();
+    ) -> Result<(), Error> {
         if let Err(_) = self.compute_replicas.insert(
-            ComputeReplicaKey { id },
+            ComputeReplicaKey { id: replica_id },
             ComputeReplicaValue {
-                compute_instance_id,
+                compute_instance_id: cluster_id,
                 name: replica_name.into(),
                 config: config.clone(),
             },
         ) {
+            let cluster = self
+                .compute_instances
+                .get(&ComputeInstanceKey { id: cluster_id })
+                .expect("cluster exists");
             return Err(Error::new(ErrorKind::DuplicateReplica(
                 replica_name.to_string(),
-                compute_name.to_string(),
+                cluster.name.to_string(),
             )));
         };
-        Ok((id, compute_instance_id))
+        Ok(())
     }
 
     /// Updates persisted information about persisted introspection source
@@ -1410,19 +1414,13 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn remove_compute_replica(
-        &mut self,
-        name: &str,
-        compute_id: ComputeInstanceId,
-    ) -> Result<(), Error> {
-        let deleted = self
-            .compute_replicas
-            .delete(|_k, v| v.compute_instance_id == compute_id && v.name == name);
+    pub fn remove_compute_replica(&mut self, id: ReplicaId) -> Result<(), Error> {
+        let deleted = self.compute_replicas.delete(|k, _v| k.id == id);
         if deleted.len() == 1 {
             Ok(())
         } else {
             assert!(deleted.is_empty());
-            Err(SqlCatalogError::UnknownComputeReplica(name.to_owned()).into())
+            Err(SqlCatalogError::UnknownComputeReplica(id.to_string()).into())
         }
     }
 

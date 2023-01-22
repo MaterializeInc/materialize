@@ -804,6 +804,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_compute_instance");
 
+        let id = self.catalog.allocate_user_cluster_id().await?;
         // The catalog items for the arranged introspection sources are shared between all replicas
         // of a compute instance, so we create them unconditionally during instance creation.
         // Whether a replica actually maintains introspection arrangements is determined by the
@@ -811,6 +812,7 @@ impl Coordinator {
         let arranged_introspection_sources =
             self.catalog.allocate_arranged_introspection_sources().await;
         let mut ops = vec![catalog::Op::CreateComputeInstance {
+            id,
             name: name.clone(),
             linked_object_id: None,
             arranged_introspection_sources,
@@ -892,43 +894,40 @@ impl Coordinator {
             };
 
             ops.push(catalog::Op::CreateComputeReplica {
+                cluster_id: id,
+                id: self.catalog.allocate_replica_id().await?,
                 name: replica_name.clone(),
                 config,
-                on_cluster_name: name.clone(),
             });
         }
 
         self.catalog_transact(Some(session), ops).await?;
 
-        self.create_compute_instance(&name).await;
+        self.create_compute_instance(id).await;
 
         Ok(ExecuteResponse::CreatedComputeInstance)
     }
 
-    async fn create_compute_instance(&mut self, cluster_name: &str) {
-        let instance = self
-            .catalog
-            .resolve_compute_instance(cluster_name)
-            .expect("compute instance must exist after creation");
-        let instance_id = instance.id;
+    async fn create_compute_instance(&mut self, cluster_id: ComputeInstanceId) {
+        let cluster = self.catalog.get_cluster(cluster_id);
+        let cluster_id = cluster.id;
         let arranged_introspection_source_ids: Vec<_> =
-            instance.log_indexes.iter().map(|(_, id)| *id).collect();
+            cluster.log_indexes.iter().map(|(_, id)| *id).collect();
 
         self.controller
             .compute
-            .create_instance(instance_id, instance.log_indexes.clone())
+            .create_instance(cluster_id, cluster.log_indexes.clone())
             .unwrap();
 
-        let replica_names: Vec<_> = instance.replica_id_by_name.keys().cloned().collect();
-        for replica_name in replica_names {
-            self.create_compute_replica(cluster_name, &replica_name)
-                .await;
+        let replica_ids: Vec<_> = cluster.replicas_by_id.keys().copied().collect();
+        for replica_id in replica_ids {
+            self.create_compute_replica(cluster_id, replica_id).await;
         }
 
         if !arranged_introspection_source_ids.is_empty() {
             self.initialize_compute_read_policies(
                 arranged_introspection_source_ids,
-                instance_id,
+                cluster_id,
                 Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
             )
             .await;
@@ -940,7 +939,7 @@ impl Coordinator {
         session: &Session,
         CreateComputeReplicaPlan {
             name,
-            of_cluster,
+            cluster_id,
             config,
         }: CreateComputeReplicaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -980,13 +979,13 @@ impl Coordinator {
                         // if none was specified. If there is a tie for "least popular", pick the first one.
                         // That is globally unbiased (for Materialize, not necessarily for this customer)
                         // because we shuffle the AZs on boot in `crate::serve`.
-                        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
+                        let cluster = self.catalog.get_cluster(cluster_id);
                         let azs = self.catalog.state().availability_zones();
                         let mut n_replicas_per_az = azs
                             .iter()
                             .map(|s| (s.clone(), 0))
                             .collect::<HashMap<_, _>>();
-                        for r in instance.replicas_by_id.values() {
+                        for r in cluster.replicas_by_id.values() {
                             if let Some(az) = r.config.location.get_az() {
                                 *n_replicas_per_az.get_mut(az).expect("unknown AZ") += 1;
                             }
@@ -1025,22 +1024,27 @@ impl Coordinator {
             idle_arrangement_merge_effort,
         };
 
+        let id = self.catalog.allocate_replica_id().await?;
         let op = catalog::Op::CreateComputeReplica {
+            cluster_id,
+            id,
             name: name.clone(),
             config,
-            on_cluster_name: of_cluster.clone(),
         };
 
         self.catalog_transact(Some(session), vec![op]).await?;
 
-        self.create_compute_replica(&of_cluster, &name).await;
+        self.create_compute_replica(cluster_id, id).await;
 
         Ok(ExecuteResponse::CreatedComputeReplica)
     }
 
-    async fn create_compute_replica(&mut self, cluster_name: &str, replica_name: &str) {
-        let instance = self.catalog.resolve_compute_instance(cluster_name).unwrap();
-        let replica_id = instance.replica_id_by_name[replica_name];
+    async fn create_compute_replica(
+        &mut self,
+        cluster_id: ComputeInstanceId,
+        replica_id: ReplicaId,
+    ) {
+        let instance = self.catalog.get_cluster(cluster_id);
         let replica_config = instance.replicas_by_id[&replica_id].config.clone();
 
         let log_source_ids: Vec<_> = replica_config.logging.source_ids().collect();
@@ -1677,16 +1681,23 @@ impl Coordinator {
     async fn sequence_drop_compute_instances(
         &mut self,
         session: &mut Session,
-        DropComputeInstancesPlan { names }: DropComputeInstancesPlan,
+        DropComputeInstancesPlan { ids }: DropComputeInstancesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let ops = self.catalog.drop_compute_instance_ops(&names);
+        let active_cluster_id = self
+            .catalog
+            .active_compute_instance(session)
+            .ok()
+            .map(|cluster| cluster.id);
+        let ops = self.catalog.drop_compute_instance_ops(&ids);
 
         self.catalog_transact(Some(session), ops).await?;
 
-        if names.iter().any(|n| n == session.vars().cluster()) {
-            session.add_notice(AdapterNotice::DroppedActiveCluster {
-                name: session.vars().cluster().to_string(),
-            });
+        if let Some(active_cluster_id) = active_cluster_id {
+            if ids.contains(&active_cluster_id) {
+                session.add_notice(AdapterNotice::DroppedActiveCluster {
+                    name: session.vars().cluster().to_string(),
+                });
+            }
         }
 
         Ok(ExecuteResponse::DroppedComputeInstance)
@@ -1695,9 +1706,9 @@ impl Coordinator {
     async fn sequence_drop_compute_replica(
         &mut self,
         session: &Session,
-        DropComputeReplicasPlan { names }: DropComputeReplicasPlan,
+        DropComputeReplicasPlan { ids }: DropComputeReplicasPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let ops = self.catalog.drop_compute_instance_replica_ops(&names);
+        let ops = self.catalog.drop_compute_instance_replica_ops(&ids);
 
         self.catalog_transact(Some(session), ops).await?;
         fail::fail_point!("after_sequencer_drop_replica");
@@ -3512,7 +3523,7 @@ impl Coordinator {
                 id,
                 cluster_config: cluster_config.clone(),
             }];
-            ops.extend(self.alter_linked_cluster_ops(id, &cluster_config)?);
+            ops.extend(self.alter_linked_cluster_ops(id, &cluster_config).await?);
             self.catalog_transact(Some(session), ops).await?;
 
             self.maybe_alter_linked_cluster(id).await;
@@ -3553,7 +3564,7 @@ impl Coordinator {
                 id,
                 cluster_config: cluster_config.clone(),
             }];
-            ops.extend(self.alter_linked_cluster_ops(id, &cluster_config)?);
+            ops.extend(self.alter_linked_cluster_ops(id, &cluster_config).await?);
             self.catalog_transact(Some(session), ops).await?;
 
             self.maybe_alter_linked_cluster(id).await;
@@ -3863,25 +3874,27 @@ impl Coordinator {
         name: &QualifiedObjectName,
         config: &StorageClusterConfig,
     ) -> Result<Vec<catalog::Op>, AdapterError> {
+        let id = self.catalog.allocate_user_cluster_id().await?;
         let name = self.catalog.resolve_full_name(name, None);
         let name = format!("{}_{}_{}", name.database, name.schema, name.item);
         let name = self.catalog.find_available_cluster_name(&name);
         let arranged_introspection_sources =
             self.catalog.allocate_arranged_introspection_sources().await;
         let mut ops = vec![catalog::Op::CreateComputeInstance {
+            id,
             name: name.clone(),
             linked_object_id: Some(linked_object_id),
             arranged_introspection_sources,
         }];
-        ops.extend(self.create_linked_cluster_replica_op(name, config)?);
+        ops.extend(self.create_linked_cluster_replica_op(id, config).await?);
         Ok(ops)
     }
 
     /// Generates the catalog operation to create a replica of the given linked
     /// cluster for the given storage cluster configuration.
-    fn create_linked_cluster_replica_op(
+    async fn create_linked_cluster_replica_op(
         &mut self,
-        on_cluster_name: String,
+        cluster_id: ComputeInstanceId,
         config: &StorageClusterConfig,
     ) -> Result<Option<catalog::Op>, AdapterError> {
         let availability_zone = {
@@ -3956,8 +3969,9 @@ impl Coordinator {
             }
         };
         Ok(Some(catalog::Op::CreateComputeReplica {
+            cluster_id,
+            id: self.catalog.allocate_replica_id().await?,
             name: LINKED_CLUSTER_REPLICA_NAME.into(),
-            on_cluster_name,
             config: ComputeReplicaConfig {
                 idle_arrangement_merge_effort: None,
                 location,
@@ -3968,21 +3982,23 @@ impl Coordinator {
 
     /// Generates the catalog operations to alter the linked cluster for the
     /// source or sink with the given ID, if such a cluster exists.
-    fn alter_linked_cluster_ops(
+    async fn alter_linked_cluster_ops(
         &mut self,
         linked_object_id: GlobalId,
         config: &StorageClusterConfig,
     ) -> Result<Vec<catalog::Op>, AdapterError> {
         let mut ops = vec![];
         if let Some(linked_cluster) = self.catalog.get_linked_cluster(linked_object_id) {
-            let cluster_name = linked_cluster.name.clone();
-            for name in linked_cluster.replica_id_by_name.keys() {
+            for id in linked_cluster.replicas_by_id.keys() {
                 let drop_ops = self
                     .catalog
-                    .drop_compute_instance_replica_ops(&[(cluster_name.clone(), name.into())]);
+                    .drop_compute_instance_replica_ops(&[(linked_cluster.id, *id)]);
                 ops.extend(drop_ops);
             }
-            ops.extend(self.create_linked_cluster_replica_op(cluster_name, config)?)
+            ops.extend(
+                self.create_linked_cluster_replica_op(linked_cluster.id, config)
+                    .await?,
+            )
         }
         Ok(ops)
     }
@@ -3991,8 +4007,7 @@ impl Coordinator {
     /// operation, if such a linked cluster exists.
     pub(crate) async fn maybe_create_linked_cluster(&mut self, linked_object_id: GlobalId) {
         if let Some(cluster) = self.catalog.get_linked_cluster(linked_object_id) {
-            let name = cluster.name().to_string();
-            self.create_compute_instance(&name).await;
+            self.create_compute_instance(cluster.id).await;
         }
     }
 
@@ -4000,17 +4015,15 @@ impl Coordinator {
     /// an alter operation, if such a linked cluster exists.
     pub(crate) async fn maybe_alter_linked_cluster(&mut self, linked_object_id: GlobalId) {
         if let Some(cluster) = self.catalog.get_linked_cluster(linked_object_id) {
-            // A linked cluster always has exactly one replica named "linked".
-            // The old replica will have been dropped by `catalog_transact`,
-            // both from the catalog state and from the controller. The new
-            // replica will be in the catalog state, and needs to be recreated
-            // in the controller.
-            let cluster_name = cluster.name().to_string();
-            // Sanity check that the linked cluster doesn't have unexpected
-            // replicas.
-            assert_eq!(cluster.replica_id_by_name.len(), 1);
-            self.create_compute_replica(&cluster_name, LINKED_CLUSTER_REPLICA_NAME)
-                .await;
+            // The old replicas of the linked cluster will have been dropped by
+            // `catalog_transact`, both from the catalog state and from the
+            // controller. The new replicas will be in the catalog state, and
+            // need to be recreated in the controller.
+            let cluster_id = cluster.id;
+            let replica_ids: Vec<_> = cluster.replicas_by_id.keys().copied().collect();
+            for replica_id in replica_ids {
+                self.create_compute_replica(cluster_id, replica_id).await;
+            }
         }
     }
 }

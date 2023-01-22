@@ -2593,7 +2593,7 @@ pub fn plan_create_cluster_replica(
     ensure_cluster_is_not_linked(scx, instance)?;
     Ok(Plan::CreateComputeReplica(CreateComputeReplicaPlan {
         name: normalize::ident(name),
-        of_cluster: of_cluster.to_string(),
+        cluster_id: instance.id(),
         config: plan_replica_config(scx, options)?,
     }))
 }
@@ -3298,7 +3298,7 @@ pub fn plan_drop_cluster(
         cascade,
     }: DropClustersStatement,
 ) -> Result<Plan, PlanError> {
-    let mut out = vec![];
+    let mut ids = vec![];
     for name in names {
         let name = if name.0.len() == 1 {
             name.0.into_element()
@@ -3311,7 +3311,7 @@ pub fn plan_drop_cluster(
                 if !cascade && !instance.exports().is_empty() {
                     sql_bail!("cannot drop cluster with active indexes or materialized views");
                 }
-                out.push(name.into_string());
+                ids.push(instance.id());
             }
             Err(_) if if_exists => {
                 // TODO(benesch): generate a notice indicating that the
@@ -3320,9 +3320,7 @@ pub fn plan_drop_cluster(
             Err(e) => return Err(e.into()),
         }
     }
-    Ok(Plan::DropComputeInstances(DropComputeInstancesPlan {
-        names: out,
-    }))
+    Ok(Plan::DropComputeInstances(DropComputeInstancesPlan { ids }))
 }
 
 fn ensure_cluster_is_not_linked(
@@ -3352,7 +3350,7 @@ pub fn plan_drop_cluster_replica(
     scx: &StatementContext,
     DropClusterReplicasStatement { if_exists, names }: DropClusterReplicasStatement,
 ) -> Result<Plan, PlanError> {
-    let mut names_out = Vec::with_capacity(names.len());
+    let mut ids = vec![];
     for QualifiedReplica { cluster, replica } in names {
         let instance = match scx.catalog.resolve_compute_instance(Some(cluster.as_str())) {
             Ok(instance) => instance,
@@ -3362,8 +3360,8 @@ pub fn plan_drop_cluster_replica(
         ensure_cluster_is_not_linked(scx, instance)?;
         let replica_name = replica.into_string();
         // Check to see if name exists
-        if instance.replica_names().contains(&replica_name) {
-            names_out.push((instance.name().to_string(), replica_name));
+        if let Some(replica_id) = instance.replicas().get(&replica_name) {
+            ids.push((instance.id(), *replica_id));
         } else {
             // If "IF EXISTS" supplied, names allowed to be missing,
             // otherwise error.
@@ -3379,9 +3377,7 @@ pub fn plan_drop_cluster_replica(
         }
     }
 
-    Ok(Plan::DropComputeReplicas(DropComputeReplicasPlan {
-        names: names_out,
-    }))
+    Ok(Plan::DropComputeReplicas(DropComputeReplicasPlan { ids }))
 }
 
 pub fn plan_drop_items(
