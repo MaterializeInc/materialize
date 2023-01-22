@@ -31,6 +31,7 @@ use mz_compute_client::types::dataflows::{BuildDesc, DataflowDesc, IndexDesc};
 use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, SubscribeSinkConnection,
 };
+use mz_controller::clusters::ClusterConfig;
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -916,11 +917,14 @@ impl Coordinator {
         let arranged_introspection_source_ids: Vec<_> =
             cluster.log_indexes.iter().map(|(_, id)| *id).collect();
 
-        self.controller.storage.create_instance(cluster_id);
         self.controller
-            .compute
-            .create_instance(cluster_id, cluster.log_indexes.clone())
-            .unwrap();
+            .create_cluster(
+                cluster_id,
+                ClusterConfig {
+                    arranged_logs: cluster.log_indexes.clone(),
+                },
+            )
+            .expect("creating cluster must not fail");
 
         let replica_ids: Vec<_> = cluster.replicas_by_id.keys().copied().collect();
         for replica_id in replica_ids {
@@ -1064,17 +1068,9 @@ impl Coordinator {
             .unwrap();
 
         self.controller
-            .storage
-            .ensure_replica(
-                instance.id,
-                replica_config.location.to_storage_cluster_config(),
-            )
+            .create_replica(instance.id, replica_id, replica_config)
             .await
-            .expect("ensure clusters cannot fail");
-        self.controller
-            .active_compute()
-            .add_replica_to_instance(instance.id, replica_id, replica_config)
-            .unwrap();
+            .expect("creating replica must not fail");
 
         if !log_source_ids.is_empty() {
             self.initialize_compute_read_policies(
@@ -1764,13 +1760,8 @@ impl Coordinator {
                 .await;
         }
         self.controller
-            .storage
-            .drop_replica(instance_id)
-            .await
-            .expect("drop clusters cannot fail");
-        self.controller
-            .active_compute()
             .drop_replica(instance_id, replica_id)
+            .await
             .expect("dropping replica must not fail");
     }
 

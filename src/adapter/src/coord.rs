@@ -88,6 +88,7 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId, ReplicaId};
+use mz_controller::clusters::ClusterConfig;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
@@ -550,10 +551,12 @@ impl Coordinator {
 
         info!("coordinator init: creating compute replicas");
         for instance in self.catalog.compute_instances() {
-            self.controller.storage.create_instance(instance.id);
-            self.controller
-                .compute
-                .create_instance(instance.id, instance.log_indexes.clone())?;
+            self.controller.create_cluster(
+                instance.id,
+                ClusterConfig {
+                    arranged_logs: instance.log_indexes.clone(),
+                },
+            )?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 let introspection_collections = replica
                     .config
@@ -590,16 +593,8 @@ impl Coordinator {
                     .extend(replica.config.logging.source_ids());
 
                 self.controller
-                    .storage
-                    .ensure_replica(
-                        instance.id,
-                        replica.config.location.to_storage_cluster_config(),
-                    )
+                    .create_replica(instance.id, replica_id, replica.config)
                     .await?;
-                self.controller
-                    .active_compute()
-                    .add_replica_to_instance(instance.id, replica_id, replica.config)
-                    .unwrap();
             }
         }
 

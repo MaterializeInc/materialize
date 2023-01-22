@@ -289,8 +289,7 @@ impl Coordinator {
             }
             if !clusters_to_drop.is_empty() {
                 for cluster_id in clusters_to_drop {
-                    self.controller.storage.drop_instance(cluster_id);
-                    self.controller.compute.drop_instance(cluster_id);
+                    self.controller.drop_cluster(cluster_id);
                 }
             }
 
