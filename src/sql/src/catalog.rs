@@ -291,9 +291,8 @@ pub trait CatalogComputeInstance<'a> {
     /// any.
     fn linked_object_id(&self) -> Option<GlobalId>;
 
-    /// Returns the set of non-transient exports (indexes, materialized views)
-    /// of this cluster.
-    fn exports(&self) -> &HashSet<GlobalId>;
+    /// Returns the objects that are bound to this cluster.
+    fn bound_objects(&self) -> &HashSet<GlobalId>;
 
     /// Returns the replicas of the cluster as a map from replica name to
     /// replica ID.
