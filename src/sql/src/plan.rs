@@ -38,12 +38,13 @@ use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
-use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
+use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::explain_new::{ExplainConfig, ExplainFormat};
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
+use mz_storage_client::types::clusters::StorageClusterId;
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
 
@@ -88,8 +89,8 @@ pub enum Plan {
     CreateDatabase(CreateDatabasePlan),
     CreateSchema(CreateSchemaPlan),
     CreateRole(CreateRolePlan),
-    CreateComputeInstance(CreateComputeInstancePlan),
-    CreateComputeReplica(CreateComputeReplicaPlan),
+    CreateCluster(CreateClusterPlan),
+    CreateClusterReplica(CreateClusterReplicaPlan),
     CreateSource(CreateSourcePlan),
     CreateSecret(CreateSecretPlan),
     CreateSink(CreateSinkPlan),
@@ -103,8 +104,8 @@ pub enum Plan {
     DropDatabase(DropDatabasePlan),
     DropSchema(DropSchemaPlan),
     DropRoles(DropRolesPlan),
-    DropComputeInstances(DropComputeInstancesPlan),
-    DropComputeReplicas(DropComputeReplicasPlan),
+    DropClusters(DropClustersPlan),
+    DropClusterReplicas(DropClusterReplicasPlan),
     DropItems(DropItemsPlan),
     EmptyQuery,
     ShowAllVariables,
@@ -174,8 +175,8 @@ impl Plan {
                 PlanKind::SendDiffs,
                 PlanKind::Subscribe,
             ],
-            StatementKind::CreateCluster => vec![PlanKind::CreateComputeInstance],
-            StatementKind::CreateClusterReplica => vec![PlanKind::CreateComputeReplica],
+            StatementKind::CreateCluster => vec![PlanKind::CreateCluster],
+            StatementKind::CreateClusterReplica => vec![PlanKind::CreateClusterReplica],
             StatementKind::CreateConnection => vec![PlanKind::CreateConnection],
             StatementKind::CreateDatabase => vec![PlanKind::CreateDatabase],
             StatementKind::CreateIndex => vec![PlanKind::CreateIndex],
@@ -194,8 +195,8 @@ impl Plan {
             StatementKind::Declare => vec![PlanKind::Declare],
             StatementKind::Delete => vec![PlanKind::ReadThenWrite],
             StatementKind::Discard => vec![PlanKind::DiscardAll, PlanKind::DiscardTemp],
-            StatementKind::DropClusterReplicas => vec![PlanKind::DropComputeReplicas],
-            StatementKind::DropClusters => vec![PlanKind::DropComputeInstances],
+            StatementKind::DropClusters => vec![PlanKind::DropClusters],
+            StatementKind::DropClusterReplicas => vec![PlanKind::DropClusterReplicas],
             StatementKind::DropDatabase => vec![PlanKind::DropDatabase],
             StatementKind::DropObjects => vec![PlanKind::DropItems],
             StatementKind::DropRoles => vec![PlanKind::DropRoles],
@@ -249,21 +250,21 @@ pub struct CreateRolePlan {
 }
 
 #[derive(Debug)]
-pub struct CreateComputeInstancePlan {
+pub struct CreateClusterPlan {
     pub name: String,
-    pub replicas: Vec<(String, ComputeReplicaConfig)>,
+    pub replicas: Vec<(String, ReplicaConfig)>,
 }
 
 #[derive(Debug)]
-pub struct CreateComputeReplicaPlan {
-    pub cluster_id: ComputeInstanceId,
+pub struct CreateClusterReplicaPlan {
+    pub cluster_id: ClusterId,
     pub name: String,
-    pub config: ComputeReplicaConfig,
+    pub config: ReplicaConfig,
 }
 
-/// Configuration of introspection for a compute replica.
+/// Configuration of introspection for a cluster replica.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
-pub struct ComputeReplicaIntrospectionConfig {
+pub struct ReplicaIntrospectionConfig {
     /// Whether to introspect the introspection.
     pub debugging: bool,
     /// The interval at which to introspect.
@@ -271,46 +272,46 @@ pub struct ComputeReplicaIntrospectionConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ComputeReplicaConfig {
+pub enum ReplicaConfig {
     Remote {
         addrs: BTreeSet<String>,
         compute_addrs: BTreeSet<String>,
         workers: NonZeroUsize,
-        introspection: Option<ComputeReplicaIntrospectionConfig>,
+        introspection: Option<ReplicaIntrospectionConfig>,
         idle_arrangement_merge_effort: Option<u32>,
     },
     Managed {
         size: String,
         availability_zone: Option<String>,
-        introspection: Option<ComputeReplicaIntrospectionConfig>,
+        introspection: Option<ReplicaIntrospectionConfig>,
         idle_arrangement_merge_effort: Option<u32>,
     },
 }
 
-impl ComputeReplicaConfig {
+impl ReplicaConfig {
     pub fn get_az(&self) -> Option<&str> {
         match self {
-            ComputeReplicaConfig::Remote { .. } => None,
-            ComputeReplicaConfig::Managed {
+            ReplicaConfig::Remote { .. } => None,
+            ReplicaConfig::Managed {
                 availability_zone, ..
             } => availability_zone.as_deref(),
         }
     }
 
-    pub fn get_introspection(&self) -> Option<&ComputeReplicaIntrospectionConfig> {
+    pub fn get_introspection(&self) -> Option<&ReplicaIntrospectionConfig> {
         match self {
-            ComputeReplicaConfig::Remote { introspection, .. } => introspection.as_ref(),
-            ComputeReplicaConfig::Managed { introspection, .. } => introspection.as_ref(),
+            ReplicaConfig::Remote { introspection, .. } => introspection.as_ref(),
+            ReplicaConfig::Managed { introspection, .. } => introspection.as_ref(),
         }
     }
 
     pub fn get_idle_arrangement_merge_effort(&self) -> Option<u32> {
         match self {
-            ComputeReplicaConfig::Remote {
+            ReplicaConfig::Remote {
                 idle_arrangement_merge_effort,
                 ..
             } => *idle_arrangement_merge_effort,
-            ComputeReplicaConfig::Managed {
+            ReplicaConfig::Managed {
                 idle_arrangement_merge_effort,
                 ..
             } => *idle_arrangement_merge_effort,
@@ -329,14 +330,14 @@ pub struct CreateSourcePlan {
 
 /// Settings related to storage clusters.
 ///
-/// This represents how resources for a storage instance are going to be
-/// provisioned, based on the SQL logic. Storage equivalent of ComputeReplicaConfig.
+/// This represents how resources for a storage cluster are going to be
+/// provisioned, based on the SQL logic. Storage equivalent of ReplicaConfig.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StorageClusterConfig {
     /// Use an existing cluster.
     Cluster {
         /// The ID of the cluster to use.
-        id: ComputeInstanceId,
+        id: StorageClusterId,
     },
     /// Remote unmanaged storage.
     Remote {
@@ -431,13 +432,13 @@ pub struct DropRolesPlan {
 }
 
 #[derive(Debug)]
-pub struct DropComputeInstancesPlan {
-    pub ids: Vec<ComputeInstanceId>,
+pub struct DropClustersPlan {
+    pub ids: Vec<ClusterId>,
 }
 
 #[derive(Debug)]
-pub struct DropComputeReplicasPlan {
-    pub ids: Vec<(ComputeInstanceId, ReplicaId)>,
+pub struct DropClusterReplicasPlan {
+    pub ids: Vec<(ClusterId, ReplicaId)>,
 }
 
 #[derive(Debug)]
@@ -706,7 +707,7 @@ pub struct MaterializedView {
     pub create_sql: String,
     pub expr: mz_expr::MirRelationExpr,
     pub column_names: Vec<ColumnName>,
-    pub compute_instance: ComputeInstanceId,
+    pub cluster_id: ClusterId,
 }
 
 #[derive(Clone, Debug)]
@@ -714,7 +715,7 @@ pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
     pub keys: Vec<mz_expr::MirScalarExpr>,
-    pub compute_instance: ComputeInstanceId,
+    pub cluster_id: ClusterId,
 }
 
 #[derive(Clone, Debug)]

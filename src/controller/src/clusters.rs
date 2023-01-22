@@ -14,16 +14,20 @@ use std::collections::BTreeMap;
 use differential_dataflow::lattice::Lattice;
 use timely::progress::Timestamp;
 
-use mz_compute_client::controller::ComputeReplicaConfig;
+use mz_compute_client::controller::{
+    ComputeInstanceEvent, ComputeInstanceId, ComputeInstanceStatus, ComputeReplicaAllocation,
+    ComputeReplicaConfig, ComputeReplicaLocation, ComputeReplicaLogging,
+};
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_repr::GlobalId;
-use mz_storage_client::types::clusters::StorageClusterId;
 
 use crate::Controller;
 
+pub use mz_compute_client::controller::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS as DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS;
+
 /// Identifies a cluster.
-pub type ClusterId = StorageClusterId;
+pub type ClusterId = ComputeInstanceId;
 
 /// Configures a cluster.
 pub struct ClusterConfig {
@@ -34,11 +38,29 @@ pub struct ClusterConfig {
     pub arranged_logs: BTreeMap<LogVariant, GlobalId>,
 }
 
+/// The status of a cluster.
+pub type ClusterStatus = ComputeInstanceStatus;
+
+/// An event associated with a cluster.
+pub type ClusterEvent = ComputeInstanceEvent;
+
 /// Identifies a cluster replica.
-pub type ReplicaId = u64;
+pub type ReplicaId = mz_compute_client::controller::ReplicaId;
 
 /// Configures a cluster replica.
 pub type ReplicaConfig = ComputeReplicaConfig;
+
+/// Configures the resource allocation for a cluster replica.
+pub type ReplicaAllocation = ComputeReplicaAllocation;
+
+/// Configures the location of a cluster replica.
+pub type ReplicaLocation = ComputeReplicaLocation;
+
+/// Configures logging for a cluster replica.
+pub type ReplicaLogging = ComputeReplicaLogging;
+
+/// Identifies a process within a cluster replica.
+pub type ProcessId = mz_compute_client::controller::ProcessId;
 
 impl<T> Controller<T>
 where

@@ -714,8 +714,8 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedDatabase { .. }
         | ExecuteResponse::CreatedSchema { .. }
         | ExecuteResponse::CreatedRole
-        | ExecuteResponse::CreatedComputeInstance { .. }
-        | ExecuteResponse::CreatedComputeReplica { .. }
+        | ExecuteResponse::CreatedCluster { .. }
+        | ExecuteResponse::CreatedClusterReplica { .. }
         | ExecuteResponse::CreatedTable { .. }
         | ExecuteResponse::CreatedIndex { .. }
         | ExecuteResponse::CreatedSecret { .. }
@@ -732,8 +732,8 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::DroppedDatabase
         | ExecuteResponse::DroppedSchema
         | ExecuteResponse::DroppedRole
-        | ExecuteResponse::DroppedComputeInstance
-        | ExecuteResponse::DroppedComputeReplica
+        | ExecuteResponse::DroppedCluster
+        | ExecuteResponse::DroppedClusterReplica
         | ExecuteResponse::DroppedSource
         | ExecuteResponse::DroppedIndex
         | ExecuteResponse::DroppedSink

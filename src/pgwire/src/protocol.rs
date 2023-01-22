@@ -1262,8 +1262,8 @@ where
             ExecuteResponse::AlteredIndexLogicalCompaction
             | ExecuteResponse::AlteredObject(..)
             | ExecuteResponse::AlteredSystemConfiguration
-            | ExecuteResponse::CreatedComputeInstance { .. }
-            | ExecuteResponse::CreatedComputeReplica { .. }
+            | ExecuteResponse::CreatedCluster { .. }
+            | ExecuteResponse::CreatedClusterReplica { .. }
             | ExecuteResponse::CreatedConnection { .. }
             | ExecuteResponse::CreatedDatabase { .. }
             | ExecuteResponse::CreatedIndex { .. }
@@ -1282,8 +1282,8 @@ where
             | ExecuteResponse::Deleted(..)
             | ExecuteResponse::DiscardedAll
             | ExecuteResponse::DiscardedTemp
-            | ExecuteResponse::DroppedComputeInstance
-            | ExecuteResponse::DroppedComputeReplica
+            | ExecuteResponse::DroppedCluster
+            | ExecuteResponse::DroppedClusterReplica
             | ExecuteResponse::DroppedConnection
             | ExecuteResponse::DroppedDatabase
             | ExecuteResponse::DroppedIndex

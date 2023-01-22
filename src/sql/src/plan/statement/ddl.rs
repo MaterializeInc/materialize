@@ -24,7 +24,7 @@ use prost::Message;
 use regex::Regex;
 use tracing::warn;
 
-use mz_compute_client::controller::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS;
+use mz_controller::clusters::DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS;
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
 use mz_ore::cast::{self, TryCastFrom};
@@ -91,7 +91,7 @@ use crate::ast::{
     UnresolvedDatabaseName, Value, ViewDefinition,
 };
 use crate::catalog::{
-    CatalogComputeInstance, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
+    CatalogCluster, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
@@ -109,14 +109,14 @@ use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterOptionParameter, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
-    ComputeReplicaIntrospectionConfig, CreateComputeInstancePlan, CreateComputeReplicaPlan,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DropComputeInstancesPlan,
-    DropComputeReplicasPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, CreateClusterPlan,
+    CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DropClusterReplicasPlan,
+    DropClustersPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
     FullObjectName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan, QueryContext,
-    RotateKeysPlan, Secret, Sink, Source, StorageClusterConfig, Table, Type, View,
+    ReplicaConfig, ReplicaIntrospectionConfig, RotateKeysPlan, Secret, Sink, Source,
+    StorageClusterConfig, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -1691,13 +1691,13 @@ pub fn plan_create_materialized_view(
     mut stmt: CreateMaterializedViewStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
-    let compute_instance = match &stmt.in_cluster {
-        None => scx.resolve_compute_instance(None)?.id(),
+    let cluster_id = match &stmt.in_cluster {
+        None => scx.resolve_cluster(None)?.id(),
         Some(in_cluster) => in_cluster.id,
     };
-    ensure_cluster_is_not_linked(scx, scx.catalog.get_compute_instance(compute_instance))?;
+    ensure_cluster_is_not_linked(scx, scx.catalog.get_cluster(cluster_id))?;
     stmt.in_cluster = Some(ResolvedClusterName {
-        id: compute_instance,
+        id: cluster_id,
         print_name: None,
     });
 
@@ -1753,7 +1753,7 @@ pub fn plan_create_materialized_view(
             create_sql,
             expr,
             column_names,
-            compute_instance,
+            cluster_id,
         },
         replace,
         if_not_exists,
@@ -2237,13 +2237,13 @@ pub fn plan_create_index(
     };
 
     let options = plan_index_options(scx, with_options.clone())?;
-    let compute_instance = match in_cluster {
-        None => scx.resolve_compute_instance(None)?.id(),
+    let cluster_id = match in_cluster {
+        None => scx.resolve_cluster(None)?.id(),
         Some(in_cluster) => in_cluster.id,
     };
-    ensure_cluster_is_not_linked(scx, scx.catalog.get_compute_instance(compute_instance))?;
+    ensure_cluster_is_not_linked(scx, scx.catalog.get_cluster(cluster_id))?;
     *in_cluster = Some(ResolvedClusterName {
-        id: compute_instance,
+        id: cluster_id,
         print_name: None,
     });
 
@@ -2262,7 +2262,7 @@ pub fn plan_create_index(
             create_sql,
             on: on.id(),
             keys,
-            compute_instance,
+            cluster_id,
         },
         options,
         if_not_exists,
@@ -2459,14 +2459,14 @@ pub fn plan_create_cluster(
         replicas.push((normalize::ident(name), plan_replica_config(scx, options)?));
     }
 
-    Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
+    Ok(Plan::CreateCluster(CreateClusterPlan {
         name: normalize::ident(name),
         replicas,
     }))
 }
 
-const DEFAULT_COMPUTE_REPLICA_INTROSPECTION_INTERVAL: Interval = Interval {
-    micros: cast::u32_to_i64(DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS),
+const DEFAULT_REPLICA_INTROSPECTION_INTERVAL: Interval = Interval {
+    micros: cast::u32_to_i64(DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS),
     months: 0,
     days: 0,
 };
@@ -2486,7 +2486,7 @@ generate_extracted_config!(
 fn plan_replica_config(
     scx: &StatementContext,
     options: Vec<ReplicaOption<Aug>>,
-) -> Result<ComputeReplicaConfig, PlanError> {
+) -> Result<ReplicaConfig, PlanError> {
     let ReplicaOptionExtracted {
         availability_zone,
         size,
@@ -2511,9 +2511,9 @@ fn plan_replica_config(
 
     let introspection_interval = introspection_interval
         .map(|OptionalInterval(i)| i)
-        .unwrap_or(Some(DEFAULT_COMPUTE_REPLICA_INTROSPECTION_INTERVAL));
+        .unwrap_or(Some(DEFAULT_REPLICA_INTROSPECTION_INTERVAL));
     let introspection = match introspection_interval {
-        Some(interval) => Some(ComputeReplicaIntrospectionConfig {
+        Some(interval) => Some(ReplicaIntrospectionConfig {
             interval: interval.duration()?,
             debugging: introspection_debugging,
         }),
@@ -2543,7 +2543,7 @@ fn plan_replica_config(
 
             let workers = NonZeroUsize::new(workers.into())
                 .ok_or_else(|| sql_err!("WORKERS must be greater 0"))?;
-            Ok(ComputeReplicaConfig::Remote {
+            Ok(ReplicaConfig::Remote {
                 addrs: remote_addrs,
                 compute_addrs,
                 workers,
@@ -2559,7 +2559,7 @@ fn plan_replica_config(
             if compute.is_some() {
                 sql_bail!("cannot specify SIZE and COMPUTE");
             }
-            Ok(ComputeReplicaConfig::Managed {
+            Ok(ReplicaConfig::Managed {
                 size,
                 availability_zone,
                 introspection,
@@ -2587,13 +2587,11 @@ pub fn plan_create_cluster_replica(
         of_cluster,
     }: CreateClusterReplicaStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let instance = scx
-        .catalog
-        .resolve_compute_instance(Some(&of_cluster.to_string()))?;
-    ensure_cluster_is_not_linked(scx, instance)?;
-    Ok(Plan::CreateComputeReplica(CreateComputeReplicaPlan {
+    let cluster = scx.catalog.resolve_cluster(Some(&of_cluster.to_string()))?;
+    ensure_cluster_is_not_linked(scx, cluster)?;
+    Ok(Plan::CreateClusterReplica(CreateClusterReplicaPlan {
         name: normalize::ident(name),
-        cluster_id: instance.id(),
+        cluster_id: cluster.id(),
         config: plan_replica_config(scx, options)?,
     }))
 }
@@ -3305,13 +3303,13 @@ pub fn plan_drop_cluster(
         } else {
             sql_bail!("invalid cluster name {}", name.to_string().quoted())
         };
-        match scx.catalog.resolve_compute_instance(Some(name.as_str())) {
-            Ok(instance) => {
-                ensure_cluster_is_not_linked(scx, instance)?;
-                if !cascade && !instance.bound_objects().is_empty() {
+        match scx.catalog.resolve_cluster(Some(name.as_str())) {
+            Ok(cluster) => {
+                ensure_cluster_is_not_linked(scx, cluster)?;
+                if !cascade && !cluster.bound_objects().is_empty() {
                     sql_bail!("cannot drop cluster with active indexes or materialized views");
                 }
-                ids.push(instance.id());
+                ids.push(cluster.id());
             }
             Err(_) if if_exists => {
                 // TODO(benesch): generate a notice indicating that the
@@ -3320,18 +3318,18 @@ pub fn plan_drop_cluster(
             Err(e) => return Err(e.into()),
         }
     }
-    Ok(Plan::DropComputeInstances(DropComputeInstancesPlan { ids }))
+    Ok(Plan::DropClusters(DropClustersPlan { ids }))
 }
 
 fn ensure_cluster_is_not_linked(
     scx: &StatementContext,
-    instance: &dyn CatalogComputeInstance,
+    cluster: &dyn CatalogCluster,
 ) -> Result<(), PlanError> {
-    if let Some(linked_object_id) = instance.linked_object_id() {
+    if let Some(linked_object_id) = cluster.linked_object_id() {
         let linked_item = scx.catalog.get_item(&linked_object_id);
         let linked_item_name = scx.catalog.resolve_full_name(linked_item.name());
         Err(PlanError::CannotModifyLinkedCluster {
-            cluster_name: instance.name().into(),
+            cluster_name: cluster.name().into(),
             linked_object_name: linked_item_name.to_string(),
         })
     } else {
@@ -3352,16 +3350,16 @@ pub fn plan_drop_cluster_replica(
 ) -> Result<Plan, PlanError> {
     let mut ids = vec![];
     for QualifiedReplica { cluster, replica } in names {
-        let instance = match scx.catalog.resolve_compute_instance(Some(cluster.as_str())) {
-            Ok(instance) => instance,
+        let cluster = match scx.catalog.resolve_cluster(Some(cluster.as_str())) {
+            Ok(cluster) => cluster,
             Err(_) if if_exists => continue,
             Err(e) => return Err(e.into()),
         };
-        ensure_cluster_is_not_linked(scx, instance)?;
+        ensure_cluster_is_not_linked(scx, cluster)?;
         let replica_name = replica.into_string();
         // Check to see if name exists
-        if let Some(replica_id) = instance.replicas().get(&replica_name) {
-            ids.push((instance.id(), *replica_id));
+        if let Some(replica_id) = cluster.replicas().get(&replica_name) {
+            ids.push((cluster.id(), *replica_id));
         } else {
             // If "IF EXISTS" supplied, names allowed to be missing,
             // otherwise error.
@@ -3370,14 +3368,14 @@ pub fn plan_drop_cluster_replica(
                 // replica does not exist.
                 sql_bail!(
                     "CLUSTER {} has no CLUSTER REPLICA named {}",
-                    instance.name(),
+                    cluster.name(),
                     replica_name.quoted(),
                 )
             }
         }
     }
 
-    Ok(Plan::DropComputeReplicas(DropComputeReplicasPlan { ids }))
+    Ok(Plan::DropClusterReplicas(DropClusterReplicasPlan { ids }))
 }
 
 pub fn plan_drop_items(

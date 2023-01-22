@@ -14,9 +14,9 @@ use chrono::{DateTime, Utc};
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::controller::{
-    ComputeInstanceId, ComputeInstanceStatus, ComputeReplicaAllocation, ComputeReplicaLocation,
-    ProcessId, ReplicaId,
+    ComputeReplicaAllocation, ComputeReplicaLocation, ProcessId, ReplicaId,
 };
+use mz_controller::clusters::{ClusterId, ClusterStatus};
 use mz_expr::MirScalarExpr;
 use mz_orchestrator::{CpuLimit, MemoryLimit, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
@@ -130,12 +130,8 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_compute_instance_update(
-        &self,
-        name: &str,
-        diff: Diff,
-    ) -> BuiltinTableUpdate {
-        let id = self.compute_instances_by_name[name];
+    pub(super) fn pack_cluster_update(&self, name: &str, diff: Diff) -> BuiltinTableUpdate {
+        let id = self.clusters_by_name[name];
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
             row: Row::pack_slice(&[Datum::String(&id.to_string()), Datum::String(name)]),
@@ -143,15 +139,15 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_compute_replica_update(
+    pub(super) fn pack_cluster_replica_update(
         &self,
-        compute_instance_id: ComputeInstanceId,
+        cluster_id: ClusterId,
         name: &str,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let instance = &self.compute_instances_by_id[&compute_instance_id];
-        let id = instance.replica_id_by_name[name];
-        let replica = &instance.replicas_by_id[&id];
+        let cluster = &self.clusters_by_id[&cluster_id];
+        let id = cluster.replica_id_by_name[name];
+        let replica = &cluster.replicas_by_id[&id];
 
         let (size, az) = match &replica.config.location {
             ComputeReplicaLocation::Managed {
@@ -168,7 +164,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::UInt64(id),
                 Datum::String(name),
-                Datum::String(&compute_instance_id.to_string()),
+                Datum::String(&cluster_id.to_string()),
                 Datum::from(size),
                 Datum::from(az),
             ]),
@@ -182,7 +178,7 @@ impl CatalogState {
         object_id: GlobalId,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let cluster_id = self.compute_instances_by_name[cluster_name];
+        let cluster_id = self.clusters_by_name[cluster_name];
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_LINKS),
             row: Row::pack_slice(&[
@@ -193,17 +189,17 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_compute_replica_status_update(
+    pub(super) fn pack_cluster_replica_status_update(
         &self,
-        compute_instance_id: ComputeInstanceId,
+        cluster_id: ClusterId,
         replica_id: ReplicaId,
         process_id: ProcessId,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let event = self.get_compute_instance_status(compute_instance_id, replica_id, process_id);
+        let event = self.get_cluster_status(cluster_id, replica_id, process_id);
         let status = match event.status {
-            ComputeInstanceStatus::Ready => "ready",
-            ComputeInstanceStatus::NotReady => "not-ready",
+            ClusterStatus::Ready => "ready",
+            ClusterStatus::NotReady => "not-ready",
         };
 
         BuiltinTableUpdate {
@@ -570,7 +566,7 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::UInt64(schema_id.into()),
                 Datum::String(name),
-                Datum::String(&mview.compute_instance.to_string()),
+                Datum::String(&mview.cluster_id.to_string()),
                 Datum::String(&query_string),
             ]),
             diff,
@@ -646,7 +642,7 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::String(name),
                 Datum::String(&index.on.to_string()),
-                Datum::String(&index.compute_instance.to_string()),
+                Datum::String(&index.cluster_id.to_string()),
             ]),
             diff,
         });

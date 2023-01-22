@@ -288,9 +288,9 @@ impl Usage {
                 dump_col!(catalog::COLLECTION_CONFIG);
                 dump_col!(catalog::COLLECTION_ID_ALLOC);
                 dump_col!(catalog::COLLECTION_SYSTEM_GID_MAPPING);
-                dump_col!(catalog::COLLECTION_COMPUTE_INSTANCES);
-                dump_col!(catalog::COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX);
-                dump_col!(catalog::COLLECTION_COMPUTE_REPLICAS);
+                dump_col!(catalog::COLLECTION_CLUSTERS);
+                dump_col!(catalog::COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX);
+                dump_col!(catalog::COLLECTION_CLUSTER_REPLICAS);
                 dump_col!(catalog::COLLECTION_DATABASE);
                 dump_col!(catalog::COLLECTION_SCHEMA);
                 dump_col!(catalog::COLLECTION_ITEM);
@@ -345,9 +345,9 @@ impl Usage {
                 edit_col!(catalog::COLLECTION_CONFIG);
                 edit_col!(catalog::COLLECTION_ID_ALLOC);
                 edit_col!(catalog::COLLECTION_SYSTEM_GID_MAPPING);
-                edit_col!(catalog::COLLECTION_COMPUTE_INSTANCES);
-                edit_col!(catalog::COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX);
-                edit_col!(catalog::COLLECTION_COMPUTE_REPLICAS);
+                edit_col!(catalog::COLLECTION_CLUSTERS);
+                edit_col!(catalog::COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX);
+                edit_col!(catalog::COLLECTION_CLUSTER_REPLICAS);
                 edit_col!(catalog::COLLECTION_DATABASE);
                 edit_col!(catalog::COLLECTION_SCHEMA);
                 edit_col!(catalog::COLLECTION_ITEM);

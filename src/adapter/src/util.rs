@@ -12,7 +12,7 @@ use std::fmt::Debug;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_controller::clusters::ClusterId;
 use mz_ore::halt;
 use mz_ore::soft_assert;
 use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
@@ -166,7 +166,7 @@ pub(crate) fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
 // the responsibility of the SQL package.
 pub fn index_sql(
     index_name: String,
-    compute_instance: ComputeInstanceId,
+    cluster_id: ClusterId,
     view_name: FullObjectName,
     view_desc: &RelationDesc,
     keys: &[usize],
@@ -176,7 +176,7 @@ pub fn index_sql(
     CreateIndexStatement::<Raw> {
         name: Some(Ident::new(index_name)),
         on_name: RawObjectName::Name(mz_sql::normalize::unresolve(view_name)),
-        in_cluster: Some(RawClusterName::Resolved(compute_instance.to_string())),
+        in_cluster: Some(RawClusterName::Resolved(cluster_id.to_string())),
         key_parts: Some(
             keys.iter()
                 .map(|i| match view_desc.get_unambiguous_name(*i) {
@@ -229,10 +229,10 @@ pub fn describe(
     }
 }
 
-/// Type identifying a sink maintained by a compute instance.
+/// Type identifying a sink maintained by a cluster.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ComputeSinkId {
-    pub compute_instance: ComputeInstanceId,
+    pub cluster_id: ClusterId,
     pub global_id: GlobalId,
 }
 

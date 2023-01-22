@@ -22,8 +22,7 @@ use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunne
 
 use crate::ast::{Ident, ObjectType, Statement, UnresolvedObjectName};
 use crate::catalog::{
-    CatalogComputeInstance, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema,
-    SessionCatalog,
+    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, SessionCatalog,
 };
 use crate::names::{
     self, Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName,
@@ -603,12 +602,9 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_function(&name)?)
     }
 
-    pub fn resolve_compute_instance(
-        &self,
-        name: Option<&Ident>,
-    ) -> Result<&dyn CatalogComputeInstance, PlanError> {
+    pub fn resolve_cluster(&self, name: Option<&Ident>) -> Result<&dyn CatalogCluster, PlanError> {
         let name = name.map(|name| name.as_str());
-        Ok(self.catalog.resolve_compute_instance(name)?)
+        Ok(self.catalog.resolve_cluster(name)?)
     }
 
     pub fn resolve_type(&self, mut ty: mz_pgrepr::Type) -> Result<ResolvedDataType, PlanError> {
