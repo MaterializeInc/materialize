@@ -3969,7 +3969,6 @@ dependencies = [
  "derivative",
  "futures-core",
  "mz-ore",
- "mz-proto",
  "prost",
  "protobuf-src",
  "serde",

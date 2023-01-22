@@ -9,8 +9,6 @@
 
 syntax = "proto3";
 
-import "orchestrator/src/orchtestrator.proto";
-
 package mz_storage_client.types.clusters;
 
 message ProtoStorageClusterId {
