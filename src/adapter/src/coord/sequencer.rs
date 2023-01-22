@@ -23,15 +23,14 @@ use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::{event, warn, Level};
 
 use mz_cloud_resources::VpcEndpointConfig;
-use mz_compute_client::controller::{
-    ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLogging, ReplicaId,
-    DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS,
-};
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDesc, IndexDesc};
 use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, SubscribeSinkConnection,
 };
-use mz_controller::clusters::ClusterConfig;
+use mz_controller::clusters::{
+    ClusterConfig, ClusterId, ReplicaConfig, ReplicaId, ReplicaLogging,
+    DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
+};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -40,17 +39,17 @@ use mz_ore::task;
 use mz_repr::explain_new::{ExplainFormat, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
-use mz_sql::catalog::{CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails};
+use mz_sql::catalog::{CatalogCluster, CatalogError, CatalogItemType, CatalogTypeDetails};
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterOptionParameter, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, CopyFormat, CreateComputeInstancePlan,
-    CreateComputeReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
+    AlterSystemResetPlan, AlterSystemSetPlan, CopyFormat, CreateClusterPlan,
+    CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DropComputeInstancesPlan,
-    DropComputeReplicasPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    ExecutePlan, ExplainPlan, FetchPlan, IndexOption, InsertPlan, MaterializedView, MutationKind,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DropClusterReplicasPlan,
+    DropClustersPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan,
+    ExplainPlan, FetchPlan, IndexOption, InsertPlan, MaterializedView, MutationKind,
     OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
     ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
     StorageClusterConfig, SubscribeFrom, SubscribePlan, View,
@@ -67,9 +66,8 @@ use crate::catalog::builtin::{
     PG_CATALOG_SCHEMA,
 };
 use crate::catalog::{
-    self, Catalog, CatalogItem, ComputeInstance, Connection, DataSourceDesc,
-    SerializedComputeReplicaLocation, StorageSinkConnectionState, LINKED_CLUSTER_REPLICA_NAME,
-    SYSTEM_USER,
+    self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, SerializedReplicaLocation,
+    StorageSinkConnectionState, LINKED_CLUSTER_REPLICA_NAME, SYSTEM_USER,
 };
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
@@ -164,15 +162,12 @@ impl Coordinator {
             Plan::CreateRole(plan) => {
                 tx.send(self.sequence_create_role(&session, plan).await, session);
             }
-            Plan::CreateComputeInstance(plan) => {
-                tx.send(
-                    self.sequence_create_compute_instance(&session, plan).await,
-                    session,
-                );
+            Plan::CreateCluster(plan) => {
+                tx.send(self.sequence_create_cluster(&session, plan).await, session);
             }
-            Plan::CreateComputeReplica(plan) => {
+            Plan::CreateClusterReplica(plan) => {
                 tx.send(
-                    self.sequence_create_compute_replica(&session, plan).await,
+                    self.sequence_create_cluster_replica(&session, plan).await,
                     session,
                 );
             }
@@ -232,16 +227,15 @@ impl Coordinator {
             Plan::DropRoles(plan) => {
                 tx.send(self.sequence_drop_roles(&session, plan).await, session);
             }
-            Plan::DropComputeInstances(plan) => {
+            Plan::DropClusters(plan) => {
                 tx.send(
-                    self.sequence_drop_compute_instances(&mut session, plan)
-                        .await,
+                    self.sequence_drop_clusters(&mut session, plan).await,
                     session,
                 );
             }
-            Plan::DropComputeReplicas(plan) => {
+            Plan::DropClusterReplicas(plan) => {
                 tx.send(
-                    self.sequence_drop_compute_replica(&session, plan).await,
+                    self.sequence_drop_cluster_replicas(&session, plan).await,
                     session,
                 );
             }
@@ -780,14 +774,14 @@ impl Coordinator {
             .map(|_| ExecuteResponse::CreatedRole)
     }
 
-    // Utility function used by both `sequence_create_compute_instance`
-    // and `sequence_create_compute_replica`. Chooses the availability zone
-    // for a replica arbitrarily based on some state (currently: the number of replicas
-    // of the given cluster per AZ).
+    // Utility function used by both `sequence_create_cluster` and
+    // `sequence_create_cluster_replica`. Chooses the availability zone for a
+    // replica arbitrarily based on some state (currently: the number of
+    // replicas of the given cluster per AZ).
     //
-    // I put this in the `Coordinator`'s impl block in case we ever want to change the logic
-    // and make it depend on some other state, but for now it's a pure function of the `n_replicas_per_az`
-    // state.
+    // I put this in the `Coordinator`'s impl block in case we ever want to
+    // change the logic and make it depend on some other state, but for now it's
+    // a pure function of the `n_replicas_per_az` state.
     fn choose_az<'a>(n_replicas_per_az: &'a HashMap<String, usize>) -> String {
         let min = *n_replicas_per_az
             .values()
@@ -800,12 +794,12 @@ impl Coordinator {
         first_argmin.clone()
     }
 
-    async fn sequence_create_compute_instance(
+    async fn sequence_create_cluster(
         &mut self,
         session: &Session,
-        CreateComputeInstancePlan { name, replicas }: CreateComputeInstancePlan,
+        CreateClusterPlan { name, replicas }: CreateClusterPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        tracing::debug!("sequence_create_compute_instance");
+        tracing::debug!("sequence_create_cluster");
 
         let id = self.catalog.allocate_user_cluster_id().await?;
         // The catalog items for the arranged introspection sources are shared between all replicas
@@ -814,7 +808,7 @@ impl Coordinator {
         // per-replica introspection configuration.
         let arranged_introspection_sources =
             self.catalog.allocate_arranged_introspection_sources().await;
-        let mut ops = vec![catalog::Op::CreateComputeInstance {
+        let mut ops = vec![catalog::Op::CreateCluster {
             id,
             name: name.clone(),
             linked_object_id: None,
@@ -845,17 +839,17 @@ impl Coordinator {
             // If the AZ was not specified, choose one, round-robin, from the ones with
             // the lowest number of configured replicas for this cluster.
             let location = match replica_config {
-                mz_sql::plan::ComputeReplicaConfig::Remote {
+                mz_sql::plan::ReplicaConfig::Remote {
                     addrs,
                     compute_addrs,
                     workers,
                     ..
-                } => SerializedComputeReplicaLocation::Remote {
+                } => SerializedReplicaLocation::Remote {
                     addrs,
                     compute_addrs,
                     workers,
                 },
-                mz_sql::plan::ComputeReplicaConfig::Managed {
+                mz_sql::plan::ReplicaConfig::Managed {
                     size,
                     availability_zone,
                     ..
@@ -866,7 +860,7 @@ impl Coordinator {
                             *n_replicas_per_az.get_mut(&az).unwrap() += 1;
                             (az, false)
                         });
-                    SerializedComputeReplicaLocation::Managed {
+                    SerializedReplicaLocation::Managed {
                         size: size.clone(),
                         availability_zone,
                         az_user_specified: user_specified,
@@ -880,23 +874,23 @@ impl Coordinator {
                     .allocate_persisted_introspection_sources()
                     .await;
                 let views = self.catalog.allocate_persisted_introspection_views().await;
-                ComputeReplicaLogging {
+                ReplicaLogging {
                     log_logging: config.debugging,
                     interval: Some(config.interval),
                     sources,
                     views,
                 }
             } else {
-                ComputeReplicaLogging::default()
+                ReplicaLogging::default()
             };
 
-            let config = ComputeReplicaConfig {
+            let config = ReplicaConfig {
                 location: self.catalog.concretize_replica_location(location)?,
                 logging,
                 idle_arrangement_merge_effort,
             };
 
-            ops.push(catalog::Op::CreateComputeReplica {
+            ops.push(catalog::Op::CreateClusterReplica {
                 cluster_id: id,
                 id: self.catalog.allocate_replica_id().await?,
                 name: replica_name.clone(),
@@ -906,12 +900,12 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), ops).await?;
 
-        self.create_compute_instance(id).await;
+        self.create_cluster(id).await;
 
-        Ok(ExecuteResponse::CreatedComputeInstance)
+        Ok(ExecuteResponse::CreatedCluster)
     }
 
-    async fn create_compute_instance(&mut self, cluster_id: ComputeInstanceId) {
+    async fn create_cluster(&mut self, cluster_id: ClusterId) {
         let cluster = self.catalog.get_cluster(cluster_id);
         let cluster_id = cluster.id;
         let arranged_introspection_source_ids: Vec<_> =
@@ -928,7 +922,7 @@ impl Coordinator {
 
         let replica_ids: Vec<_> = cluster.replicas_by_id.keys().copied().collect();
         for replica_id in replica_ids {
-            self.create_compute_replica(cluster_id, replica_id).await;
+            self.create_cluster_replica(cluster_id, replica_id).await;
         }
 
         if !arranged_introspection_source_ids.is_empty() {
@@ -941,31 +935,31 @@ impl Coordinator {
         }
     }
 
-    async fn sequence_create_compute_replica(
+    async fn sequence_create_cluster_replica(
         &mut self,
         session: &Session,
-        CreateComputeReplicaPlan {
+        CreateClusterReplicaPlan {
             name,
             cluster_id,
             config,
-        }: CreateComputeReplicaPlan,
+        }: CreateClusterReplicaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let introspection = config.get_introspection().cloned();
         let idle_arrangement_merge_effort = config.get_idle_arrangement_merge_effort();
 
         // Choose default AZ if necessary
         let location = match config {
-            mz_sql::plan::ComputeReplicaConfig::Remote {
+            mz_sql::plan::ReplicaConfig::Remote {
                 addrs,
                 compute_addrs,
                 workers,
                 ..
-            } => SerializedComputeReplicaLocation::Remote {
+            } => SerializedReplicaLocation::Remote {
                 addrs,
                 compute_addrs,
                 workers,
             },
-            mz_sql::plan::ComputeReplicaConfig::Managed {
+            mz_sql::plan::ReplicaConfig::Managed {
                 size,
                 availability_zone,
                 ..
@@ -1001,7 +995,7 @@ impl Coordinator {
                         (az, false)
                     }
                 };
-                SerializedComputeReplicaLocation::Managed {
+                SerializedReplicaLocation::Managed {
                     size,
                     availability_zone,
                     az_user_specified: user_specified,
@@ -1015,24 +1009,24 @@ impl Coordinator {
                 .allocate_persisted_introspection_sources()
                 .await;
             let views = self.catalog.allocate_persisted_introspection_views().await;
-            ComputeReplicaLogging {
+            ReplicaLogging {
                 log_logging: config.debugging,
                 interval: Some(config.interval),
                 sources,
                 views,
             }
         } else {
-            ComputeReplicaLogging::default()
+            ReplicaLogging::default()
         };
 
-        let config = ComputeReplicaConfig {
+        let config = ReplicaConfig {
             location: self.catalog.concretize_replica_location(location)?,
             logging,
             idle_arrangement_merge_effort,
         };
 
         let id = self.catalog.allocate_replica_id().await?;
-        let op = catalog::Op::CreateComputeReplica {
+        let op = catalog::Op::CreateClusterReplica {
             cluster_id,
             id,
             name: name.clone(),
@@ -1041,18 +1035,14 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), vec![op]).await?;
 
-        self.create_compute_replica(cluster_id, id).await;
+        self.create_cluster_replica(cluster_id, id).await;
 
-        Ok(ExecuteResponse::CreatedComputeReplica)
+        Ok(ExecuteResponse::CreatedClusterReplica)
     }
 
-    async fn create_compute_replica(
-        &mut self,
-        cluster_id: ComputeInstanceId,
-        replica_id: ReplicaId,
-    ) {
-        let instance = self.catalog.get_cluster(cluster_id);
-        let replica_config = instance.replicas_by_id[&replica_id].config.clone();
+    async fn create_cluster_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
+        let cluster = self.catalog.get_cluster(cluster_id);
+        let replica_config = cluster.replicas_by_id[&replica_id].config.clone();
 
         let log_source_ids: Vec<_> = replica_config.logging.source_ids().collect();
         let log_source_collections = replica_config
@@ -1068,14 +1058,14 @@ impl Coordinator {
             .unwrap();
 
         self.controller
-            .create_replica(instance.id, replica_id, replica_config)
+            .create_replica(cluster.id, replica_id, replica_config)
             .await
             .expect("creating replica must not fail");
 
         if !log_source_ids.is_empty() {
             self.initialize_compute_read_policies(
                 log_source_ids.clone(),
-                instance.id,
+                cluster.id,
                 Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
             )
             .await;
@@ -1442,7 +1432,7 @@ impl Coordinator {
                     create_sql,
                     expr: view_expr,
                     column_names,
-                    compute_instance,
+                    cluster_id,
                 },
             replace,
             if_not_exists,
@@ -1480,7 +1470,7 @@ impl Coordinator {
         // dataflow. This makes the materialized view include the maximum possible
         // amount of historical detail.
         let id_bundle = self
-            .index_oracle(compute_instance)
+            .index_oracle(cluster_id)
             .sufficient_collections(&depends_on);
         let as_of = self.least_valid_read(&id_bundle);
 
@@ -1497,7 +1487,7 @@ impl Coordinator {
                 optimized_expr,
                 desc: desc.clone(),
                 depends_on,
-                compute_instance,
+                cluster_id,
             }),
         });
 
@@ -1506,7 +1496,7 @@ impl Coordinator {
                 // Create a dataflow that materializes the view query and sinks
                 // it to storage.
                 let df = txn
-                    .dataflow_builder(compute_instance)
+                    .dataflow_builder(cluster_id)
                     .build_materialized_view_dataflow(id, as_of.clone(), internal_view_id)?;
                 Ok(df)
             })
@@ -1534,7 +1524,7 @@ impl Coordinator {
                 )
                 .await;
 
-                self.ship_dataflow(df, compute_instance).await;
+                self.ship_dataflow(df, cluster_id).await;
 
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
@@ -1565,8 +1555,8 @@ impl Coordinator {
             if_not_exists,
         } = plan;
 
-        // An index must be created on a specific compute instance.
-        let compute_instance = index.compute_instance;
+        // An index must be created on a specific cluster.
+        let cluster_id = index.cluster_id;
 
         let id = self.catalog.allocate_user_id().await?;
         let index = catalog::Index {
@@ -1575,7 +1565,7 @@ impl Coordinator {
             on: index.on,
             conn_id: None,
             depends_on,
-            compute_instance,
+            cluster_id,
         };
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
@@ -1586,14 +1576,14 @@ impl Coordinator {
         };
         match self
             .catalog_transact_with(Some(session), vec![op], |txn| {
-                let mut builder = txn.dataflow_builder(compute_instance);
+                let mut builder = txn.dataflow_builder(cluster_id);
                 let df = builder.build_index_dataflow(id)?;
                 Ok(df)
             })
             .await
         {
             Ok(df) => {
-                self.ship_dataflow(df, compute_instance).await;
+                self.ship_dataflow(df, cluster_id).await;
                 self.set_index_options(id, options).expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex)
             }
@@ -1685,17 +1675,17 @@ impl Coordinator {
         Ok(ExecuteResponse::DroppedRole)
     }
 
-    async fn sequence_drop_compute_instances(
+    async fn sequence_drop_clusters(
         &mut self,
         session: &mut Session,
-        DropComputeInstancesPlan { ids }: DropComputeInstancesPlan,
+        DropClustersPlan { ids }: DropClustersPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let active_cluster_id = self
             .catalog
-            .active_compute_instance(session)
+            .active_cluster(session)
             .ok()
             .map(|cluster| cluster.id);
-        let ops = self.catalog.drop_compute_instance_ops(&ids);
+        let ops = self.catalog.drop_cluster_ops(&ids);
 
         self.catalog_transact(Some(session), ops).await?;
 
@@ -1707,27 +1697,23 @@ impl Coordinator {
             }
         }
 
-        Ok(ExecuteResponse::DroppedComputeInstance)
+        Ok(ExecuteResponse::DroppedCluster)
     }
 
-    async fn sequence_drop_compute_replica(
+    async fn sequence_drop_cluster_replicas(
         &mut self,
         session: &Session,
-        DropComputeReplicasPlan { ids }: DropComputeReplicasPlan,
+        DropClusterReplicasPlan { ids }: DropClusterReplicasPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let ops = self.catalog.drop_compute_instance_replica_ops(&ids);
+        let ops = self.catalog.drop_cluster_replica_ops(&ids);
 
         self.catalog_transact(Some(session), ops).await?;
         fail::fail_point!("after_sequencer_drop_replica");
 
-        Ok(ExecuteResponse::DroppedComputeReplica)
+        Ok(ExecuteResponse::DroppedClusterReplica)
     }
 
-    pub(crate) async fn drop_replica(
-        &mut self,
-        instance_id: ComputeInstanceId,
-        replica_id: ReplicaId,
-    ) {
+    pub(crate) async fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
         if let Some(Some(ReplicaMetadata {
             last_heartbeat,
             metrics,
@@ -1760,7 +1746,7 @@ impl Coordinator {
                 .await;
         }
         self.controller
-            .drop_replica(instance_id, replica_id)
+            .drop_replica(cluster_id, replica_id)
             .await
             .expect("dropping replica must not fail");
     }
@@ -1864,8 +1850,8 @@ impl Coordinator {
                     });
                 } else if name.as_str() == CLUSTER_VAR_NAME
                     && matches!(
-                        self.catalog.resolve_compute_instance(v),
-                        Err(CatalogError::UnknownComputeInstance(_))
+                        self.catalog.resolve_cluster(v),
+                        Err(CatalogError::UnknownCluster(_))
                     )
                 {
                     session.add_notice(AdapterNotice::ClusterDoesNotExist {
@@ -2014,7 +2000,7 @@ impl Coordinator {
             view_id,
             index_id,
             source_ids,
-            compute_instance,
+            cluster_id,
             id_bundle,
             when,
             target_replica,
@@ -2035,7 +2021,7 @@ impl Coordinator {
                         copy_to,
                         source,
                         session,
-                        compute_instance,
+                        cluster_id,
                         when,
                         target_replica,
                         view_id,
@@ -2066,7 +2052,7 @@ impl Coordinator {
                         copy_to,
                         source,
                         &mut session,
-                        compute_instance,
+                        cluster_id,
                         when,
                         target_replica,
                         view_id,
@@ -2096,7 +2082,7 @@ impl Coordinator {
             GlobalId,
             GlobalId,
             BTreeSet<GlobalId>,
-            ComputeInstanceId,
+            ClusterId,
             CollectionIdBundle,
             QueryWhen,
             Option<ReplicaId>,
@@ -2119,24 +2105,22 @@ impl Coordinator {
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
 
-        let compute_instance = self.catalog.active_compute_instance(session)?;
+        let cluster = self.catalog.active_cluster(session)?;
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {
-                compute_instance
-                    .replica_id_by_name
-                    .get(name)
-                    .copied()
-                    .ok_or(AdapterError::UnknownClusterReplica {
-                        cluster_name: compute_instance.name.clone(),
+                cluster.replica_id_by_name.get(name).copied().ok_or(
+                    AdapterError::UnknownClusterReplica {
+                        cluster_name: cluster.name.clone(),
                         replica_name: name.to_string(),
-                    })
+                    },
+                )
             })
             .transpose()?;
 
-        if compute_instance.replicas_by_id.is_empty() {
+        if cluster.replicas_by_id.is_empty() {
             return Err(AdapterError::NoClusterReplicasAvailable(
-                compute_instance.name.clone(),
+                cluster.name.clone(),
             ));
         }
 
@@ -2153,15 +2137,10 @@ impl Coordinator {
         let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
             && when == QueryWhen::Immediately;
 
-        check_no_invalid_log_reads(
-            &self.catalog,
-            compute_instance,
-            &source_ids,
-            &mut target_replica,
-        )?;
+        check_no_invalid_log_reads(&self.catalog, cluster, &source_ids, &mut target_replica)?;
 
         let id_bundle = self
-            .index_oracle(compute_instance.id)
+            .index_oracle(cluster.id)
             .sufficient_collections(&source_ids);
 
         Ok((
@@ -2171,7 +2150,7 @@ impl Coordinator {
             view_id,
             index_id,
             source_ids,
-            compute_instance.id(),
+            cluster.id(),
             id_bundle,
             when,
             target_replica,
@@ -2187,7 +2166,7 @@ impl Coordinator {
         copy_to: Option<CopyFormat>,
         source: MirRelationExpr,
         session: &mut Session,
-        compute_instance: ComputeInstanceId,
+        cluster_id: ClusterId,
         when: QueryWhen,
         target_replica: Option<ReplicaId>,
         view_id: GlobalId,
@@ -2202,7 +2181,7 @@ impl Coordinator {
             source,
             session,
             &when,
-            compute_instance,
+            cluster_id,
             view_id,
             index_id,
             timeline_context,
@@ -2234,7 +2213,7 @@ impl Coordinator {
 
         // Implement the peek, and capture the response.
         let resp = self
-            .implement_peek_plan(peek_plan, finishing, compute_instance, target_replica)
+            .implement_peek_plan(peek_plan, finishing, cluster_id, target_replica)
             .await?;
 
         if session.vars().emit_timestamp_notice() {
@@ -2257,7 +2236,7 @@ impl Coordinator {
         source: MirRelationExpr,
         session: &Session,
         when: &QueryWhen,
-        compute_instance: ComputeInstanceId,
+        cluster_id: ClusterId,
         view_id: GlobalId,
         index_id: GlobalId,
         timeline_context: TimelineContext,
@@ -2280,19 +2259,15 @@ impl Coordinator {
                 _ => {
                     // Determine a timestamp that will be valid for anything in any schema
                     // referenced by the first query.
-                    let id_bundle = self.timedomain_for(
-                        source_ids,
-                        &timeline_context,
-                        conn_id,
-                        compute_instance,
-                    )?;
+                    let id_bundle =
+                        self.timedomain_for(source_ids, &timeline_context, conn_id, cluster_id)?;
                     // We want to prevent compaction of the indexes consulted by
                     // determine_timestamp, not the ones listed in the query.
                     let timestamp = self.determine_timestamp(
                         session,
                         &id_bundle,
                         &QueryWhen::Immediately,
-                        compute_instance,
+                        cluster_id,
                         timeline_context,
                         real_time_recency_ts,
                     )?;
@@ -2308,7 +2283,7 @@ impl Coordinator {
                 session,
                 &id_bundle,
                 when,
-                compute_instance,
+                cluster_id,
                 timeline_context,
                 real_time_recency_ts,
             )?
@@ -2384,7 +2359,7 @@ impl Coordinator {
         // The assembled dataflow contains a view and an index of that view.
         let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
         dataflow.set_as_of(timestamp_context.antichain());
-        let mut builder = self.dataflow_builder(compute_instance);
+        let mut builder = self.dataflow_builder(cluster_id);
         builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             prep_relation_expr(
@@ -2413,7 +2388,7 @@ impl Coordinator {
         let peek_plan = self.create_peek_plan(
             dataflow,
             view_id,
-            compute_instance,
+            cluster_id,
             index_id,
             key,
             permutation,
@@ -2466,20 +2441,18 @@ impl Coordinator {
             up_to,
         } = plan;
 
-        let compute_instance = self.catalog.active_compute_instance(session)?;
-        let compute_instance_id = compute_instance.id;
+        let cluster = self.catalog.active_cluster(session)?;
+        let cluster_id = cluster.id;
 
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {
-                compute_instance
-                    .replica_id_by_name
-                    .get(name)
-                    .copied()
-                    .ok_or(AdapterError::UnknownClusterReplica {
-                        cluster_name: compute_instance.name.clone(),
+                cluster.replica_id_by_name.get(name).copied().ok_or(
+                    AdapterError::UnknownClusterReplica {
+                        cluster_name: cluster.name.clone(),
                         replica_name: name.to_string(),
-                    })
+                    },
+                )
             })
             .transpose()?;
 
@@ -2498,20 +2471,11 @@ impl Coordinator {
                               uses| {
             // Determine the frontier of updates to subscribe *from*.
             // Updates greater or equal to this frontier will be produced.
-            let id_bundle = coord
-                .index_oracle(compute_instance_id)
-                .sufficient_collections(uses);
+            let id_bundle = coord.index_oracle(cluster_id).sufficient_collections(uses);
             let timeline = coord.validate_timeline_context(id_bundle.iter())?;
             // If a timestamp was explicitly requested, use that.
             let frontier = coord
-                .determine_timestamp(
-                    session,
-                    &id_bundle,
-                    &when,
-                    compute_instance_id,
-                    timeline,
-                    None,
-                )?
+                .determine_timestamp(session, &id_bundle, &when, cluster_id, timeline, None)?
                 .timestamp_context;
             let frontier_ts = frontier.timestamp_or_default();
 
@@ -2546,7 +2510,7 @@ impl Coordinator {
             SubscribeFrom::Id(from_id) => {
                 check_no_invalid_log_reads(
                     &self.catalog,
-                    compute_instance,
+                    cluster,
                     &btreeset!(from_id),
                     &mut target_replica,
                 )?;
@@ -2562,13 +2526,13 @@ impl Coordinator {
                 let sink_id = self.catalog.allocate_user_id().await?;
                 let sink_desc = make_sink_desc(self, session, from_id, from_desc, &[from_id][..])?;
                 let sink_name = format!("subscribe-{}", sink_id);
-                self.dataflow_builder(compute_instance_id)
+                self.dataflow_builder(cluster_id)
                     .build_sink_dataflow(sink_name, sink_id, sink_desc)?
             }
             SubscribeFrom::Query { expr, desc } => {
                 check_no_invalid_log_reads(
                     &self.catalog,
-                    compute_instance,
+                    cluster,
                     &expr.depends_on(),
                     &mut target_replica,
                 )?;
@@ -2577,7 +2541,7 @@ impl Coordinator {
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
                 let sink_desc = make_sink_desc(self, session, id, desc, &depends_on)?;
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
-                let mut dataflow_builder = self.dataflow_builder(compute_instance_id);
+                let mut dataflow_builder = self.dataflow_builder(cluster_id);
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
                 dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
                 dataflow
@@ -2590,7 +2554,7 @@ impl Coordinator {
             .expect("must exist for active sessions")
             .drop_sinks
             .push(ComputeSinkId {
-                compute_instance: compute_instance_id,
+                cluster_id,
                 global_id: sink_id,
             });
         let arity = sink_desc.from_desc.arity();
@@ -2609,12 +2573,12 @@ impl Coordinator {
                 arity,
             },
         );
-        self.ship_dataflow(dataflow, compute_instance_id).await;
+        self.ship_dataflow(dataflow, cluster_id).await;
 
         if let Some(target) = target_replica {
             self.controller
                 .compute
-                .set_subscribe_target_replica(compute_instance_id, sink_id, target)
+                .set_subscribe_target_replica(cluster_id, sink_id, target)
                 .unwrap();
         }
 
@@ -2649,7 +2613,7 @@ impl Coordinator {
         use mz_repr::explain_new::trace_plan;
         use ExplainStage::*;
 
-        let compute_instance = self.catalog.active_compute_instance(session)?.id;
+        let cluster = self.catalog.active_cluster(session)?.id;
 
         let ExplainPlan {
             raw_plan,
@@ -2684,22 +2648,18 @@ impl Coordinator {
                     || -> Result<_, AdapterError> {
                         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
                         let mut dataflow = DataflowDesc::new("explanation".to_string());
-                        self.dataflow_builder(compute_instance)
-                            .import_view_into_dataflow(
-                                // TODO: If explaining a view, pipe the actual id of the view.
-                                &GlobalId::Explain,
-                                &optimized_plan,
-                                &mut dataflow,
-                            )?;
+                        self.dataflow_builder(cluster).import_view_into_dataflow(
+                            // TODO: If explaining a view, pipe the actual id of the view.
+                            &GlobalId::Explain,
+                            &optimized_plan,
+                            &mut dataflow,
+                        )?;
                         mz_repr::explain_new::trace_plan(&dataflow);
                         Ok(dataflow)
                     },
                 )?;
 
-                mz_transform::optimize_dataflow(
-                    &mut dataflow,
-                    &self.index_oracle(compute_instance),
-                )?;
+                mz_transform::optimize_dataflow(&mut dataflow, &self.index_oracle(cluster))?;
 
                 let used_indexes = dataflow
                     .index_imports
@@ -2774,7 +2734,7 @@ impl Coordinator {
         session: Session,
         plan: ExplainPlan,
     ) {
-        let (format, source_ids, optimized_plan, compute_instance, id_bundle) = return_if_err!(
+        let (format, source_ids, optimized_plan, cluster_id, id_bundle) = return_if_err!(
             self.sequence_explain_timestamp_begin_inner(&session, plan),
             tx,
             session
@@ -2790,7 +2750,7 @@ impl Coordinator {
                         tx,
                         session,
                         format,
-                        compute_instance,
+                        cluster_id,
                         optimized_plan,
                         id_bundle,
                     },
@@ -2812,7 +2772,7 @@ impl Coordinator {
                 self.sequence_explain_timestamp_finish(
                     &session,
                     format,
-                    compute_instance,
+                    cluster_id,
                     optimized_plan,
                     id_bundle,
                     None,
@@ -2831,7 +2791,7 @@ impl Coordinator {
             ExplainFormat,
             BTreeSet<GlobalId>,
             OptimizedMirRelationExpr,
-            ComputeInstanceId,
+            ClusterId,
             CollectionIdBundle,
         ),
         AdapterError,
@@ -2843,24 +2803,18 @@ impl Coordinator {
         let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {})?;
         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
         let source_ids = optimized_plan.depends_on();
-        let compute_instance = self.catalog.active_compute_instance(session)?;
+        let cluster = self.catalog.active_cluster(session)?;
         let id_bundle = self
-            .index_oracle(compute_instance.id)
+            .index_oracle(cluster.id)
             .sufficient_collections(&source_ids);
-        Ok((
-            format,
-            source_ids,
-            optimized_plan,
-            compute_instance.id(),
-            id_bundle,
-        ))
+        Ok((format, source_ids, optimized_plan, cluster.id(), id_bundle))
     }
 
     pub(crate) fn sequence_explain_timestamp_finish(
         &self,
         session: &Session,
         format: ExplainFormat,
-        compute_instance: ComputeInstanceId,
+        cluster_id: ClusterId,
         optimized_plan: OptimizedMirRelationExpr,
         id_bundle: CollectionIdBundle,
         real_time_recency_ts: Option<Timestamp>,
@@ -2877,7 +2831,7 @@ impl Coordinator {
             session,
             &id_bundle,
             &QueryWhen::Immediately,
-            compute_instance,
+            cluster_id,
             timeline_context,
             real_time_recency_ts,
         )?;
@@ -2903,13 +2857,9 @@ impl Coordinator {
             }
         }
         {
-            if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
+            if let Some(compute_ids) = id_bundle.compute_ids.get(&cluster_id) {
                 for id in compute_ids {
-                    let state = self
-                        .controller
-                        .compute
-                        .collection(compute_instance, *id)
-                        .unwrap();
+                    let state = self.controller.compute.collection(cluster_id, *id).unwrap();
                     let name = self
                         .catalog
                         .try_get_entry(id)
@@ -3487,18 +3437,18 @@ impl Coordinator {
         for o in options {
             match o {
                 IndexOption::LogicalCompactionWindow(window) => {
-                    // The index is on a specific compute instance.
-                    let compute_instance = self
+                    // The index is on a specific cluster.
+                    let cluster = self
                         .catalog
                         .get_entry(&id)
                         .index()
                         .expect("setting options on index")
-                        .compute_instance;
+                        .cluster_id;
                     let policy = match window {
                         Some(time) => ReadPolicy::lag_writes_by(time.try_into()?),
                         None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
                     };
-                    self.update_compute_base_read_policy(compute_instance, id, policy);
+                    self.update_compute_base_read_policy(cluster, id, policy);
                 }
             }
         }
@@ -3797,8 +3747,8 @@ impl Coordinator {
             | Plan::CreateDatabase(_)
             | Plan::CreateSchema(_)
             | Plan::CreateRole(_)
-            | Plan::CreateComputeInstance(_)
-            | Plan::CreateComputeReplica(_)
+            | Plan::CreateCluster(_)
+            | Plan::CreateClusterReplica(_)
             | Plan::CreateSource(_)
             | Plan::CreateSecret(_)
             | Plan::CreateSink(_)
@@ -3812,8 +3762,8 @@ impl Coordinator {
             | Plan::DropDatabase(_)
             | Plan::DropSchema(_)
             | Plan::DropRoles(_)
-            | Plan::DropComputeInstances(_)
-            | Plan::DropComputeReplicas(_)
+            | Plan::DropClusters(_)
+            | Plan::DropClusterReplicas(_)
             | Plan::DropItems(_)
             | Plan::SendDiffs(_)
             | Plan::Insert(_)
@@ -3870,7 +3820,7 @@ impl Coordinator {
         let name = self.catalog.find_available_cluster_name(&name);
         let arranged_introspection_sources =
             self.catalog.allocate_arranged_introspection_sources().await;
-        let mut ops = vec![catalog::Op::CreateComputeInstance {
+        let mut ops = vec![catalog::Op::CreateCluster {
             id,
             name: name.clone(),
             linked_object_id: Some(linked_object_id),
@@ -3884,7 +3834,7 @@ impl Coordinator {
     /// cluster for the given storage cluster configuration.
     async fn create_linked_cluster_replica_op(
         &mut self,
-        cluster_id: ComputeInstanceId,
+        cluster_id: ClusterId,
         config: &StorageClusterConfig,
     ) -> Result<Option<catalog::Op>, AdapterError> {
         let availability_zone = {
@@ -3896,7 +3846,7 @@ impl Coordinator {
             Self::choose_az(&n_replicas_per_az)
         };
         let location = match config {
-            StorageClusterConfig::Managed { size } => SerializedComputeReplicaLocation::Managed {
+            StorageClusterConfig::Managed { size } => SerializedReplicaLocation::Managed {
                 size: size.clone(),
                 availability_zone,
                 az_user_specified: false,
@@ -3924,7 +3874,7 @@ impl Coordinator {
                     return Err(AdapterError::SourceOrSinkSizeRequired { expected });
                 }
                 let (size, _alloc) = self.catalog.default_storage_cluster_size();
-                SerializedComputeReplicaLocation::Managed {
+                SerializedReplicaLocation::Managed {
                     size,
                     availability_zone,
                     az_user_specified: false,
@@ -3937,7 +3887,7 @@ impl Coordinator {
                 // TODO(benesch): remove the `REMOTE` option from `CREATE
                 // SOURCE` and `CREATE SINK` in favor of `IN CLUSTER` with a
                 // cluster whose replicas are remote.
-                SerializedComputeReplicaLocation::Remote {
+                SerializedReplicaLocation::Remote {
                     addrs: BTreeSet::from_iter(iter::once(addr.to_string())),
                     compute_addrs: BTreeSet::new(),
                     workers: NonZeroUsize::new(1).expect("statically nonzero"),
@@ -3949,20 +3899,20 @@ impl Coordinator {
         };
         let location = self.catalog.concretize_replica_location(location)?;
         let logging = {
-            ComputeReplicaLogging {
+            ReplicaLogging {
                 log_logging: false,
                 interval: Some(Duration::from_micros(
-                    DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS.into(),
+                    DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS.into(),
                 )),
                 sources: vec![],
                 views: vec![],
             }
         };
-        Ok(Some(catalog::Op::CreateComputeReplica {
+        Ok(Some(catalog::Op::CreateClusterReplica {
             cluster_id,
             id: self.catalog.allocate_replica_id().await?,
             name: LINKED_CLUSTER_REPLICA_NAME.into(),
-            config: ComputeReplicaConfig {
+            config: ReplicaConfig {
                 idle_arrangement_merge_effort: None,
                 location,
                 logging,
@@ -3982,7 +3932,7 @@ impl Coordinator {
             for id in linked_cluster.replicas_by_id.keys() {
                 let drop_ops = self
                     .catalog
-                    .drop_compute_instance_replica_ops(&[(linked_cluster.id, *id)]);
+                    .drop_cluster_replica_ops(&[(linked_cluster.id, *id)]);
                 ops.extend(drop_ops);
             }
             ops.extend(
@@ -3997,7 +3947,7 @@ impl Coordinator {
     /// operation, if such a linked cluster exists.
     pub(crate) async fn maybe_create_linked_cluster(&mut self, linked_object_id: GlobalId) {
         if let Some(cluster) = self.catalog.get_linked_cluster(linked_object_id) {
-            self.create_compute_instance(cluster.id).await;
+            self.create_cluster(cluster.id).await;
         }
     }
 
@@ -4012,7 +3962,7 @@ impl Coordinator {
             let cluster_id = cluster.id;
             let replica_ids: Vec<_> = cluster.replicas_by_id.keys().copied().collect();
             for replica_id in replica_ids {
-                self.create_compute_replica(cluster_id, replica_id).await;
+                self.create_cluster_replica(cluster_id, replica_id).await;
             }
         }
     }
@@ -4020,7 +3970,7 @@ impl Coordinator {
 
 fn check_no_invalid_log_reads(
     catalog: &Catalog,
-    compute_instance: &ComputeInstance,
+    cluster: &Cluster,
     source_ids: &BTreeSet<GlobalId>,
     target_replica: &mut Option<ReplicaId>,
 ) -> Result<(), AdapterError>
@@ -4036,13 +3986,13 @@ where
         return Ok(());
     }
 
-    // Reading from log sources on replicated compute instances is only allowed
-    // if a target replica is selected. Otherwise, we have no way of knowing
-    // which replica we read the introspection data from.
-    let num_replicas = compute_instance.replicas_by_id.len();
+    // Reading from log sources on replicated clusters is only allowed if a
+    // target replica is selected. Otherwise, we have no way of knowing which
+    // replica we read the introspection data from.
+    let num_replicas = cluster.replicas_by_id.len();
     if target_replica.is_none() {
         if num_replicas == 1 {
-            *target_replica = compute_instance.replicas_by_id.keys().next().copied();
+            *target_replica = cluster.replicas_by_id.keys().next().copied();
         } else {
             return Err(AdapterError::UntargetedLogRead { log_names });
         }
@@ -4051,7 +4001,7 @@ where
     // Ensure that logging is initialized for the target replica, lest
     // we try to read from a non-existing arrangement.
     let replica_id = target_replica.unwrap();
-    let replica = &compute_instance.replicas_by_id[&replica_id];
+    let replica = &cluster.replicas_by_id[&replica_id];
     if !replica.config.logging.enabled() {
         return Err(AdapterError::IntrospectionDisabled { log_names });
     }

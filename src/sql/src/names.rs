@@ -16,7 +16,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_controller::clusters::ClusterId;
 use mz_expr::LocalId;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
@@ -468,7 +468,7 @@ impl AstDisplay for ResolvedDatabaseName {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ResolvedClusterName {
-    pub id: ComputeInstanceId,
+    pub id: ClusterId,
     /// If set, a name to print in the `AstDisplay` implementation instead of
     /// `None`. This is only meant to be used by the `NameSimplifier`.
     ///
@@ -1073,7 +1073,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     ) -> <Aug as AstInfo>::ClusterName {
         match cluster_name {
             RawClusterName::Unresolved(ident) => {
-                match self.catalog.resolve_compute_instance(Some(ident.as_str())) {
+                match self.catalog.resolve_cluster(Some(ident.as_str())) {
                     Ok(cluster) => ResolvedClusterName {
                         id: cluster.id(),
                         print_name: None,
@@ -1081,8 +1081,9 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     Err(e) => {
                         self.status = Err(e.into());
                         ResolvedClusterName {
-                            // The id is arbitrary here, we just need some dummy value to return.
-                            id: ComputeInstanceId::System(0),
+                            // The ID is arbitrary here; we just need some dummy
+                            // value to return.
+                            id: ClusterId::System(0),
                             print_name: None,
                         }
                     }
@@ -1096,8 +1097,9 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 Err(e) => {
                     self.status = Err(e.into());
                     ResolvedClusterName {
-                        // The id is arbitrary here, we just need some dummy value to return.
-                        id: ComputeInstanceId::System(0),
+                        // The ID is arbitrary here; we just need some dummy
+                        // value to return.
+                        id: ClusterId::System(0),
                         print_name: None,
                     }
                 }
@@ -1333,7 +1335,7 @@ pub struct NameSimplifier<'a> {
 
 impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
     fn visit_cluster_name_mut(&mut self, node: &mut ResolvedClusterName) {
-        node.print_name = Some(self.catalog.get_compute_instance(node.id).name().into());
+        node.print_name = Some(self.catalog.get_cluster(node.id).name().into());
     }
 
     fn visit_object_name_mut(&mut self, name: &mut ResolvedObjectName) {

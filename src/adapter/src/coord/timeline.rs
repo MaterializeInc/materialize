@@ -557,7 +557,7 @@ impl Coordinator {
                         CatalogItem::Index(index) => {
                             id_bundle
                                 .compute_ids
-                                .entry(index.compute_instance)
+                                .entry(index.cluster_id)
                                 .or_default()
                                 .insert(entry.id());
                         }

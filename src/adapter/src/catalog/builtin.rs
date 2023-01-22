@@ -161,19 +161,19 @@ pub struct BuiltinRole {
 }
 
 #[derive(Clone, Debug)]
-pub struct BuiltinComputeInstance {
-    /// Name of the compute instance.
+pub struct BuiltinCluster {
+    /// Name of the cluster.
     ///
     /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
     pub name: &'static str,
 }
 
 #[derive(Clone, Debug)]
-pub struct BuiltinComputeReplica {
+pub struct BuiltinClusterReplica {
     /// Name of the compute replica.
     pub name: &'static str,
-    /// Name of the compute instance that this replica belongs to.
-    pub compute_instance_name: &'static str,
+    /// Name of the cluster that this replica belongs to.
+    pub cluster_name: &'static str,
 }
 
 /// Uniquely identifies the definition of a builtin object.
@@ -2820,26 +2820,24 @@ pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
     name: &*INTROSPECTION_USER.name,
 });
 
-pub static MZ_SYSTEM_COMPUTE_INSTANCE: Lazy<BuiltinComputeInstance> =
-    Lazy::new(|| BuiltinComputeInstance {
-        name: &*SYSTEM_USER.name,
-    });
+pub static MZ_SYSTEM_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
+    name: &*SYSTEM_USER.name,
+});
 
-pub static MZ_SYSTEM_COMPUTE_REPLICA: Lazy<BuiltinComputeReplica> =
-    Lazy::new(|| BuiltinComputeReplica {
+pub static MZ_SYSTEM_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =
+    Lazy::new(|| BuiltinClusterReplica {
         name: DEFAULT_CLUSTER_REPLICA_NAME,
-        compute_instance_name: MZ_SYSTEM_COMPUTE_INSTANCE.name,
+        cluster_name: MZ_SYSTEM_CLUSTER.name,
     });
 
-pub static MZ_INTROSPECTION_COMPUTE_INSTANCE: Lazy<BuiltinComputeInstance> =
-    Lazy::new(|| BuiltinComputeInstance {
-        name: &*INTROSPECTION_USER.name,
-    });
+pub static MZ_INTROSPECTION_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
+    name: &*INTROSPECTION_USER.name,
+});
 
-pub static MZ_INTROSPECTION_COMPUTE_REPLICA: Lazy<BuiltinComputeReplica> =
-    Lazy::new(|| BuiltinComputeReplica {
+pub static MZ_INTROSPECTION_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =
+    Lazy::new(|| BuiltinClusterReplica {
         name: DEFAULT_CLUSTER_REPLICA_NAME,
-        compute_instance_name: MZ_INTROSPECTION_COMPUTE_INSTANCE.name,
+        cluster_name: MZ_INTROSPECTION_CLUSTER.name,
     });
 
 /// List of all builtin objects sorted topologically by dependency.
@@ -3077,16 +3075,12 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
 });
 pub static BUILTIN_ROLES: Lazy<Vec<&BuiltinRole>> =
     Lazy::new(|| vec![&*MZ_SYSTEM_ROLE, &*MZ_INTROSPECTION_ROLE]);
-pub static BUILTIN_COMPUTE_INSTANCES: Lazy<Vec<&BuiltinComputeInstance>> = Lazy::new(|| {
+pub static BUILTIN_CLUSTERS: Lazy<Vec<&BuiltinCluster>> =
+    Lazy::new(|| vec![&*MZ_SYSTEM_CLUSTER, &*MZ_INTROSPECTION_CLUSTER]);
+pub static BUILTIN_CLUSTER_REPLICAS: Lazy<Vec<&BuiltinClusterReplica>> = Lazy::new(|| {
     vec![
-        &*MZ_SYSTEM_COMPUTE_INSTANCE,
-        &*MZ_INTROSPECTION_COMPUTE_INSTANCE,
-    ]
-});
-pub static BUILTIN_COMPUTE_REPLICAS: Lazy<Vec<&BuiltinComputeReplica>> = Lazy::new(|| {
-    vec![
-        &*MZ_SYSTEM_COMPUTE_REPLICA,
-        &*MZ_INTROSPECTION_COMPUTE_REPLICA,
+        &*MZ_SYSTEM_CLUSTER_REPLICA,
+        &*MZ_INTROSPECTION_CLUSTER_REPLICA,
     ]
 });
 

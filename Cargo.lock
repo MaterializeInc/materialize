@@ -4519,6 +4519,7 @@ dependencies = [
  "mz-ccsr",
  "mz-cloud-resources",
  "mz-compute-client",
+ "mz-controller",
  "mz-expr",
  "mz-expr-test-util",
  "mz-interchange",

@@ -207,8 +207,10 @@ serde_plain::derive_display_from_serialize!(ObjectType);
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub enum EventDetails {
-    CreateComputeReplicaV1(CreateComputeReplicaV1),
-    DropComputeReplicaV1(DropComputeReplicaV1),
+    #[serde(rename = "CreateComputeReplicaV1")] // historical name
+    CreateClusterReplicaV1(CreateClusterReplicaV1),
+    #[serde(rename = "DropComputeReplicaV1")] // historical name
+    DropClusterReplicaV1(DropClusterReplicaV1),
     CreateSourceSinkV1(CreateSourceSinkV1),
     CreateSourceSinkV2(CreateSourceSinkV2),
     AlterSourceSinkV1(AlterSourceSinkV1),
@@ -246,7 +248,7 @@ pub struct RenameItemV1 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct DropComputeReplicaV1 {
+pub struct DropClusterReplicaV1 {
     pub cluster_id: String,
     pub cluster_name: String,
     // Events that predate v0.32.0 will not have this field set.
@@ -256,7 +258,7 @@ pub struct DropComputeReplicaV1 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct CreateComputeReplicaV1 {
+pub struct CreateClusterReplicaV1 {
     pub cluster_id: String,
     pub cluster_name: String,
     // Events that predate v0.32.0 will not have this field set.
@@ -303,10 +305,10 @@ pub struct SchemaV1 {
 impl EventDetails {
     pub fn as_json(&self) -> serde_json::Value {
         match self {
-            EventDetails::CreateComputeReplicaV1(v) => {
+            EventDetails::CreateClusterReplicaV1(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
-            EventDetails::DropComputeReplicaV1(v) => {
+            EventDetails::DropClusterReplicaV1(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::IdFullNameV1(v) => serde_json::to_value(v).expect("must serialize"),

@@ -18,7 +18,7 @@ use chrono::DurationRound;
 use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Level};
 
-use mz_compute_client::controller::ComputeInstanceEvent;
+use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
@@ -65,9 +65,7 @@ impl Coordinator {
             Message::AdvanceTimelines => {
                 self.advance_timelines().await;
             }
-            Message::ComputeInstanceStatus(status) => {
-                self.message_compute_instance_status(status).await
-            }
+            Message::ClusterEvent(event) => self.message_cluster_event(event).await,
             // Processing this message DOES NOT send a response to the client;
             // in any situation where you use it, you must also have a code
             // path that responds to the client (e.g. reporting an error).
@@ -593,15 +591,15 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn message_compute_instance_status(&mut self, event: ComputeInstanceEvent) {
+    async fn message_cluster_event(&mut self, event: ClusterEvent) {
         event!(Level::TRACE, event = format!("{:?}", event));
 
         // It is possible that we receive a status update for a replica that has
         // already been dropped from the catalog. Just ignore these events.
-        let Some(instance) = self.catalog.try_get_cluster(event.instance_id) else {
+        let Some(cluster) = self.catalog.try_get_cluster(event.instance_id) else {
             return;
         };
-        let Some(replica) = instance.replicas_by_id.get(&event.replica_id) else {
+        let Some(replica) = cluster.replicas_by_id.get(&event.replica_id) else {
             return;
         };
 
@@ -610,20 +608,20 @@ impl Coordinator {
 
             self.catalog_transact(
                 None,
-                vec![catalog::Op::UpdateComputeReplicaStatus {
+                vec![catalog::Op::UpdateClusterReplicaStatus {
                     event: event.clone(),
                 }],
             )
             .await
-            .unwrap_or_terminate("updating compute instance status cannot fail");
+            .unwrap_or_terminate("updating cluster status cannot fail");
 
-            let instance = self.catalog.get_cluster(event.instance_id);
-            let replica = &instance.replicas_by_id[&event.replica_id];
+            let cluster = self.catalog.get_cluster(event.instance_id);
+            let replica = &cluster.replicas_by_id[&event.replica_id];
             let new_status = replica.status();
 
             if old_status != new_status {
                 self.broadcast_notice(AdapterNotice::ClusterReplicaStatusChanged {
-                    cluster: instance.name.clone(),
+                    cluster: cluster.name.clone(),
                     replica: replica.name.clone(),
                     status: new_status,
                     time: event.time,
@@ -714,14 +712,14 @@ impl Coordinator {
                 tx,
                 session,
                 format,
-                compute_instance,
+                cluster_id,
                 optimized_plan,
                 id_bundle,
             } => tx.send(
                 self.sequence_explain_timestamp_finish(
                     &session,
                     format,
-                    compute_instance,
+                    cluster_id,
                     optimized_plan,
                     id_bundle,
                     Some(real_time_recency_ts),
@@ -734,7 +732,7 @@ impl Coordinator {
                 copy_to,
                 source,
                 mut session,
-                compute_instance,
+                cluster_id,
                 when,
                 target_replica,
                 view_id,
@@ -750,7 +748,7 @@ impl Coordinator {
                         copy_to,
                         source,
                         &mut session,
-                        compute_instance,
+                        cluster_id,
                         when,
                         target_replica,
                         view_id,

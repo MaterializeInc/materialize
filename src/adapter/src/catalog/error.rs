@@ -51,7 +51,7 @@ pub enum ErrorKind {
     #[error("replica name {} is reserved", .0.quoted())]
     ReservedReplicaName(String),
     #[error("system cluster '{0}' cannot be modified")]
-    ReadOnlyComputeInstance(String),
+    ReadOnlyCluster(String),
     #[error("system schema '{0}' cannot be modified")]
     ReadOnlySystemSchema(String),
     #[error("system item '{0}' cannot be modified")]

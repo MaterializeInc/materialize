@@ -87,8 +87,7 @@ use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
-use mz_compute_client::controller::{ComputeInstanceEvent, ComputeInstanceId, ReplicaId};
-use mz_controller::clusters::ClusterConfig;
+use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterId, ReplicaId};
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
@@ -193,7 +192,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         Option<OwnedMutexGuard<()>>,
     ),
     AdvanceTimelines,
-    ComputeInstanceStatus(ComputeInstanceEvent),
+    ClusterEvent(ClusterEvent),
     RemovePendingPeeks {
         conn_id: ConnectionId,
     },
@@ -256,7 +255,7 @@ pub enum RealTimeRecencyContext {
         tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
         format: ExplainFormat,
-        compute_instance: ComputeInstanceId,
+        cluster_id: ClusterId,
         optimized_plan: OptimizedMirRelationExpr,
         id_bundle: CollectionIdBundle,
     },
@@ -266,7 +265,7 @@ pub enum RealTimeRecencyContext {
         copy_to: Option<CopyFormat>,
         source: MirRelationExpr,
         session: Session,
-        compute_instance: ComputeInstanceId,
+        cluster_id: ClusterId,
         when: QueryWhen,
         target_replica: Option<ReplicaId>,
         view_id: GlobalId,
@@ -475,7 +474,7 @@ pub struct Coordinator {
     /// the connection id of the client that initiated the peek.
     pending_peeks: HashMap<Uuid, PendingPeek>,
     /// A map from client connection ids to a set of all pending peeks for that client.
-    client_pending_peeks: HashMap<ConnectionId, BTreeMap<Uuid, ComputeInstanceId>>,
+    client_pending_peeks: HashMap<ConnectionId, BTreeMap<Uuid, ClusterId>>,
 
     /// A map from client connection ids to a pending real time recency timestamps.
     pending_real_time_recency_timestamp: HashMap<ConnectionId, RealTimeRecencyContext>,
@@ -550,7 +549,7 @@ impl Coordinator {
         policies_to_set.insert(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS, Default::default());
 
         info!("coordinator init: creating compute replicas");
-        for instance in self.catalog.compute_instances() {
+        for instance in self.catalog.clusters() {
             self.controller.create_cluster(
                 instance.id,
                 ClusterConfig {
@@ -745,25 +744,24 @@ impl Coordinator {
                     if logs.contains(&idx.on) {
                         policy_entry
                             .compute_ids
-                            .entry(idx.compute_instance)
+                            .entry(idx.cluster_id)
                             .or_insert_with(BTreeSet::new)
                             .insert(entry.id());
                     } else {
                         let dataflow = self
-                            .dataflow_builder(idx.compute_instance)
+                            .dataflow_builder(idx.cluster_id)
                             .build_index_dataflow(entry.id())?;
-                        // What follows is morally equivalent to `self.ship_dataflow(df, idx.compute_instance)`,
+                        // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
                         // but we cannot call that as it will also downgrade the read hold on the index.
                         policy_entry
                             .compute_ids
-                            .entry(idx.compute_instance)
+                            .entry(idx.cluster_id)
                             .or_insert_with(Default::default)
                             .extend(dataflow.export_ids());
-                        let dataflow_plan =
-                            vec![self.finalize_dataflow(dataflow, idx.compute_instance)];
+                        let dataflow_plan = vec![self.finalize_dataflow(dataflow, idx.cluster_id)];
                         self.controller
                             .active_compute()
-                            .create_dataflows(idx.compute_instance, dataflow_plan)
+                            .create_dataflows(idx.cluster_id, dataflow_plan)
                             .unwrap();
                     }
                 }
@@ -785,14 +783,14 @@ impl Coordinator {
 
                     // Re-create the sink on the compute instance.
                     let id_bundle = self
-                        .index_oracle(mview.compute_instance)
+                        .index_oracle(mview.cluster_id)
                         .sufficient_collections(&mview.depends_on);
                     let as_of = self.least_valid_read(&id_bundle);
                     let internal_view_id = self.allocate_transient_id()?;
                     let df = self
-                        .dataflow_builder(mview.compute_instance)
+                        .dataflow_builder(mview.cluster_id)
                         .build_materialized_view_dataflow(entry.id(), as_of, internal_view_id)?;
-                    self.ship_dataflow(df, mview.compute_instance).await;
+                    self.ship_dataflow(df, mview.cluster_id).await;
                 }
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink.
@@ -1071,7 +1069,7 @@ impl Coordinator {
                 Some(m) = internal_cmd_rx.recv() => m,
                 // `next()` on any stream is cancel-safe:
                 // https://docs.rs/tokio-stream/0.1.9/tokio_stream/trait.StreamExt.html#cancel-safety
-                Some(event) = compute_events.next() => Message::ComputeInstanceStatus(event),
+                Some(event) = compute_events.next() => Message::ClusterEvent(event),
                 // See [`mz_controller::Controller::Controller::ready`] for notes
                 // on why this is cancel-safe.
                 () = self.controller.ready() => {
@@ -1283,7 +1281,7 @@ pub async fn serve(
                     .controller
                     .remove_orphans(
                         coord.catalog.get_next_replica_id().await?,
-                        coord.catalog.get_next_user_compute_instance_id().await?,
+                        coord.catalog.get_next_user_cluster_id().await?,
                     )
                     .await
                     .map_err(AdapterError::Orchestrator)?;

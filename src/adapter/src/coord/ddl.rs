@@ -20,7 +20,7 @@ use tracing::Level;
 use tracing::{event, warn};
 
 use mz_audit_log::VersionedEvent;
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_controller::clusters::ClusterId;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
@@ -130,16 +130,13 @@ impl Coordinator {
                         }
                         StorageSinkConnectionState::Pending(_) => (),
                     },
-                    CatalogItem::Index(catalog::Index {
-                        compute_instance, ..
-                    }) => {
-                        indexes_to_drop.push((*compute_instance, *id));
+                    CatalogItem::Index(catalog::Index { cluster_id, .. }) => {
+                        indexes_to_drop.push((*cluster_id, *id));
                     }
                     CatalogItem::MaterializedView(catalog::MaterializedView {
-                        compute_instance,
-                        ..
+                        cluster_id, ..
                     }) => {
-                        materialized_views_to_drop.push((*compute_instance, *id));
+                        materialized_views_to_drop.push((*cluster_id, *id));
                     }
                     CatalogItem::Secret(_) => {
                         secrets_to_drop.push(*id);
@@ -162,8 +159,8 @@ impl Coordinator {
                     }
                     _ => (),
                 }
-            } else if let catalog::Op::DropComputeInstance { id } = op {
-                let cluster = self.catalog.try_get_cluster(*id).expect("valid cluster id");
+            } else if let catalog::Op::DropCluster { id } = op {
+                let cluster = self.catalog.get_cluster(*id);
 
                 // Drop the introspection sources
                 let replica_logs = cluster
@@ -178,7 +175,7 @@ impl Coordinator {
 
                 // Drop timelines
                 timelines_to_drop.extend(self.remove_compute_instance_from_timeline(*id));
-            } else if let catalog::Op::DropComputeReplica {
+            } else if let catalog::Op::DropClusterReplica {
                 cluster_id,
                 replica_id,
             } = op
@@ -353,20 +350,20 @@ impl Coordinator {
     }
 
     pub(crate) fn drop_compute_sinks(&mut self, sinks: Vec<ComputeSinkId>) {
-        let by_compute_instance = sinks
+        let by_cluster = sinks
             .into_iter()
             .map(
                 |ComputeSinkId {
-                     compute_instance,
+                     cluster_id,
                      global_id,
-                 }| (compute_instance, global_id),
+                 }| (cluster_id, global_id),
             )
             .into_group_map();
         let mut compute = self.controller.active_compute();
-        for (compute_instance, ids) in by_compute_instance {
+        for (cluster_id, ids) in by_cluster {
             // A cluster could have been dropped, so verify it exists.
-            if compute.instance_exists(compute_instance) {
-                compute.drop_collections(compute_instance, ids).unwrap();
+            if compute.instance_exists(cluster_id) {
+                compute.drop_collections(cluster_id, ids).unwrap();
             }
         }
     }
@@ -378,35 +375,29 @@ impl Coordinator {
         self.controller.storage.drop_sinks(sinks).unwrap();
     }
 
-    pub(crate) fn drop_indexes(&mut self, indexes: Vec<(ComputeInstanceId, GlobalId)>) {
-        let mut by_compute_instance: HashMap<_, Vec<_>> = HashMap::new();
-        for (compute_instance, id) in indexes {
+    pub(crate) fn drop_indexes(&mut self, indexes: Vec<(ClusterId, GlobalId)>) {
+        let mut by_cluster: HashMap<_, Vec<_>> = HashMap::new();
+        for (cluster_id, id) in indexes {
             if self.drop_compute_read_policy(&id) {
-                by_compute_instance
-                    .entry(compute_instance)
-                    .or_default()
-                    .push(id);
+                by_cluster.entry(cluster_id).or_default().push(id);
             } else {
                 tracing::error!("Instructed to drop a non-index index");
             }
         }
-        for (compute_instance, ids) in by_compute_instance {
+        for (cluster_id, ids) in by_cluster {
             self.controller
                 .active_compute()
-                .drop_collections(compute_instance, ids)
+                .drop_collections(cluster_id, ids)
                 .unwrap();
         }
     }
 
-    fn drop_materialized_views(&mut self, mviews: Vec<(ComputeInstanceId, GlobalId)>) {
-        let mut by_compute_instance: HashMap<_, Vec<_>> = HashMap::new();
+    fn drop_materialized_views(&mut self, mviews: Vec<(ClusterId, GlobalId)>) {
+        let mut by_cluster: HashMap<_, Vec<_>> = HashMap::new();
         let mut source_ids = Vec::new();
-        for (compute_instance, id) in mviews {
+        for (cluster_id, id) in mviews {
             if self.drop_compute_read_policy(&id) {
-                by_compute_instance
-                    .entry(compute_instance)
-                    .or_default()
-                    .push(id);
+                by_cluster.entry(cluster_id).or_default().push(id);
                 source_ids.push(id);
             } else {
                 tracing::error!("Instructed to drop a materialized view that isn't one");
@@ -415,10 +406,10 @@ impl Coordinator {
 
         // Drop compute sinks.
         let mut compute = self.controller.active_compute();
-        for (compute_instance, ids) in by_compute_instance {
+        for (cluster_id, ids) in by_cluster {
             // A cluster could have been dropped, so verify it exists.
-            if compute.instance_exists(compute_instance) {
-                compute.drop_collections(compute_instance, ids).unwrap();
+            if compute.instance_exists(cluster_id) {
+                compute.drop_collections(cluster_id, ids).unwrap();
             }
         }
 
@@ -616,7 +607,7 @@ impl Coordinator {
                 Op::CreateRole { .. } => {
                     new_roles += 1;
                 }
-                Op::CreateComputeInstance {
+                Op::CreateCluster {
                     linked_object_id, ..
                 } => {
                     // Linked compute clusters don't count against the limit,
@@ -628,7 +619,7 @@ impl Coordinator {
                         new_clusters += 1;
                     }
                 }
-                Op::CreateComputeReplica { cluster_id, .. } => {
+                Op::CreateClusterReplica { cluster_id, .. } => {
                     *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
                 }
                 Op::CreateItem { name, item, .. } => {
@@ -680,10 +671,10 @@ impl Coordinator {
                 Op::DropRole { .. } => {
                     new_roles -= 1;
                 }
-                Op::DropComputeInstance { .. } => {
+                Op::DropCluster { .. } => {
                     new_clusters -= 1;
                 }
-                Op::DropComputeReplica { cluster_id, .. } => {
+                Op::DropClusterReplica { cluster_id, .. } => {
                     *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
                 }
                 Op::DropItem(id) => {
@@ -731,7 +722,7 @@ impl Coordinator {
                 | Op::AlterSource { .. }
                 | Op::DropTimeline(_)
                 | Op::RenameItem { .. }
-                | Op::UpdateComputeReplicaStatus { .. }
+                | Op::UpdateClusterReplicaStatus { .. }
                 | Op::UpdateStorageUsage { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
@@ -794,7 +785,7 @@ impl Coordinator {
             // TODO(benesch): remove the `max_sources` and `max_sinks` limit,
             // and set a higher max cluster limit?
             self.catalog
-                .user_compute_instances()
+                .user_clusters()
                 .filter(|c| c.linked_object_id.is_none())
                 .count(),
             new_clusters,
@@ -802,7 +793,7 @@ impl Coordinator {
             "Cluster",
         )?;
         for (cluster_id, new_replicas) in new_replicas_per_cluster {
-            // It's possible that the compute instance hasn't been created yet.
+            // It's possible that the cluster hasn't been created yet.
             let current_amount = self
                 .catalog
                 .try_get_cluster(cluster_id)
