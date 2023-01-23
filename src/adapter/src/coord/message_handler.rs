@@ -596,7 +596,7 @@ impl Coordinator {
 
         // It is possible that we receive a status update for a replica that has
         // already been dropped from the catalog. Just ignore these events.
-        let Some(cluster) = self.catalog.try_get_cluster(event.instance_id) else {
+        let Some(cluster) = self.catalog.try_get_cluster(event.cluster_id) else {
             return;
         };
         let Some(replica) = cluster.replicas_by_id.get(&event.replica_id) else {
@@ -615,7 +615,7 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("updating cluster status cannot fail");
 
-            let cluster = self.catalog.get_cluster(event.instance_id);
+            let cluster = self.catalog.get_cluster(event.cluster_id);
             let replica = &cluster.replicas_by_id[&event.replica_id];
             let new_status = replica.status();
 

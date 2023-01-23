@@ -9,19 +9,17 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::Ipv4Addr;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use serde::Deserialize;
 
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::AwsExternalIdPrefix;
-use mz_compute_client::controller::ComputeReplicaAllocation;
+use mz_controller::clusters::ReplicaAllocation;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_sql::catalog::EnvironmentId;
-use mz_storage_client::controller::StorageClusterResourceAllocation;
 
 use crate::catalog::storage;
 use crate::config::SystemParameterFrontend;
@@ -47,9 +45,7 @@ pub struct Config<'a> {
     pub metrics_registry: &'a MetricsRegistry,
     /// Map of strings to corresponding compute replica sizes.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
-    /// Map of strings to corresponding storage cluster sizes.
-    pub storage_cluster_sizes: StorageClusterSizeMap,
-    /// Default storage cluster size, should be a key from storage_cluster_sizes.
+    /// Default storage cluster size. Must be a key from cluster_replica_sizes.
     pub default_storage_cluster_size: Option<String>,
     /// Values to set for system parameters, if those system parameters have not
     /// already been set by the system user.
@@ -71,7 +67,7 @@ pub struct Config<'a> {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ClusterReplicaSizeMap(pub HashMap<String, ComputeReplicaAllocation>);
+pub struct ClusterReplicaSizeMap(pub HashMap<String, ReplicaAllocation>);
 
 impl Default for ClusterReplicaSizeMap {
     fn default() -> Self {
@@ -97,11 +93,11 @@ impl Default for ClusterReplicaSizeMap {
                 let workers = 1 << i;
                 (
                     workers.to_string(),
-                    ComputeReplicaAllocation {
+                    ReplicaAllocation {
                         memory_limit: None,
                         cpu_limit: None,
-                        scale: NonZeroUsize::new(1).unwrap(),
-                        workers: NonZeroUsize::new(workers).unwrap(),
+                        scale: 1,
+                        workers,
                     },
                 )
             })
@@ -111,58 +107,35 @@ impl Default for ClusterReplicaSizeMap {
             let scale = 1 << i;
             inner.insert(
                 format!("{scale}-1"),
-                ComputeReplicaAllocation {
+                ReplicaAllocation {
                     memory_limit: None,
                     cpu_limit: None,
-                    scale: NonZeroUsize::new(scale).unwrap(),
-                    workers: NonZeroUsize::new(1).unwrap(),
+                    scale,
+                    workers: 1,
                 },
             );
 
             inner.insert(
                 format!("{scale}-{scale}"),
-                ComputeReplicaAllocation {
+                ReplicaAllocation {
                     memory_limit: None,
                     cpu_limit: None,
-                    scale: NonZeroUsize::new(scale).unwrap(),
-                    workers: NonZeroUsize::new(scale).unwrap(),
+                    scale,
+                    workers: scale.into(),
                 },
             );
         }
 
         inner.insert(
             "2-4".to_string(),
-            ComputeReplicaAllocation {
+            ReplicaAllocation {
                 memory_limit: None,
                 cpu_limit: None,
-                scale: NonZeroUsize::new(2).unwrap(),
-                workers: NonZeroUsize::new(4).unwrap(),
+                scale: 2,
+                workers: 4,
             },
         );
         Self(inner)
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct StorageClusterSizeMap(pub HashMap<String, StorageClusterResourceAllocation>);
-
-impl Default for StorageClusterSizeMap {
-    fn default() -> Self {
-        Self(
-            (0..=5)
-                .map(|i| {
-                    let workers = 1 << i;
-                    (
-                        workers.to_string(),
-                        StorageClusterResourceAllocation {
-                            memory_limit: None,
-                            cpu_limit: None,
-                            workers: NonZeroUsize::new(workers).unwrap(),
-                        },
-                    )
-                })
-                .collect::<HashMap<_, _>>(),
-        )
     }
 }
 

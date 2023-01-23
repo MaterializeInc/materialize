@@ -106,7 +106,7 @@ use tower_http::cors::{self, AllowOrigin};
 use url::Url;
 use uuid::Uuid;
 
-use mz_adapter::catalog::{ClusterReplicaSizeMap, StorageClusterSizeMap};
+use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
 use mz_environmentd::{TlsConfig, TlsMode, BUILD_INFO};
@@ -436,9 +436,6 @@ pub struct Args {
         value_delimiter = ';'
     )]
     bootstrap_system_parameter: Vec<KeyValueArg<String, String>>,
-    /// A map from size name to resource allocations for storage hosts.
-    #[clap(long, env = "STORAGE_HOST_SIZES")]
-    storage_host_sizes: Option<String>,
     /// Default storage host size
     #[clap(long, env = "DEFAULT_STORAGE_HOST_SIZE")]
     default_storage_host_size: Option<String>,
@@ -732,14 +729,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
     };
 
-    let storage_cluster_sizes: StorageClusterSizeMap = match args.storage_host_sizes {
-        None => Default::default(),
-        Some(json) => serde_json::from_str(&json).context("parsing storage cluster map")?,
-    };
-
     // Ensure default storage cluster size actually exists in the passed map
     if let Some(default_storage_cluster_size) = &args.default_storage_host_size {
-        if !storage_cluster_sizes
+        if !cluster_replica_sizes
             .0
             .contains_key(default_storage_cluster_size)
         {
@@ -768,6 +760,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         now,
         environment_id: args.environment_id,
         cluster_replica_sizes,
+        default_storage_cluster_size: args.default_storage_host_size,
         bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
         bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
         bootstrap_system_parameters: args
@@ -775,8 +768,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             .into_iter()
             .map(|kv| (kv.key, kv.value))
             .collect(),
-        storage_cluster_sizes,
-        default_storage_cluster_size: args.default_storage_host_size,
         availability_zones: args.availability_zone,
         connection_context: ConnectionContext::from_cli_args(
             &args.tracing.log_filter.inner,

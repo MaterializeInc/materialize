@@ -97,7 +97,7 @@ def test_crash_clusterd(mz: MaterializeApplication) -> None:
     pods = mz.kubectl("get", "pods", "-o", "custom-columns=:metadata.name")
     podcount = 0
     for pod in pods.splitlines():
-        if "compute-cluster" in pod:
+        if "cluster" in pod:
             try:
                 mz.kubectl("delete", "pod", pod)
                 podcount += 1

@@ -27,12 +27,12 @@ def zones_used(mz: MaterializeApplication) -> int:
         )[0]
         assert replica_id is not None
 
-        compute_pod_name = f"compute-cluster-{cluster_id}-replica-{replica_id}-0"
+        cluster_pod_name = f"cluster-{cluster_id}-replica-{replica_id}-0"
 
-        wait(condition="condition=Ready", resource=f"pod/{compute_pod_name}")
+        wait(condition="condition=Ready", resource=f"pod/{cluster_pod_name}")
 
         compute_pod = mz.environmentd.api().read_namespaced_pod(
-            compute_pod_name, mz.environmentd.namespace()
+            cluster_pod_name, mz.environmentd.namespace()
         )
         spec = compute_pod.spec
         assert spec is not None

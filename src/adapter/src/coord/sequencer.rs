@@ -22,12 +22,13 @@ use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::{event, warn, Level};
 
 use mz_cloud_resources::VpcEndpointConfig;
+use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDesc, IndexDesc};
 use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SinkAsOf, SubscribeSinkConnection,
 };
 use mz_controller::clusters::{
-    ClusterConfig, ClusterId, ReplicaConfig, ReplicaId, ReplicaLogging,
+    ClusterConfig, ClusterId, ReplicaAllocation, ReplicaConfig, ReplicaId, ReplicaLogging,
     DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
 };
 use mz_expr::{
@@ -54,9 +55,7 @@ use mz_sql::plan::{
     SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, View,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_storage_client::controller::{
-    CollectionDescription, DataSource, ReadPolicy, StorageClusterResourceAllocation, StorageError,
-};
+use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 
@@ -892,8 +891,10 @@ impl Coordinator {
 
             let config = ReplicaConfig {
                 location: self.catalog.concretize_replica_location(location)?,
-                logging,
-                idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
+                compute: ComputeReplicaConfig {
+                    logging,
+                    idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
+                },
             };
 
             ops.push(catalog::Op::CreateClusterReplica {
@@ -995,7 +996,7 @@ impl Coordinator {
                             .map(|s| (s.clone(), 0))
                             .collect::<HashMap<_, _>>();
                         for r in cluster.replicas_by_id.values() {
-                            if let Some(az) = r.config.location.get_az() {
+                            if let Some(az) = r.config.location.availability_zone() {
                                 *n_replicas_per_az.get_mut(az).expect("unknown AZ") += 1;
                             }
                         }
@@ -1030,8 +1031,10 @@ impl Coordinator {
 
         let config = ReplicaConfig {
             location: self.catalog.concretize_replica_location(location)?,
-            logging,
-            idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
+            compute: ComputeReplicaConfig {
+                logging,
+                idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
+            },
         };
 
         let id = self.catalog.allocate_replica_id().await?;
@@ -1053,8 +1056,9 @@ impl Coordinator {
         let cluster = self.catalog.get_cluster(cluster_id);
         let replica_config = cluster.replicas_by_id[&replica_id].config.clone();
 
-        let log_source_ids: Vec<_> = replica_config.logging.source_ids().collect();
+        let log_source_ids: Vec<_> = replica_config.compute.logging.source_ids().collect();
         let log_source_collections = replica_config
+            .compute
             .logging
             .sources
             .iter()
@@ -3889,9 +3893,11 @@ impl Coordinator {
             id: self.catalog.allocate_replica_id().await?,
             name: LINKED_CLUSTER_REPLICA_NAME.into(),
             config: ReplicaConfig {
-                idle_arrangement_merge_effort: None,
                 location,
-                logging,
+                compute: ComputeReplicaConfig {
+                    logging,
+                    idle_arrangement_merge_effort: None,
+                },
             },
         });
         Ok(())
@@ -3929,26 +3935,25 @@ impl Coordinator {
         if !self.catalog.config().unsafe_mode {
             let mut entries = self
                 .catalog
-                .state()
-                .storage_cluster_sizes()
+                .cluster_replica_sizes()
                 .0
                 .iter()
                 .collect::<Vec<_>>();
             entries.sort_by_key(
                 |(
                     _name,
-                    StorageClusterResourceAllocation {
+                    ReplicaAllocation {
+                        scale,
                         workers,
                         memory_limit,
                         ..
                     },
-                )| (workers, memory_limit),
+                )| (scale, workers, memory_limit),
             );
             let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
             return Err(AdapterError::SourceOrSinkSizeRequired { expected });
         }
-        let (size, _alloc) = self.catalog.default_storage_cluster_size();
-        Ok(size)
+        Ok(self.catalog.default_linked_cluster_size())
     }
 
     /// Creates the cluster linked to the specified object after a create
@@ -4010,7 +4015,7 @@ where
     // we try to read from a non-existing arrangement.
     let replica_id = target_replica.unwrap();
     let replica = &cluster.replicas_by_id[&replica_id];
-    if !replica.config.logging.enabled() {
+    if !replica.config.compute.logging.enabled() {
         return Err(AdapterError::IntrospectionDisabled { log_names });
     }
 

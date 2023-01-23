@@ -82,7 +82,7 @@ def test_upgrade(aws_region: Optional[str]) -> None:
     last_released_version = f"v{util.released_materialize_versions()[0]}"
 
     mz = MaterializeApplication(tag=last_released_version, aws_region=aws_region)
-    wait(condition="condition=Ready", resource="pod/compute-cluster-u1-replica-1-0")
+    wait(condition="condition=Ready", resource="pod/cluster-u1-replica-1-0")
 
     executor = CloudtestExecutor(application=mz)
     scenario = CloudtestUpgrade(checks=Check.__subclasses__(), executor=executor)

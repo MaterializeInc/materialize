@@ -76,7 +76,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context};
@@ -215,7 +214,7 @@ struct NamespacedKubernetesOrchestrator {
     kubernetes_namespace: String,
     namespace: String,
     config: KubernetesOrchestratorConfig,
-    service_scales: std::sync::Mutex<BTreeMap<String, NonZeroUsize>>,
+    service_scales: std::sync::Mutex<BTreeMap<String, u16>>,
 }
 
 impl fmt::Debug for NamespacedKubernetesOrchestrator {
@@ -482,7 +481,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 memory_bytes: memory,
             }
         }
-        let ret = futures::future::join_all((0..scale.get()).map(|i| get_metrics(self, id, i)));
+        let ret = futures::future::join_all((0..scale).map(|i| get_metrics(self, id, i.into())));
 
         Ok(ret.await)
     }
@@ -562,7 +561,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             status: None,
         };
 
-        let hosts = (0..scale.get())
+        let hosts = (0..scale)
             .map(|i| {
                 format!(
                     "{name}-{i}.{name}.{}.svc.cluster.local",
@@ -746,7 +745,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     ..Default::default()
                 },
                 service_name: name.clone(),
-                replicas: Some(scale.get().try_into()?),
+                replicas: Some(scale.into()),
                 template: pod_template_spec,
                 pod_management_policy: Some("Parallel".to_string()),
                 ..Default::default()
@@ -771,7 +770,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         // template. In theory, Kubernetes would do this automatically, but
         // in practice we have observed that it does not.
         // See: https://github.com/kubernetes/kubernetes/issues/67250
-        for pod_id in 0..scale.get() {
+        for pod_id in 0..scale {
             let pod_name = format!("{}-{}", &name, pod_id);
             let pod = match self.pod_api.get(&pod_name).await {
                 Ok(pod) => pod,
