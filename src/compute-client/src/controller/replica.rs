@@ -169,10 +169,9 @@ where
         )
         .await;
 
-        if let Err(error) = result {
-            tracing::warn!("replica task for {replica_id} failed: {error}");
-        } else {
-            panic!("replica message loop should never return successfully");
+        match result {
+            Ok(()) => tracing::info!("stopped replica task for {replica_id}"),
+            Err(error) => tracing::warn!("replica task for {replica_id} failed: {error}"),
         }
     }
 }
