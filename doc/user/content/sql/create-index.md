@@ -36,7 +36,7 @@ this exists."
 
 Field | Use
 ------|-----
-**DEFAULT** | Creates a default index that stores all columns in a source, view, or materialized view in memory.
+**DEFAULT** | Creates a default index using a set of columns that can uniquely identify each row. If this set of columns can't be inferred, then all columns are used.
 _index&lowbar;name_ | A name for the index.
 _obj&lowbar;name_ | The name of the source, view, or materialized view on which you want to create an index.
 _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this index. If not specified, defaults to the active cluster.
