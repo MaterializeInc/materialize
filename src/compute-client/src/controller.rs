@@ -262,7 +262,7 @@ where
 
         self.instances.insert(
             id,
-            Instance::new(id, self.build_info, arranged_logs, self.envd_epoch),
+            Instance::new(self.build_info, arranged_logs, self.envd_epoch),
         );
 
         let instance = self.instances.get_mut(&id).expect("instance just added");
