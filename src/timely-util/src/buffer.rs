@@ -15,8 +15,7 @@
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::ExchangeData;
+use differential_dataflow::{Data, ExchangeData};
 use timely::communication::Push;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::OutputHandle;
@@ -42,7 +41,7 @@ use timely::progress::Timestamp;
 pub struct ConsolidateBuffer<'a, T, D: ExchangeData, R: Semigroup, P>
 where
     P: Push<Bundle<T, (D, T, R)>> + 'a,
-    T: Clone + Lattice + Ord + Timestamp + 'a,
+    T: Data + Timestamp + 'a,
     D: 'a,
 {
     // a buffer for records, to send at self.cap
@@ -55,7 +54,7 @@ where
 
 impl<'a, T, D: ExchangeData, R: Semigroup, P> ConsolidateBuffer<'a, T, D, R, P>
 where
-    T: Clone + Lattice + Ord + Timestamp + 'a,
+    T: Data + Timestamp + 'a,
     P: Push<Bundle<T, (D, T, R)>> + 'a,
 {
     /// Create a new [ConsolidateBuffer], wrapping the provided session.
@@ -80,6 +79,25 @@ where
             // Retain capability for the specified output port.
             self.cap = Some(cap.delayed_for_output(cap.time(), self.port));
         }
+        self.give_internal(data);
+    }
+
+    /// Give an element to the buffer, using a pre-fabricated capability. Note that the capability
+    /// must be valid for the associated output.
+    pub fn give_at(&mut self, cap: &Capability<T>, data: (D, T, R)) {
+        // Retain a cap for the current time, which will be used on flush.
+        if self.cap.as_ref().map_or(true, |t| t.time() != cap.time()) {
+            // Flush on capability change
+            self.flush();
+            // Retain capability.
+            self.cap = Some(cap.clone());
+        }
+        self.give_internal(data);
+    }
+
+    /// Give an element and possibly flush the buffer. Note that this needs to have access
+    /// to a capability, which the public functions ensure.
+    fn give_internal(&mut self, data: (D, T, R)) {
         self.buffer.push(data);
         if self.buffer.len() == self.buffer.capacity() {
             // Consolidate while the consolidation frees at least half the buffer
@@ -103,7 +121,7 @@ where
 impl<'a, T, D: ExchangeData, R: Semigroup, P> Drop for ConsolidateBuffer<'a, T, D, R, P>
 where
     P: Push<Bundle<T, (D, T, R)>> + 'a,
-    T: Clone + Lattice + Ord + Timestamp + 'a,
+    T: Data + Timestamp + 'a,
     D: 'a,
 {
     fn drop(&mut self) {

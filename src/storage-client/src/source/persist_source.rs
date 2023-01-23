@@ -15,9 +15,10 @@ use std::sync::Arc;
 
 use mz_persist_client::operators::shard_source::shard_source;
 use mz_persist_types::codec_impls::UnitSchema;
+use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::{Capability, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -34,6 +35,7 @@ use crate::types::errors::DataflowError;
 use crate::types::sources::SourceData;
 
 pub use mz_persist_client::operators::shard_source::FlowControl;
+use mz_timely_util::buffer::ConsolidateBuffer;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -144,25 +146,18 @@ struct PendingWork {
 
 impl PendingWork {
     /// Perform roughly `fuel` work, reading from the fetched part, decoding, and sending outputs.
-    fn do_work(
+    fn do_work<P>(
         &mut self,
         fuel: &mut usize,
         until: &Antichain<Timestamp>,
         map_filter_project: Option<&MfpPlan>,
         datum_vec: &mut DatumVec,
         row_builder: &mut Row,
-        output: &mut OutputHandle<
-            '_,
-            Timestamp,
-            (Result<Row, DataflowError>, Timestamp, Diff),
-            timely::dataflow::channels::pushers::Tee<
-                Timestamp,
-                (Result<Row, DataflowError>, Timestamp, Diff),
-            >,
-        >,
-    ) {
+        output: &mut ConsolidateBuffer<Timestamp, Result<Row, DataflowError>, Diff, P>,
+    ) where
+        P: Push<Bundle<Timestamp, (Result<Row, DataflowError>, Timestamp, Diff)>>,
+    {
         let mut work = 0;
-        let mut session = output.session(&self.capability);
         while let Some(((key, val), time, diff)) = self.fetched_part.next() {
             if until.less_equal(&time) {
                 continue;
@@ -184,26 +179,26 @@ impl PendingWork {
                                 Ok((row, time, diff)) => {
                                     // Additional `until` filtering due to temporal filters.
                                     if !until.less_equal(&time) {
-                                        session.give((Ok(row), time, diff));
+                                        output.give_at(&self.capability, (Ok(row), time, diff));
                                         work += 1;
                                     }
                                 }
                                 Err((err, time, diff)) => {
                                     // Additional `until` filtering due to temporal filters.
                                     if !until.less_equal(&time) {
-                                        session.give((Err(err), time, diff));
+                                        output.give_at(&self.capability, (Err(err), time, diff));
                                         work += 1;
                                     }
                                 }
                             }
                         }
                     } else {
-                        session.give((Ok(row), time, diff));
+                        output.give_at(&self.capability, (Ok(row), time, diff));
                         work += 1;
                     }
                 }
                 (Ok(SourceData(Err(err))), Ok(())) => {
-                    session.give((Err(err), time, diff));
+                    output.give_at(&self.capability, (Err(err), time, diff));
                     work += 1;
                 }
                 // TODO(petrosagg): error handling
@@ -268,7 +263,7 @@ where
             });
 
             let mut fuel = refuel;
-            let mut handle = updates_output.activate();
+            let mut handle = ConsolidateBuffer::new(updates_output.activate(), 0);
             while !todo.is_empty() && fuel > 0 {
                 todo.front_mut().unwrap().do_work(
                     &mut fuel,
