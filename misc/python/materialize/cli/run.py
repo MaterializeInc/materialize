@@ -12,6 +12,8 @@
 import argparse
 import os
 import shutil
+import signal
+import sys
 import uuid
 from urllib.parse import urlparse
 
@@ -184,7 +186,46 @@ def main() -> int:
         raise UIError(f"unknown program {args.program}")
 
     print(f"$ {' '.join(command)}")
-    os.execvp(command[0], command)
+    # We go through a dance here familiar to shell authors where both
+    # the parent and child try to put the child into its own process
+    # group.  (See the comments in jobs.c:make_child() in bash, for
+    # example, which further cite the POSIX Rationale.)  We will later
+    # kill this group, which catches children like clusterd which
+    # outlive their parent (and hence, their PPID is 1; but their PGID
+    # remains the child's).  We also put the child into the foreground
+    # to ensure signals, such as SIGINT from ^C and SIGQUIT from ^\,
+    # are delivered to it, rather than to us.
+    child_pid = os.fork()
+    assert child_pid >= 0
+    if child_pid == 0:
+        try:
+            os.setsid()
+            os.setpgid(os.getpid(), os.getpid())
+        except OSError:
+            pass
+        _set_foreground_process(os.getpid())
+        os.execvp(command[0], command)
+
+    try:
+        os.setpgid(child_pid, child_pid)
+    except OSError:
+        pass
+    (_, ws) = os.wait()
+    try:
+        os.killpg(child_pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    exit(os.waitstatus_to_exitcode(ws))
+
+
+def _set_foreground_process(pid: int) -> None:
+    # Conventionally, stderr is used for this purpose as the
+    # least-likely stream to be redirected in an interactive context.
+    if not os.isatty(sys.stderr.fileno()):
+        return
+    signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+    with open(os.ttyname(sys.stderr.fileno()), "w") as tty:
+        os.tcsetpgrp(tty.fileno(), os.getpgrp())
 
 
 def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> int:
