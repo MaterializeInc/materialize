@@ -19,6 +19,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use tracing::debug;
 use uuid::Uuid;
 
 use mz_ore::halt;
@@ -638,6 +639,7 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
     fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
         let mut ret = Trace::default();
         ret.downgrade_since(&proto.since.into_rust_if_some("since")?);
+        let mut batches_pushed = 0;
         for batch in proto.spine.into_iter() {
             let batch: HollowBatch<T> = batch.into_rust()?;
             if PartialOrder::less_than(ret.since(), batch.desc.since()) {
@@ -657,6 +659,13 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
             // Ignore merge_reqs because whichever process generated this diff is
             // assigned the work.
             let _merge_reqs = ret.push_batch(batch);
+
+            batches_pushed += 1;
+            if batches_pushed % 1000 == 0 {
+                let mut batch_count = 0;
+                ret.map_batches(|_| batch_count += 1);
+                debug!("Decoded and pushed {batches_pushed} batches; trace size {batch_count}");
+            }
         }
         Ok(ret)
     }

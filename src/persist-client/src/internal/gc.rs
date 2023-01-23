@@ -237,7 +237,18 @@ where
         let mut live_diffs = 0;
         let mut seqno_held_parts = HashSet::new();
 
+        let mut state_count = 0;
+
         while let Some(state) = states.next() {
+            if state_count % 1000 == 0 {
+                let batch_count = state.collections.trace.batches().into_iter().count();
+                debug!(
+                    "gc {} state includes {batch_count} batches after applying {state_count} diffs (seqno {:?})",
+                    req.shard_id, state.seqno
+                );
+            }
+            state_count += 1;
+
             match state.seqno.cmp(&req.new_seqno_since) {
                 Ordering::Less => {
                     state.collections.trace.map_batches(|b| {
@@ -296,6 +307,7 @@ where
                 .state_versions
                 .delete_rollup(&req.shard_id, key)
                 .await;
+            debug!("gc {} deleted rollup blob {key}", req.shard_id);
         }
         debug!("gc {} deleted rollup blobs", req.shard_id);
 

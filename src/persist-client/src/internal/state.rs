@@ -975,7 +975,7 @@ where
             .expect("State should have at least one rollup if seqno > minimum")
     }
 
-    pub(super) fn seqno_since(&self) -> SeqNo {
+    pub(crate) fn seqno_since(&self) -> SeqNo {
         let mut seqno_since = self.seqno;
         for cap in self.collections.leased_readers.values() {
             seqno_since = std::cmp::min(seqno_since, cap.seqno);
