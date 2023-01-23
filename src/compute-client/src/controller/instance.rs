@@ -396,19 +396,13 @@ where
 
     /// Remove an existing instance replica, by ID.
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
-        if !self.compute.replicas.contains_key(&id) {
-            return Err(ReplicaMissing(id));
-        }
-        self.remove_replica_state(id);
-        Ok(())
-    }
+        self.compute
+            .replicas
+            .remove(&id)
+            .ok_or(ReplicaMissing(id))?;
 
-    /// Remove all state related to a replica.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the specified replica does not exist in the compute state.
-    fn remove_replica_state(&mut self, id: ReplicaId) {
+        self.compute.failed_replicas.remove(&id);
+
         // Remove frontier tracking for this replica.
         self.remove_write_frontiers(id);
 
@@ -439,20 +433,17 @@ where
             self.compute.ready_responses.push_back(response);
         }
 
-        self.compute
-            .replicas
-            .remove(&id)
-            .expect("replica not found");
-
-        // In case the replica crashes and we receive a drop replica request
-        // at the same time, the cleanup request will race with the rehydration.
-        // Hence we also have to stop a pending rehydration request.
-        self.compute.failed_replicas.remove(&id);
+        Ok(())
     }
 
+    /// Rehydrate the given instance replica.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the specified replica does not exist.
     fn rehydrate_replica(&mut self, id: ReplicaId) {
         let config = self.compute.replicas[&id].config.clone();
-        self.remove_replica_state(id);
+        self.remove_replica(id).expect("replica must exist");
         let result = self.add_replica(id, config);
 
         match result {
