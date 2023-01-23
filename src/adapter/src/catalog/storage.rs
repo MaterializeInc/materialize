@@ -1372,31 +1372,21 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn remove_cluster(
-        &mut self,
-        name: &str,
-    ) -> Result<(ClusterId, Option<GlobalId>, Vec<GlobalId>), Error> {
-        let deleted = self.clusters.delete(|_k, v| v.name == name);
+    pub fn remove_cluster(&mut self, id: ClusterId) -> Result<(), Error> {
+        let deleted = self.clusters.delete(|k, _v| k.id == id);
         if deleted.is_empty() {
-            Err(SqlCatalogError::UnknownCluster(name.to_owned()).into())
+            Err(SqlCatalogError::UnknownCluster(id.to_string()).into())
         } else {
             assert_eq!(deleted.len(), 1);
-            // Cascade delete introsepction sources and cluster replicas.
-            let (key, value) = deleted.into_element();
-            let id = key.id;
-            let linked_object_id = value.linked_object_id;
+            // Cascade delete introspection sources and cluster replicas.
+            //
+            // TODO(benesch): this doesn't seem right. Cascade deletions should
+            // be entirely the domain of the higher catalog layer, not the
+            // storage layer.
             self.cluster_replicas.delete(|_k, v| v.cluster_id == id);
-            let introspection_source_indexes = self
-                .introspection_sources
+            self.introspection_sources
                 .delete(|k, _v| k.cluster_id == id);
-            Ok((
-                id,
-                linked_object_id,
-                introspection_source_indexes
-                    .into_iter()
-                    .map(|(_, v)| GlobalId::System(v.index_id))
-                    .collect(),
-            ))
+            Ok(())
         }
     }
 
