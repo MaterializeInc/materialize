@@ -17,6 +17,11 @@
 # Create a cluster for sources and sinks.
 > CREATE CLUSTER storage REPLICAS ()
 
+# Querying a cluster with no replicas does not succeed.
+> SET cluster = storage
+! SELECT 1
+contains:CLUSTER "storage" has no replicas available to service request
+
 # Specifying `IN CLUSTER` and `SIZE` simultaneously is banned.
 ! CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER WITH (SIZE = '1')
 contains:only one of IN CLUSTER or SIZE can be set
@@ -30,6 +35,10 @@ contains:cannot create index in cluster containing sources or sinks
 ! CREATE MATERIALIZED VIEW bad IN CLUSTER storage AS SELECT 1
 contains:cannot create materialized view in cluster containing sources or sinks
 
+# Executing queries on a storage cluster is banned.
+! SELECT 1
+contains:cannot execute queries on cluster containing sources or sinks
+
 # Only one replica of a storage cluster is permitted.
 > CREATE CLUSTER REPLICA storage.r1 SIZE '1'
 ! CREATE CLUSTER REPLICA storage.r2 SIZE '1'
@@ -40,6 +49,10 @@ contains:cannot create more than one replica of a cluster containing sources or 
 > DROP SOURCE loadgen;
 > CREATE INDEX idx IN CLUSTER storage ON t (a)
 > CREATE MATERIALIZED VIEW mv IN CLUSTER storage AS SELECT 1
+
+# As is running queries.
+> SELECT 1
+1
 
 # Recreating the source is banned.
 ! CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER
@@ -63,6 +76,8 @@ contains:cannot create source in cluster with more than one replica
 ! DROP CLUSTER storage
 contains:cannot drop cluster with active objects
 > DROP CLUSTER storage CASCADE
+
+> SET cluster = default
 
 # Test that a cluster can contain multiple sources and sinks, and verify that
 # the sources and sinks produce the correct output.
