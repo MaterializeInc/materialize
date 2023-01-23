@@ -4039,7 +4039,6 @@ impl Catalog {
             },
             DropCluster {
                 id: ClusterId,
-                introspection_source_index_ids: Vec<GlobalId>,
             },
             DropClusterReplica {
                 cluster_id: ClusterId,
@@ -4716,17 +4715,16 @@ impl Catalog {
                             ErrorKind::ReadOnlyCluster(name.clone()),
                         )));
                     }
-                    let (cluster_id, linked_object_id, introspection_source_index_ids) =
-                        tx.remove_cluster(name)?;
+                    tx.remove_cluster(id)?;
                     builtin_table_updates.push(state.pack_cluster_update(name, -1));
-                    if let Some(linked_object_id) = linked_object_id {
+                    if let Some(linked_object_id) = cluster.linked_object_id {
                         builtin_table_updates.push(state.pack_cluster_link_update(
                             name,
                             linked_object_id,
                             -1,
                         ));
                     }
-                    for id in &introspection_source_index_ids {
+                    for id in cluster.log_indexes.values() {
                         builtin_table_updates.extend(state.pack_item_update(*id, -1));
                     }
                     state.add_to_audit_log(
@@ -4738,18 +4736,11 @@ impl Catalog {
                         EventType::Drop,
                         ObjectType::Cluster,
                         EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
-                            id: cluster_id.to_string(),
+                            id: cluster.id.to_string(),
                             name: name.clone(),
                         }),
                     )?;
-                    catalog_action(
-                        state,
-                        builtin_table_updates,
-                        Action::DropCluster {
-                            id,
-                            introspection_source_index_ids,
-                        },
-                    )?;
+                    catalog_action(state, builtin_table_updates, Action::DropCluster { id })?;
                 }
                 Op::DropClusterReplica {
                     cluster_id,
@@ -5223,19 +5214,11 @@ impl Catalog {
                     }
                 }
 
-                Action::DropCluster {
-                    id,
-                    introspection_source_index_ids,
-                } => {
-                    for id in introspection_source_index_ids {
-                        state.drop_item(id);
-                    }
-
+                Action::DropCluster { id } => {
                     let cluster = state
                         .clusters_by_id
                         .remove(&id)
                         .expect("can only drop known clusters");
-
                     state.clusters_by_name.remove(&cluster.name);
 
                     if let Some(linked_object_id) = cluster.linked_object_id {
@@ -5243,6 +5226,10 @@ impl Catalog {
                             .clusters_by_linked_object_id
                             .remove(&linked_object_id)
                             .expect("can only drop known clusters");
+                    }
+
+                    for id in cluster.log_indexes.values() {
+                        state.drop_item(*id);
                     }
 
                     assert!(
