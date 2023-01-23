@@ -58,7 +58,7 @@ This moves the onus of some behaviors on to higher layers. STORAGE is not expect
 
 The STORAGE layer is tasked with creating and maintaining definite collections.
 
-It relies on no other layers of the stack, and has great lattitude in defining what it requires of others.
+It relies on no other layers of the stack, and has great latitude in defining what it requires of others.
 
 Its primary requirements include
 1. define and respond to `CreateSource` commands (likely from ADAPTER) with the identifier of definite collections.
@@ -69,8 +69,6 @@ The layer gets to determine how it exposes these commands and what information m
 For example, STORAGE may reasonably conclude that it cannot rely on determinism of ADAPTER or COMPUTE, and therefore require `Subscribe` commands must come with a "rendition" identifier, where STORAGE is then allowed to reconcile the renditions of a collection (perhaps taking the most recent information).
 
 There are any number of secondary requirements and additional commands that can be exposed (for example, to drop sources, manage timeouts of subscriptions, advance compaction of collections, set and modify rendition reconciliation policies, etc).
-
-STORAGE can be sharded into STORAGE INSTANCEs.
 
 ### COMPUTE
 
@@ -87,7 +85,6 @@ Its primary requirements include (all from ADAPTER)
 Each COMPUTE INSTANCE is by design stateless, and should be explicitly instructed in what is required of it.
 
 COMPUTE can be sharded into COMPUTE INSTANCEs.
-Each COMPUTE INSTANCE is bound to one STORAGE INSTANCE.
 Views installed in one COMPUTE INSTANCE can be used in that same COMPUTE INSTANCE, but cannot be used by others without a round-trip through STORAGE.
 
 ### ADAPTER
