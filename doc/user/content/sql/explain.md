@@ -246,7 +246,7 @@ Operator | Meaning | Example
 
 ### Timestamps
 
-`EXPLAIN TIMESTAMP` displays the timestamps used for a `SELECT` statement, view, or materialized view--a valuable statement to understand why a query is lagging.
+`EXPLAIN TIMESTAMP` displays the timestamps used for a `SELECT` statement, view, or materialized view -- valuable information to acknowledge query delays.
 
 The explanation divides in two parts:
 1. Determinations for a timestamp
@@ -254,13 +254,16 @@ The explanation divides in two parts:
 
 #### Determinations for a timestamp
 
-Queries in Materialize have a logical timestamp, known as a _query timestamp_. It helps to return a correct result at a particular time. Returning a correct result implies retrieving the right data, at an exact time, from each source present in the query. A source, in this case, will be objects providing data: materialized views, views, indexes, tables, and sources.
+Queries in Materialize have a logical timestamp, known as _query timestamp_. It plays a critical role to retun a correct result. Returning a correct result implies retrieving data with the same logical time from each source present in a query. In this case, sources are objects providing data: a materialized view, view, index, table, or source. Each source will have a pair of logical timestamps, denoted as _frontiers_.
 
 #### Sources frontiers
 
-Sources have two important timestamps, the read frontier (_since_) and the write frontier (_upper_). Both represent logical timestamps limits. The read frontier indicates the minimum logical timestamp to read correct data (known as _compaction_). The write frontier represents the maximum timestamp to build the correct data at a particular point.
+Sources frontiers are the _read frontier_ and the _write frontier_. They stand for a source’s limits to return a correct result immediately:
 
-A _query timestamp_ outside the frontiers indicates chances of lag.
+* Read frontier: Indicates the minimum logical timestamp to return a correct result (known as _compaction_)
+* Write frontier: Represents the maximum timestamp to build a correct result without waiting unprocessed data.
+
+Having a _query timestamp_ outside the limits of the frontiers can explain the presence of delays. While in the middle, the space of processed but not yet compacted data, allows building and returning a correct result immediately.
 
 #### Example
 
@@ -307,14 +310,9 @@ Field | Meaning | Example
 
 Field | Meaning | Example
 ---------|---------|---------
-**read frontier** | Minimum read point. |`[1673612423000 (2023-01-13 12:20:23.000)]`
-**write frontier** | Highest available read point. | `[1673612424152 (2023-01-13 12:20:24.152)]`
-
-
-Identifying a source is done through the following properties:
-  * Database, schema, and name
-  * Dataflow ID
-  * Section (storage or compute)
+**source** | Source’s identifiers | `source materialize.public.raw_users (u2014, storage)`
+**read frontier** | Minimum logical timestamp. |`[1673612423000 (2023-01-13 12:20:23.000)]`
+**write frontier** | Maximum logical timestamp. | `[1673612424152 (2023-01-13 12:20:24.152)]`
 
 <!-- We think of `since` as the "read frontier": times not later than or equal to
 `since` cannot be correctly read. We think of `upper` as the "write frontier":
