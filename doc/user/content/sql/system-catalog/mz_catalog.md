@@ -307,6 +307,7 @@ Field            | Type        | Meaning
 `type`           | [`text`]    | The type of the sink: `kafka`.
 `connection_id`  | [`text`]    | The ID of the connection associated with the sink, if any.
 `size`           | [`text`]    | The size of the sink.
+`envelope_type`  | [`text`]    | The [envelope](/sql/create-sink/#envelopes) of the sink: `upsert`, or `debezium`.
 
 ### `mz_sources`
 
