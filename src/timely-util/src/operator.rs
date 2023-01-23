@@ -416,24 +416,65 @@ where
         <R2 as Multiply<R>>::Output: Data + Semigroup,
         L: FnMut(D1) -> (D2, R2) + 'static,
     {
+        let target_capacity =
+            timely::container::buffer::default_capacity::<(D2, G::Timestamp, R2)>();
+        let mut out = Vec::with_capacity(target_capacity);
         let mut buffer = Vec::new();
-        let mut out = Vec::new();
         self.inner
             .unary(Pipeline, "ExplodeOne", move |_, _| {
                 move |input, output| {
-                    input.for_each(|time, data| {
-                        data.swap(&mut buffer);
-                        out.extend(buffer.drain(..).map(|(x, t, d)| {
-                            let (x, d2) = logic(x);
-                            (x, t, d2.multiply(&d))
-                        }));
-                        differential_dataflow::consolidation::consolidate_updates(&mut out);
-                        if out.len() < out.capacity() / 2 {
-                            output.session(&time).give_iterator(out.drain(..));
+                    assert!(out.len() == 0);
+                    let mut previous_len = out.len();
+                    let mut previous_cap: Option<Capability<G::Timestamp>> = None;
+                    while let Some((time, data)) = input.next() {
+                        // manage capabilities across input buffers
+                        if let Some(cap_ref) = previous_cap.as_ref() {
+                            // output if we have a new time
+                            if cap_ref.time() != time.time() {
+                                if out.len() < out.capacity() / 2 {
+                                    output.session(cap_ref).give_iterator(out.drain(..));
+                                } else {
+                                    output.session(cap_ref).give_container(&mut out);
+                                    out.reserve_exact(target_capacity);
+                                }
+                                previous_cap = Some(time.retain());
+                                previous_len = out.len();
+                            }
                         } else {
-                            output.session(&time).give_container(&mut out);
+                            previous_cap = Some(time.retain());
                         }
-                    });
+
+                        // process input buffer
+                        data.swap(&mut buffer);
+                        for (x, t, d) in buffer.drain(..) {
+                            let (x, d2) = logic(x);
+                            out.push((x, t, d2.multiply(&d)));
+
+                            // limit, if possible, the lifetime of the allocations above
+                            // and consolidate smaller buffers if we're in the lucky case
+                            // of a small domain for x
+                            if out.len() >= 2 * previous_len {
+                                differential_dataflow::consolidation::consolidate_updates(&mut out);
+
+                                // output if consolidation did not result in enough gain
+                                if out.len() >= out.capacity() / 2 {
+                                    let Some(cap_ref) = previous_cap.as_ref() else {
+                                        unreachable!("previous capability cannot be None while processing data")
+                                    };
+                                    output.session(cap_ref).give_container(&mut out);
+                                    out.reserve_exact(target_capacity);
+                                }
+                                previous_len = out.len();
+                            }
+                        }
+                    }
+                    if !out.is_empty() {
+                        let Some(cap_ref) = previous_cap.as_ref() else {
+                            unreachable!("if we processed any data, previous capability cannot be None")
+                        };
+                        output.session(cap_ref).give_container(&mut out);
+                        out.reserve_exact(target_capacity);
+                    }
                 }
             })
             .as_collection()
