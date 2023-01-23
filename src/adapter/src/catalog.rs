@@ -31,11 +31,12 @@ use mz_audit_log::{
     VersionedStorageUsage,
 };
 use mz_build_info::DUMMY_BUILD_INFO;
+use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::{LogVariant, LogView, DEFAULT_LOG_VARIANTS, DEFAULT_LOG_VIEWS};
 use mz_compute_client::protocol::command::ComputeParameters;
 use mz_controller::clusters::{
-    ClusterEvent, ClusterId, ClusterStatus, ProcessId, ReplicaAllocation, ReplicaConfig, ReplicaId,
-    ReplicaLocation, ReplicaLogging,
+    ClusterEvent, ClusterId, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaAllocation,
+    ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging, UnmanagedReplicaLocation,
 };
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::cast::CastFrom;
@@ -68,7 +69,6 @@ use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOp
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_stash::{Stash, StashFactory};
 use mz_storage_client::controller::IntrospectionType;
-use mz_storage_client::controller::StorageClusterResourceAllocation;
 use mz_storage_client::types::parameters::{PersistParameters, StorageParameters};
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
@@ -81,9 +81,7 @@ use crate::catalog::builtin::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{
-    AwsPrincipalContext, ClusterReplicaSizeMap, Config, StorageClusterSizeMap,
-};
+pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction};
 use crate::client::ConnectionId;
@@ -189,7 +187,6 @@ pub struct CatalogState {
     config: mz_sql::catalog::CatalogConfig,
     oid_counter: u32,
     cluster_replica_sizes: ClusterReplicaSizeMap,
-    storage_cluster_sizes: StorageClusterSizeMap,
     default_storage_cluster_size: Option<String>,
     availability_zones: Vec<String>,
     system_configuration: SystemVars,
@@ -238,7 +235,7 @@ impl CatalogState {
         let mut persisted_source_ids = HashSet::new();
         for cluster in self.clusters_by_id.values() {
             for replica in cluster.replicas_by_id.values() {
-                persisted_source_ids.extend(replica.config.logging.source_ids());
+                persisted_source_ids.extend(replica.config.compute.logging.source_ids());
             }
         }
 
@@ -432,8 +429,8 @@ impl CatalogState {
         let replica_id = cluster.replica_id_by_name[LINKED_CLUSTER_REPLICA_NAME];
         let replica = &cluster.replicas_by_id[&replica_id];
         match &replica.config.location {
-            ReplicaLocation::Remote { .. } => None,
-            ReplicaLocation::Managed { size, .. } => Some(size),
+            ReplicaLocation::Unmanaged(_) => None,
+            ReplicaLocation::Managed(ManagedReplicaLocation { size, .. }) => Some(size),
         }
     }
 
@@ -771,7 +768,7 @@ impl CatalogState {
         replica_id: ReplicaId,
         config: ReplicaConfig,
     ) {
-        self.insert_replica_introspection_items(&config.logging, replica_id);
+        self.insert_replica_introspection_items(&config.compute.logging, replica_id);
         let replica = ClusterReplica {
             name: replica_name.clone(),
             process_status: (0..config.location.num_processes())
@@ -1019,10 +1016,6 @@ impl CatalogState {
         &self.config
     }
 
-    pub fn storage_cluster_sizes(&self) -> &StorageClusterSizeMap {
-        &self.storage_cluster_sizes
-    }
-
     pub fn resolve_database(&self, database_name: &str) -> Result<&Database, SqlCatalogError> {
         match self.database_by_name.get(database_name) {
             Some(id) => Ok(&self.database_by_id[id]),
@@ -1183,29 +1176,21 @@ impl CatalogState {
         &self.availability_zones
     }
 
-    /// Returns the default storage cluster size and allocation.
+    /// Returns the default storage cluster size .
     ///
     /// If a default size was given as configuration, it is always used,
-    /// otherwise the smallest cluster size is used instead.
-    pub fn default_storage_cluster_size(&self) -> (String, StorageClusterResourceAllocation) {
+    /// otherwise the smallest size is used instead.
+    pub fn default_linked_cluster_size(&self) -> String {
         match &self.default_storage_cluster_size {
-            Some(default_storage_cluster_size) => {
-                // The default is guaranteed to be in the size map during startup
-                let allocation = self
-                    .storage_cluster_sizes
-                    .0
-                    .get(default_storage_cluster_size)
-                    .expect("default storage cluster size must exist in size map");
-                (default_storage_cluster_size.clone(), allocation.clone())
-            }
+            Some(default_storage_cluster_size) => default_storage_cluster_size.clone(),
             None => {
-                let (size, allocation) = self
-                    .storage_cluster_sizes
+                let (size, _allocation) = self
+                    .cluster_replica_sizes
                     .0
                     .iter()
-                    .min_by_key(|(_, a)| (a.workers, a.memory_limit))
-                    .expect("should have at least one valid storage instance size");
-                (size.clone(), allocation.clone())
+                    .min_by_key(|(_, a)| (a.scale, a.workers, a.memory_limit))
+                    .expect("should have at least one valid cluster replica size");
+                size.clone()
             }
         }
     }
@@ -2160,7 +2145,6 @@ impl Catalog {
                 },
                 oid_counter: FIRST_USER_OID,
                 cluster_replica_sizes: config.cluster_replica_sizes,
-                storage_cluster_sizes: config.storage_cluster_sizes,
                 default_storage_cluster_size: config.default_storage_cluster_size,
                 availability_zones: config.availability_zones,
                 system_configuration: SystemVars::default(),
@@ -2448,8 +2432,10 @@ impl Catalog {
             };
             let config = ReplicaConfig {
                 location: catalog.concretize_replica_location(serialized_config.location)?,
-                logging,
-                idle_arrangement_merge_effort: serialized_config.idle_arrangement_merge_effort,
+                compute: ComputeReplicaConfig {
+                    logging,
+                    idle_arrangement_merge_effort: serialized_config.idle_arrangement_merge_effort,
+                },
             };
 
             // And write the allocated sources back to storage
@@ -3292,7 +3278,6 @@ impl Catalog {
             skip_migrations: true,
             metrics_registry,
             cluster_replica_sizes: Default::default(),
-            storage_cluster_sizes: Default::default(),
             default_storage_cluster_size: None,
             bootstrap_system_parameters: Default::default(),
             availability_zones: vec![],
@@ -3445,11 +3430,6 @@ impl Catalog {
     /// Get the next user ID without allocating it.
     pub async fn get_next_user_global_id(&mut self) -> Result<GlobalId, Error> {
         self.storage().await.get_next_user_global_id().await
-    }
-
-    /// Get the next user cluster ID without allocating it.
-    pub async fn get_next_user_cluster_id(&mut self) -> Result<ClusterId, Error> {
-        self.storage().await.get_next_user_cluster_id().await
     }
 
     /// Get the next replica id without allocating it.
@@ -3750,6 +3730,7 @@ impl Catalog {
                     .get(replica_id)
                     .unwrap()
                     .config
+                    .compute
                     .logging;
 
                 let log_and_view_ids = logging.source_and_view_ids();
@@ -3898,12 +3879,12 @@ impl Catalog {
                 computectl_addrs,
                 compute_addrs,
                 workers,
-            } => ReplicaLocation::Remote {
+            } => ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
                 storagectl_addr,
-                computectl_addrs: computectl_addrs.into_iter().collect(),
-                compute_addrs: compute_addrs.into_iter().collect(),
-                workers: std::num::NonZeroUsize::new(workers).unwrap(),
-            },
+                computectl_addrs,
+                compute_addrs,
+                workers,
+            }),
             SerializedReplicaLocation::Managed {
                 size,
                 availability_zone,
@@ -3937,23 +3918,24 @@ impl Catalog {
                     });
                 }
 
-                ReplicaLocation::Managed {
+                ReplicaLocation::Managed(ManagedReplicaLocation {
                     allocation: cluster_replica_sizes.0.get(&size).unwrap().clone(),
                     availability_zone,
                     size,
                     az_user_specified,
-                }
+                })
             }
         };
         Ok(location)
     }
 
-    /// Returns the default storage cluster size and allocation.
-    ///
-    /// If a default size was given as configuration, it is always used,
-    /// otherwise the smallest cluster size is used instead.
-    pub fn default_storage_cluster_size(&self) -> (String, StorageClusterResourceAllocation) {
-        self.state.default_storage_cluster_size()
+    pub fn cluster_replica_sizes(&self) -> &ClusterReplicaSizeMap {
+        &self.state.cluster_replica_sizes
+    }
+
+    /// Returns the default size to use for linked clusters.
+    pub fn default_linked_cluster_size(&self) -> String {
+        self.state.default_linked_cluster_size()
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -4523,7 +4505,9 @@ impl Catalog {
                         )));
                     }
                     tx.insert_cluster_replica(cluster_id, id, &name, &config.clone().into())?;
-                    if let ReplicaLocation::Managed { size, .. } = &config.location {
+                    if let ReplicaLocation::Managed(ManagedReplicaLocation { size, .. }) =
+                        &config.location
+                    {
                         let details = EventDetails::CreateClusterReplicaV1(
                             mz_audit_log::CreateClusterReplicaV1 {
                                 cluster_id: cluster_id.to_string(),
@@ -5204,7 +5188,8 @@ impl Catalog {
                     config,
                 } => {
                     let num_processes = config.location.num_processes();
-                    let introspection_ids: Vec<_> = config.logging.source_and_view_ids().collect();
+                    let introspection_ids: Vec<_> =
+                        config.compute.logging.source_and_view_ids().collect();
                     state.insert_cluster_replica(cluster_id, name.clone(), id, config);
                     for id in introspection_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
@@ -5288,7 +5273,7 @@ impl Catalog {
                         .expect("can only drop replicas from known instances");
                     let replica = cluster.replicas_by_id.remove(&replica_id).unwrap();
                     cluster.replica_id_by_name.remove(&replica.name).unwrap();
-                    let persisted_log_ids = replica.config.logging.source_and_view_ids();
+                    let persisted_log_ids = replica.config.compute.logging.source_and_view_ids();
                     assert!(cluster.replica_id_by_name.len() == cluster.replicas_by_id.len());
 
                     for id in persisted_log_ids {
@@ -5331,13 +5316,13 @@ impl Catalog {
 
                 Action::UpdateClusterReplicaStatus { event } => {
                     builtin_table_updates.push(state.pack_cluster_replica_status_update(
-                        event.instance_id,
+                        event.cluster_id,
                         event.replica_id,
                         event.process_id,
                         -1,
                     ));
                     state.ensure_cluster_status(
-                        event.instance_id,
+                        event.cluster_id,
                         event.replica_id,
                         event.process_id,
                         ClusterReplicaProcessStatus {
@@ -5346,7 +5331,7 @@ impl Catalog {
                         },
                     );
                     builtin_table_updates.push(state.pack_cluster_replica_status_update(
-                        event.instance_id,
+                        event.cluster_id,
                         event.replica_id,
                         event.process_id,
                         1,
@@ -5914,8 +5899,8 @@ impl From<ReplicaConfig> for SerializedReplicaConfig {
     fn from(config: ReplicaConfig) -> Self {
         SerializedReplicaConfig {
             location: config.location.into(),
-            logging: config.logging.into(),
-            idle_arrangement_merge_effort: config.idle_arrangement_merge_effort,
+            logging: config.compute.logging.into(),
+            idle_arrangement_merge_effort: config.compute.idle_arrangement_merge_effort,
         }
     }
 }
@@ -5940,23 +5925,23 @@ pub enum SerializedReplicaLocation {
 impl From<ReplicaLocation> for SerializedReplicaLocation {
     fn from(loc: ReplicaLocation) -> Self {
         match loc {
-            ReplicaLocation::Remote {
+            ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
                 storagectl_addr,
                 computectl_addrs,
                 compute_addrs,
                 workers,
-            } => Self::Unmanaged {
+            }) => Self::Unmanaged {
                 storagectl_addr,
-                computectl_addrs: computectl_addrs.into_iter().collect(),
-                compute_addrs: compute_addrs.into_iter().collect(),
-                workers: workers.get(),
+                computectl_addrs,
+                compute_addrs,
+                workers,
             },
-            ReplicaLocation::Managed {
+            ReplicaLocation::Managed(ManagedReplicaLocation {
                 allocation: _,
                 size,
                 availability_zone,
                 az_user_specified,
-            } => Self::Managed {
+            }) => SerializedReplicaLocation::Managed {
                 size,
                 availability_zone,
                 az_user_specified,

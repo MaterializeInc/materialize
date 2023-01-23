@@ -13,10 +13,10 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
-use mz_compute_client::controller::{
-    ComputeReplicaAllocation, ComputeReplicaLocation, ProcessId, ReplicaId,
+use mz_controller::clusters::{
+    ClusterId, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaAllocation, ReplicaId,
+    ReplicaLocation,
 };
-use mz_controller::clusters::{ClusterId, ClusterStatus};
 use mz_expr::MirScalarExpr;
 use mz_orchestrator::{CpuLimit, MemoryLimit, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
@@ -150,13 +150,13 @@ impl CatalogState {
         let replica = &cluster.replicas_by_id[&id];
 
         let (size, az) = match &replica.config.location {
-            ComputeReplicaLocation::Managed {
+            ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
                 availability_zone,
                 az_user_specified: _,
                 allocation: _,
-            } => (Some(&**size), Some(availability_zone.as_str())),
-            ComputeReplicaLocation::Remote { .. } => (None, None),
+            }) => (Some(&**size), Some(availability_zone.as_str())),
+            ReplicaLocation::Unmanaged(_) => (None, None),
         };
 
         BuiltinTableUpdate {
@@ -950,7 +950,7 @@ impl CatalogState {
             .map(
                 |(
                     size,
-                    ComputeReplicaAllocation {
+                    ReplicaAllocation {
                         memory_limit,
                         cpu_limit,
                         scale,
@@ -964,8 +964,8 @@ impl CatalogState {
                         (*memory_limit).unwrap_or(MemoryLimit::MAX);
                     let row = Row::pack_slice(&[
                         size.as_str().into(),
-                        u64::cast_from(scale.get()).into(),
-                        u64::cast_from(workers.get()).into(),
+                        u64::from(*scale).into(),
+                        u64::cast_from(*workers).into(),
                         cpu_limit.as_nanocpus().into(),
                         memory_bytes.into(),
                     ]);

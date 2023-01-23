@@ -397,7 +397,6 @@ impl Usage {
             skip_migrations: false,
             metrics_registry,
             cluster_replica_sizes: Default::default(),
-            storage_cluster_sizes: Default::default(),
             default_storage_cluster_size: None,
             bootstrap_system_parameters: Default::default(),
             availability_zones: vec![],

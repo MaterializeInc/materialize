@@ -45,7 +45,6 @@ use tokio_stream::StreamMap;
 use tracing::{debug, info};
 
 use mz_build_info::BuildInfo;
-use mz_orchestrator::NamespacedOrchestrator;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
@@ -59,7 +58,7 @@ use crate::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
     SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse, Update,
 };
-use crate::controller::clusters::{StorageClusters, StorageClustersConfig};
+use crate::controller::rehydration::RehydratingStorageClient;
 use crate::healthcheck;
 use crate::types::errors::DataflowError;
 use crate::types::instances::StorageInstanceId;
@@ -69,15 +68,10 @@ use crate::types::sinks::{
 };
 use crate::types::sources::{IngestionDescription, SourceData, SourceExport};
 
-mod clusters;
 mod collection_mgmt;
 mod persist_handles;
 mod rehydration;
 mod statistics;
-
-pub use crate::controller::clusters::{
-    StorageClusterAddr, StorageClusterConfig, StorageClusterDesc, StorageClusterResourceAllocation,
-};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
 
@@ -215,26 +209,15 @@ pub trait StorageController: Debug + Send {
     /// Panics if a storage instance with the given ID does not exist.
     fn drop_instance(&mut self, id: StorageInstanceId);
 
-    /// Ensures that the identified storage instance has one replica with the
-    /// specified configuration.
+    /// Connects the storage instance to the specified replica.
     ///
-    /// If the storage instance does not yet have a replica, a replica is
-    /// created. If the storage instance has an existing replica, the existing
-    /// replica is recreated to match the new configuration, if necessary.
+    /// If the storage instance is already attached to a replica, communication
+    /// with that replica is severed in favor of the new replica.
     ///
     /// In the future, this API will be adjusted to support active replication
     /// of storage instances (i.e., multiple replicas attached to a given
-    /// storage instance.)
-    async fn ensure_replica(
-        &mut self,
-        id: StorageInstanceId,
-        config: StorageClusterConfig,
-    ) -> Result<(), StorageError>;
-
-    /// Drops the replica of the identified storage instance.
-    ///
-    /// Does nothing if the identified storage instance does not have a replica.
-    async fn drop_replica(&mut self, id: StorageInstanceId) -> Result<(), StorageError>;
+    /// storage instance).
+    fn connect_replica(&mut self, id: StorageInstanceId, addr: String);
 
     /// Acquire a mutable reference to the collection state, should it exist.
     fn collection_mut(
@@ -398,9 +381,6 @@ pub trait StorageController: Debug + Send {
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
     async fn process(&mut self) -> Result<(), anyhow::Error>;
-
-    /// Considers all nodes not currently used as orphans and removes those from the orchestrator.
-    async fn remove_orphans(&mut self, next_id: StorageInstanceId) -> Result<(), anyhow::Error>;
 }
 
 /// Compaction policies for collections maintained by `Controller`.
@@ -633,6 +613,11 @@ impl Arbitrary for DurableExportMetadata<mz_repr::Timestamp> {
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
 pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
+    /// A function that returns the current time.
+    now: NowFn,
+    /// The fencing token for this instance of the controller.
+    envd_epoch: NonZeroI64,
+
     /// Collections maintained by the storage controller.
     ///
     /// This collection only grows, although individual collections may be rendered unusable.
@@ -668,9 +653,6 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     /// needed.
     // TODO(aljoscha): Should these live somewhere else?
     introspection_tokens: HashMap<GlobalId, Box<dyn Any + Send + Sync>>,
-    now: NowFn,
-    /// The fencing token for this instance of the controller.
-    envd_epoch: NonZeroI64,
 
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
@@ -679,15 +661,24 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
     sink_statistics: Arc<std::sync::Mutex<HashMap<GlobalId, HashMap<usize, SinkStatisticsUpdate>>>>,
+
+    /// Clients for all known storage instances.
+    clients: HashMap<StorageInstanceId, RehydratingStorageClient<T>>,
+    /// Set to `true` once `initialization_complete` has been called.
+    initialized: bool,
+    /// Storage configuration to apply to newly provisioned instances.
+    config: StorageParameters,
 }
 
 /// A storage controller for a storage instance.
 #[derive(Debug)]
 pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
 {
+    /// The build information for this process.
+    build_info: &'static BuildInfo,
+    /// The state for the storage controller.
+    /// TODO(benesch): why is this a separate struct?
     state: StorageControllerState<T>,
-    /// Storage cluster provisioning and storage object assignment.
-    clusters: StorageClusters<T>,
     /// Mechanism for returning frontier advancement for tables.
     internal_response_queue: tokio::sync::mpsc::UnboundedReceiver<StorageResponse<T>>,
     /// The persist location where all storage collections are being written to
@@ -826,6 +817,9 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             envd_epoch,
             source_statistics: Arc::new(std::sync::Mutex::new(HashMap::new())),
             sink_statistics: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            clients: HashMap::new(),
+            initialized: false,
+            config: StorageParameters::default(),
         }
     }
 }
@@ -842,13 +836,19 @@ where
     type Timestamp = T;
 
     fn initialization_complete(&mut self) {
-        self.clusters.initialization_complete();
+        self.state.initialized = true;
+        for client in self.state.clients.values_mut() {
+            client.send(StorageCommand::InitializationComplete);
+        }
     }
 
     fn update_configuration(&mut self, config_params: StorageParameters) {
         // TODO(#16753): apply config to `self.persist`
 
-        self.clusters.update_configuration(config_params);
+        for client in self.state.clients.values_mut() {
+            client.send(StorageCommand::UpdateConfiguration(config_params.clone()));
+        }
+        self.state.config.update(config_params);
     }
 
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError> {
@@ -875,25 +875,29 @@ where
     }
 
     fn create_instance(&mut self, id: StorageInstanceId) {
-        self.clusters.create_instance(id)
+        let mut client = RehydratingStorageClient::new(self.build_info, Arc::clone(&self.persist));
+        if self.state.initialized {
+            client.send(StorageCommand::InitializationComplete);
+        }
+        client.send(StorageCommand::UpdateConfiguration(
+            self.state.config.clone(),
+        ));
+        let old_client = self.state.clients.insert(id, client);
+        assert!(old_client.is_none(), "storage instance {id} already exists");
     }
 
     fn drop_instance(&mut self, id: StorageInstanceId) {
-        self.clusters.drop_instance(id)
+        let client = self.state.clients.remove(&id);
+        assert!(client.is_some(), "storage instance {id} does not exist");
     }
 
-    async fn ensure_replica(
-        &mut self,
-        id: StorageInstanceId,
-        config: StorageClusterConfig,
-    ) -> Result<(), StorageError> {
-        self.clusters.ensure_replica(id, config).await?;
-        Ok(())
-    }
-
-    async fn drop_replica(&mut self, id: StorageInstanceId) -> Result<(), StorageError> {
-        self.clusters.drop_replica(id).await?;
-        Ok(())
+    fn connect_replica(&mut self, id: StorageInstanceId, addr: String) {
+        let client = self
+            .state
+            .clients
+            .get_mut(&id)
+            .unwrap_or_else(|| panic!("instance {id} does not exist"));
+        client.connect(addr);
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -1132,15 +1136,16 @@ where
                     let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
 
                     // Fetch the client for this ingestion's instance.
-                    let client =
-                        self.clusters
-                            .client(ingestion.instance_id)
-                            .with_context(|| {
-                                format!(
-                                    "instance {} missing for ingestion {}",
-                                    ingestion.instance_id, id
-                                )
-                            })?;
+                    let client = self
+                        .state
+                        .clients
+                        .get_mut(&ingestion.instance_id)
+                        .with_context(|| {
+                            format!(
+                                "instance {} missing for ingestion {}",
+                                ingestion.instance_id, id
+                            )
+                        })?;
                     let augmented_ingestion = CreateSourceCommand {
                         id,
                         description: desc,
@@ -1329,8 +1334,9 @@ where
 
             // Fetch the client for this exports's cluster.
             let client = self
-                .clusters
-                .client(description.instance_id)
+                .state
+                .clients
+                .get_mut(&description.instance_id)
                 .with_context(|| {
                     format!(
                         "cluster {} missing for export {}",
@@ -1562,8 +1568,9 @@ where
 
     async fn ready(&mut self) {
         let mut clients = self
-            .clusters
-            .clients()
+            .state
+            .clients
+            .values_mut()
             .map(|client| client.response_stream())
             .enumerate()
             .collect::<StreamMap<_, _>>();
@@ -1618,7 +1625,7 @@ where
             // TODO(petrosagg): make this a strict check
             let client = self.state.collections[&id]
                 .cluster_id()
-                .and_then(|cluster_id| self.clusters.client(cluster_id));
+                .and_then(|cluster_id| self.state.clients.get_mut(&cluster_id));
             if let Some(client) = client {
                 client.send(StorageCommand::AllowCompaction(vec![(
                     id,
@@ -1654,10 +1661,6 @@ where
             .await;
 
         Ok(())
-    }
-
-    async fn remove_orphans(&mut self, next_id: StorageInstanceId) -> Result<(), anyhow::Error> {
-        self.clusters.remove_orphans(next_id).await
     }
 }
 
@@ -1709,29 +1712,16 @@ where
         postgres_url: String,
         persist_location: PersistLocation,
         persist_clients: Arc<Mutex<PersistClientCache>>,
-        orchestrator: Arc<dyn NamespacedOrchestrator>,
-        clusterd_image: String,
-        init_container_image: Option<String>,
         now: NowFn,
         postgres_factory: &StashFactory,
         envd_epoch: NonZeroI64,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let clusters = StorageClusters::new(
-            StorageClustersConfig {
-                build_info,
-                orchestrator,
-                clusterd_image,
-                init_container_image,
-            },
-            Arc::clone(&persist_clients),
-        );
-
         Self {
+            build_info,
             state: StorageControllerState::new(postgres_url, tx, now, postgres_factory, envd_epoch)
                 .await,
-            clusters,
             internal_response_queue: rx,
             persist_location,
             persist: persist_clients,

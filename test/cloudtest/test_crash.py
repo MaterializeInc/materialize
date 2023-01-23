@@ -85,11 +85,10 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
 def test_crash_storage(mz: MaterializeApplication) -> None:
     populate(mz, 1)
 
-    source_id = mz.environmentd.sql_query(
-        "SELECT id FROM mz_sources WHERE name = 's1';"
-    )[0][0]
-    assert source_id is not None
-    pod_name = f"pod/storage-{source_id}-0"
+    [cluster_id, replica_id] = mz.environmentd.sql_query(
+        f"SELECT s.cluster_id, r.id FROM mz_sources s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = 's1'"
+    )[0]
+    pod_name = f"pod/cluster-{cluster_id}-replica-{replica_id}-0"
 
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
     mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd` || true")
@@ -106,8 +105,8 @@ def test_crash_environmentd(mz: MaterializeApplication) -> None:
 
     def get_replica() -> Tuple[V1Pod, V1StatefulSet]:
         """Find the stateful set for the replica of the default cluster"""
-        compute_pod_name = f"compute-cluster-u1-replica-1-0"
-        ss_name = f"compute-cluster-u1-replica-1"
+        compute_pod_name = f"cluster-u1-replica-1-0"
+        ss_name = f"cluster-u1-replica-1"
         compute_pod = mz.environmentd.api().read_namespaced_pod(
             compute_pod_name, mz.environmentd.namespace()
         )

@@ -36,12 +36,8 @@ use crate::types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkCon
 use crate::types::sources::SourceInstanceDesc;
 
 use super::error::CollectionMissing;
-use super::orchestrator::ComputeOrchestrator;
-use super::replica::{Replica, ReplicaConfig, ReplicaResponse};
-use super::{
-    CollectionState, ComputeControllerResponse, ComputeInstanceId, ComputeReplicaLocation,
-    ReplicaId,
-};
+use super::replica::{Replica, ReplicaConfig};
+use super::{CollectionState, ComputeControllerResponse, ComputeInstanceId, ReplicaId};
 
 #[derive(Error, Debug)]
 #[error("replica exists already: {0}")]
@@ -97,7 +93,7 @@ pub(super) enum SubscribeTargetError {
 #[derive(Debug)]
 pub(super) struct Instance<T> {
     /// ID of this instance
-    instance_id: ComputeInstanceId,
+    _instance_id: ComputeInstanceId,
     /// Build info for spawning replicas
     build_info: &'static BuildInfo,
     /// The replicas of this compute instance.
@@ -116,8 +112,6 @@ pub(super) struct Instance<T> {
     failed_replicas: BTreeSet<ReplicaId>,
     /// Ready compute controller responses to be delivered.
     pub ready_responses: VecDeque<ComputeControllerResponse<T>>,
-    /// Orchestrator for managing replicas
-    orchestrator: ComputeOrchestrator,
     /// A number that increases with each restart of `environmentd`.
     envd_epoch: NonZeroI64,
     /// Numbers that increase with each restart of a replica.
@@ -189,7 +183,6 @@ where
         instance_id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
-        orchestrator: ComputeOrchestrator,
         envd_epoch: NonZeroI64,
     ) -> Self {
         let collections = arranged_logs
@@ -201,7 +194,7 @@ where
             .collect();
 
         let mut instance = Self {
-            instance_id,
+            _instance_id: instance_id,
             build_info,
             replicas: Default::default(),
             collections,
@@ -211,7 +204,6 @@ where
             history: Default::default(),
             failed_replicas: Default::default(),
             ready_responses: Default::default(),
-            orchestrator,
             envd_epoch,
             replica_epochs: Default::default(),
         };
@@ -272,7 +264,7 @@ where
     /// rehydration.
     ///
     /// This method is cancellation safe.
-    pub async fn recv(&mut self) -> Result<(ReplicaId, ReplicaResponse<T>), ReplicaId> {
+    pub async fn recv(&mut self) -> Result<(ReplicaId, ComputeResponse<T>), ReplicaId> {
         // Receive responses from any of the replicas, and take appropriate
         // action.
         let response = self
@@ -379,10 +371,8 @@ where
         *replica_epoch += 1;
         let replica = Replica::spawn(
             id,
-            self.compute.instance_id,
             self.compute.build_info,
             config,
-            self.compute.orchestrator.clone(),
             ComputeStartupEpoch::new(self.compute.envd_epoch, *replica_epoch),
         );
 
@@ -409,53 +399,15 @@ where
     }
 
     /// Remove an existing instance replica, by ID.
-    ///
-    /// This method removes the replica from the orchestrator and should only be called if the
-    /// replica should be permanently removed.
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
-        let replica = self
-            .compute
-            .replicas
-            .get_mut(&id)
-            .ok_or(ReplicaMissing(id))?;
-
-        // If the replica is managed we have to remove it from the orchestrator. We spawn
-        // a background task that waits until the termination of the message handler task and
-        // then removes it from the orchestrator.
-        if matches!(
-            replica.config.location,
-            ComputeReplicaLocation::Managed { .. }
-        ) {
-            let replica_task = replica.replica_task.take().unwrap();
-            let instance_id = self.compute.instance_id;
-            let orchestrator = self.compute.orchestrator.clone();
-            mz_ore::task::spawn(|| format!("drop-replica-{id}"), async move {
-                // Ensure the active-replication-replica task is terminated before removing the service
-                // from the orchestrator. This await guarantees the ensure call has happened before
-                // we remove the replica from the orchestrator.
-                replica_task.abort();
-                let join_result = replica_task.await;
-                tracing::debug!("Replica task joined: {:?}", join_result);
-
-                match orchestrator.drop_replica(instance_id, id).await {
-                    Ok(_) => {
-                        tracing::debug!("Removed replica from orchestrator")
-                    }
-                    Err(e) => {
-                        tracing::warn!("Could not drop replica {:?}: {}", &id, &e)
-                    }
-                }
-            });
+        if !self.compute.replicas.contains_key(&id) {
+            return Err(ReplicaMissing(id));
         }
-
         self.remove_replica_state(id);
         Ok(())
     }
 
     /// Remove all state related to a replica.
-    ///
-    /// This method does not cause an orchestrator removal of the replica, so it is suitable for
-    /// removing the replica temporarily, e.g., during rehydration.
     ///
     /// # Panics
     ///

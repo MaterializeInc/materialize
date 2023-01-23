@@ -118,8 +118,7 @@ use mz_transform::Optimizer;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog,
-    CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, StorageClusterSizeMap,
-    StorageSinkConnectionState,
+    CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -300,8 +299,7 @@ pub struct Config {
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
     pub availability_zones: Vec<String>,
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
-    pub storage_cluster_sizes: StorageClusterSizeMap,
-    pub default_storage_host_size: Option<String>,
+    pub default_storage_cluster_size: Option<String>,
     pub bootstrap_system_parameters: BTreeMap<String, String>,
     pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
@@ -559,6 +557,7 @@ impl Coordinator {
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 let introspection_collections = replica
                     .config
+                    .compute
                     .logging
                     .sources
                     .iter()
@@ -582,14 +581,14 @@ impl Coordinator {
                     .compute_ids
                     .entry(instance.id)
                     .or_insert_with(BTreeSet::new)
-                    .extend(replica.config.logging.source_ids());
+                    .extend(replica.config.compute.logging.source_ids());
                 policies_to_set
                     .get_mut(&DEFAULT_LOGICAL_COMPACTION_WINDOW_TS)
                     .expect(
                         "Default policy map was inserted just after `policies_to_set` was created.",
                     )
                     .storage_ids
-                    .extend(replica.config.logging.source_ids());
+                    .extend(replica.config.compute.logging.source_ids());
 
                 self.controller
                     .create_replica(instance.id, replica_id, replica.config)
@@ -1030,8 +1029,8 @@ impl Coordinator {
         // it manually.
         let mut advance_timelines_interval =
             tokio::time::interval(self.catalog.config().timestamp_interval);
-        // Watcher that listens for and reports compute service status changes.
-        let mut compute_events = self.controller.compute.watch_services();
+        // // Watcher that listens for and reports cluster service status changes.
+        let mut cluster_events = self.controller.events_stream();
         let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
         let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
         spawn(|| "coord idle metric", async move {
@@ -1064,7 +1063,7 @@ impl Coordinator {
                 Some(m) = internal_cmd_rx.recv() => m,
                 // `next()` on any stream is cancel-safe:
                 // https://docs.rs/tokio-stream/0.1.9/tokio_stream/trait.StreamExt.html#cancel-safety
-                Some(event) = compute_events.next() => Message::ClusterEvent(event),
+                Some(event) = cluster_events.next() => Message::ClusterEvent(event),
                 // See [`mz_controller::Controller::Controller::ready`] for notes
                 // on why this is cancel-safe.
                 () = self.controller.ready() => {
@@ -1137,8 +1136,7 @@ pub async fn serve(
         secrets_controller,
         cloud_resource_controller,
         cluster_replica_sizes,
-        storage_cluster_sizes,
-        default_storage_host_size,
+        default_storage_cluster_size,
         bootstrap_system_parameters,
         mut availability_zones,
         connection_context,
@@ -1198,8 +1196,7 @@ pub async fn serve(
             skip_migrations: false,
             metrics_registry: &metrics_registry,
             cluster_replica_sizes,
-            storage_cluster_sizes,
-            default_storage_cluster_size: default_storage_host_size,
+            default_storage_cluster_size,
             bootstrap_system_parameters,
             availability_zones,
             secrets_reader: secrets_controller.reader(),
@@ -1274,10 +1271,7 @@ pub async fn serve(
                     .await?;
                 coord
                     .controller
-                    .remove_orphans(
-                        coord.catalog.get_next_replica_id().await?,
-                        coord.catalog.get_next_user_cluster_id().await?,
-                    )
+                    .remove_orphaned_replicas(coord.catalog.get_next_replica_id().await?)
                     .await
                     .map_err(AdapterError::Orchestrator)?;
                 Ok(())

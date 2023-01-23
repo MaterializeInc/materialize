@@ -166,7 +166,7 @@ impl Coordinator {
                 let replica_logs = cluster
                     .replicas_by_id
                     .values()
-                    .flat_map(|replica| replica.config.logging.source_ids())
+                    .flat_map(|replica| replica.config.compute.logging.source_ids())
                     .map(|log_id| (*id, log_id));
                 log_sources_to_drop.extend(replica_logs);
 
@@ -186,6 +186,7 @@ impl Coordinator {
                 // Drop the introspection sources
                 let replica_logs = replica
                     .config
+                    .compute
                     .logging
                     .source_ids()
                     .map(|log_id| (cluster.id, log_id));

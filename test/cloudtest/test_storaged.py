@@ -45,12 +45,11 @@ def test_source_creation(mz: MaterializeApplication) -> None:
     )
 
     for source in ["source1", "source2"]:
-        id = mz.environmentd.sql_query(
-            f"SELECT id FROM mz_sources WHERE name = '{source}'"
-        )[0][0]
-        assert id is not None
+        [cluster_id, replica_id] = mz.environmentd.sql_query(
+            f"SELECT s.cluster_id, r.id FROM mz_sources s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = '{source}'"
+        )[0]
 
-        storage_cluster = f"pod/storage-{id}-0"
+        storage_cluster = f"pod/cluster-{cluster_id}-replica-{replica_id}-0"
         wait(condition="condition=Ready", resource=storage_cluster)
 
         mz.environmentd.sql(f"DROP SOURCE {source}")
@@ -77,11 +76,10 @@ def test_source_resizing(mz: MaterializeApplication) -> None:
             """
         )
     )
-    id = mz.environmentd.sql_query(
-        f"SELECT id FROM mz_sources WHERE name = 'resize_source'"
-    )[0][0]
-    assert id is not None
-    storage_cluster = f"pod/storage-{id}-0"
+    [cluster_id, replica_id] = mz.environmentd.sql_query(
+        f"SELECT s.cluster_id, r.id FROM mz_sources s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = 'resize_source'"
+    )[0]
+    storage_cluster = f"pod/cluster-{cluster_id}-replica-{replica_id}-0"
 
     wait(condition="condition=Ready", resource=storage_cluster)
 
@@ -140,13 +138,11 @@ def test_source_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
         )
     )
 
-    id = mz.environmentd.sql_query("SELECT id FROM mz_sources WHERE name = 'source1'")[
-        0
-    ][0]
-    assert id is not None
-
-    storage_cluster_pod = f"pod/storage-{id}-0"
-    storage_cluster_svc = f"service/storage-{id}"
+    [cluster_id, replica_id] = mz.environmentd.sql_query(
+        f"SELECT s.cluster_id, r.id FROM mz_sources s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = 'source1'"
+    )[0]
+    storage_cluster_pod = f"pod/cluster-{cluster_id}-replica-{replica_id}-0"
+    storage_cluster_svc = f"service/cluster-{cluster_id}-replica-{replica_id}"
 
     wait(condition="condition=Ready", resource=storage_cluster_pod)
     exists(storage_cluster_svc)
@@ -166,6 +162,9 @@ def test_source_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
     not_exists(storage_cluster_svc)
 
 
+@pytest.mark.skip(
+    reason="follow-up task in https://github.com/MaterializeInc/cloud/issues/4929"
+)
 def test_sink_resizing(mz: MaterializeApplication) -> None:
     """Test that resizing a given sink causes the storage cluster to be replaced."""
 
@@ -202,11 +201,12 @@ def test_sink_resizing(mz: MaterializeApplication) -> None:
             """
         )
     )
-    id = mz.environmentd.sql_query(
-        f"SELECT id FROM mz_sinks WHERE name = 'resize_sink'"
-    )[0][0]
-    assert id is not None
     storage_cluster = f"pod/storage-{id}-0"
+    [cluster_id, replica_id] = mz.environmentd.sql_query(
+        f"SELECT s.cluster_id, r.id FROM mz_sinks s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = 'resize_sink'"
+    )[0]
+    assert id is not None
+    storage_cluster = f"pod/cluster-{cluster_id}-replica-{replica_id}-0"
 
     assert get_num_workers(mz) == "'2'"
 

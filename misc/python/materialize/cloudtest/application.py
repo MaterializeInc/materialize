@@ -150,7 +150,7 @@ class MaterializeApplication(Application):
 
     def create(self) -> None:
         super().create()
-        wait(condition="condition=Ready", resource="pod/compute-cluster-u1-replica-1-0")
+        wait(condition="condition=Ready", resource="pod/cluster-u1-replica-1-0")
 
     def wait_for_sql(self) -> None:
         """Wait until environmentd pod is ready and can accept SQL connections"""
