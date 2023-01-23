@@ -335,6 +335,7 @@ where
                     init_container_image: self.init_container_image.clone(),
                     args: &|assigned| {
                         vec![
+                            format!("--storage-workers={}", location.allocation.workers),
                             format!(
                                 "--storage-controller-listen-addr={}",
                                 assigned["storagectl"]
