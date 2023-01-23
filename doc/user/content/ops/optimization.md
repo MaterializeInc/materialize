@@ -60,7 +60,7 @@ In general, your index key should exactly match the columns that are constrained
 
 ### `JOIN`
 
-In general, you can improve the performance of your joins by creating indexes on the columns being joined. This comes at the cost of additional memory usage. Fortunately, Materialize can reuse these indexes for different queries, which means **for multiple queries, indexes are a fixed upfront cost with memory savings for each new query.**
+In general, you can improve the performance of your joins by creating indexes on the columns being joined. This comes at the cost of additional memory usage. Fortunately, Materialize's in-memory [arrangements](/overview/arrangements) allow the system to share indexes across queries, which means **for multiple queries, an index is a fixed upfront cost with memory savings for each new query that uses it.**
 
 Let's create a few tables to work through examples.
 
@@ -70,9 +70,11 @@ CREATE TABLE sections (id INT, teacher_id INT, course_id INT, schedule TEXT);
 CREATE TABLE courses (id INT, name TEXT);
 ```
 
-#### Joining Two Collections
+#### Multiple Queries Join On the Same Collection
 
-Here is an example where we join a collection `teachers` to a collection `sections` to see the name of the teacher, schedule, and course ID for a specific section of a course.
+Let's consider two queries that join on a common collection. The idea is to create an index that can be shared across the two queries to save memory.
+
+Here is a query where we join a collection `teachers` to a collection `sections` to see the name of the teacher, schedule, and course ID for a specific section of a course.
 
 ```sql
 SELECT
@@ -83,11 +85,22 @@ FROM teachers t
 INNER JOIN sections s ON t.id = s.teacher_id;
 ```
 
-We can optimize this query by creating an index for each column being joined.
+Here is another query that also joins on `teachers.id`. This one counts the number of sections each teacher teaches.
+
+```sql
+SELECT
+    t.id,
+    t.name,
+    count(*)
+FROM teachers t
+INNER JOIN sections s ON t.id = s.teacher_id
+GROUP BY t.id;
+```
+
+We can eliminate redundant memory usage for these two queries by creating an index on the common column being joined, `teachers.id`.
 
 ```sql
 CREATE INDEX pk_teachers ON teachers (id);
-CREATE INDEX sections_fk_teachers ON sections (teacher_id);
 ```
 
 #### Joins with Filters
@@ -125,7 +138,7 @@ EXPLAIN VIEW course_schedule;
 ```
 
 ```
-                  Optimized Plan                  
+                  Optimized Plan
 --------------------------------------------------
  Explained Query:                                +
    Project (#1, #5, #7)                          +
@@ -183,7 +196,7 @@ In many relational databases, indexes don't replicate the entire collection of d
     CREATE INDEX sections_narrow_courses_1 ON sections_narrow_courses (course_id);
     ```
     {{< note >}}
-  In this case, because both foreign keys are in `sections`, we could have gotten away with one narrow collection `sections_narrow_teachers_and_courses` with indexes on `id`, `teacher_id`, and `course_id`. In general, we won't be so lucky to have all the foreign keys in the same collection, so we've shown the more general pattern of creating a narrow view and two indexes for each foreign key. 
+  In this case, because both foreign keys are in `sections`, we could have gotten away with one narrow collection `sections_narrow_teachers_and_courses` with indexes on `id`, `teacher_id`, and `course_id`. In general, we won't be so lucky to have all the foreign keys in the same collection, so we've shown the more general pattern of creating a narrow view and two indexes for each foreign key.
     {{</ note >}}
 
 3. Rewrite your query to use your narrow collections in the join conditions. Example:
@@ -193,7 +206,7 @@ In many relational databases, indexes don't replicate the entire collection of d
       t.name AS teacher_name,
       s.schedule,
       c.name AS course_name
-    FROM sections_narrow_teachers s_t 
+    FROM sections_narrow_teachers s_t
     INNER JOIN sections s ON s_t.id = s.id
     INNER JOIN teachers t ON s_t.teacher_id = t.id
     INNER JOIN sections_narrow_courses s_c ON s_c.id = s.id
