@@ -604,6 +604,9 @@ impl CatalogState {
                     });
                 }
             };
+
+            let envelope = sink.envelope();
+
             updates.push(BuiltinTableUpdate {
                 id: self.resolve_builtin_table(&MZ_SINKS),
                 row: Row::pack_slice(&[
@@ -614,6 +617,7 @@ impl CatalogState {
                     Datum::String(connection.name()),
                     Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
                     Datum::from(self.get_storage_object_size(id)),
+                    Datum::from(envelope),
                     Datum::String(&sink.cluster_id.to_string()),
                 ]),
                 diff,

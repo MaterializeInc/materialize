@@ -1557,6 +1557,14 @@ impl Sink {
         }
     }
 
+    /// Envelope of the sink.
+    pub fn envelope(&self) -> Option<&str> {
+        match &self.envelope {
+            SinkEnvelope::Debezium => Some("debezium"),
+            SinkEnvelope::Upsert => Some("upsert"),
+        }
+    }
+
     pub fn connection_id(&self) -> Option<GlobalId> {
         match &self.connection {
             StorageSinkConnectionState::Pending(pending) => pending.connection_id(),
