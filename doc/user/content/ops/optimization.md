@@ -96,9 +96,9 @@ If your query filters one or more of the join inputs by a literal equality (e.g.
 
 #### Optimize Multi-Way Joins with Delta Joins
 
-Materialize has access to a join execution strategy we call `DeltaQuery`, a.k.a. **delta joins**, that aggressively re-uses indexes and maintains **_zero_** intermediate results. Materialize considers this plan only if all the necessary indexes already exist, in which case the **_additional_** memory cost of the join is **zero**. This is typically possible when you **index all the join keys**.
+Materialize has access to a join execution strategy we call `DeltaQuery`, a.k.a. **delta joins**, that aggressively re-uses indexes and maintains no intermediate results. Materialize considers this plan only if all the necessary indexes already exist, in which case the additional memory cost of the join is zero This is typically possible when you index all the join keys.
 
-From the previous example, suppose we want to add the name of the course rather than just the course ID. We will create a view `course_schedule` to reflect this:
+From the previous example, add the name of the course rather than just the course ID.
 
 ```sql
 CREATE VIEW course_schedule AS
