@@ -25,8 +25,7 @@ use timely::progress::Timestamp;
 use tracing::{error, warn};
 
 use mz_compute_client::controller::{
-    ComputeInstanceId, ComputeInstanceStatus, ComputeReplicaConfig, ComputeReplicaLocation,
-    ComputeReplicaLogging,
+    ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLocation, ComputeReplicaLogging,
 };
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
@@ -54,7 +53,7 @@ pub struct ClusterConfig {
 }
 
 /// The status of a cluster.
-pub type ClusterStatus = ComputeInstanceStatus;
+pub type ClusterStatus = mz_orchestrator::ServiceStatus;
 
 /// Identifies a cluster replica.
 pub type ReplicaId = mz_compute_client::controller::ReplicaId;
@@ -95,7 +94,7 @@ impl ReplicaLocation {
     /// any.
     pub fn availability_zone(&self) -> Option<&str> {
         match self {
-            ReplicaLocation::Unmanaged { .. } => None,
+            ReplicaLocation::Unmanaged(_) => None,
             ReplicaLocation::Managed(m) => Some(&m.availability_zone),
         }
     }
@@ -155,7 +154,7 @@ pub struct ClusterEvent {
     pub cluster_id: ClusterId,
     pub replica_id: ReplicaId,
     pub process_id: ProcessId,
-    pub status: ComputeInstanceStatus,
+    pub status: ClusterStatus,
     pub time: DateTime<Utc>,
 }
 
