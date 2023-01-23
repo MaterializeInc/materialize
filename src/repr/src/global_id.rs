@@ -11,6 +11,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::{anyhow, Error};
+use columnation::{CloneRegion, Columnation};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -114,4 +115,8 @@ impl RustType<ProtoGlobalId> for GlobalId {
             None => Err(TryFromProtoError::missing_field("ProtoGlobalId::kind")),
         }
     }
+}
+
+impl Columnation for GlobalId {
+    type InnerRegion = CloneRegion<GlobalId>;
 }

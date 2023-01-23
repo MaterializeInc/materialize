@@ -17,10 +17,8 @@ use std::rc::Rc;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
+use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
-use differential_dataflow::operators::Consolidate;
-use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
 use timely::dataflow::channels::pact::Pipeline;
@@ -34,6 +32,7 @@ use mz_repr::{DatumVec, Diff, Row};
 
 use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
+use crate::typedefs::{RowKeySpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
 impl<G> Context<G, Row>
@@ -216,81 +215,83 @@ where
             let input = collection.map(move |((key, hash), row)| ((key, hash % modulus), row));
             // We only want to arrange parts of the input that are not part of the actual output
             // such that `input.concat(&negated_output.negate())` yields the correct TopK
-            // TODO(#16549): Use explicit arrangement
-            let negated_output = input.reduce_named("TopK", {
-                move |_key, source, target: &mut Vec<(Row, Diff)>| {
-                    // Determine if we must actually shrink the result set.
-                    // TODO(benesch): avoid dangerous `as` conversion.
-                    #[allow(clippy::as_conversions)]
-                    let must_shrink = offset > 0
-                        || limit
-                            .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() as usize > l)
-                            .unwrap_or(false);
-                    if must_shrink {
-                        // First go ahead and emit all records
-                        for (row, diff) in source.iter() {
-                            target.push(((*row).clone(), diff.clone()));
-                        }
-                        // local copies that may count down to zero.
-                        let mut offset = offset;
-                        let mut limit = limit;
+            let negated_output = input
+                .arrange_named::<RowSpine<(Row, u64), _, _, _>>("Arranged TopK input")
+                .reduce_named("Reduced TopK input", {
+                    move |_key, source, target: &mut Vec<(Row, Diff)>| {
+                        // Determine if we must actually shrink the result set.
+                        // TODO(benesch): avoid dangerous `as` conversion.
+                        #[allow(clippy::as_conversions)]
+                        let must_shrink = offset > 0
+                            || limit
+                                .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() as usize > l)
+                                .unwrap_or(false);
+                        if must_shrink {
+                            // First go ahead and emit all records
+                            for (row, diff) in source.iter() {
+                                target.push(((*row).clone(), diff.clone()));
+                            }
+                            // local copies that may count down to zero.
+                            let mut offset = offset;
+                            let mut limit = limit;
 
-                        // The order in which we should produce rows.
-                        let mut indexes = (0..source.len()).collect::<Vec<_>>();
-                        // We decode the datums once, into a common buffer for efficiency.
-                        // Each row should contain `arity` columns; we should check that.
-                        let mut buffer = Vec::with_capacity(arity * source.len());
-                        for (index, row) in source.iter().enumerate() {
-                            buffer.extend(row.0.iter());
-                            assert_eq!(buffer.len(), arity * (index + 1));
-                        }
-                        let width = buffer.len() / source.len();
+                            // The order in which we should produce rows.
+                            let mut indexes = (0..source.len()).collect::<Vec<_>>();
+                            // We decode the datums once, into a common buffer for efficiency.
+                            // Each row should contain `arity` columns; we should check that.
+                            let mut buffer = Vec::with_capacity(arity * source.len());
+                            for (index, row) in source.iter().enumerate() {
+                                buffer.extend(row.0.iter());
+                                assert_eq!(buffer.len(), arity * (index + 1));
+                            }
+                            let width = buffer.len() / source.len();
 
-                        //todo: use arrangements or otherwise make the sort more performant?
-                        indexes.sort_by(|left, right| {
-                            let left = &buffer[left * width..][..width];
-                            let right = &buffer[right * width..][..width];
-                            // Note: source was originally ordered by the u8 array representation
-                            // of rows, but left.cmp(right) uses Datum::cmp.
-                            mz_expr::compare_columns(&order_key, left, right, || left.cmp(right))
-                        });
+                            //todo: use arrangements or otherwise make the sort more performant?
+                            indexes.sort_by(|left, right| {
+                                let left = &buffer[left * width..][..width];
+                                let right = &buffer[right * width..][..width];
+                                // Note: source was originally ordered by the u8 array representation
+                                // of rows, but left.cmp(right) uses Datum::cmp.
+                                mz_expr::compare_columns(&order_key, left, right, || {
+                                    left.cmp(right)
+                                })
+                            });
 
-                        // We now need to lay out the data in order of `buffer`, but respecting
-                        // the `offset` and `limit` constraints.
-                        for index in indexes.into_iter() {
-                            let (row, mut diff) = source[index];
-                            if diff > 0 {
-                                // If we are still skipping early records ...
-                                if offset > 0 {
-                                    let to_skip =
-                                        std::cmp::min(offset, usize::try_from(diff).unwrap());
-                                    offset -= to_skip;
-                                    diff -= Diff::try_from(to_skip).unwrap();
-                                }
-                                // We should produce at most `limit` records.
-                                // TODO(benesch): avoid dangerous `as` conversion.
-                                #[allow(clippy::as_conversions)]
-                                if let Some(limit) = &mut limit {
-                                    diff = std::cmp::min(diff, Diff::try_from(*limit).unwrap());
-                                    *limit -= diff as usize;
-                                }
-                                // Output the indicated number of rows.
+                            // We now need to lay out the data in order of `buffer`, but respecting
+                            // the `offset` and `limit` constraints.
+                            for index in indexes.into_iter() {
+                                let (row, mut diff) = source[index];
                                 if diff > 0 {
-                                    // Emit retractions for the elements actually part of
-                                    // the set of TopK elements.
-                                    target.push((row.clone(), -diff));
+                                    // If we are still skipping early records ...
+                                    if offset > 0 {
+                                        let to_skip =
+                                            std::cmp::min(offset, usize::try_from(diff).unwrap());
+                                        offset -= to_skip;
+                                        diff -= Diff::try_from(to_skip).unwrap();
+                                    }
+                                    // We should produce at most `limit` records.
+                                    // TODO(benesch): avoid dangerous `as` conversion.
+                                    #[allow(clippy::as_conversions)]
+                                    if let Some(limit) = &mut limit {
+                                        diff = std::cmp::min(diff, Diff::try_from(*limit).unwrap());
+                                        *limit -= diff as usize;
+                                    }
+                                    // Output the indicated number of rows.
+                                    if diff > 0 {
+                                        // Emit retractions for the elements actually part of
+                                        // the set of TopK elements.
+                                        target.push((row.clone(), -diff));
+                                    }
                                 }
                             }
                         }
                     }
-                }
-            });
+                });
 
             negated_output
                 .negate()
                 .concat(&input)
-                // TODO(#16549): Use explicit arrangement
-                .consolidate()
+                .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated TopK")
         }
 
         fn render_top1_monotonic<G>(
@@ -328,8 +329,7 @@ where
             // TODO: Could we use explode here? We'd lose the diff>0 assert and we'd have to impl Mul
             // for the monoid, unclear if it's worth it.
             let partial: Collection<G, Row, monoids::Top1Monoid> = collection
-                // TODO(#16549): Use explicit arrangement
-                .consolidate()
+                .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MonotonicTop1 input")
                 .inner
                 .map(move |((group_key, row), time, diff)| {
                     assert!(diff > 0);
@@ -346,11 +346,11 @@ where
                 })
                 .as_collection();
             let result = partial
-                // TODO(#16549): Use explicit arrangement
-                .arrange_by_self()
-                .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("Top1Monotonic", {
+                .map(|k| (k, ()))
+                .arrange_named::<RowSpine<Row, _, _, _>>("Arranged MonotonicTop1 partial")
+                .reduce_abelian::<_, RowSpine<_, _, _, _>>("MonotonicTop1", {
                     move |_key, input, output| {
-                        let accum = &input[0].1;
+                        let accum: &monoids::Top1Monoid = &input[0].1;
                         output.push((accum.row.clone(), 1));
                     }
                 });

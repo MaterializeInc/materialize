@@ -21,7 +21,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
-use differential_dataflow::operators::{Consolidate, Reduce, Threshold};
+use differential_dataflow::operators::Reduce;
 use differential_dataflow::Collection;
 use mz_expr::MirScalarExpr;
 use serde::{Deserialize, Serialize};
@@ -275,7 +275,6 @@ where
                 });
 
             // Demux out the potential errors from key and value selector evaluation.
-            use differential_dataflow::operators::consolidate::ConsolidateStream;
             let (ok, mut err) = key_val_input
                 .as_collection()
                 .consolidate_stream()
@@ -394,15 +393,16 @@ where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    // TODO(#16549): Use explicit arrangement
-    collection.reduce_abelian::<_, RowSpine<_, _, _, _>>("DistinctBy", {
-        |_key, _input, output| {
-            // We're pushing an empty row here because the key is implicitly added by the
-            // arrangement, and the permutation logic takes care of using the key part of the
-            // output.
-            output.push((Row::default(), 1));
-        }
-    })
+    collection
+        .arrange_named::<RowSpine<_, _, _, _>>("Arranged DistinctBy")
+        .reduce_abelian::<_, RowSpine<_, _, _, _>>("DistinctBy", {
+            |_key, _input, output| {
+                // We're pushing an empty row here because the key is implicitly added by the
+                // arrangement, and the permutation logic takes care of using the key part of the
+                // output.
+                output.push((Row::default(), 1));
+            }
+        })
 }
 
 /// Build the dataflow to compute the set of distinct keys.
@@ -417,23 +417,23 @@ where
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    // TODO(#16549): Use explicit arrangement
-    let negated_result = collection.reduce_named("DistinctBy Retractions", {
-        |key, input, output| {
-            output.push((key.clone(), -1));
-            output.extend(
-                input
-                    .iter()
-                    .map(|(values, count)| ((*values).clone(), *count)),
-            );
-        }
-    });
+    let negated_result = collection
+        .arrange_named::<RowSpine<Row, _, _, _>>("Arranged DistinctBy Retractions input")
+        .reduce_named("Reduce DistinctBy Retractions", {
+            |key, input, output| {
+                output.push((key.clone(), -1));
+                output.extend(
+                    input
+                        .iter()
+                        .map(|(values, count)| ((*values).clone(), *count)),
+                );
+            }
+        });
     use timely::dataflow::operators::Map;
     negated_result
         .negate()
         .concat(&collection)
-        // TODO(#16549): Use explicit arrangement
-        .consolidate()
+        .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated DistinctBy Retractions")
         .inner
         .map(|((k, _), time, count)| (k, time, count))
         .as_collection()
@@ -467,7 +467,7 @@ where
         to_collect.push(result.as_collection(move |key, val| (key.clone(), (index, val.clone()))));
     }
     differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
-        // TODO(#16549): Use explicit arrangement
+        .arrange_named::<RowSpine<_, _, _, _>>("Arranged ReduceFuseBasic input")
         .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceFuseBasic", {
             let mut row_buf = Row::default();
             move |_key, input, output| {
@@ -510,13 +510,18 @@ where
 
     // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
     if distinct {
-        // TODO(#16549): Use explicit arrangement
-        partial = partial.distinct_core();
+        partial = partial
+            .arrange_named::<RowSpine<(Row, Row), _, _, _>>("Arranged ReduceInaccumulable")
+            .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceInaccumulable", move |_, _, t| {
+                t.push(((), 1))
+            })
+            .as_collection(|k, _| k.clone())
     }
 
-    // TODO(#16549): Use explicit arrangement
     let debug_name = debug_name.to_string();
-    partial.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceInaccumulable", {
+    partial
+        .arrange_named::<RowSpine<_, Row, _, _>>("Arranged ReduceInaccumulable")
+        .reduce_abelian("ReduceInaccumulable", {
         let mut row_buf = Row::default();
         move |_key, source, target| {
             // Negative counts would be surprising, but until we are 100% certain we wont
@@ -648,8 +653,8 @@ where
 
     let debug_name = debug_name.to_string();
     let negated_output = input
-        // TODO(#16549): Use explicit arrangement
-        .reduce_named("MinsMaxesHierarchical", {
+        .arrange_named::<RowSpine<_, Vec<Row>, _, _>>("Arranged MinsMaxesHierarchical input")
+        .reduce_named("Reduced MinsMaxesHierarchical", {
             move |key, source, target| {
                 // Should negative accumulations reach us, we should loudly complain.
                 if source.iter().any(|(_val, cnt)| cnt <= &0) {
@@ -684,8 +689,7 @@ where
     negated_output
         .negate()
         .concat(&input)
-        // TODO(#16549): Use explicit arrangement
-        .consolidate()
+        .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MinsMaxesHierarchical")
 }
 
 /// Build the dataflow to compute and arrange multiple hierarchical aggregations
@@ -720,8 +724,7 @@ where
     // We arrange the inputs ourself to force it into a leaner structure because we know we
     // won't care about values.
     let partial = collection
-        // TODO(#16549): Use explicit arrangement
-        .consolidate()
+        .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated ReduceMonotonic input")
         .inner
         .map(move |((key, values), time, diff)| {
             assert!(diff > 0);
@@ -1255,8 +1258,12 @@ where
                 row_buf.packer().push(value);
                 (key, row_buf.clone())
             })
-            // TODO(#16549): Use explicit arrangement
-            .distinct_core()
+            .map(|k| (k, ()))
+            .arrange_named::<RowKeySpine<(Row, Row), _, _>>("Arranged Accumulable")
+            .reduce_abelian::<_, RowKeySpine<_, _, _>>("Reduced Accumulable", move |_k, _s, t| {
+                t.push(((), 1))
+            })
+            .as_collection(|k, _| k.clone())
             .explode_one({
                 let zero_diffs = zero_diffs.clone();
                 move |(key, row)| {
