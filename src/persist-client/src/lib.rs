@@ -427,11 +427,11 @@ impl BlobKnobs for PersistConfig {
     }
 
     fn connect_timeout(&self) -> Duration {
-        Duration::from_secs(3)
+        Duration::from_secs(7)
     }
 
     fn read_timeout(&self) -> Duration {
-        Duration::from_secs(6)
+        Duration::from_secs(10)
     }
 }
 
