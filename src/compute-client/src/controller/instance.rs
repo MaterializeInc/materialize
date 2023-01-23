@@ -37,7 +37,7 @@ use crate::types::sources::SourceInstanceDesc;
 
 use super::error::CollectionMissing;
 use super::replica::{Replica, ReplicaConfig};
-use super::{CollectionState, ComputeControllerResponse, ComputeInstanceId, ReplicaId};
+use super::{CollectionState, ComputeControllerResponse, ReplicaId};
 
 #[derive(Error, Debug)]
 #[error("replica exists already: {0}")]
@@ -92,8 +92,6 @@ pub(super) enum SubscribeTargetError {
 /// The state we keep for a compute instance.
 #[derive(Debug)]
 pub(super) struct Instance<T> {
-    /// ID of this instance
-    _instance_id: ComputeInstanceId,
     /// Build info for spawning replicas
     build_info: &'static BuildInfo,
     /// The replicas of this compute instance.
@@ -180,7 +178,6 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     pub fn new(
-        instance_id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         envd_epoch: NonZeroI64,
@@ -194,7 +191,6 @@ where
             .collect();
 
         let mut instance = Self {
-            _instance_id: instance_id,
             build_info,
             replicas: Default::default(),
             collections,
