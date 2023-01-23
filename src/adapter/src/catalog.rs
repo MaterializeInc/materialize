@@ -2431,7 +2431,8 @@ impl Catalog {
                 views: log_views,
             };
             let config = ReplicaConfig {
-                location: catalog.concretize_replica_location(serialized_config.location)?,
+                location: catalog
+                    .concretize_replica_location(serialized_config.location, &vec![])?,
                 compute: ComputeReplicaConfig {
                     logging,
                     idle_arrangement_merge_effort: serialized_config.idle_arrangement_merge_effort,
@@ -3872,6 +3873,7 @@ impl Catalog {
     pub fn concretize_replica_location(
         &self,
         location: SerializedReplicaLocation,
+        allowed_sizes: &Vec<String>,
     ) -> Result<ReplicaLocation, AdapterError> {
         let location = match location {
             SerializedReplicaLocation::Unmanaged {
@@ -3891,7 +3893,6 @@ impl Catalog {
                 az_user_specified,
             } => {
                 let cluster_replica_sizes = &self.state.cluster_replica_sizes;
-                let allowed_sizes = self.state.system_config().allowed_cluster_replica_sizes();
 
                 if !cluster_replica_sizes.0.contains_key(&size)
                     || (!allowed_sizes.is_empty() && !allowed_sizes.contains(&size))

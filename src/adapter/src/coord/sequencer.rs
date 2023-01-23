@@ -890,7 +890,10 @@ impl Coordinator {
             };
 
             let config = ReplicaConfig {
-                location: self.catalog.concretize_replica_location(location)?,
+                location: self.catalog.concretize_replica_location(
+                    location,
+                    self.catalog.system_config().allowed_cluster_replica_sizes(),
+                )?,
                 compute: ComputeReplicaConfig {
                     logging,
                     idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
@@ -1030,7 +1033,10 @@ impl Coordinator {
         };
 
         let config = ReplicaConfig {
-            location: self.catalog.concretize_replica_location(location)?,
+            location: self.catalog.concretize_replica_location(
+                location,
+                self.catalog.system_config().allowed_cluster_replica_sizes(),
+            )?,
             compute: ComputeReplicaConfig {
                 logging,
                 idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
@@ -3877,7 +3883,10 @@ impl Coordinator {
             availability_zone,
             az_user_specified: false,
         };
-        let location = self.catalog.concretize_replica_location(location)?;
+        let location = self.catalog.concretize_replica_location(
+            location,
+            self.catalog.system_config().allowed_cluster_replica_sizes(),
+        )?;
         let logging = {
             ReplicaLogging {
                 log_logging: false,
