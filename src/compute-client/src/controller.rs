@@ -69,8 +69,6 @@ mod replica;
 
 pub mod error;
 
-pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
-
 /// Identifer of a compute instance.
 pub type ComputeInstanceId = StorageInstanceId;
 
