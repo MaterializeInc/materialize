@@ -20,6 +20,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use mz_build_info::BuildInfo;
 use mz_ore::retry::Retry;
+use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_service::client::GenericClient;
 
 use crate::logging::LoggingConfig;
@@ -50,6 +51,8 @@ pub(super) struct Replica<T> {
     /// If receiving from the channel returns `None`, the replica has failed
     /// and requires rehydration.
     response_rx: UnboundedReceiver<ComputeResponse<T>>,
+    /// A handle to the task that aborts it when the replica is dropped.
+    _task: AbortOnDropHandle<()>,
     /// Configuration specific to this replica.
     pub config: ReplicaConfig,
 }
@@ -71,7 +74,7 @@ where
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
 
-        mz_ore::task::spawn(
+        let task = mz_ore::task::spawn(
             || format!("active-replication-replica-{id}"),
             ReplicaTask {
                 replica_id: id,
@@ -87,6 +90,7 @@ where
         Self {
             command_tx,
             response_rx,
+            _task: task.abort_on_drop(),
             config,
         }
     }
@@ -119,7 +123,6 @@ struct ReplicaTask<T> {
     command_rx: UnboundedReceiver<ComputeCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
     response_tx: UnboundedSender<ComputeResponse<T>>,
-    /// Orchestrator responsible for setting up clusterds
     /// A number (technically, pair of numbers) identifying this incarnation of the replica.
     /// The semantics of this don't matter, except that it must strictly increase.
     epoch: ComputeStartupEpoch,
@@ -179,8 +182,8 @@ where
 /// The initial replica connection is retried forever (with backoff). Once connected, the task
 /// returns (with an `Err`) if it encounters an error condition (e.g. the replica disconnects).
 ///
-/// If no error condition is encountered, the task runs forever. The instance controller should
-/// expected to abort the task when the replica is removed.
+/// If no error condition is encountered, the task runs until the controller disconnects from the
+/// command channel, or the task is dropped.
 async fn run_message_loop<T>(
     replica_id: ReplicaId,
     mut command_rx: UnboundedReceiver<ComputeCommand<T>>,
@@ -226,7 +229,10 @@ where
         select! {
             // Command from controller to forward to replica.
             command = command_rx.recv() => match command {
-                None => bail!("controller unexpectedly dropped command_rx"),
+                None => {
+                    // Controller is no longer interested in this replica. Shut down.
+                    break;
+                }
                 Some(mut command) => {
                     cmd_spec.specialize_command(&mut command);
                     client.send(command).await?;
@@ -234,14 +240,18 @@ where
             },
             // Response from replica to forward to controller.
             response = client.recv() => {
-                let response = match response? {
-                    None => bail!("replica unexpectedly gracefully terminated connection"),
-                    Some(response) => response,
+                let Some(response) = response? else {
+                    bail!("replica unexpectedly gracefully terminated connection");
                 };
-                response_tx.send(response)?;
+                if response_tx.send(response).is_err() {
+                    // Controller is no longer interested in this replica. Shut down.
+                    break;
+                }
             }
         }
     }
+
+    Ok(())
 }
 
 struct CommandSpecialization {
