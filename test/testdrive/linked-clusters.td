@@ -103,11 +103,11 @@ contains:cannot modify linked cluster "materialize_public_lg2"
 contains:cannot modify linked cluster "materialize_public_lg2"
 > SET cluster = materialize_public_lg2
 ! SELECT 1
-contains:cannot execute queries on linked clusters
+contains:cannot execute queries on cluster containing sources or sinks
 ! SUBSCRIBE v
-contains:cannot execute queries on linked clusters
+contains:cannot execute queries on cluster containing sources or sinks
 ! EXPLAIN SELECT 1
-contains:cannot execute queries on linked clusters
+contains:cannot execute queries on cluster containing sources or sinks
 > SET cluster = default
 
 # Test that only the default clusters and replicas remain after dropping
