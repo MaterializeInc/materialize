@@ -174,8 +174,9 @@ where
         id: ClusterId,
         config: ClusterConfig,
     ) -> Result<(), anyhow::Error> {
-        self.storage.create_instance(id);
-        self.compute.create_instance(id, config.arranged_logs)?;
+        self.storage.notify_create_instance(id);
+        self.compute
+            .notify_create_instance(id, config.arranged_logs)?;
         Ok(())
     }
 
@@ -185,8 +186,8 @@ where
     ///
     /// Panics if the cluster still has replicas.
     pub fn drop_cluster(&mut self, id: ClusterId) {
-        self.storage.drop_instance(id);
-        self.compute.drop_instance(id);
+        self.storage.notify_drop_instance(id);
+        self.compute.notify_drop_instance(id);
     }
 
     /// Creates a replica of the specified cluster with the specified identifier

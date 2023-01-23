@@ -250,8 +250,12 @@ where
     T: Timestamp + Lattice,
     ComputeGrpcClient: ComputeClient<T>,
 {
-    /// Create a compute instance.
-    pub fn create_instance(
+    /// Notifies the controller about a newly created instance with the
+    /// specified `id`.
+    ///
+    /// Returns an error if the controller was previously notified about a
+    /// storage instance with the given `id`.
+    pub fn notify_create_instance(
         &mut self,
         id: ComputeInstanceId,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
@@ -276,12 +280,13 @@ where
         Ok(())
     }
 
-    /// Remove a compute instance.
+    /// Notifies the controller that the instance with the given `id` has just
+    /// been dropped.
     ///
     /// # Panics
     ///
-    /// Panics if the identified `instance` still has active replicas.
-    pub fn drop_instance(&mut self, id: ComputeInstanceId) {
+    /// Panics if the identified instance still has active replicas.
+    pub fn notify_drop_instance(&mut self, id: ComputeInstanceId) {
         if let Some(compute_state) = self.instances.remove(&id) {
             compute_state.drop();
         }

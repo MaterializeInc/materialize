@@ -193,21 +193,22 @@ pub trait StorageController: Debug + Send {
     /// Acquire an immutable reference to the collection state, should it exist.
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError>;
 
-    /// Creates a storage instance with the specified ID.
+    /// Notifies the controller about a newly created storage instance with the
+    /// specified `id`.
     ///
     /// A storage instance can have zero or one replicas. The instance is
     /// created with zero replicas.
     ///
-    /// Panics if a storage instance with the given ID already exists.
-    fn create_instance(&mut self, id: StorageInstanceId);
+    /// Panics if the controller was previously notified about a storage
+    /// instance with the given `id`.
+    fn notify_create_instance(&mut self, id: StorageInstanceId);
 
-    /// Drops the storage instance with the given ID.
+    /// Notifies the controller that the storage instance with the given ID has
+    /// just been dropped.
     ///
-    /// If you call this method while the storage instance has a replica
-    /// attached, that replica will be leaked. Call `drop_replica` first.
-    ///
-    /// Panics if a storage instance with the given ID does not exist.
-    fn drop_instance(&mut self, id: StorageInstanceId);
+    /// Panics if the controller was not previously notified about a storage
+    /// instance with the given `id`.
+    fn notify_drop_instance(&mut self, id: StorageInstanceId);
 
     /// Connects the storage instance to the specified replica.
     ///
@@ -874,7 +875,7 @@ where
         Box::new(self.state.collections.iter())
     }
 
-    fn create_instance(&mut self, id: StorageInstanceId) {
+    fn notify_create_instance(&mut self, id: StorageInstanceId) {
         let mut client = RehydratingStorageClient::new(self.build_info, Arc::clone(&self.persist));
         if self.state.initialized {
             client.send(StorageCommand::InitializationComplete);
@@ -886,7 +887,7 @@ where
         assert!(old_client.is_none(), "storage instance {id} already exists");
     }
 
-    fn drop_instance(&mut self, id: StorageInstanceId) {
+    fn notify_drop_instance(&mut self, id: StorageInstanceId) {
         let client = self.state.clients.remove(&id);
         assert!(client.is_some(), "storage instance {id} does not exist");
     }
