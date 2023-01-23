@@ -298,15 +298,31 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// workers responsibilities, how it communicates with the other workers and
     /// how commands flow from the controller and through the workers.
     fn run_client(&mut self, command_rx: CommandReceiver, response_tx: ResponseSender) {
-        let command_sequencer = self.setup_command_sequencer();
-        let command_sequencer = Rc::new(RefCell::new(command_sequencer));
+        let command_sequencer = match self.storage_state.internal_cmd_tx.as_ref() {
+            Some(command_sequencer) => Rc::clone(command_sequencer),
+            None => {
+                // It is very important that we only create the internal control
+                // flow/command sequencer once because a) the `StorageState` is
+                // re-used when a new client connects and b) dataflows that have
+                // already been rendered into the timely worker are reused as
+                // well.
+                //
+                // If we created a new sequencer every time we get a new client
+                // (likely because the controller re-started and re-connected),
+                // dataflows that were rendered before would still hold a handle
+                // to the old sequencer but we would not read their commands
+                // anymore.
+                let command_sequencer = self.setup_command_sequencer();
+                let command_sequencer = Rc::new(RefCell::new(command_sequencer));
 
-        // TODO(aljoscha): We can refactor when `StorageState` is being created,
-        // to get around this being an `Option`.
-        let command_sequencer_clone = Rc::clone(&command_sequencer);
-        self.storage_state
-            .internal_cmd_tx
-            .replace(command_sequencer_clone);
+                let command_sequencer_clone = Rc::clone(&command_sequencer);
+                self.storage_state
+                    .internal_cmd_tx
+                    .replace(command_sequencer_clone);
+
+                command_sequencer
+            }
+        };
 
         // TODO(aljoscha): This `Activatable` business seems brittle, but that's
         // also how the command channel works currently. We can wrap it inside a
