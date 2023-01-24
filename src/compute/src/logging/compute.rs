@@ -376,7 +376,8 @@ pub fn construct<A: Allocate>(
         let peek_duration = peek_duration
             .as_collection()
             .explode(|(worker, val)| Some(((worker, val.next_power_of_two()), (val, 1))))
-            .count_total_core::<i64>()
+            // TODO(#16549): Use explicit arrangement
+            .count_total_core()
             .map(|((worker, bucket), (sum, count))| {
                 Row::pack_slice(&[
                     Datum::UInt64(u64::cast_from(worker)),
