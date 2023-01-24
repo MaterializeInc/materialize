@@ -57,11 +57,11 @@ We’ll use three approaches to solve the many cases mentioned in the “Goals�
 3. We'll transform away window functions in some special cases (e.g., to TopK, or a simple grouped aggregation + self-join)
 4. Initially, we will resort to the old window function implementation in some cases, but this should become less and less over time. I think it will be possible to eventually implement all window function usage with the above 1.-3., but it will take time to get there. 
 
-We’ll use the word ****index**** in the below text to mean the values of the ORDER BY column of the OVER clause, i.e., they are simply the values that determine the ordering. (Note that it’s sparse indexing, i.e., not every number occurs from 1 to n, but there are usually (big) gaps.)
+We’ll use the word **index** in the below text to mean the values of the ORDER BY column of the OVER clause, i.e., they are simply the values that determine the ordering. (Note that it’s sparse indexing, i.e., not every number occurs from 1 to n, but there are usually (big) gaps.)
 
-Now I’ll list all window functions, and how we’ll support them with one of the above approaches:
+Now I’ll list all window functions, and how we’ll support them with one of the above approaches. For a list of window functions, see https://www.postgresql.org/docs/current/functions-window.html
 
-- Frameless window functions
+- Frameless window functions (i.e., that either operate on an entire partition, e.g., ROW_NUMBER, or grab a value from a specific other row, e.g., LAG)
     - LAG/LEAD
         - For LAG/LEAD with an offset of 1, the sum function will just remember the previous value. (And we can have a similar one for LEAD.) This looks a bit weird as a sum function, but it will work:
             - it's associative;
@@ -75,10 +75,10 @@ Now I’ll list all window functions, and how we’ll support them with one of t
     - ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE
         - There is the TopK special case, which we want to transform to our efficient TopK implementation, rather then use any prefix sum stuff. This should probably be an MIR transform, e.g., to rely on MirScalarExpr canonicalization when detecting different variations of `rownum <= k`, e.g., `k >= rownum`, `rownum < k+1`, `rownum - 1 < k`.
         - Also, [as noted in the Goals section](https://www.notion.so/Efficient-Window-Functions-87682d6de73a4f6088acde21aba41fe6), there are some other cases where small input changes will lead to small output changes. These will be possible to support efficiently by performing a Prefix Sum with an appropriate sum function.
-- Framed window functions: These are *window aggregations* and FIRST_VALUE / LAST_VALUE.
+- Framed window functions: These are window aggregations and FIRST_VALUE / LAST_VALUE / NTH_VALUE. These operate on a certain subset of a window partition, e.g. the 5 preceding rows from the current row. For all the frame options, see https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-WINDOW-FUNCTIONS 
     - Aggregation when frame is both UNBOUNDED PRECEDING and UNBOUNDED FOLLOWING at the same time (or there is no ORDER BY, which has a similar effect) should be transformed to a grouped aggregation + self join.
     - In all other cases, we’ll use prefix sum, for which we need two things:
-        1. We have to find the end(s) of the interval that is the frame. I.e., we need to tell ********indexes******** to Prefix Sum (where the index is a value of the ORDER BY column(s), as mentioned above).
+        1. We have to find the end(s) of the interval that is the frame. I.e., we need to tell **indexes** to Prefix Sum (where the index is a value of the ORDER BY column(s), as mentioned above).
         2. We’ll need to generalize Prefix Sum to not just prefixes, but arbitrary intervals. (A prefix interval is identified by one index, a general interval is identified by two indexes.)
     - Solving 1. for all framing modes (RANGE | ROWS | GROUPS):
         - RANGE: this is the obvious one (but probably not the most often used): The offset is just a difference in the (sparse) “index” of the prefix sum (i.e., the ORDER BY column).
@@ -86,7 +86,7 @@ Now I’ll list all window functions, and how we’ll support them with one of t
         - GROUPS: (One could say that this is probably not so often used, so no need to initially support it. However, the problem is that the solution for ROWS will probably build on this, and that is the default, so that one is often used.) We have to somehow translate the offset to a difference in the “index” of the prefix sum:
             - Naive solution: Since this is a difference in DENSE_RANK between the current row and the ends of the interval, we could compute a DENSE_RANK, and then join with that to find the “index” (the value of the ORDER BY column).
                 - However, this would be slow, because DENSE_RANK is inherently not well incrementalizable: Small input changes can lead to lots of changes in the ranks.
-            - **(Tricky part)** A better solution is to calculate a count aggregation on all ranges (with prefix sum’s `aggregate`) (let’s calls this `counts`), and then do a logarithmic search for the index with a nested `iterate`:
+            - **(Tricky part)** A better solution is to calculate a count aggregation on all ranges (with prefix sum’s `aggregate`) (let's call this `counts`), and then do a logarithmic search for the index with a nested `iterate`:
                 - We start with `(index, offset)` pairs for all the possible current elements in parallel, where the pair means that we need to move `index` down by `offset` (down when looking for the lower end of the interval, or up when looking for the upper end), i.e., we need to lower `index` while lowering `offset` to 0.
                 - Then, at every step of an `iterate`, we can use a range from `counts` on each  `(index, offset)` pair: `index` is lowered by the size of the range, and `offset` is lowered by the aggregated count of the range.
                     - We want to use the biggest such range in `counts` that doesn’t make `offset` negative. We can do this by an inner `iterate`.
@@ -101,7 +101,7 @@ Now I’ll list all window functions, and how we’ll support them with one of t
             - `full_ranges`, `zero_ranges`, `used_ranges` stay the same.
             - `init_states` won’t start at position 0, but at the lower end of the intervals in `queries`
             - The iteration at the end will be mostly the same.
-    - FIRST_VALUE / LAST_VALUE with various frames
+    - FIRST_VALUE / LAST_VALUE / NTH_VALUE with various frames
         - Can be similarly implemented to window aggregations, i.e., we could “sum” up the relevant interval (that is not necessarily a prefix) with an appropriate sum function.
         - Or we can make it a bit faster: we just find the index of the relevant end of the interval (i.e., left end for FIRST_VALUE), and then self-join.
         - (And there are some special cases which we can more efficiently support: FIRST_VALUE with UNBOUNDED PRECEDING and LAST_VALUE with UNBOUNDED FOLLOWING should be transformed to just a (non-windowed) grouped aggregation + self-join instead of prefix sum trickery. Also, similarly for the case when there is no ORDER BY.)
