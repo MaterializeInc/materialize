@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![allow(missing_docs)]
+
 //! The tunable knobs for persist.
 
 use std::time::Duration;
@@ -15,7 +17,12 @@ use mz_build_info::BuildInfo;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::ConsensusKnobs;
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use proptest_derive::Arbitrary;
 use semver::Version;
+use serde::{Deserialize, Serialize};
+
+include!(concat!(env!("OUT_DIR"), "/mz_persist_client.cfg.rs"));
 
 /// The tunable knobs for persist.
 #[derive(Debug, Clone)]
@@ -222,5 +229,54 @@ impl ConsensusKnobs for PersistConfig {
 
     fn connection_pool_ttl_stagger(&self) -> Duration {
         self.consensus_connection_pool_ttl_stagger
+    }
+}
+
+/// Updates to values in [PersistConfig].
+///
+/// These reflect updates made to LaunchDarkly. They're passed from environmentd
+/// through storage and compute commands and applied to PersistConfig to change
+/// its values.
+///
+/// Parameters can be set (`Some`) or unset (`None`). Unset parameters should be
+/// interpreted to mean "use the previous value".
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Arbitrary)]
+pub struct PersistParameters {
+    /// Configures [`PersistConfig::blob_target_size`].
+    pub blob_target_size: Option<usize>,
+    /// Configures [`PersistConfig::compaction_minimum_timeout`].
+    pub compaction_minimum_timeout: Option<Duration>,
+}
+
+impl PersistParameters {
+    /// Update the parameter values with the set ones from `other`.
+    pub fn update(&mut self, other: PersistParameters) {
+        if let Some(v) = other.blob_target_size {
+            self.blob_target_size = Some(v);
+        }
+        if let Some(v) = other.compaction_minimum_timeout {
+            self.compaction_minimum_timeout = Some(v);
+        }
+    }
+
+    /// Return whether all parameters are unset.
+    pub fn all_unset(&self) -> bool {
+        self.blob_target_size.is_none() && self.compaction_minimum_timeout.is_none()
+    }
+}
+
+impl RustType<ProtoPersistParameters> for PersistParameters {
+    fn into_proto(&self) -> ProtoPersistParameters {
+        ProtoPersistParameters {
+            blob_target_size: self.blob_target_size.into_proto(),
+            compaction_minimum_timeout: self.compaction_minimum_timeout.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoPersistParameters) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            blob_target_size: proto.blob_target_size.into_rust()?,
+            compaction_minimum_timeout: proto.compaction_minimum_timeout.into_rust()?,
+        })
     }
 }
