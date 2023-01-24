@@ -283,6 +283,7 @@ impl StashFactory {
             nonce: rand::random(),
             sinces_tx,
             metrics: Arc::clone(&self.metrics),
+            collections: HashMap::new(),
         };
         // Do the initial connection once here so we don't get stuck in
         // transact's retry loop if the url is bad.
@@ -374,6 +375,7 @@ pub struct Stash {
     epoch: Option<NonZeroI64>,
     nonce: [u8; 16],
     pub(crate) sinces_tx: mpsc::UnboundedSender<(Id, Antichain<Timestamp>)>,
+    pub(crate) collections: HashMap<String, Id>,
     metrics: Arc<Metrics>,
 }
 
@@ -588,6 +590,7 @@ impl Stash {
         F: for<'a> Fn(
             &'a CountedStatements<'a>,
             &'a Client,
+            &'a HashMap<String, Id>,
         ) -> BoxFuture<'a, Result<T, StashError>>,
     {
         self.metrics.transactions.inc();
@@ -649,6 +652,7 @@ impl Stash {
         F: for<'a> Fn(
             &'a CountedStatements<'a>,
             &'a Client,
+            &'a HashMap<String, Id>,
         ) -> BoxFuture<'a, Result<T, StashError>>,
     {
         let reconnect = match &self.client {
@@ -673,7 +677,7 @@ impl Stash {
         let epoch_fut = client
             .query_one(stmts.select_epoch(), &[])
             .map_err(|err| err.into());
-        let f_fut = f(&stmts, client);
+        let f_fut = f(&stmts, client, &self.collections);
         let (row, res) = future::try_join(epoch_fut, f_fut).await?;
         let current_epoch = NonZeroI64::new(row.get(0)).unwrap();
         if Some(current_epoch) != self.epoch {

@@ -130,12 +130,18 @@ pub struct StashCollection<K, V> {
     _kv: PhantomData<(K, V)>,
 }
 
-impl<K, V> Clone for StashCollection<K, V> {
-    fn clone(&self) -> Self {
+impl<K, V> StashCollection<K, V> {
+    fn new(id: Id) -> Self {
         Self {
-            id: self.id,
+            id,
             _kv: PhantomData,
         }
+    }
+}
+
+impl<K, V> Clone for StashCollection<K, V> {
+    fn clone(&self) -> Self {
+        Self::new(self.id)
     }
 }
 
