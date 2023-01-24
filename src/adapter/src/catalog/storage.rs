@@ -638,6 +638,7 @@ impl Connection {
             .await
     }
 
+    #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_databases(&mut self) -> Result<Vec<(DatabaseId, String)>, Error> {
         Ok(COLLECTION_DATABASE
             .peek_one(&mut self.stash)
@@ -647,6 +648,7 @@ impl Connection {
             .collect())
     }
 
+    #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_schemas(
         &mut self,
     ) -> Result<Vec<(SchemaId, String, Option<DatabaseId>)>, Error> {
@@ -664,6 +666,7 @@ impl Connection {
             .collect())
     }
 
+    #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_roles(&mut self) -> Result<Vec<(RoleId, String)>, Error> {
         Ok(COLLECTION_ROLE
             .peek_one(&mut self.stash)
@@ -673,6 +676,7 @@ impl Connection {
             .collect())
     }
 
+    #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_clusters(
         &mut self,
     ) -> Result<Vec<(ClusterId, String, Option<GlobalId>)>, Error> {
@@ -684,6 +688,7 @@ impl Connection {
             .collect())
     }
 
+    #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_cluster_replicas(
         &mut self,
     ) -> Result<Vec<(ClusterId, ReplicaId, String, SerializedReplicaConfig)>, Error> {
@@ -695,6 +700,7 @@ impl Connection {
             .collect())
     }
 
+    #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_audit_log(&mut self) -> Result<impl Iterator<Item = VersionedEvent>, Error> {
         Ok(COLLECTION_AUDIT_LOG
             .peek_one(&mut self.stash)
@@ -703,6 +709,7 @@ impl Connection {
             .map(|ev| ev.event))
     }
 
+    #[tracing::instrument(level = "info", skip_all)]
     pub async fn storage_usage(
         &mut self,
     ) -> Result<impl Iterator<Item = VersionedStorageUsage>, Error> {
@@ -714,6 +721,7 @@ impl Connection {
     }
 
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
+    #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_system_gids(
         &mut self,
     ) -> Result<BTreeMap<(String, CatalogItemType, String), (GlobalId, String)>, Error> {
@@ -730,6 +738,7 @@ impl Connection {
             .collect())
     }
 
+    #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_introspection_source_index_gids(
         &mut self,
         cluster_id: ClusterId,
@@ -749,6 +758,7 @@ impl Connection {
     }
 
     /// Load the persisted server configurations.
+    #[tracing::instrument(level = "info", skip_all)]
     pub async fn load_system_configuration(&mut self) -> Result<BTreeMap<String, String>, Error> {
         COLLECTION_SYSTEM_CONFIGURATION
             .peek_one(&mut self.stash)
