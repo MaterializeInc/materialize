@@ -3959,7 +3959,7 @@ impl Catalog {
         self.state.default_linked_cluster_size()
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(name = "catalog::transact", level = "debug", skip_all)]
     pub async fn transact<F, R>(
         &mut self,
         oracle_write_ts: mz_repr::Timestamp,

@@ -25,12 +25,12 @@ use mz_build_info::BuildInfo;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 use serde_json::json;
 
+use crate::cli::admin::{make_blob, make_consensus};
 use crate::fetch::EncodedPart;
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey,
@@ -72,6 +72,9 @@ pub(crate) enum Command {
     /// Prints the unreferenced blobs across all shards
     UnreferencedBlobs(StateArgs),
 
+    /// Prints information about blob usage for a shard
+    BlobUsage(StateArgs),
+
     /// Prints each consensus state change as JSON. Output includes the full consensus state
     /// before and after each state transitions:
     ///
@@ -103,40 +106,28 @@ pub(crate) enum Command {
 pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
     match command.command {
         Command::State(args) => {
-            let shard_id = ShardId::from_str(&args.shard_id).expect("invalid shard id");
-            let state = fetch_latest_state(shard_id, &args.consensus_uri, &args.blob_uri).await?;
+            let state = fetch_latest_state(&args).await?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&state).expect("unserializable state")
             );
         }
         Command::StateRollup(args) => {
-            let shard_id = ShardId::from_str(&args.state.shard_id).expect("invalid shard id");
-            let rollup_key = args.rollup_key.map(PartialRollupKey);
-            let state_rollup = fetch_state_rollup(
-                shard_id,
-                &args.state.shard_id,
-                &args.state.blob_uri,
-                rollup_key,
-            )
-            .await?;
+            let state_rollup = fetch_state_rollup(&args).await?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&state_rollup).expect("unserializable state")
             );
         }
         Command::StateRollups(args) => {
-            let shard_id = ShardId::from_str(&args.shard_id).expect("invalid shard id");
-            let state_rollups =
-                fetch_state_rollups(shard_id, &args.consensus_uri, &args.blob_uri).await?;
+            let state_rollups = fetch_state_rollups(&args).await?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&state_rollups).expect("unserializable state")
             );
         }
         Command::StateDiff(args) => {
-            let shard_id = ShardId::from_str(&args.shard_id).expect("invalid shard id");
-            let states = fetch_state_diffs(shard_id, &args.consensus_uri, &args.blob_uri).await?;
+            let states = fetch_state_diffs(&args).await?;
             for window in states.windows(2) {
                 println!(
                     "{}",
@@ -157,10 +148,11 @@ pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
             println!("{}", json!(updates));
         }
         Command::UnreferencedBlobs(args) => {
-            let shard_id = ShardId::from_str(&args.shard_id).expect("invalid shard id");
-            let unreferenced_blobs =
-                unreferenced_blobs(&shard_id, &args.consensus_uri, &args.blob_uri).await?;
+            let unreferenced_blobs = unreferenced_blobs(&args).await?;
             println!("{}", json!(unreferenced_blobs));
+        }
+        Command::BlobUsage(args) => {
+            let () = blob_usage(&args).await?;
         }
     }
 
@@ -212,23 +204,9 @@ pub struct StateArgs {
 }
 
 /// Fetches the current state of a given shard
-pub async fn fetch_latest_state(
-    shard_id: ShardId,
-    consensus_uri: &str,
-    blob_uri: &str,
-) -> Result<impl serde::Serialize, anyhow::Error> {
-    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
-    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let consensus = ConsensusConfig::try_from(
-        consensus_uri,
-        Box::new(cfg.clone()),
-        metrics.postgres_consensus.clone(),
-    )?;
-    let consensus = consensus.clone().open().await?;
-    let blob = BlobConfig::try_from(blob_uri).await?;
-    let blob = blob.clone().open().await?;
-
-    let state_versions = StateVersions::new(cfg, consensus, blob, Arc::clone(&metrics));
+pub async fn fetch_latest_state(args: &StateArgs) -> Result<impl serde::Serialize, anyhow::Error> {
+    let shard_id = args.shard_id();
+    let state_versions = args.open().await?;
     let versions = state_versions
         .fetch_recent_live_diffs::<u64>(&shard_id)
         .await;
@@ -257,31 +235,21 @@ pub async fn fetch_latest_state(
 /// Fetches a state rollup of a given shard. If the seqno is not provided, choose the latest;
 /// if the rollup id is not provided, discover it by inspecting state.
 pub async fn fetch_state_rollup(
-    shard_id: ShardId,
-    consensus_uri: &str,
-    blob_uri: &str,
-    rollup_key: Option<PartialRollupKey>,
+    args: &StateRollupArgs,
 ) -> Result<impl serde::Serialize, anyhow::Error> {
-    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
-    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let consensus = ConsensusConfig::try_from(
-        consensus_uri,
-        Box::new(cfg.clone()),
-        metrics.postgres_consensus.clone(),
-    )?;
-    let consensus = consensus.clone().open().await?;
-    let blob = BlobConfig::try_from(blob_uri).await?;
-    let blob = blob.clone().open().await?;
+    let shard_id = args.state.shard_id();
+    let state_versions = args.state.open().await?;
 
-    let rollup_key = if let Some(rollup_key) = rollup_key {
-        rollup_key
+    let rollup_key = if let Some(rollup_key) = &args.rollup_key {
+        PartialRollupKey(rollup_key.to_owned())
     } else {
-        let latest_state = consensus.head(&shard_id.to_string()).await?;
+        let latest_state = state_versions.consensus.head(&shard_id.to_string()).await?;
         let diff_buf = latest_state.ok_or_else(|| anyhow!("unknown shard"))?;
         let diff = ProtoStateDiff::decode(diff_buf.data).expect("invalid encoded diff");
         PartialRollupKey(diff.latest_rollup_key)
     };
-    let rollup_buf = blob
+    let rollup_buf = state_versions
+        .blob
         .get(&rollup_key.complete(&shard_id))
         .await?
         .expect("fetching the specified state rollup");
@@ -290,26 +258,11 @@ pub async fn fetch_state_rollup(
 }
 
 /// Fetches the state from all known rollups of a given shard
-pub async fn fetch_state_rollups(
-    shard_id: ShardId,
-    consensus_uri: &str,
-    blob_uri: &str,
-) -> Result<impl serde::Serialize, anyhow::Error> {
-    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
-    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let consensus = ConsensusConfig::try_from(
-        consensus_uri,
-        Box::new(cfg.clone()),
-        metrics.postgres_consensus.clone(),
-    )?;
-    let consensus = consensus.clone().open().await?;
-    let blob = BlobConfig::try_from(blob_uri).await?;
-    let blob = blob.clone().open().await?;
+pub async fn fetch_state_rollups(args: &StateArgs) -> Result<impl serde::Serialize, anyhow::Error> {
+    let shard_id = args.shard_id();
+    let state_versions = args.open().await?;
 
     let mut rollup_keys = HashSet::new();
-
-    let state_versions =
-        StateVersions::new(cfg, consensus, Arc::clone(&blob), Arc::clone(&metrics));
     let mut state_iter = match state_versions
         .fetch_all_live_states::<K, V, u64, D>(&shard_id)
         .await
@@ -338,7 +291,11 @@ pub async fn fetch_state_rollups(
 
     let mut rollup_states = HashMap::with_capacity(rollup_keys.len());
     for key in rollup_keys {
-        let rollup_buf = blob.get(&key.complete(&shard_id)).await.unwrap();
+        let rollup_buf = state_versions
+            .blob
+            .get(&key.complete(&shard_id))
+            .await
+            .unwrap();
         if let Some(rollup_buf) = rollup_buf {
             let proto =
                 ProtoStateRollup::decode(rollup_buf.as_slice()).expect("invalid encoded state");
@@ -351,22 +308,10 @@ pub async fn fetch_state_rollups(
 
 /// Fetches each state in a shard
 pub async fn fetch_state_diffs(
-    shard_id: ShardId,
-    consensus_uri: &str,
-    blob_uri: &str,
+    args: &StateArgs,
 ) -> Result<Vec<impl serde::Serialize>, anyhow::Error> {
-    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
-    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let consensus = ConsensusConfig::try_from(
-        consensus_uri,
-        Box::new(cfg.clone()),
-        metrics.postgres_consensus.clone(),
-    )?;
-    let consensus = consensus.clone().open().await?;
-    let blob = BlobConfig::try_from(blob_uri).await?;
-    let blob = blob.clone().open().await?;
-
-    let state_versions = StateVersions::new(cfg, consensus, blob, Arc::clone(&metrics));
+    let shard_id = args.shard_id();
+    let state_versions = args.open().await?;
 
     let mut live_states = vec![];
     let mut state_iter = match state_versions
@@ -449,8 +394,9 @@ pub async fn blob_batch_part(
     partial_key: String,
     limit: usize,
 ) -> Result<impl serde::Serialize, anyhow::Error> {
-    let blob = BlobConfig::try_from(blob_uri).await?;
-    let blob = blob.clone().open().await?;
+    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+    let blob = make_blob(blob_uri, NO_COMMIT, metrics).await?;
 
     let key = PartialBatchKey(partial_key).complete(&shard_id);
     let part = blob
@@ -503,8 +449,9 @@ struct BlobCounts {
 
 /// Fetches the blob count for given path
 pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow::Error> {
-    let blob = BlobConfig::try_from(blob_uri).await?;
-    let blob = blob.clone().open().await?;
+    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+    let blob = make_blob(blob_uri, NO_COMMIT, metrics).await?;
 
     let mut blob_counts = BTreeMap::new();
     let () = blob
@@ -537,27 +484,16 @@ struct UnreferencedBlobs {
 }
 
 /// Fetches the unreferenced blobs for given environment
-pub async fn unreferenced_blobs(
-    shard_id: &ShardId,
-    consensus_uri: &str,
-    blob_uri: &str,
-) -> Result<impl serde::Serialize, anyhow::Error> {
-    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
-    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let consensus = ConsensusConfig::try_from(
-        consensus_uri,
-        Box::new(cfg.clone()),
-        metrics.postgres_consensus.clone(),
-    )?;
-    let consensus = consensus.clone().open().await?;
-    let blob = BlobConfig::try_from(blob_uri).await?;
-    let blob = blob.clone().open().await?;
+pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serialize, anyhow::Error> {
+    let shard_id = args.shard_id();
+    let state_versions = args.open().await?;
 
     let mut all_parts = vec![];
     let mut all_rollups = vec![];
-    let () = blob
+    let () = state_versions
+        .blob
         .list_keys_and_metadata(
-            &BlobKeyPrefix::Shard(shard_id).to_string(),
+            &BlobKeyPrefix::Shard(&shard_id).to_string(),
             &mut |metadata| match BlobKey::parse_ids(metadata.key) {
                 Ok((_, PartialBlobKey::Batch(writer, part))) => {
                     all_parts.push((PartialBatchKey::new(&writer, &part), writer.clone()));
@@ -570,9 +506,8 @@ pub async fn unreferenced_blobs(
         )
         .await?;
 
-    let state_versions = StateVersions::new(cfg, consensus, blob, Arc::clone(&metrics));
     let mut state_iter = match state_versions
-        .fetch_all_live_states::<K, V, u64, D>(shard_id)
+        .fetch_all_live_states::<K, V, u64, D>(&shard_id)
         .await
     {
         Ok(state_iter) => state_iter,
@@ -582,7 +517,7 @@ pub async fn unreferenced_blobs(
                 *kvtd = codec.actual;
             }
             state_versions
-                .fetch_all_live_states::<K, V, u64, D>(shard_id)
+                .fetch_all_live_states::<K, V, u64, D>(&shard_id)
                 .await?
         }
     };
@@ -617,6 +552,213 @@ pub async fn unreferenced_blobs(
     }
 
     Ok(unreferenced_blobs)
+}
+
+/// Returns information about blob usage for a shard
+pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
+    let shard_id = args.shard_id();
+    let state_versions = args.open().await?;
+
+    let mut s3_contents_before = HashMap::new();
+    let () = state_versions
+        .blob
+        .list_keys_and_metadata(&BlobKeyPrefix::Shard(&shard_id).to_string(), &mut |b| {
+            s3_contents_before.insert(b.key.to_owned(), usize::cast_from(b.size_in_bytes));
+        })
+        .await?;
+
+    let mut state_iter = match state_versions
+        .fetch_all_live_states::<K, V, u64, D>(&shard_id)
+        .await
+    {
+        Ok(state_iter) => state_iter,
+        Err(codec) => {
+            {
+                let mut kvtd = KVTD_CODECS.lock().expect("lockable");
+                *kvtd = codec.actual;
+            }
+            state_versions
+                .fetch_all_live_states::<K, V, u64, D>(&shard_id)
+                .await?
+        }
+    };
+
+    let mut referenced_parts = HashMap::new();
+    let mut referenced_rollups = HashSet::new();
+    while let Some(state) = state_iter.next() {
+        state.collections.trace.map_batches(|b| {
+            for part in b.parts.iter() {
+                referenced_parts.insert(
+                    part.key.complete(&shard_id).to_string(),
+                    part.encoded_size_bytes,
+                );
+            }
+        });
+        for rollup_key in state.collections.rollups.values() {
+            referenced_rollups.insert(rollup_key.complete(&shard_id).to_string());
+        }
+    }
+
+    let mut current_parts = HashMap::new();
+    let mut current_rollups = HashSet::new();
+    state_iter.state().collections.trace.map_batches(|b| {
+        for part in b.parts.iter() {
+            current_parts.insert(
+                part.key.complete(&shard_id).to_string(),
+                part.encoded_size_bytes,
+            );
+        }
+    });
+    for rollup_key in state_iter.state().collections.rollups.values() {
+        current_rollups.insert(rollup_key.complete(&shard_id).to_string());
+    }
+
+    // There's a bit of a race condition between fetching s3 and state, but
+    // probably fine for most cases?
+    let (mut referenced_by_state_count, mut referenced_by_state_bytes) = (0, 0);
+    let (mut current_writer_pending_count, mut current_writer_pending_bytes) = (0, 0);
+    let (mut leaked_count, mut leaked_bytes) = (0, 0);
+    for (key, bytes) in s3_contents_before.iter() {
+        let referenced_by_state =
+            referenced_parts.contains_key(key) || referenced_rollups.contains(key);
+        if referenced_by_state {
+            referenced_by_state_count += 1;
+            referenced_by_state_bytes += bytes;
+        } else {
+            let current_writer_pending =
+                match BlobKey::parse_ids(key).expect("key should be in known format") {
+                    (_, PartialBlobKey::Batch(writer_id, _)) => state_iter
+                        .state()
+                        .collections
+                        .writers
+                        .contains_key(&writer_id),
+                    (_, PartialBlobKey::Rollup(_, _)) => false,
+                };
+            if current_writer_pending {
+                current_writer_pending_count += 1;
+                current_writer_pending_bytes += bytes;
+            } else {
+                leaked_count += 1;
+                leaked_bytes += bytes;
+            }
+        }
+    }
+    let (mut gc_able_parts_count, mut gc_able_parts_bytes) = (0, 0);
+    let (current_parts_count, current_parts_bytes) =
+        (current_parts.len(), current_parts.values().sum::<usize>());
+    for (key, bytes) in referenced_parts.iter() {
+        if !current_parts.contains_key(key) {
+            gc_able_parts_count += 1;
+            gc_able_parts_bytes += bytes;
+        }
+    }
+    let (mut gc_able_rollups_count, mut gc_able_rollups_bytes) = (0, 0);
+    let (mut current_rollups_count, mut current_rollups_bytes) = (0, 0);
+    for key in referenced_rollups.iter() {
+        let Some(bytes) = s3_contents_before.get(key) else {
+            println!("unknown size due to race condition: {}", key);
+            continue;
+        };
+        if current_rollups.contains(key) {
+            current_rollups_count += 1;
+            current_rollups_bytes += *bytes;
+        } else {
+            gc_able_rollups_count += 1;
+            gc_able_rollups_bytes += *bytes;
+        }
+    }
+
+    println!(
+        "total s3 contents:        {} ({} blobs)",
+        human_bytes(s3_contents_before.values().sum::<usize>()),
+        s3_contents_before.len(),
+    );
+    println!(
+        "  leaked:                 {} ({} blobs)",
+        human_bytes(leaked_bytes),
+        leaked_count,
+    );
+    println!(
+        "  current writer pending: {} ({} blobs)",
+        human_bytes(current_writer_pending_bytes),
+        current_writer_pending_count,
+    );
+    println!(
+        "  referenced:             {} ({} blobs)",
+        human_bytes(referenced_by_state_bytes),
+        referenced_by_state_count,
+    );
+    println!(
+        "    gc-able:              {} ({} blobs)",
+        human_bytes(gc_able_parts_bytes + gc_able_rollups_bytes),
+        gc_able_parts_count + gc_able_rollups_count,
+    );
+    println!(
+        "      gc-able parts:      {} ({} blobs)",
+        human_bytes(gc_able_parts_bytes),
+        gc_able_parts_count,
+    );
+    println!(
+        "      gc-able rollups:    {} ({} blobs)",
+        human_bytes(gc_able_rollups_bytes),
+        gc_able_rollups_count,
+    );
+    println!(
+        "    current:              {} ({} blobs)",
+        human_bytes(current_parts_bytes + current_rollups_bytes),
+        current_parts_count + current_rollups_count,
+    );
+    println!(
+        "      current parts:      {} ({} blobs)",
+        human_bytes(current_parts_bytes),
+        current_parts_count,
+    );
+    println!(
+        "      current rollups:    {} ({} blobs)",
+        human_bytes(current_rollups_bytes),
+        current_rollups_count,
+    );
+
+    Ok(())
+}
+
+fn human_bytes(bytes: usize) -> String {
+    if bytes < 10_240 {
+        return format!("{}B", bytes);
+    }
+    #[allow(clippy::as_conversions)]
+    let mut bytes = bytes as f64 / 1_024f64;
+    if bytes < 10_240f64 {
+        return format!("{:.1}KiB", bytes);
+    }
+    bytes = bytes / 1_024f64;
+    if bytes < 10_240f64 {
+        return format!("{:.1}MiB", bytes);
+    }
+    bytes = bytes / 1_024f64;
+    if bytes < 10_240f64 {
+        return format!("{:.1}GiB", bytes);
+    }
+    bytes = bytes / 1_024f64;
+    format!("{:.1}TiB", bytes)
+}
+
+// All `inspect` command are read-only.
+const NO_COMMIT: bool = false;
+
+impl StateArgs {
+    fn shard_id(&self) -> ShardId {
+        ShardId::from_str(&self.shard_id).expect("invalid shard id")
+    }
+
+    async fn open(&self) -> Result<StateVersions, anyhow::Error> {
+        let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+        let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+        let consensus =
+            make_consensus(&cfg, &self.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
+        let blob = make_blob(&self.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
+        Ok(StateVersions::new(cfg, consensus, blob, metrics))
+    }
 }
 
 /// The following is a very terrible hack that no one should draw inspiration from. Currently State

@@ -2,6 +2,17 @@
 # MZ differs from PG.
 # See pgtest/transactions.pt for more details
 
+
+send
+Query {"query": "DROP TABLE IF EXISTS t"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
 # Verify implicit transactions are properly upgraded
 send
 Query {"query": "CREATE TABLE t (a INT)"}

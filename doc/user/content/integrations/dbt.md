@@ -296,7 +296,7 @@ Component                            | Value     | Description
 `columns`                            | `list`    | One or more columns on which the index is defined. To create an index that uses _all_ columns, use the `default` component instead.
 `name`                               | `string`  | The name for the index. If unspecified, Materialize will use the materialization name and column names provided.
 `cluster`                            | `string`  | The cluster to use to create the index. If unspecified, indexes will be created in the cluster used to create the materialization.
-`default`                            | `bool`    | Default: `False`. If set to `True`, creates a default index that uses all columns.
+`default`                            | `bool`    | Default: `False`. If set to `True`, creates a [default index](/sql/create-index/#syntax).
 
 ##### Creating a multi-column index
 

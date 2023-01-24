@@ -1,4 +1,19 @@
 # Test that multiple DDL statements in the same extended request are supported
+
+send
+Query {"query": "DROP TABLE IF EXISTS a"}
+Query {"query": "DROP TABLE IF EXISTS b"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
 send
 Parse {"query": "CREATE TABLE a (a int)"}
 Bind

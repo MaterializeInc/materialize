@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::iter::once;
+use std::sync::Arc;
 use std::time::Duration;
 
 use itertools::{max, Itertools};
@@ -538,7 +539,7 @@ impl Connection {
             // An advanced collection must have had its user version set, so the unwrap
             // must succeed.
             COLLECTION_CONFIG
-                .peek_key_one(&mut stash, &USER_VERSION.to_string())
+                .peek_key_one(&mut stash, USER_VERSION.to_string())
                 .await?
                 .expect("user_version must exist")
                 .value
@@ -599,11 +600,10 @@ impl Connection {
     }
 
     async fn get_setting_stash(stash: &mut Stash, key: &str) -> Result<Option<String>, Error> {
-        let settings = COLLECTION_SETTING.get(stash).await?;
-        let v = stash
+        let v = COLLECTION_SETTING
             .peek_key_one(
-                settings,
-                &SettingKey {
+                stash,
+                SettingKey {
                     name: key.to_string(),
                 },
             )
@@ -842,7 +842,7 @@ impl Connection {
             config: config.clone().into(),
         };
         COLLECTION_CLUSTER_REPLICAS
-            .upsert_key(&mut self.stash, &key, |_| Ok::<_, Error>(val))
+            .upsert_key(&mut self.stash, key, |_| Ok::<_, Error>(val))
             .await??;
         Ok(())
     }
@@ -890,7 +890,7 @@ impl Connection {
         COLLECTION_ID_ALLOC
             .peek_key_one(
                 &mut self.stash,
-                &IdAllocKey {
+                IdAllocKey {
                     name: id_type.to_string(),
                 },
             )
@@ -908,7 +908,7 @@ impl Connection {
             name: id_type.to_string(),
         };
         let (prev, next, consolidate_ids) = COLLECTION_ID_ALLOC
-            .upsert_key_no_consolidate(&mut self.stash, &key, |prev| {
+            .upsert_key_no_consolidate(&mut self.stash, key, move |prev| {
                 let id = prev.expect("must exist").next_id;
                 match id.checked_add(amount) {
                     Some(next_gid) => Ok(IdAllocValue { next_id: next_gid }),
@@ -946,7 +946,7 @@ impl Connection {
             id: timeline.to_string(),
         };
         let (prev, next, consolidate_ids) = COLLECTION_TIMESTAMP
-            .upsert_key_no_consolidate(&mut self.stash, &key, |_| {
+            .upsert_key_no_consolidate(&mut self.stash, key, move |_| {
                 Ok::<_, Error>(TimestampValue { ts: timestamp })
             })
             .await??;
@@ -985,28 +985,55 @@ where
         id: timeline.to_string(),
     };
     Ok(COLLECTION_TIMESTAMP
-        .peek_key_one(stash, &key)
+        .peek_key_one(stash, key)
         .await?
         .map(|v| v.ts))
 }
 
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(name = "storage::transaction", level = "trace", skip_all)]
 pub async fn transaction<'a>(stash: &'a mut Stash) -> Result<Transaction<'a>, Error> {
-    let databases = COLLECTION_DATABASE.peek_one(stash).await?;
-    let schemas = COLLECTION_SCHEMA.peek_one(stash).await?;
-    let roles = COLLECTION_ROLE.peek_one(stash).await?;
-    let items = COLLECTION_ITEM.peek_one(stash).await?;
-    let clusters = COLLECTION_CLUSTERS.peek_one(stash).await?;
-    let cluster_replicas = COLLECTION_CLUSTER_REPLICAS.peek_one(stash).await?;
-    let introspection_sources = COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX
-        .peek_one(stash)
+    let (
+        databases,
+        schemas,
+        roles,
+        items,
+        clusters,
+        cluster_replicas,
+        introspection_sources,
+        id_allocator,
+        configs,
+        settings,
+        timestamps,
+        system_gid_mapping,
+        system_configurations,
+    ) = stash
+        .with_transaction(|tx| {
+            Box::pin(async move {
+                // Peek the catalog collections in any order and a single transaction.
+                futures::try_join!(
+                    tx.peek_one(tx.collection(COLLECTION_DATABASE.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_SCHEMA.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_ROLE.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_ITEM.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_CLUSTERS.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_CLUSTER_REPLICAS.name()).await?),
+                    tx.peek_one(
+                        tx.collection(COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX.name())
+                            .await?,
+                    ),
+                    tx.peek_one(tx.collection(COLLECTION_ID_ALLOC.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_CONFIG.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_SETTING.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_TIMESTAMP.name()).await?),
+                    tx.peek_one(tx.collection(COLLECTION_SYSTEM_GID_MAPPING.name()).await?),
+                    tx.peek_one(
+                        tx.collection(COLLECTION_SYSTEM_CONFIGURATION.name())
+                            .await?,
+                    )
+                )
+            })
+        })
         .await?;
-    let id_allocator = COLLECTION_ID_ALLOC.peek_one(stash).await?;
-    let configs = COLLECTION_CONFIG.peek_one(stash).await?;
-    let settings = COLLECTION_SETTING.peek_one(stash).await?;
-    let timestamps = COLLECTION_TIMESTAMP.peek_one(stash).await?;
-    let system_gid_mapping = COLLECTION_SYSTEM_GID_MAPPING.peek_one(stash).await?;
-    let system_configurations = COLLECTION_SYSTEM_CONFIGURATION.peek_one(stash).await?;
 
     Ok(Transaction {
         stash,
@@ -1579,147 +1606,111 @@ impl<'a> Transaction<'a> {
     pub async fn commit_without_consolidate(
         self,
     ) -> Result<(&'a mut Stash, Vec<mz_stash::Id>), Error> {
-        let mut batches = Vec::new();
-        async fn add_batch<K, V, I>(
-            stash: &mut Stash,
+        async fn add_batch<'tx, K, V>(
+            tx: &'tx mz_stash::Transaction<'tx>,
             batches: &mut Vec<AppendBatch>,
-            collection: &TypedCollection<K, V>,
-            changes: I,
-        ) -> Result<(), Error>
+            typed: &TypedCollection<K, V>,
+            changes: &[(K, V, mz_stash::Diff)],
+        ) -> Result<(), StashError>
         where
-            K: mz_stash::Data,
-            V: mz_stash::Data,
-
-            I: IntoIterator<Item = (K, V, mz_stash::Diff)>,
+            K: mz_stash::Data + 'tx,
+            V: mz_stash::Data + 'tx,
         {
-            let mut changes = changes.into_iter().peekable();
-            if changes.peek().is_none() {
+            if changes.is_empty() {
                 return Ok(());
             }
-            let collection = collection.get(stash).await?;
-            let mut batch = collection.make_batch(stash).await?;
+            let collection = tx.collection::<K, V>(typed.name()).await?;
+            let upper = tx.upper(collection.id).await?;
+            let mut batch = collection.make_batch_lower(upper)?;
             for (k, v, diff) in changes {
-                collection.append_to_batch(&mut batch, &k, &v, diff);
+                collection.append_to_batch(&mut batch, k, v, *diff);
             }
             batches.push(batch);
             Ok(())
         }
-        add_batch(
-            self.stash,
-            &mut batches,
-            &COLLECTION_DATABASE,
-            self.databases.pending(),
-        )
-        .await?;
-        add_batch(
-            self.stash,
-            &mut batches,
-            &COLLECTION_SCHEMA,
-            self.schemas.pending(),
-        )
-        .await?;
-        add_batch(
-            self.stash,
-            &mut batches,
-            &COLLECTION_ITEM,
-            self.items.pending(),
-        )
-        .await?;
-        add_batch(
-            self.stash,
-            &mut batches,
-            &COLLECTION_ROLE,
-            self.roles.pending(),
-        )
-        .await?;
-        add_batch(
-            self.stash,
-            &mut batches,
-            &COLLECTION_CLUSTERS,
-            self.clusters.pending(),
-        )
-        .await?;
-        add_batch(
-            self.stash,
-            &mut batches,
-            &COLLECTION_CLUSTER_REPLICAS,
-            self.cluster_replicas.pending(),
-        )
-        .await?;
-        add_batch(
-            self.stash,
-            &mut batches,
-            &COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX,
-            self.introspection_sources.pending(),
-        )
-        .await?;
-        add_batch(
-            self.stash,
-            &mut batches,
-            &COLLECTION_ID_ALLOC,
-            self.id_allocator.pending(),
-        )
-        .await?;
-        add_batch(
-            self.stash,
-            &mut batches,
-            &COLLECTION_CONFIG,
-            self.configs.pending(),
-        )
-        .await?;
-        add_batch(
-            self.stash,
-            &mut batches,
-            &COLLECTION_SETTING,
-            self.settings.pending(),
-        )
-        .await?;
-        add_batch(
-            self.stash,
-            &mut batches,
-            &COLLECTION_TIMESTAMP,
-            self.timestamps.pending(),
-        )
-        .await?;
-        add_batch(
-            self.stash,
-            &mut batches,
-            &COLLECTION_SYSTEM_GID_MAPPING,
-            self.system_gid_mapping.pending(),
-        )
-        .await?;
-        add_batch(
-            self.stash,
-            &mut batches,
-            &COLLECTION_SYSTEM_CONFIGURATION,
-            self.system_configurations.pending(),
-        )
-        .await?;
-        add_batch(
-            self.stash,
-            &mut batches,
-            &COLLECTION_AUDIT_LOG,
-            self.audit_log_updates,
-        )
-        .await?;
-        add_batch(
-            self.stash,
-            &mut batches,
-            &COLLECTION_STORAGE_USAGE,
-            self.storage_usage_updates,
-        )
-        .await?;
 
-        let ids = batches
-            .iter()
-            .map(|batch| batch.collection_id)
-            .collect::<Vec<_>>();
-        if !batches.is_empty() {
-            self.stash
-                .append_batch(&batches)
-                .await
-                .map_err(StashError::from)?;
-        }
+        // The with_transaction fn below requires a Fn that can be cloned,
+        // meaning anything it closes over must be Clone. The .pending() here
+        // return Vecs. Thus, the Arcs here aren't strictly necessary because
+        // Vecs are Clone. However, using an Arc means that we never clone the
+        // Vec (which would happen at least one time when the txn starts), and
+        // instead only clone the Arc.
+        let databases = Arc::new(self.databases.pending());
+        let schemas = Arc::new(self.schemas.pending());
+        let items = Arc::new(self.items.pending());
+        let roles = Arc::new(self.roles.pending());
+        let clusters = Arc::new(self.clusters.pending());
+        let cluster_replicas = Arc::new(self.cluster_replicas.pending());
+        let introspection_sources = Arc::new(self.introspection_sources.pending());
+        let id_allocator = Arc::new(self.id_allocator.pending());
+        let configs = Arc::new(self.configs.pending());
+        let settings = Arc::new(self.settings.pending());
+        let timestamps = Arc::new(self.timestamps.pending());
+        let system_gid_mapping = Arc::new(self.system_gid_mapping.pending());
+        let system_configurations = Arc::new(self.system_configurations.pending());
+        let audit_log_updates = Arc::new(self.audit_log_updates);
+        let storage_usage_updates = Arc::new(self.storage_usage_updates);
+
+        let ids = self
+            .stash
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    let mut batches = Vec::new();
+                    add_batch(&tx, &mut batches, &COLLECTION_DATABASE, &databases).await?;
+                    add_batch(&tx, &mut batches, &COLLECTION_SCHEMA, &schemas).await?;
+                    add_batch(&tx, &mut batches, &COLLECTION_ITEM, &items).await?;
+                    add_batch(&tx, &mut batches, &COLLECTION_ROLE, &roles).await?;
+                    add_batch(&tx, &mut batches, &COLLECTION_CLUSTERS, &clusters).await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &COLLECTION_CLUSTER_REPLICAS,
+                        &cluster_replicas,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX,
+                        &introspection_sources,
+                    )
+                    .await?;
+                    add_batch(&tx, &mut batches, &COLLECTION_ID_ALLOC, &id_allocator).await?;
+                    add_batch(&tx, &mut batches, &COLLECTION_CONFIG, &configs).await?;
+                    add_batch(&tx, &mut batches, &COLLECTION_SETTING, &settings).await?;
+                    add_batch(&tx, &mut batches, &COLLECTION_TIMESTAMP, &timestamps).await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &COLLECTION_SYSTEM_GID_MAPPING,
+                        &system_gid_mapping,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &COLLECTION_SYSTEM_CONFIGURATION,
+                        &system_configurations,
+                    )
+                    .await?;
+                    add_batch(&tx, &mut batches, &COLLECTION_AUDIT_LOG, &audit_log_updates).await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &COLLECTION_STORAGE_USAGE,
+                        &storage_usage_updates,
+                    )
+                    .await?;
+
+                    let ids = batches
+                        .iter()
+                        .map(|batch| batch.collection_id)
+                        .collect::<Vec<_>>();
+                    tx.append(batches).await?;
+                    Ok(ids)
+                })
+            })
+            .await?;
         Ok((self.stash, ids))
     }
 }
@@ -1738,44 +1729,87 @@ where
 
 /// Inserts empty values into all new collections, so the collections are readable.
 pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
-    let mut batches = Vec::new();
-    async fn add_batch<K, V>(
-        stash: &mut Stash,
-        batches: &mut Vec<AppendBatch>,
-        collection: &TypedCollection<K, V>,
-    ) -> Result<(), Error>
+    async fn add_batch<'tx, K, V>(
+        tx: &'tx mz_stash::Transaction<'tx>,
+        typed: &TypedCollection<K, V>,
+    ) -> Result<Option<AppendBatch>, StashError>
     where
         K: mz_stash::Data,
         V: mz_stash::Data,
     {
-        if is_collection_uninitialized(stash, collection).await? {
-            let collection = collection.get(stash).await?;
-            let batch = collection.make_batch(stash).await?;
-            batches.push(batch);
+        let collection = tx.collection::<K, V>(typed.name()).await?;
+        let upper = tx.upper(collection.id).await?;
+        if upper.elements() == [mz_stash::Timestamp::MIN] {
+            Ok(Some(collection.make_batch_lower(upper)?))
+        } else {
+            Ok(None)
         }
-        Ok(())
     }
-    add_batch(stash, &mut batches, &COLLECTION_CONFIG).await?;
-    add_batch(stash, &mut batches, &COLLECTION_SETTING).await?;
-    add_batch(stash, &mut batches, &COLLECTION_ID_ALLOC).await?;
-    add_batch(stash, &mut batches, &COLLECTION_SYSTEM_GID_MAPPING).await?;
-    add_batch(stash, &mut batches, &COLLECTION_CLUSTERS).await?;
-    add_batch(
-        stash,
-        &mut batches,
-        &COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX,
-    )
-    .await?;
-    add_batch(stash, &mut batches, &COLLECTION_CLUSTER_REPLICAS).await?;
-    add_batch(stash, &mut batches, &COLLECTION_DATABASE).await?;
-    add_batch(stash, &mut batches, &COLLECTION_SCHEMA).await?;
-    add_batch(stash, &mut batches, &COLLECTION_ITEM).await?;
-    add_batch(stash, &mut batches, &COLLECTION_ROLE).await?;
-    add_batch(stash, &mut batches, &COLLECTION_TIMESTAMP).await?;
-    add_batch(stash, &mut batches, &COLLECTION_SYSTEM_CONFIGURATION).await?;
-    add_batch(stash, &mut batches, &COLLECTION_AUDIT_LOG).await?;
-    add_batch(stash, &mut batches, &COLLECTION_STORAGE_USAGE).await?;
-    stash.append(&batches).await.map_err(|e| e.into())
+
+    stash
+        .with_transaction(move |tx| {
+            Box::pin(async move {
+                // Query all collections in parallel. Makes for triplicated
+                // names, but runs quick.
+                let (
+                    config,
+                    setting,
+                    id_alloc,
+                    system_gid_mapping,
+                    clusters,
+                    cluster_introspection,
+                    cluster_replicas,
+                    database,
+                    schema,
+                    item,
+                    role,
+                    timestamp,
+                    system_configuration,
+                    audit_log,
+                    storage_usage,
+                ) = futures::try_join!(
+                    add_batch(&tx, &COLLECTION_CONFIG),
+                    add_batch(&tx, &COLLECTION_SETTING),
+                    add_batch(&tx, &COLLECTION_ID_ALLOC),
+                    add_batch(&tx, &COLLECTION_SYSTEM_GID_MAPPING),
+                    add_batch(&tx, &COLLECTION_CLUSTERS),
+                    add_batch(&tx, &COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX),
+                    add_batch(&tx, &COLLECTION_CLUSTER_REPLICAS),
+                    add_batch(&tx, &COLLECTION_DATABASE),
+                    add_batch(&tx, &COLLECTION_SCHEMA),
+                    add_batch(&tx, &COLLECTION_ITEM),
+                    add_batch(&tx, &COLLECTION_ROLE),
+                    add_batch(&tx, &COLLECTION_TIMESTAMP),
+                    add_batch(&tx, &COLLECTION_SYSTEM_CONFIGURATION),
+                    add_batch(&tx, &COLLECTION_AUDIT_LOG),
+                    add_batch(&tx, &COLLECTION_STORAGE_USAGE),
+                )?;
+                let batches: Vec<AppendBatch> = [
+                    config,
+                    setting,
+                    id_alloc,
+                    system_gid_mapping,
+                    clusters,
+                    cluster_introspection,
+                    cluster_replicas,
+                    database,
+                    schema,
+                    item,
+                    role,
+                    timestamp,
+                    system_configuration,
+                    audit_log,
+                    storage_usage,
+                ]
+                .into_iter()
+                .filter_map(|b| b)
+                .collect();
+                tx.append(batches).await?;
+                Ok(())
+            })
+        })
+        .await
+        .map_err(|err| err.into())
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]

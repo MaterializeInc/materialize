@@ -79,7 +79,7 @@ use std::fmt;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::process;
+use std::process::ExitCode;
 
 use chrono::Utc;
 use time::Instant;
@@ -130,7 +130,7 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> ExitCode {
     mz_ore::panic::set_abort_on_panic();
     mz_ore::test::init_logging_default("warn");
 
@@ -156,7 +156,7 @@ async fn main() {
             Ok(file) => Some((file, junit_report::TestSuite::new("sqllogictest"))),
             Err(err) => {
                 writeln!(config.stderr, "creating {}: {}", filename.display(), err);
-                process::exit(1);
+                return ExitCode::FAILURE;
             }
         },
         None => None,
@@ -213,7 +213,7 @@ async fn main() {
         }
     }
     if bad_file {
-        process::exit(1);
+        return ExitCode::FAILURE;
     }
 
     writeln!(config.stdout, "{}", outcomes.display(config.no_fail));
@@ -230,28 +230,29 @@ async fn main() {
                     "error: unable to write junit report: {}",
                     err
                 );
-                process::exit(2);
+                return ExitCode::from(2);
             }
         }
     }
 
     if outcomes.any_failed() && !args.no_fail {
-        process::exit(1);
+        return ExitCode::FAILURE;
     }
+    ExitCode::SUCCESS
 }
 
-async fn rewrite(config: &RunConfig<'_>, args: Args) {
+async fn rewrite(config: &RunConfig<'_>, args: Args) -> ExitCode {
     if args.junit_report.is_some() {
         writeln!(
             config.stderr,
             "--rewrite-results is not compatible with --junit-report"
         );
-        process::exit(1);
+        return ExitCode::FAILURE;
     }
 
     if args.paths.iter().any(|path| path == "-") {
         writeln!(config.stderr, "--rewrite-results cannot be used with stdin");
-        process::exit(1);
+        return ExitCode::FAILURE;
     }
 
     let mut bad_file = false;
@@ -276,8 +277,9 @@ async fn rewrite(config: &RunConfig<'_>, args: Args) {
         }
     }
     if bad_file {
-        process::exit(1);
+        return ExitCode::FAILURE;
     }
+    ExitCode::SUCCESS
 }
 
 struct OutputStream<W> {

@@ -326,7 +326,7 @@ impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
     }
 }
 
-async fn make_consensus(
+pub(super) async fn make_consensus(
     cfg: &PersistConfig,
     consensus_uri: &str,
     commit: bool,
@@ -347,7 +347,7 @@ async fn make_consensus(
     Ok(consensus)
 }
 
-async fn make_blob(
+pub(super) async fn make_blob(
     blob_uri: &str,
     commit: bool,
     metrics: Arc<Metrics>,
