@@ -1387,6 +1387,7 @@ where
 
             // Remove sink by removing its write frontier and arranging for deprovisioning.
             self.update_write_frontiers(&[(id, Antichain::new())]);
+            self.state.pending_sink_drops.push(id);
         }
     }
 
@@ -1623,18 +1624,22 @@ where
         // instances, but this seems fine for now.
         for (id, frontier) in self.state.pending_compaction_commands.drain(..) {
             // TODO(petrosagg): make this a strict check
-            let client = self.state.collections[&id]
-                .cluster_id()
-                .and_then(|cluster_id| self.state.clients.get_mut(&cluster_id));
+            let cluster_id = self.state.collections[&id].cluster_id();
+            let client = cluster_id.and_then(|cluster_id| self.state.clients.get_mut(&cluster_id));
+
+            // Only ingestion collections have actual work to do on drop.
+            //
+            // Note that while collections are dropped, the `client` may already
+            // be cleared out, before we do this post-processing!
+            if cluster_id.is_some() && frontier.is_empty() {
+                self.state.pending_source_drops.push(id);
+            }
+
             if let Some(client) = client {
                 client.send(StorageCommand::AllowCompaction(vec![(
                     id,
                     frontier.clone(),
                 )]));
-
-                if frontier.is_empty() {
-                    self.state.pending_source_drops.push(id);
-                }
             }
         }
 
