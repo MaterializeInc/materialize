@@ -525,6 +525,7 @@ pub struct Connection {
 }
 
 impl Connection {
+    #[tracing::instrument(name = "storage::open", level = "info", skip_all)]
     pub async fn open(
         mut stash: Stash,
         now: NowFn,
@@ -1728,6 +1729,7 @@ where
 }
 
 /// Inserts empty values into all new collections, so the collections are readable.
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
     async fn add_batch<'tx, K, V>(
         tx: &'tx mz_stash::Transaction<'tx>,
