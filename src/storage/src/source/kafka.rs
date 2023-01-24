@@ -25,7 +25,7 @@ use rdkafka::types::RDKafkaRespErr;
 use rdkafka::{ClientContext, Message, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
-use tracing::{error, info, warn};
+use tracing::{error, info, trace, warn};
 
 use mz_expr::PartitionId;
 use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
@@ -202,7 +202,12 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
             }
         }
 
-        info!("worker {worker_id}/{worker_count}: Instantiating Kafka source reader at offsets {start_offsets:?}");
+        info!(
+            source_id = source_id.to_string(),
+            worker_id = worker_id,
+            num_workers = worker_count,
+            "into_reader: instantiating Kafka source reader at offsets {start_offsets:?}"
+        );
 
         let partition_info = Arc::new(Mutex::new(None));
         let metadata_thread_handle = {
@@ -231,16 +236,32 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
             thread::Builder::new()
                 .name("kafka-metadata".to_string())
                 .spawn(move || {
-                    info!(
+                    trace!(
+                        source_id = source_id.to_string(),
+                        worker_id = worker_id,
+                        num_workers = worker_count,
                         refresh_frequency =? metadata_refresh_frequency,
-                        "starting kafka metadata refresh thread"
+                        "kafka metadata thread: starting..."
                     );
                     while let Some(partition_info) = partition_info.upgrade() {
                         let result =
                             get_kafka_partitions(&consumer, &topic, Duration::from_secs(30));
+                        trace!(
+                            source_id = source_id.to_string(),
+                            worker_id = worker_id,
+                            num_workers = worker_count,
+                            "kafka metadata thread: metadata fetch result: {:?}",
+                            result
+                        );
                         match result {
                             Ok(info) => {
                                 *partition_info.lock().unwrap() = Some(info);
+                                trace!(
+                                    source_id = source_id.to_string(),
+                                    worker_id = worker_id,
+                                    num_workers = worker_count,
+                                    "kafka metadata thread: updated partition metadata info",
+                                );
                                 *status_report.lock().unwrap() = Some(HealthStatus::Running);
                                 thread::park_timeout(metadata_refresh_frequency);
                             }
@@ -251,7 +272,12 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
                             }
                         }
                     }
-                    info!("Partition info has been dropped; shutting down.")
+                    info!(
+                        source_id = source_id.to_string(),
+                        worker_id = worker_id,
+                        num_workers = worker_count,
+                        "kafka metadata thread: partition info has been dropped; shutting down."
+                    )
                 })
                 .unwrap()
                 .unpark_on_drop()
@@ -477,8 +503,12 @@ impl KafkaSourceReader {
     /// Creates a new partition queue for `partition_id`.
     fn create_partition_queue(&mut self, partition_id: i32, initial_offset: Offset) {
         info!(
-            "Activating Kafka queue for {} [{}] (source {}) on worker {}",
-            self.topic_name, partition_id, self.id, self.worker_id
+            source_id = self.id.to_string(),
+            worker_id = self.worker_id,
+            num_workers = self.worker_count,
+            "activating Kafka queue for topic {}, partition {}",
+            self.topic_name,
+            partition_id,
         );
 
         // Collect old partition assignments
@@ -553,19 +583,47 @@ impl KafkaSourceReader {
                     });
                 if let Some(position) = position {
                     if *position != next_offset {
-                        warn!("Did not fast-forward consumer on partition PID: {} to the correct Kafka offset. Currently at offset: {} Expected offset: {}",
-                              pid, position, next_offset);
+                        warn!(
+                            source_id = self.id.to_string(),
+                            worker_id = self.worker_id,
+                            num_workers = self.worker_count,
+                            "did not fast-forward consumer on \
+                            partition {} to the correct Kafka offset. Currently \
+                            at offset: {} Expected offset: {}",
+                            pid,
+                            position,
+                            next_offset
+                        );
                     } else {
-                        info!("Successfully fast-forwarded consumer on partition PID: {} to Kafka offset {}.", pid, position);
+                        info!(
+                            source_id = self.id.to_string(),
+                            worker_id = self.worker_id,
+                            num_workers = self.worker_count,
+                            "successfully fast-forwarded consumer on \
+                            partition {} to Kafka offset {}.",
+                            pid,
+                            position
+                        );
                     }
                 } else {
-                    warn!("Tried to fast-forward consumer on partition PID: {} to Kafka offset {}. Could not obtain new consumer position",
-                          pid, next_offset);
+                    warn!(
+                        source_id = self.id.to_string(),
+                        worker_id = self.worker_id,
+                        num_workers = self.worker_count,
+                        "tried to fast-forward consumer on \
+                        partition {} to Kafka offset {}. Could not obtain new consumer position",
+                        pid,
+                        next_offset
+                    );
                 }
             }
             Err(e) => error!(
-                "Failed to fast-forward consumer for source:{}, Error:{}",
-                self.source_name, e
+                source_id = self.id.to_string(),
+                worker_id = self.worker_id,
+                num_workers = self.worker_count,
+                "failed to fast-forward consumer for source {}, Error:{}",
+                self.source_name,
+                e
             ),
         }
     }
@@ -666,9 +724,12 @@ impl KafkaSourceReader {
         let offset_as_i64: i64 = time.1.offset.try_into().expect("offset to be < i64::MAX");
         if offset_as_i64 <= last_offset {
             info!(
-                "Kafka message before expected offset, skipping: \
-                             source {} (reading topic {}, partition {}) \
-                             received offset {} expected offset {:?}",
+                source_id = self.id.to_string(),
+                worker_id = self.worker_id,
+                num_workers = self.worker_count,
+                "kafka message before expected offset, skipping: \
+                source {} (reading topic {}, partition {}) \
+                received offset {} expected offset {:?}",
                 self.source_name,
                 self.topic_name,
                 partition,
