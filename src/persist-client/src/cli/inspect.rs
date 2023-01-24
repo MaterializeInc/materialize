@@ -58,7 +58,7 @@ pub(crate) enum Command {
     State(StateArgs),
 
     /// Prints latest consensus rollup state as JSON
-    StateRollup(StateArgs),
+    StateRollup(StateRollupArgs),
 
     /// Prints consensus rollup state of all known rollups as JSON
     StateRollups(StateArgs),
@@ -111,9 +111,15 @@ pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
             );
         }
         Command::StateRollup(args) => {
-            let shard_id = ShardId::from_str(&args.shard_id).expect("invalid shard id");
-            let state_rollup =
-                fetch_latest_state_rollup(shard_id, &args.consensus_uri, &args.blob_uri).await?;
+            let shard_id = ShardId::from_str(&args.state.shard_id).expect("invalid shard id");
+            let rollup_key = args.rollup_key.map(PartialRollupKey);
+            let state_rollup = fetch_state_rollup(
+                shard_id,
+                &args.state.shard_id,
+                &args.state.blob_uri,
+                rollup_key,
+            )
+            .await?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&state_rollup).expect("unserializable state")
@@ -159,6 +165,17 @@ pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
     }
 
     Ok(())
+}
+
+/// Arguments for viewing the state rollup of a shard
+#[derive(Debug, Clone, clap::Parser)]
+pub struct StateRollupArgs {
+    #[clap(flatten)]
+    pub(crate) state: StateArgs,
+
+    /// Inspect the state rollup with the given ID, if available.
+    #[clap(long)]
+    pub(crate) rollup_key: Option<String>,
 }
 
 /// Arguments for viewing the current state of a given shard
@@ -237,11 +254,13 @@ pub async fn fetch_latest_state(
     Ok(state)
 }
 
-/// Fetches the current state rollup of a given shard
-pub async fn fetch_latest_state_rollup(
+/// Fetches a state rollup of a given shard. If the seqno is not provided, choose the latest;
+/// if the rollup id is not provided, discover it by inspecting state.
+pub async fn fetch_state_rollup(
     shard_id: ShardId,
     consensus_uri: &str,
     blob_uri: &str,
+    rollup_key: Option<PartialRollupKey>,
 ) -> Result<impl serde::Serialize, anyhow::Error> {
     let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
@@ -254,19 +273,20 @@ pub async fn fetch_latest_state_rollup(
     let blob = BlobConfig::try_from(blob_uri).await?;
     let blob = blob.clone().open().await?;
 
-    if let Some(diff_buf) = consensus.head(&shard_id.to_string()).await? {
+    let rollup_key = if let Some(rollup_key) = rollup_key {
+        rollup_key
+    } else {
+        let latest_state = consensus.head(&shard_id.to_string()).await?;
+        let diff_buf = latest_state.ok_or_else(|| anyhow!("unknown shard"))?;
         let diff = ProtoStateDiff::decode(diff_buf.data).expect("invalid encoded diff");
-        let rollup_key = PartialRollupKey(diff.latest_rollup_key);
-        let rollup_buf = blob
-            .get(&rollup_key.complete(&shard_id))
-            .await
-            .unwrap()
-            .unwrap();
-        let proto = ProtoStateRollup::decode(rollup_buf.as_slice()).expect("invalid encoded state");
-        return Ok(proto);
-    }
-
-    Err(anyhow!("unknown shard"))
+        PartialRollupKey(diff.latest_rollup_key)
+    };
+    let rollup_buf = blob
+        .get(&rollup_key.complete(&shard_id))
+        .await?
+        .expect("fetching the specified state rollup");
+    let proto = ProtoStateRollup::decode(rollup_buf.as_slice()).expect("invalid encoded state");
+    Ok(proto)
 }
 
 /// Fetches the state from all known rollups of a given shard
