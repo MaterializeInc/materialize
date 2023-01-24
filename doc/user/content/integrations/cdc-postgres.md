@@ -296,6 +296,8 @@ As a _superuser_ (`cloudsqlsuperuser`):
 
 {{< /tabs >}}
 
+Once logical replication is enabled:
+
 1. Grant enough privileges to ensure Debezium can operate in the database. The specific privileges will depend on how much control you want to give to the replication user, so we recommend following the [Debezium documentation](https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-replication-user-privileges).
 
 1. If a table that you want to replicate has a **primary key** defined, you can use your default replica identity value. If a table you want to replicate has **no primary key** defined, you must set the replica identity value to `FULL`:
