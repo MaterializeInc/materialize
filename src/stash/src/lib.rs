@@ -680,6 +680,104 @@ where
             })
             .await
     }
+
+    /// Transactionally deletes any kv pair from `self` which returns `true` for
+    /// `predicate`.
+    ///
+    /// Note that this operation:
+    /// - Runs in a single transaction and cannot be combined with other
+    ///   transactions.
+    /// - Scans the entire table to perform deletions.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn delete<P>(&self, stash: &mut Stash, predicate: P) -> Result<(), StashError>
+    where
+        P: Fn(&K, &V) -> bool + Clone + Sync + Send + 'static,
+        K: Hash + Clone,
+        V: Clone,
+    {
+        let name = self.name;
+        stash
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    let collection = tx.collection::<K, V>(name).await?;
+                    let lower = tx.upper(collection.id).await?;
+                    let mut batch = collection.make_batch_lower(lower)?;
+                    let set = match tx.peek_one(collection).await {
+                        Ok(set) => set,
+                        Err(err) => match err.inner {
+                            InternalStashError::PeekSinceUpper(_) => {
+                                // If the upper isn't > since, bump the upper and try again to find a sealed
+                                // entry. Do this by appending the empty batch which will advance the upper.
+                                tx.append(vec![batch]).await?;
+                                let lower = tx.upper(collection.id).await?;
+                                batch = collection.make_batch_lower(lower)?;
+                                tx.peek_one(collection).await?
+                            }
+                            _ => return Err(err),
+                        },
+                    };
+
+                    for (k, v) in set {
+                        if (predicate)(&k, &v) {
+                            collection.append_to_batch(&mut batch, &k, &v, -1);
+                        }
+                    }
+
+                    tx.append(vec![batch]).await?;
+                    Ok(())
+                })
+            })
+            .await
+    }
+
+    /// Transactionally updates values in all KV pairs using `transform`.
+    ///
+    /// Note that this operation:
+    /// - Runs in a single transaction and cannot be combined with other
+    ///   transactions.
+    /// - Scans the entire table to perform deletions.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn update<T>(&self, stash: &mut Stash, transform: T) -> Result<(), StashError>
+    where
+        T: Fn(&K, &V) -> Option<V> + Clone + Sync + Send + 'static,
+        K: Hash + Clone,
+        V: Clone,
+    {
+        let name = self.name;
+        stash
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    let collection = tx.collection::<K, V>(name).await?;
+                    let lower = tx.upper(collection.id).await?;
+                    let mut batch = collection.make_batch_lower(lower)?;
+                    let set = match tx.peek_one(collection).await {
+                        Ok(set) => set,
+                        Err(err) => match err.inner {
+                            InternalStashError::PeekSinceUpper(_) => {
+                                // If the upper isn't > since, bump the upper and try again to find a sealed
+                                // entry. Do this by appending the empty batch which will advance the upper.
+                                tx.append(vec![batch]).await?;
+                                let lower = tx.upper(collection.id).await?;
+                                batch = collection.make_batch_lower(lower)?;
+                                tx.peek_one(collection).await?
+                            }
+                            _ => return Err(err),
+                        },
+                    };
+
+                    for (k, v) in set {
+                        if let Some(new_v) = (transform)(&k, &v) {
+                            collection.append_to_batch(&mut batch, &k, &v, -1);
+                            collection.append_to_batch(&mut batch, &k, &new_v, 1);
+                        }
+                    }
+
+                    tx.append(vec![batch]).await?;
+                    Ok(())
+                })
+            })
+            .await
+    }
 }
 
 /// TableTransaction emulates some features of a typical SQL transaction over
