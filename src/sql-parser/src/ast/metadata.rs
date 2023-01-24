@@ -41,17 +41,17 @@ pub trait AstInfo: Clone {
     /// The type used for nested statements.
     type NestedStatement: AstDisplay + Clone + Hash + Debug + Eq;
     /// The type used for table references.
-    type ObjectName: AstDisplay + Clone + Hash + Debug + Eq;
+    type ObjectName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// The type used for schema names.
-    type SchemaName: AstDisplay + Clone + Hash + Debug + Eq;
+    type SchemaName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// The type used for database names.
-    type DatabaseName: AstDisplay + Clone + Hash + Debug + Eq;
+    type DatabaseName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// The type used for cluster names.
-    type ClusterName: AstDisplay + Clone + Hash + Debug + Eq;
+    type ClusterName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// The type used for data types.
-    type DataType: AstDisplay + Clone + Hash + Debug + Eq;
+    type DataType: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// The type stored next to CTEs for their assigned ID.
-    type CteId: Clone + Hash + Debug + Eq;
+    type CteId: Clone + Hash + Debug + Eq + Ord;
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Default)]
@@ -67,7 +67,7 @@ impl AstInfo for Raw {
     type CteId = ();
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
 pub enum RawObjectName {
     Name(UnresolvedObjectName),
     Id(String, UnresolvedObjectName),
@@ -117,7 +117,7 @@ where
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
 pub enum RawClusterName {
     Unresolved(Ident),
     Resolved(String),
@@ -150,7 +150,7 @@ where
 }
 
 /// SQL data types
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum RawDataType {
     /// Array
     Array(Box<RawDataType>),

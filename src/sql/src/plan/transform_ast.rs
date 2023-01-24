@@ -351,7 +351,7 @@ impl Desugarer {
         } = expr
         {
             if *negated {
-                *expr = e.clone().lt(low.take()).or(e.take().gt(high.take()));
+                *expr = Expr::lt(*e.clone(), low.take()).or(e.take().gt(high.take()));
             } else {
                 *expr = e.clone().gt_eq(low.take()).and(e.take().lt_eq(high.take()));
             }

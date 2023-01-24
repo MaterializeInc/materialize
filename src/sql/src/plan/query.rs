@@ -2055,7 +2055,7 @@ fn plan_view_select(
 
 fn plan_scalar_table_funcs(
     qcx: &QueryContext,
-    table_funcs: Vec<(TableFunction<Aug>, String)>,
+    table_funcs: BTreeMap<TableFunction<Aug>, String>,
     table_func_names: &mut HashMap<String, Ident>,
     relation_expr: &HirRelationExpr,
     from_scope: &Scope,
@@ -2086,12 +2086,12 @@ fn plan_scalar_table_funcs(
         return Ok((expr, scope));
     }
     // Otherwise, plan as usual, emulating the ROWS FROM behavior
-    let (keys, values): (Vec<_>, Vec<_>) = table_funcs.into_iter().unzip();
-    let (expr, mut scope, num_cols) = plan_rows_from_internal(&rows_from_qcx, keys.iter(), None)?;
+    let (expr, mut scope, num_cols) =
+        plan_rows_from_internal(&rows_from_qcx, table_funcs.keys(), None)?;
 
     // Munge the scope so table names match with the generated ids.
     let mut i = 0;
-    for (id, num_cols) in values.iter().zip(num_cols) {
+    for (id, num_cols) in table_funcs.values().zip(num_cols) {
         for _ in 0..num_cols {
             scope.items[i].table_name = Some(PartialObjectName {
                 database: None,
@@ -4964,9 +4964,7 @@ struct AggregateTableFuncVisitor<'a> {
     scx: &'a StatementContext<'a>,
     aggs: Vec<Function<Aug>>,
     within_aggregate: bool,
-    // We maintain the `Vec` for deterministic ordering and the `HashMap` for fast lookups.
-    tables: Vec<(TableFunction<Aug>, String)>,
-    tables_map: HashMap<TableFunction<Aug>, String>,
+    tables: BTreeMap<TableFunction<Aug>, String>,
     table_disallowed_context: Vec<&'static str>,
     in_select_item: bool,
     err: Option<PlanError>,
@@ -4978,8 +4976,7 @@ impl<'a> AggregateTableFuncVisitor<'a> {
             scx,
             aggs: Vec::new(),
             within_aggregate: false,
-            tables: Vec::new(),
-            tables_map: HashMap::new(),
+            tables: BTreeMap::new(),
             table_disallowed_context: Vec::new(),
             in_select_item: false,
             err: None,
@@ -4988,7 +4985,7 @@ impl<'a> AggregateTableFuncVisitor<'a> {
 
     fn into_result(
         self,
-    ) -> Result<(Vec<Function<Aug>>, Vec<(TableFunction<Aug>, String)>), PlanError> {
+    ) -> Result<(Vec<Function<Aug>>, BTreeMap<TableFunction<Aug>, String>), PlanError> {
         match self.err {
             Some(err) => Err(err),
             None => {
@@ -5095,16 +5092,11 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
             {
                 let func = TableFunction { name, args };
                 // Identical table functions can be de-duplicated.
-                let id = match self.tables_map.get(&func) {
-                    Some(id) => id.clone(),
-                    None => {
-                        let id = format!("table_func_{}", Uuid::new_v4());
-                        self.tables_map.insert(func.clone(), id.clone());
-                        self.tables.push((func, id.clone()));
-                        id
-                    }
-                };
-                *expr = Expr::Identifier(vec![Ident::from(id)]);
+                let id = self
+                    .tables
+                    .entry(func)
+                    .or_insert_with(|| format!("table_func_{}", Uuid::new_v4()));
+                *expr = Expr::Identifier(vec![Ident::from(id.clone())]);
             }
         }
         if let Some(context) = disallowed_context {
