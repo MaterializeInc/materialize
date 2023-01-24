@@ -51,9 +51,13 @@ Running Materialize locally requires a running CockroachDB server.
 On macOS, when using Homebrew, CockroachDB can be installed and started via:
 
 ```shell
-brew install cockroachdb/cockroach/cockroach
+brew install materializeinc/cockroach/cockroach
 brew services start cockroach
 ```
+
+(We recommend use of our [forked Homebrew tap][forked-cockroach-tap] because it
+runs CockroachDB using an in-memory store, which avoids slow filesystem
+operations on macOS.)
 
 On Linux, we recommend using Docker:
 
@@ -466,6 +470,7 @@ source /path/to/materialize/misc/completions/zsh/*
 [github-https]: https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line
 [hakari documentation]: https://docs.rs/cargo-hakari/latest/cargo_hakari/about/index.html
 [Homebrew]: https://brew.sh
+[forked-cockroach-tap]: https://github.com/materializeInc/homebrew-cockroach
 [Kubernetes]: https://kubernetes.io
 [materialize-dbt-utils]: https://github.com/MaterializeInc/materialize-dbt-utils
 [Nix]: https://nixos.org
