@@ -21,7 +21,7 @@ use mz_ore::task::spawn;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
@@ -192,6 +192,17 @@ where
                 )
             })
             .await;
+
+        if !self.state.collections.is_tombstone()
+            && !self
+                .state
+                .collections
+                .leased_readers
+                .contains_key(reader_id)
+        {
+            error!("Reader {reader_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
+                    This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
+        }
         // Usually, the reader gets an initial seqno hold of the seqno at which
         // it was registered. However, on a tombstone shard the seqno hold
         // happens to get computed as the tombstone seqno + 1
@@ -242,6 +253,12 @@ where
                 )
             })
             .await;
+        if !self.state.collections.is_tombstone()
+            && !self.state.collections.writers.contains_key(writer_id)
+        {
+            error!("Writer {writer_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
+                    This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
+        }
         (shard_upper, writer_state)
     }
 
