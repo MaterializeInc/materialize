@@ -303,7 +303,7 @@ pub fn construct<A: Allocate>(
                                     if let Some(start) = peek_stash.remove(&key) {
                                         let elapsed_ns = time.as_nanos() - start;
                                         peek_duration_session.give((
-                                            (key.0, elapsed_ns.next_power_of_two(), elapsed_ns),
+                                            (key.0, elapsed_ns),
                                             time_ms,
                                             1,
                                         ));
@@ -375,7 +375,7 @@ pub fn construct<A: Allocate>(
         // Duration statistics derive from the non-rounded event times.
         let peek_duration = peek_duration
             .as_collection()
-            .explode(|(worker, bucket, val)| Some(((worker, bucket), (val, 1))))
+            .explode(|(worker, val)| Some(((worker, val.next_power_of_two()), (val, 1))))
             .count_total_core::<i64>()
             .map(|((worker, bucket), (sum, count))| {
                 Row::pack_slice(&[
