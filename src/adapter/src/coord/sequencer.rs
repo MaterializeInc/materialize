@@ -3846,7 +3846,7 @@ impl Coordinator {
     /// source or sink with the given name.
     ///
     /// The operations are written to the provided `ops` vector. The ID
-    /// allocated for the TODO TODO
+    /// allocated for the linked cluster is returned.
     pub(crate) async fn create_linked_cluster_ops(
         &mut self,
         linked_object_id: GlobalId,
