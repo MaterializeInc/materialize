@@ -230,6 +230,19 @@ pub struct StateCollections<T> {
     pub(crate) trace: Trace<T>,
 }
 
+impl<T> StateCollections<T> {
+    /// Fetch the time remaining on a leased reader's lease, or Duration::ZERO if it does not exist.
+    pub(crate) fn reader_lease_remaining(&self, id: &LeasedReaderId, now_ms: u64) -> Duration {
+        if let Some(state) = self.leased_readers.get(id) {
+            let lease_ms = now_ms.saturating_sub(state.last_heartbeat_timestamp_ms);
+            let remaining_ms = state.lease_duration_ms.saturating_sub(lease_ms);
+            Duration::from_millis(remaining_ms)
+        } else {
+            Duration::ZERO
+        }
+    }
+}
+
 #[derive(Debug)]
 #[cfg_attr(test, derive(PartialEq))]
 pub enum CompareAndAppendBreak<T> {
