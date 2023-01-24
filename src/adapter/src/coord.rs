@@ -82,7 +82,7 @@ use rand::seq::SliceRandom;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{info, span, warn, Level};
+use tracing::{info, span, warn, Instrument, Level};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -521,7 +521,7 @@ impl Coordinator {
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "info", skip_all)]
     pub(crate) async fn bootstrap(
         &mut self,
         builtin_migration_metadata: BuiltinMigrationMetadata,
@@ -1136,6 +1136,10 @@ impl Coordinator {
 ///
 /// Returns a handle to the coordinator and a client to communicate with the
 /// coordinator.
+// TODO: This causes stack overflows during tests which can be fixed by setting
+// RUST_MIN_STACK=8388608, but we'd like to come up with a better solution, so
+// don't enable serve tracing for now.
+//#[tracing::instrument(name = "coord::serve", level = "info", skip_all)]
 pub async fn serve(
     Config {
         dataflow_client,
@@ -1231,6 +1235,7 @@ pub async fn serve(
     let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
     let metrics = Metrics::register_into(&metrics_registry);
     let metrics_clone = metrics.clone();
+    let span = tracing::Span::current();
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
         // prevent a stack overflow we allocate a stack twice as big as the default
@@ -1281,6 +1286,7 @@ pub async fn serve(
             let bootstrap = handle.block_on(async {
                 coord
                     .bootstrap(builtin_migration_metadata, builtin_table_updates)
+                    .instrument(span)
                     .await?;
                 coord
                     .controller

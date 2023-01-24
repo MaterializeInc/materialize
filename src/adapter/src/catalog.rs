@@ -2115,7 +2115,7 @@ impl Catalog {
     /// schemas since last restart, a list of updates to builtin tables that
     /// describe the initial state of the catalog, and the version of the
     /// catalog before any migrations were performed.
-    #[tracing::instrument(level = "info", skip_all)]
+    #[tracing::instrument(name = "catalog::open", level = "info", skip_all)]
     pub async fn open(
         config: Config<'_>,
     ) -> Result<

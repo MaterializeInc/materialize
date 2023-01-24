@@ -236,6 +236,7 @@ pub enum TlsMode {
 }
 
 /// Start an `environmentd` server.
+#[tracing::instrument(name = "environmentd::serve", level = "info", skip_all)]
 pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
         &config.adapter_stash_url,
