@@ -415,11 +415,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             {
                 let mut command_sequencer = command_sequencer.borrow_mut();
                 while let Some(internal_cmd) = command_sequencer.next() {
-                    self.handle_internal_storage_command(
-                        &mut *command_sequencer,
-                        &mut async_worker,
-                        internal_cmd,
-                    );
+                    self.handle_internal_storage_command(&mut async_worker, internal_cmd);
                 }
             }
         }
@@ -456,19 +452,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Entry point for applying an internal storage command.
     pub fn handle_internal_storage_command(
         &mut self,
-        internal_cmd_tx: &mut dyn InternalCommandSender,
         async_worker: &mut AsyncStorageWorker<mz_repr::Timestamp>,
         internal_cmd: InternalStorageCommand,
     ) {
         match internal_cmd {
-            InternalStorageCommand::SuspendAndRestart { id, reason } => {
-                info!(
-                    "worker {}/{} initiating suspend-and-restart for {id} because of: {reason}",
-                    self.timely_worker.index(),
-                    self.timely_worker.peers(),
-                );
-
+            InternalStorageCommand::SuspendAndRestart(id) => {
                 let maybe_ingestion = self.storage_state.ingestions.get(&id).cloned();
+
                 if let Some(ingestion_description) = maybe_ingestion {
                     // Yank the token of the previously existing source
                     // dataflow.
@@ -500,33 +490,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     return;
                 }
 
-                let maybe_sink = self.storage_state.exports.get(&id).cloned();
-                if let Some(sink_description) = maybe_sink {
-                    // Yank the token of the previously existing sink
-                    // dataflow.
-                    let maybe_token = self.storage_state.sink_tokens.remove(&id);
-
-                    if maybe_token.is_none() {
-                        // Something has dropped the sink. Make sure we don't
-                        // accidentally re-create it.
-                        return;
-                    }
-
-                    // This needs to be broadcast by one worker and go through
-                    // the internal command fabric, to ensure consistent
-                    // ordering of dataflow rendering across all workers.
-                    if self.timely_worker.index() == 0 {
-                        internal_cmd_tx.broadcast(InternalStorageCommand::CreateSinkDataflow(
-                            id,
-                            sink_description,
-                        ));
-                    }
-
-                    // Continue with other commands.
-                    return;
-                }
-
-                panic!("got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}");
+                panic!("got InternalStorageCommand::SuspendAndRestart for something that is not a source: {id}");
             }
             InternalStorageCommand::CreateIngestionDataflow {
                 id: ingestion_id,
