@@ -32,7 +32,7 @@ use mz_persist_types::{Codec, Codec64, Opaque};
 use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::compact::CompactReq;
-use crate::internal::maintenance::{LeaseExpiration, RoutineMaintenance, WriterMaintenance};
+use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics, ShardMetrics,
 };
@@ -904,6 +904,7 @@ where
         let shard_metrics = Arc::clone(&self.shard_metrics);
         cmd.run_cmd(&shard_metrics, |cas_mismatch_metric| async move {
             let mut garbage_collection;
+            let mut expiry_metrics;
 
             loop {
                 let was_tombstone_before = self.state.collections.is_tombstone();
@@ -917,6 +918,7 @@ where
                         return Ok((self.state.seqno(), Err(err), RoutineMaintenance::default()))
                     }
                 };
+                expiry_metrics = new_state.expire_at((self.cfg.now)());
 
                 // Sanity check that all state transitions have special case for
                 // being a tombstone. The ones that do will return a Break and
@@ -988,16 +990,10 @@ where
                         );
                         self.state = new_state;
 
-                        let (expired_readers, expired_writers) =
-                            self.state.handles_needing_expiration((self.cfg.now)());
                         self.metrics
                             .lease
                             .timeout_read
-                            .inc_by(u64::cast_from(expired_readers.len()));
-                        let lease_expiration = Some(LeaseExpiration {
-                            readers: expired_readers,
-                            writers: expired_writers,
-                        });
+                            .inc_by(u64::cast_from(expiry_metrics.readers_expired));
 
                         if let Some(gc) = garbage_collection.as_ref() {
                             debug!("Assigned gc request: {:?}", gc);
@@ -1005,7 +1001,6 @@ where
 
                         let maintenance = RoutineMaintenance {
                             garbage_collection,
-                            lease_expiration: lease_expiration.unwrap_or_default(),
                             write_rollup: self.state.need_rollup(),
                         };
 

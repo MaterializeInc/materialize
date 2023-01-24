@@ -1179,31 +1179,6 @@ where
         ret
     }
 
-    pub fn handles_needing_expiration(
-        &self,
-        now_ms: EpochMillis,
-    ) -> (Vec<LeasedReaderId>, Vec<WriterId>) {
-        let mut readers = Vec::new();
-        for (reader, state) in self.collections.leased_readers.iter() {
-            let time_since_last_heartbeat_ms =
-                now_ms.saturating_sub(state.last_heartbeat_timestamp_ms);
-            if time_since_last_heartbeat_ms > state.lease_duration_ms {
-                readers.push(reader.clone());
-            }
-        }
-        // critical_readers don't need forced expiration (in fact, that's the
-        // point)
-        let mut writers = Vec::new();
-        for (writer, state) in self.collections.writers.iter() {
-            let time_since_last_heartbeat_ms =
-                now_ms.saturating_sub(state.last_heartbeat_timestamp_ms);
-            if time_since_last_heartbeat_ms > state.lease_duration_ms {
-                writers.push(writer.clone());
-            }
-        }
-        (readers, writers)
-    }
-
     pub fn need_rollup(&self) -> Option<SeqNo> {
         let (latest_rollup_seqno, _) = self.latest_rollup();
         if self.seqno.0.saturating_sub(latest_rollup_seqno.0) > PersistConfig::NEED_ROLLUP_THRESHOLD
