@@ -55,20 +55,11 @@ pub enum InternalStorageCommand {
 pub trait InternalCommandSender {
     /// Broadcasts the given command to all workers.
     fn broadcast(&mut self, internal_cmd: InternalStorageCommand);
-
-    /// Returns the next available command, if any. This returns `None` when
-    /// there are currently no commands but there might be commands again in the
-    /// future.
-    fn next(&mut self) -> Option<InternalStorageCommand>;
 }
 
 impl InternalCommandSender for Sequencer<InternalStorageCommand> {
     fn broadcast(&mut self, internal_cmd: InternalStorageCommand) {
         self.push(internal_cmd);
-    }
-
-    fn next(&mut self) -> Option<InternalStorageCommand> {
-        Iterator::next(self)
     }
 }
 

@@ -380,8 +380,4 @@ impl InternalCommandSender for HaltingInternalCommandSender {
     fn broadcast(&mut self, internal_cmd: mz_storage::internal_control::InternalStorageCommand) {
         halt!("got unexpected {:?} during testing", internal_cmd);
     }
-
-    fn next(&mut self) -> Option<InternalStorageCommand> {
-        halt!("got unexpected call to next() during testing");
-    }
 }
