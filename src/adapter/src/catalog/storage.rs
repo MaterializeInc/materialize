@@ -1731,9 +1731,8 @@ where
 pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
     async fn add_batch<'tx, K, V>(
         tx: &'tx mz_stash::Transaction<'tx>,
-        batches: &mut Vec<AppendBatch>,
         typed: &TypedCollection<K, V>,
-    ) -> Result<(), StashError>
+    ) -> Result<Option<AppendBatch>, StashError>
     where
         K: mz_stash::Data,
         V: mz_stash::Data,
@@ -1741,36 +1740,70 @@ pub async fn initialize_stash(stash: &mut Stash) -> Result<(), Error> {
         let collection = tx.collection::<K, V>(typed.name()).await?;
         let upper = tx.upper(collection.id).await?;
         if upper.elements() == [mz_stash::Timestamp::MIN] {
-            let batch = collection.make_batch_lower(upper)?;
-            batches.push(batch);
+            Ok(Some(collection.make_batch_lower(upper)?))
+        } else {
+            Ok(None)
         }
-        Ok(())
     }
 
     stash
         .with_transaction(move |tx| {
             Box::pin(async move {
-                let mut batches = Vec::new();
-                add_batch(&tx, &mut batches, &COLLECTION_CONFIG).await?;
-                add_batch(&tx, &mut batches, &COLLECTION_SETTING).await?;
-                add_batch(&tx, &mut batches, &COLLECTION_ID_ALLOC).await?;
-                add_batch(&tx, &mut batches, &COLLECTION_SYSTEM_GID_MAPPING).await?;
-                add_batch(&tx, &mut batches, &COLLECTION_CLUSTERS).await?;
-                add_batch(
-                    &tx,
-                    &mut batches,
-                    &COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX,
-                )
-                .await?;
-                add_batch(&tx, &mut batches, &COLLECTION_CLUSTER_REPLICAS).await?;
-                add_batch(&tx, &mut batches, &COLLECTION_DATABASE).await?;
-                add_batch(&tx, &mut batches, &COLLECTION_SCHEMA).await?;
-                add_batch(&tx, &mut batches, &COLLECTION_ITEM).await?;
-                add_batch(&tx, &mut batches, &COLLECTION_ROLE).await?;
-                add_batch(&tx, &mut batches, &COLLECTION_TIMESTAMP).await?;
-                add_batch(&tx, &mut batches, &COLLECTION_SYSTEM_CONFIGURATION).await?;
-                add_batch(&tx, &mut batches, &COLLECTION_AUDIT_LOG).await?;
-                add_batch(&tx, &mut batches, &COLLECTION_STORAGE_USAGE).await?;
+                // Query all collections in parallel. Makes for triplicated
+                // names, but runs quick.
+                let (
+                    config,
+                    setting,
+                    id_alloc,
+                    system_gid_mapping,
+                    clusters,
+                    cluster_introspection,
+                    cluster_replicas,
+                    database,
+                    schema,
+                    item,
+                    role,
+                    timestamp,
+                    system_configuration,
+                    audit_log,
+                    storage_usage,
+                ) = futures::try_join!(
+                    add_batch(&tx, &COLLECTION_CONFIG),
+                    add_batch(&tx, &COLLECTION_SETTING),
+                    add_batch(&tx, &COLLECTION_ID_ALLOC),
+                    add_batch(&tx, &COLLECTION_SYSTEM_GID_MAPPING),
+                    add_batch(&tx, &COLLECTION_CLUSTERS),
+                    add_batch(&tx, &COLLECTION_CLUSTER_INTROSPECTION_SOURCE_INDEX),
+                    add_batch(&tx, &COLLECTION_CLUSTER_REPLICAS),
+                    add_batch(&tx, &COLLECTION_DATABASE),
+                    add_batch(&tx, &COLLECTION_SCHEMA),
+                    add_batch(&tx, &COLLECTION_ITEM),
+                    add_batch(&tx, &COLLECTION_ROLE),
+                    add_batch(&tx, &COLLECTION_TIMESTAMP),
+                    add_batch(&tx, &COLLECTION_SYSTEM_CONFIGURATION),
+                    add_batch(&tx, &COLLECTION_AUDIT_LOG),
+                    add_batch(&tx, &COLLECTION_STORAGE_USAGE),
+                )?;
+                let batches: Vec<AppendBatch> = [
+                    config,
+                    setting,
+                    id_alloc,
+                    system_gid_mapping,
+                    clusters,
+                    cluster_introspection,
+                    cluster_replicas,
+                    database,
+                    schema,
+                    item,
+                    role,
+                    timestamp,
+                    system_configuration,
+                    audit_log,
+                    storage_usage,
+                ]
+                .into_iter()
+                .filter_map(|b| b)
+                .collect();
                 tx.append(batches).await?;
                 Ok(())
             })
