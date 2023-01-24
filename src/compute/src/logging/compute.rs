@@ -17,6 +17,7 @@ use std::time::Duration;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::count::CountTotal;
+use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -346,11 +347,11 @@ pub fn construct<A: Allocate>(
 
         let frontier_delay = frontier_delay
             .as_collection()
-            .explode(|(dataflow, source_id, worker, delay)| {
-                Some((
+            .explode_one(|(dataflow, source_id, worker, delay)| {
+                (
                     (dataflow, source_id, worker, delay.next_power_of_two()),
                     (i128::try_from(delay).expect("delay too big"), 1),
-                ))
+                )
             })
             // TODO(#16549): Use explicit arrangement
             .count_total_core::<i64>()
@@ -381,7 +382,7 @@ pub fn construct<A: Allocate>(
         // Duration statistics derive from the non-rounded event times.
         let peek_duration = peek_duration
             .as_collection()
-            .explode(|(worker, val)| Some(((worker, val.next_power_of_two()), (val, 1))))
+            .explode_one(|(worker, val)| ((worker, val.next_power_of_two()), (val, 1)))
             // TODO(#16549): Use explicit arrangement
             .count_total_core()
             .map(|((worker, bucket), (sum, count))| {
