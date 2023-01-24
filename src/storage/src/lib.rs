@@ -78,7 +78,6 @@
 //! Materialize's storage layer.
 
 pub mod decode;
-pub mod internal_control;
 pub mod render;
 pub mod server;
 pub mod sink;
