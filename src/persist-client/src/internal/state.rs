@@ -23,6 +23,7 @@ use mz_persist_types::{Codec, Codec64, Opaque};
 use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use tracing::info;
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
@@ -1100,6 +1101,30 @@ where
         Continue((work_ret, new_state))
     }
 
+    /// Expire all readers and writers up to the given walltime_ms.
+    pub fn expire_at(&mut self, walltime_ms: EpochMillis) -> ExpiryMetrics {
+        let mut metrics = ExpiryMetrics::default();
+        let shard_id = self.shard_id();
+        self.collections.leased_readers.retain(|k, v| {
+            let retain = v.last_heartbeat_timestamp_ms + v.lease_duration_ms >= walltime_ms;
+            if !retain {
+                info!("Force expiring reader ({k}) of shard ({shard_id}) due to inactivity");
+                metrics.readers_expired += 1;
+            }
+            retain
+        });
+        // critical_readers don't need forced expiration. (In fact, that's the point!)
+        self.collections.writers.retain(|k, v| {
+            let retain = (v.last_heartbeat_timestamp_ms + v.lease_duration_ms) >= walltime_ms;
+            if !retain {
+                info!("Force expiring writer ({k}) of shard ({shard_id}) due to inactivity");
+                // We don't track writer expiration metrics yet.
+            }
+            retain
+        });
+        metrics
+    }
+
     /// Returns the batches that contain updates up to (and including) the given `as_of`. The
     /// result `Vec` contains blob keys, along with a [`Description`] of what updates in the
     /// referenced parts are valid to read.
@@ -1188,6 +1213,11 @@ where
             None
         }
     }
+}
+
+#[derive(Default)]
+pub struct ExpiryMetrics {
+    pub(crate) readers_expired: usize,
 }
 
 /// Wrapper for Antichain that represents a Since
