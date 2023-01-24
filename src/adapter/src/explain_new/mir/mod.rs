@@ -14,7 +14,9 @@ pub(crate) mod text;
 use std::collections::HashMap;
 
 use mz_compute_client::types::dataflows::DataflowDescription;
-use mz_expr::{visit::Visit, Id, LocalId, MirRelationExpr, OptimizedMirRelationExpr};
+use mz_expr::{
+    visit::Visit, Id, LocalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
+};
 use mz_ore::{stack::RecursionLimitError, str::bracketed, str::separated};
 use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
 use mz_transform::attribute::{
@@ -307,4 +309,51 @@ fn id_gen(expr: &MirRelationExpr) -> Result<impl Iterator<Item = LocalId>, Recur
     })?;
 
     Ok((max_id + 1..).map(LocalId::new))
+}
+
+use crate::explain_new::{DisplayText, Displayable};
+
+/// Pretty-prints a list of expressions that may have runs of column indices.
+#[derive(Debug)]
+pub struct MirIndices<'a>(pub &'a [MirScalarExpr]);
+
+impl<'a> DisplayText for MirIndices<'a> {
+    fn fmt_text(&self, f: &mut std::fmt::Formatter<'_>, ctx: &mut ()) -> std::fmt::Result {
+        let mut is_first = true;
+        let mut slice = self.0;
+        while !slice.is_empty() {
+            if !is_first {
+                write!(f, ", ")?;
+            }
+            is_first = false;
+            if let &MirScalarExpr::Column(ref lead) = &slice[0] {
+                if slice.len() > 2
+                    && slice[1] == MirScalarExpr::Column(lead + 1)
+                    && slice[2] == MirScalarExpr::Column(lead + 2)
+                {
+                    let mut last = 3;
+                    while slice.get(last) == Some(&MirScalarExpr::Column(lead + last)) {
+                        last += 1;
+                    }
+                    Displayable::from(&slice[0]).fmt_text(f, ctx)?;
+                    write!(f, "..=")?;
+                    Displayable::from(&slice[last - 1]).fmt_text(f, ctx)?;
+                    slice = &slice[last..];
+                } else {
+                    Displayable::from(&slice[0]).fmt_text(f, ctx)?;
+                    slice = &slice[1..];
+                }
+            } else {
+                Displayable::from(&slice[0]).fmt_text(f, ctx)?;
+                slice = &slice[1..];
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<'a> std::fmt::Display for MirIndices<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.fmt_text(f, &mut ())
+    }
 }
