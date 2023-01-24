@@ -23,7 +23,6 @@
 #![allow(clippy::needless_borrow)]
 
 use std::any::Any;
-use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -53,6 +52,7 @@ use tracing::{info, trace, warn};
 
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
+use mz_ore::halt;
 use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
@@ -70,7 +70,7 @@ use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuild
 use mz_timely_util::operator::StreamExt as _;
 
 use crate::healthcheck::write_to_persist;
-use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
+
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
 use crate::source::types::{
@@ -169,7 +169,6 @@ pub fn create_raw_source<G, C, R>(
     source_connection: C,
     connection_context: ConnectionContext,
     calc: R,
-    internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
 ) -> (
     (
         Vec<
@@ -241,7 +240,7 @@ where
         remap_stream,
     );
 
-    let health_token = health_operator(scope, config, health_stream, internal_cmd_tx);
+    let health_token = health_operator(scope, config, health_stream);
 
     let token = Rc::new((source_reader_token, remap_token, resume_token, health_token));
 
@@ -698,7 +697,6 @@ where
                             return;
                         }
                     };
-
                     let SourceReaderOperatorOutput {
                         messages,
                         status_update,
@@ -878,7 +876,6 @@ fn health_operator<G>(
     scope: &G,
     config: RawSourceCreationConfig,
     health_stream: Stream<G, (usize, HealthStatusUpdate)>,
-    internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -977,13 +974,8 @@ where
 
                     last_reported_status = new_status.clone();
                 }
-                // TODO(aljoscha): Instead of threading through the
-                // `should_halt` bit, we can give an internal command sender
-                // directly to the places where `should_halt = true` originates.
-                // We should definitely do that, but this is okay for a PoC.
                 if let Some(halt_with) = halt_with {
-                    info!("Broadcasting suspend-and-restart command because of {:?}", halt_with);
-                    internal_cmd_tx.borrow_mut().broadcast(InternalStorageCommand::SuspendAndRestart(source_id));
+                    halt!("halting with status {halt_with:?}");
                 }
             }
         }
