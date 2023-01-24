@@ -84,7 +84,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
-use tracing::info;
+use tracing::{info, trace};
 
 use mz_ore::halt;
 use mz_ore::now::NowFn;
@@ -775,7 +775,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
             match command {
                 StorageCommand::CreateSources(ingestions) => {
                     ingestions.retain_mut(|ingestion| {
+
                         if let Some(existing) = self.storage_state.ingestions.get(&ingestion.id) {
+                            trace!(
+                                worker_id = self.timely_worker.index(),
+                                has_token = self.storage_state.source_tokens.contains_key(&ingestion.id),
+                                "reconciliation, existing ingestion: {}", ingestion.id
+                            );
+
                             stale_ingestions.remove(&ingestion.id);
                             // If we've been asked to create an ingestion that is
                             // already installed, the descriptions must match
@@ -817,6 +824,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 | StorageCommand::AllowCompaction(_) => (),
             }
         }
+
+        trace!(
+            worker_id = self.timely_worker.index(),
+            "reconciliation, stale ingestions: {:?}",
+            stale_ingestions
+        );
 
         // Synthesize a drop command to remove stale ingestions and exports
         commands.push(StorageCommand::AllowCompaction(
