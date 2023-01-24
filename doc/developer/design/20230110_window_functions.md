@@ -25,8 +25,7 @@ Some window functions are impossible to efficiently support in streaming, becaus
         - SUMming an expression that is often 0.
         - Window aggregations with an UNBOUNDED PRECEDING frame are fine if changes happen mostly at the end of partitions
             - e.g., OVER an `ORDER BY time` if new elements are arriving typically with fresh timestamps. Such OVER clauses are popular case in our [use case list](https://www.notion.so/Window-Functions-Use-Cases-6ad1846a7da942dc8fa28997d9c220dd).
-- FIRST_VALUE / LAST_VALUE with various frames
-    - Similar to window aggregations, but easier.
+- FIRST_VALUE / LAST_VALUE / NTH_VALUE with various frames. These are similar to window aggregations.
 - ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE: These are impossible to implement efficiently in a streaming setting in many cases, because a small input change will lead to a big output change if the changed record is not near the end of the window partition. However, I can imagine some scenarios where the user knows some special property of the input data that ensures that small input changes will lead to small output changes, so she will use one of these functions and expect it to be efficient:
     - If changes mostly come near the end of the window partition. For example, if there is an ORDER BY time, and new records usually have recent timestamps. (Prefix Sum will handle this fine.)
     - If most changes are not record appearances or disappearances, but existing records changing in a way that they move only a little bit in the ordering. In this case, the output changes only for as many records, that got “jumped over” by the changing record. (Prefix Sum will handle this fine.)
@@ -48,8 +47,6 @@ The current way of execution is to put entire partitions into scalars, and execu
 
 We will use [DD’s prefix_sum](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/algorithms/prefix_sum.rs) (with some generalizations) for most of the window functions. The bulk of this work will be applied in the rendering, but currently window functions disappear in the HIR-to-MIR lowering. I propose to create a new relation expression enum variant in both MIR and LIR. This would allow us to focus on window functions for this epic (the epic is quite big already), and then we could have a separate epic for unifying window functions, TopK, and the current Reduce into a “super Reduce”. For a discussion on window function representations, see the [Alternatives section](https://www.notion.so/Efficient-Window-Functions-87682d6de73a4f6088acde21aba41fe6).
 
-### Rendering
-
 We’ll use three approaches to solve the many cases mentioned in the “Goals” section:
 
 1. We’ll use [DD’s prefix_sum](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/algorithms/prefix_sum.rs) with some tricky sum functions.
@@ -59,62 +56,97 @@ We’ll use three approaches to solve the many cases mentioned in the “Goals�
 
 We’ll use the word **index** in the below text to mean the values of the ORDER BY column of the OVER clause, i.e., they are simply the values that determine the ordering. (Note that it’s sparse indexing, i.e., not every number occurs from 1 to n, but there are usually (big) gaps.)
 
+----------------------
+
+### How to handle each window function
+
 Now I’ll list all window functions, and how we’ll support them with one of the above approaches. For a list of window functions, see https://www.postgresql.org/docs/current/functions-window.html
 
-- Frameless window functions (i.e., that either operate on an entire partition, e.g., ROW_NUMBER, or grab a value from a specific other row, e.g., LAG)
-    - LAG/LEAD
-        - For LAG/LEAD with an offset of 1, the sum function will just remember the previous value if it exists, and None if it does not. (And we can have a similar one for LEAD.) This looks a bit weird as a sum function, but it will work:
-            - it's associative;
-            - It's not commutative, but that shouldn't be an issue for Prefix Sum;
-            - The zero element is None. Note: prefix sum sometimes sums in the zero element not just at the beginning, but randomly in the middle of an addition chain. E.g., when having *a, b, c* in the prefix then we might expect simply *a+b+c* or maybe *z+a+b+c* to be the prefix sum, but actually DD's Prefix Sum implementation might give us something like *z+a+b+z+c+z*.
-            - I built [a small prototype outside Materialize](https://github.com/ggevay/window-funcs), where I verified that the output values are correct, and that output is quickly updated for small input changes.
-        - For LAG/LEAD with offset *k > 1* (which computes the given expression not for the previous record, but for the record that was *k* records ago):
-            - A sum function could simply remember the last *k* values, acting on a `Vec<Val>` of length at most *k*, which would generalize `Option<Val>`. This works kind of ok for small *k*.
-            - A more complicated but probably better solution: We could find the index for that element in the window partition that is *k* elements behind by using the same method as we use for calculating the intervals of the framed window functions (see below). Then with the index in hand, we can just do a self-join.
-    - ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE
-        - There is the TopK special case, which we want to transform to our efficient TopK implementation, rather than use any prefix sum stuff. This should probably be an MIR transform, e.g., to rely on MirScalarExpr canonicalization when detecting different variations of `rownum <= k`, e.g., `k >= rownum`, `rownum < k+1`, `rownum - 1 < k`.
-        - Also, [as noted in the Goals section](https://www.notion.so/Efficient-Window-Functions-87682d6de73a4f6088acde21aba41fe6), there are some other cases where small input changes will lead to small output changes. These will be possible to support efficiently by performing a Prefix Sum with an appropriate sum function.
-- Framed window functions: These are window aggregations and FIRST_VALUE / LAST_VALUE / NTH_VALUE. These operate on a certain subset of a window partition, e.g. the 5 preceding rows from the current row. For all the frame options, see https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-WINDOW-FUNCTIONS 
-    - Aggregation when frame is both UNBOUNDED PRECEDING and UNBOUNDED FOLLOWING at the same time (or there is no ORDER BY, which has a similar effect) should be transformed to a grouped aggregation + self join.
-    - In all other cases, we’ll use prefix sum, for which we need two things:
-        1. We have to find the end(s) of the interval that is the frame. I.e., we need to tell **indexes** to Prefix Sum (where the index is a value of the ORDER BY column(s), as mentioned above).
-        2. We’ll need to generalize Prefix Sum to not just prefixes, but arbitrary intervals. (A prefix interval is identified by one index, a general interval is identified by two indexes.)
-    - Solving 1. for all framing modes (RANGE | ROWS | GROUPS):
-        - RANGE: this is the obvious one (but probably not the most often used): The offset is just a difference in the (sparse) “index” of the prefix sum (i.e., the ORDER BY column).
-            - Btw. we might translate some inequality self-joins to this one!
-        - GROUPS: (One could say that this is probably not so often used, so no need to initially support it. However, the problem is that the solution for ROWS will probably build on this, and that is the default, so that one is often used.) We have to somehow translate the offset to a difference in the “index” of the prefix sum:
-            - Naive solution: Since this is a difference in DENSE_RANK between the current row and the ends of the interval, we could compute a DENSE_RANK, and then join with that to find the “index” (the value of the ORDER BY column).
-                - However, this would be slow, because DENSE_RANK is inherently not well incrementalizable: Small input changes can lead to lots of changes in the ranks.
-            - **(Tricky part)** A better solution is to calculate a count aggregation on all ranges (with prefix sum’s `aggregate`) (let's call this `counts`), and then do a logarithmic search for the index with a nested `iterate`:
-                - We start with `(index, offset)` pairs for all the possible current elements in parallel, where the pair means that we need to move `index` down by `offset` (down when looking for the lower end of the interval, or up when looking for the upper end), i.e., we need to lower `index` while lowering `offset` to 0.
-                - Then, at every step of an `iterate`, we can use a range from `counts` on each  `(index, offset)` pair: `index` is lowered by the size of the range, and `offset` is lowered by the aggregated count of the range.
-                    - We want to use the biggest such range in `counts` that doesn’t make `offset` negative. We can do this by an inner `iterate`.
-        - ROWS: similar to GROUPS, but use indexes that include the deduplication component. (see below at “Duplicate indexes”)
-        - There is also `frame_exclusion`, which sometimes necessitates special handling for the group that contains the current row. In such cases, we will put together the result value of the window function from 3 parts: 1. prefix sum (generalized to arbitrary intervals) for groups that are earlier than the current row’s group, 2. prefix sum for groups that are later than the current row’s group, 3. current row’s group (without prefix sum).
-    - Solving 2.:
-        - For invertible aggregation functions (e.g., sum, but not min/max) we can use the existing prefix sum with a minor trick: agg(a,b) = agg(0,b) - agg(0,a).
-            - However, the performance of this might not be good, because even if (a,b) is a small interval, the (0,a) and the (0,b) intervals will be big, so there will be many changes of the aggregates of these even for small input changes.
-        - To have better performance (and to support non-invertible aggregations, e.g., min/max), we need to extend what the `broadcast` part of prefix sum is doing (`aggregate` can stay the same):
-            - `queries` will contain intervals specified by two indexes.
-            - `requests`: We can similarly compute a set of requests from `queries`. The change will only be inside the `flat_map`.
-            - `full_ranges`, `zero_ranges`, `used_ranges` stay the same.
-            - `init_states` won’t start at position 0, but at the lower end of the intervals in `queries`
-            - The iteration at the end will be mostly the same.
-    - FIRST_VALUE / LAST_VALUE / NTH_VALUE with various frames
-        - Can be similarly implemented to window aggregations, i.e., we could “sum” up the relevant interval (that is not necessarily a prefix) with an appropriate sum function.
-        - Or we can make it a bit faster: we just find the index of the relevant end of the interval (i.e., left end for FIRST_VALUE), and then self-join.
-        - (And there are some special cases which we can more efficiently support: FIRST_VALUE with UNBOUNDED PRECEDING and LAST_VALUE with UNBOUNDED FOLLOWING should be transformed to just a (non-windowed) grouped aggregation + self-join instead of prefix sum trickery. Also, similarly for the case when there is no ORDER BY.)
+#### 1. Frameless window functions
 
-**Duplicate indexes.** There might be rows which agree on both the PARTITION BY key and the ORDER BY key (the index). Prefix Sum doesn’t handle such duplicate indexes.
+These either operate on an entire partition, e.g., ROW_NUMBER, or grab a value from a specific other row, e.g., LAG.
 
-- To eliminate these duplicates, we will number the elements inside each group with 0, 1, 2, …, and this will be an additional component of the prefix sum indexes.
-- For this to perform well, we are assuming that groups are small.
-    - Note that a group here is identified by a value of the PARTITION BY expression + a value of the ORDER BY expression, so this is not an unreasonable assumption.
-- Also note that if there is no ORDER BY, then groups might be large, but in this case we don’t employ Prefix Sum, but we transform away the window functions to grouped aggregation + self-join (as noted above).
+##### 1.a. LAG/LEAD
 
-**Parallelism.** DD's Prefix Sum should be data-parallel even inside a window partition. (It’s similar to [a Fenwick tree](https://en.wikipedia.org/wiki/Fenwick_tree), with sums maintained over power-of-2 sized intervals, from which you can compute a prefix sum by putting together LogN intervals.) TODO: But I wasn't able to actually observe a speedup in a simple test when adding cores, so we should investigate what’s going on with parallelization. There was probably just some technical issue, because all operations in the Prefix Sum implementation look parallelizable.
+For LAG/LEAD with an offset of 1, the sum function will just remember the previous value if it exists, and None if it does not. (And we can have a similar one for LEAD.) This has the following properties:
 
-**Types.** We'll have to generalize DD's Prefix Sum to orderings over types other than a single unsigned integer, which is currently hardcoded in the code that forms the intervals. We’ll map other types to a single unsigned integer. Importantly, this mapping should *preserve the ordering* of the type:
+- It's associative.
+- It's not commutative, but that isn't a problem for Prefix Sum.
+- The zero element is None. Note: prefix sum sometimes sums in the zero element not just at the beginning, but randomly in the middle of an addition chain. E.g., when having *a, b, c* in the prefix then we might expect simply *a+b+c* or maybe *z+a+b+c* to be the prefix sum, but actually DD's Prefix Sum implementation might give us something like *z+a+b+z+c+z*.
+
+I built [a small prototype outside Materialize](https://github.com/ggevay/window-funcs), where I verified that the output values are correct, and that output is quickly updated for small input changes.
+
+For LAG/LEAD with *k > 1* (which computes the given expression not for the previous record, but for the record that was *k* records ago), the sum function could simply remember the last *k* values, acting on a `Vec<Val>` of length at most *k*, which would generalize `Option<Val>`. This works kind of ok for small *k*. A more complicated but probably better solution is to find the index for that element in the window partition that is *k* elements behind by using the same method as we use for calculating the intervals of the framed window functions (see below). Then with the index in hand, we can just do a self-join.
+
+##### 1.b. ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE
+
+There is the **TopK** special case, i.e., where the user specifies `ROW_NUMBER() <= k` (or similar). We want to transform this pattern to our efficient TopK implementation, rather than using prefix sum. This should probably be an MIR transform. This way we can rely on MirScalarExpr canonicalization when detecting different variations of `rownum <= k`, e.g., `k >= rownum`, `rownum < k+1`, `rownum - 1 < k`.
+
+In most situations other than TopK, these functions cannot be implemented efficiently in a streaming setting, because small input changes often lead to big output changes. However, as noted in the [Goals](#Goals) section, there are some special cases where small input changes will lead to small output changes. These will be possible to support efficiently by performing a Prefix Sum with an appropriate sum function.
+
+#### 2. Window aggregations
+
+These operate on so-called **frames**, i.e., a certain subset of a window partition. Frames are specified in relation to the current row. For example, "sum up column `x` for the preceding 5 rows from the current row". For all the frame options, see https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-WINDOW-FUNCTIONS 
+
+There is a special case where the frame includes the entire window partition: An aggregation where the frame is both UNBOUNDED PRECEDING and UNBOUNDED FOLLOWING at the same time (or there is no ORDER BY, which has a similar effect) should be transformed to a grouped aggregation + self join.
+
+In all other cases, we’ll use prefix sum, for which we need to solve two tasks:
+
+*I.* We have to find the end(s) of the interval that is the frame. I.e., we need to tell **indexes** to Prefix Sum (where the index is a value of the ORDER BY column(s), as mentioned above).
+
+*II.* We’ll need to generalize Prefix Sum to not just prefixes, but arbitrary intervals. (A prefix interval is identified by one index, a general interval is identified by two indexes.)
+
+*Solving I. for each framing mode (RANGE | GROUPS | ROWS):*
+- RANGE: this is the obvious one (but probably not the most often used): The offset is just a difference in the (sparse) “index” of the prefix sum (i.e., the ORDER BY column).
+    - Btw. we might translate some inequality self-joins to this one!
+- GROUPS: (One could say that this is probably not so often used, so no need to initially support it. However, the problem is that the solution for ROWS will probably build on this, and that is the default, so that one is often used.) We have to somehow translate the offset to a difference in the “index” of the prefix sum:
+    - Naive solution: Since this is a difference in DENSE_RANK between the current row and the ends of the interval, we could compute a DENSE_RANK, and then join with that to find the “index” (the value of the ORDER BY column).
+        - However, this would be slow, because DENSE_RANK is inherently not well incrementalizable: Small input changes can lead to lots of changes in the ranks.
+    - **(Tricky part)** A better solution is to calculate a count aggregation on all ranges (with prefix sum’s `aggregate`) (let's call this `counts`), and then do a logarithmic search for the index with a nested `iterate`:
+        - We start with `(index, offset)` pairs for all the possible current elements in parallel, where the pair means that we need to move `index` down by `offset` (down when looking for the lower end of the interval, or up when looking for the upper end), i.e., we need to lower `index` while lowering `offset` to 0.
+        - Then, at every step of an `iterate`, we can use a range from `counts` on each  `(index, offset)` pair: `index` is lowered by the size of the range, and `offset` is lowered by the aggregated count of the range.
+            - We want to use the biggest such range in `counts` that doesn't make `offset` negative. We can do this by an inner `iterate`.
+- ROWS: similar to GROUPS, but use indexes that include the deduplication component. (see below at “Duplicate indexes”)
+
+There is also `frame_exclusion`, which sometimes necessitates special handling for the group that contains the current row. In such cases, we will put together the result value of the window function from 3 parts: 1. prefix sum (generalized to arbitrary intervals) for groups that are earlier than the current row’s group, 2. prefix sum for groups that are later than the current row’s group, 3. current row’s group (without prefix sum).
+
+*Solving II.:*
+
+For invertible aggregation functions (e.g., sum, but not min/max) we can use the existing prefix sum with a minor trick: agg(a,b) = agg(0,b) - agg(0,a).
+    - However, the performance of this might not be good, because even if (a,b) is a small interval, the (0,a) and the (0,b) intervals will be big, so there will be many changes of the aggregates of these even for small input changes.
+
+To have better performance (and to support non-invertible aggregations, e.g., min/max), we need to extend what the `broadcast` part of prefix sum is doing (`aggregate` can stay the same):
+    - `queries` will contain intervals specified by two indexes.
+    - `requests`: We can similarly compute a set of requests from `queries`. The change will only be inside the `flat_map`.
+    - `full_ranges`, `zero_ranges`, `used_ranges` stay the same.
+    - `init_states` won’t start at position 0, but at the lower end of the intervals in `queries`
+    - The iteration at the end will be mostly the same. 
+
+#### 3. FIRST_VALUE / LAST_VALUE / NTH_VALUE
+
+These also operate based on a **frame**, similarly to window aggregations (see above). They can be similarly implemented to window aggregations, i.e., we could “sum” up the relevant interval (that is not necessarily a prefix) with an appropriate sum function.
+
+Alternatively, we could make these a bit faster (except for NTH_VALUE) if we just find the index of the relevant end of the interval (i.e., left end for FIRST_VALUE), and then self-join.
+
+(And there are some special cases when we can transform away the window function usage: FIRST_VALUE with UNBOUNDED PRECEDING and LAST_VALUE with UNBOUNDED FOLLOWING should be transformed to just a (non-windowed) grouped aggregation + self-join instead of prefix sum trickery. Also, similarly for the case when there is no ORDER BY.)
+
+----------------------
+
+### Duplicate indexes
+
+There might be rows which agree on both the PARTITION BY key and the ORDER BY key (the index). Such duplicate indexes are not handled by Prefix Sum. To eliminate these duplicates, we will number the elements inside each group with 0, 1, 2, …, and this will be an additional component of the prefix sum indexes.
+
+For this to perform well, we are assuming that groups are small.
+This is not an unreasonable assumption, because a group is identified here by a value of the PARTITION BY expression + a value of the ORDER BY expression.
+Also note that if there is no ORDER BY, then groups might be large, but in this case we don’t employ Prefix Sum, but we transform away the window functions to grouped aggregation + self-join (as noted above).
+
+### Parallelism
+
+DD's Prefix Sum should be data-parallel even inside a window partition. (It’s similar to [a Fenwick tree](https://en.wikipedia.org/wiki/Fenwick_tree), with sums maintained over power-of-2 sized intervals, from which you can compute a prefix sum by putting together LogN intervals.) TODO: But I wasn't able to actually observe a speedup in a simple test when adding cores, so we should investigate what’s going on with parallelization. There was probably just some technical issue, because all operations in the Prefix Sum implementation look parallelizable.
+
+### Types
+
+We'll have to generalize DD's Prefix Sum to orderings over types other than a single unsigned integer, which is currently hardcoded in the code that forms the intervals. We’ll map other types to a single unsigned integer. Importantly, this mapping should *preserve the ordering* of the type:
 
 - Signed integer types are fine, we just need to fiddle with the sign to map them to an unsigned int in a way that preserves the ordering.
 - Date/Time types are just a few integers. We’ll concatenate their bits.
