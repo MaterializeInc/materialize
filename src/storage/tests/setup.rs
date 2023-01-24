@@ -81,7 +81,6 @@ use std::marker::{Send, Sync};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mz_ore::halt;
 use mz_persist_types::codec_impls::UnitSchema;
 use timely::progress::{Antichain, Timestamp as _};
 
