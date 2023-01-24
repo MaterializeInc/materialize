@@ -147,7 +147,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
 Return
   Filter (exists(Get l1) AND exists(Get l2))
     Get materialize.public.t
-Where
+With
   cte l1 =
     Filter (#^0 < #0)
       Get materialize.public.mv
@@ -166,7 +166,7 @@ Project (#2, #3)
   Return
     Map (select(Get l1), select(Get l2))
       Get materialize.public.t
-  Where
+  With
     cte l1 =
       Project (#0)
         TopK limit=1
@@ -267,7 +267,7 @@ Project (#1)
   Return
     Map ((#0 + 5))
       Get l0
-  Where
+  With
     cte l0 =
       Project (#2)
         Map ((#0 * #1))
@@ -284,7 +284,7 @@ Return
   CrossJoin
     Get l0
     Get l1
-Where
+With
   cte l1 =
     Filter (#0 > 0)
       Get l0
@@ -324,14 +324,14 @@ CrossJoin
     Return
       Filter (#0 != #^0)
         Get l0
-    Where
+    With
       cte l0 =
         Reduce aggregates=[max((#^0 * #0))]
           Get materialize.public.t
   Return
     Filter ((#0 != #^0) OR ((#0) IS NOT NULL AND (#^0) IS NULL))
       Get l0
-  Where
+  With
     cte l0 =
       Reduce aggregates=[max((#^0 * #0))]
         Get materialize.public.t
@@ -374,11 +374,11 @@ CrossJoin
         Return
           Filter ((#^^0 = #^0) AND (#0 > 5))
             Get l1
-        Where
+        With
           cte l1 =
             Reduce aggregates=[max((#^^0 * #0))]
               Get materialize.public.t
-  Where
+  With
     cte l0 =
       Reduce aggregates=[max((#^0 * #0))]
         Get materialize.public.t
