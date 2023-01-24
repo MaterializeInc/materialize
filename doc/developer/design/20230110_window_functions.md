@@ -54,7 +54,8 @@ We’ll use three approaches to solve the many cases mentioned in the “Goals�
 
 1. We’ll use [DD’s prefix_sum](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/algorithms/prefix_sum.rs) with some tricky sum functions.
 2. As an extension of 1., we’ll use a generalization of DD’s prefix sum to arbitrary intervals (i.e., not just prefixes).
-3. We transform away window functions in some special cases (e.g., to TopK, or a simple grouped aggregation + self-join)
+3. We'll transform away window functions in some special cases (e.g., to TopK, or a simple grouped aggregation + self-join)
+4. Initially, we will resort to the old window function implementation in some cases, but this should become less and less over time. I think it will be possible to eventually implement all window function usage with the above 1.-3., but it will take time to get there. 
 
 We’ll use the word ****index**** in the below text to mean the values of the ORDER BY column of the OVER clause, i.e., they are simply the values that determine the ordering. (Note that it’s sparse indexing, i.e., not every number occurs from 1 to n, but there are usually (big) gaps.)
 
