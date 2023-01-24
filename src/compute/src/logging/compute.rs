@@ -303,7 +303,7 @@ pub fn construct<A: Allocate>(
                                     if let Some(start) = peek_stash.remove(&key) {
                                         let elapsed_ns = time.as_nanos() - start;
                                         peek_duration_session.give((
-                                            (key.0, elapsed_ns.next_power_of_two()),
+                                            (key.0, elapsed_ns.next_power_of_two(), elapsed_ns),
                                             time_ms,
                                             1,
                                         ));
@@ -375,16 +375,17 @@ pub fn construct<A: Allocate>(
         // Duration statistics derive from the non-rounded event times.
         let peek_duration = peek_duration
             .as_collection()
-            // TODO(#16549): Use explicit arrangement
-            .count_total_core()
-            .map({
-                move |((worker, pow), count)| {
-                    Row::pack_slice(&[
-                        Datum::UInt64(u64::cast_from(worker)),
-                        Datum::UInt64(pow.try_into().expect("pow too big")),
-                        Datum::UInt64(count),
-                    ])
-                }
+            .explode(|(worker, bucket, val)| Some(((worker, bucket), (val, 1))))
+            .count_total_core::<i64>()
+            .map(|((worker, bucket), (sum, count))| {
+                Row::pack_slice(&[
+                    Datum::UInt64(u64::cast_from(worker)),
+                    Datum::UInt64(bucket.try_into().expect("pow too big")),
+                    Datum::UInt64(count.try_into().expect("count too big")),
+                    sum.try_into()
+                        .map(|sum| Datum::UInt64(sum))
+                        .unwrap_or(Datum::Null),
+                ])
             });
 
         let logs = vec![

@@ -766,6 +766,7 @@ impl LogVariant {
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("duration_ns", ScalarType::UInt64.nullable(false))
                 .with_column("count", ScalarType::UInt64.nullable(false))
+                .with_column("sum", ScalarType::UInt64.nullable(true))
                 .with_key(vec![0, 1]),
         }
     }

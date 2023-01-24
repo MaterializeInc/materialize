@@ -283,6 +283,7 @@ Field         | Type       | Meaning
 `worker_id`   | [`bigint`] | The ID of the worker thread servicing the peek.
 `duration_ns` | [`bigint`] | The upper bound of the bucket in nanoseconds.
 `count`       | [`bigint`] | The (noncumulative) count of peeks in this bucket.
+`sum  `       | [`bigint`] | The (noncumulative) sum of peek durations in this bucket, or `NULL` in the unlikely event it has overflowed.
 
 ### `mz_peek_durations`
 
