@@ -96,7 +96,7 @@ use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::PersistConfig;
+use mz_persist_client::cfg::PersistConfig;
 use mz_pid_file::PidFile;
 use mz_service::emit_boot_diagnostics;
 use mz_service::grpc::GrpcServer;

@@ -31,9 +31,10 @@ use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
 use mz_persist_client::async_runtime::CpuHeavyRuntime;
+use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::read::{Listen, ListenEvent};
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistClient, PersistConfig, ShardId};
+use mz_persist_client::{PersistClient, ShardId};
 
 use crate::maelstrom::api::{Body, ErrorCode, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};

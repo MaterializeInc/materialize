@@ -83,17 +83,18 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mz_ore::halt;
-use mz_persist_types::codec_impls::UnitSchema;
-use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand};
 use timely::progress::{Antichain, Timestamp as _};
 
 use mz_build_info::DUMMY_BUILD_INFO;
+use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
+use mz_persist_client::cfg::PersistConfig;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::TimestampManipulation;
 use mz_repr::{Diff, GlobalId, RelationDesc, Timestamp};
+use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand};
 use mz_storage::sink::SinkBaseMetrics;
 use mz_storage::source::metrics::SourceBaseMetrics;
 use mz_storage::source::testscript::ScriptCommand;
@@ -194,8 +195,7 @@ where
             let sink_metrics = SinkBaseMetrics::register_with(&metrics_registry);
             let decode_metrics = DecodeMetrics::register_with(&metrics_registry);
 
-            let mut persistcfg =
-                mz_persist_client::PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+            let mut persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
             persistcfg.reader_lease_duration = std::time::Duration::from_secs(60 * 15);
             persistcfg.now = SYSTEM_TIME.clone();
 

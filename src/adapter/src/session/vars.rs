@@ -18,7 +18,7 @@ use uncased::UncasedStr;
 
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
-use mz_persist_client::PersistConfig;
+use mz_persist_client::cfg::PersistConfig;
 use mz_sql::ast::{Ident, SetVariableValue, Value as AstValue};
 use mz_sql::DEFAULT_SCHEMA;
 use mz_sql_parser::ast::TransactionIsolationLevel;

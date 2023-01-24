@@ -169,16 +169,16 @@ mod tests {
     use std::time::Duration;
 
     use itertools::Itertools;
-    use mz_persist_types::codec_impls::UnitSchema;
-    use mz_repr::Row;
-    use timely::progress::Antichain;
-
     use once_cell::sync::Lazy;
+    use timely::progress::Antichain;
 
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
-    use mz_persist_client::{PersistConfig, PersistLocation, ShardId};
+    use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::{PersistLocation, ShardId};
+    use mz_persist_types::codec_impls::UnitSchema;
+    use mz_repr::Row;
     use mz_storage_client::types::sources::SourceData;
 
     // Test suite

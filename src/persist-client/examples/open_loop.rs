@@ -28,7 +28,8 @@ use tracing::{debug, error, info, info_span, trace, Instrument};
 
 use mz_ore::cast::CastFrom;
 use mz_persist::workload::DataGenerator;
-use mz_persist_client::{PersistConfig, PersistLocation, ShardId};
+use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::{PersistLocation, ShardId};
 
 use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
 use crate::BUILD_INFO;
