@@ -753,6 +753,7 @@ impl LogVariant {
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("delay_ns", ScalarType::UInt64.nullable(false))
                 .with_column("count", ScalarType::Int64.nullable(false))
+                .with_column("sum", ScalarType::UInt64.nullable(true))
                 .with_key(vec![0, 1, 2, 3]),
 
             LogVariant::Compute(ComputeLog::PeekCurrent) => RelationDesc::empty()

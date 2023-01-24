@@ -126,7 +126,7 @@ pub fn construct<A: Allocate>(
             let mut peek_stash = HashMap::new();
             let mut storage_sources = HashMap::<
                 (GlobalId, usize),
-                HashMap<GlobalId, (VecDeque<(mz_repr::Timestamp, u128)>, HashMap<u128, i32>)>,
+                HashMap<GlobalId, (VecDeque<(mz_repr::Timestamp, u128)>, HashMap<u128, i128>)>,
             >::new();
             move |_frontiers| {
                 let mut dataflow = dataflow_out.activate();
@@ -236,12 +236,11 @@ pub fn construct<A: Allocate>(
                                                 if logical >= source_logical {
                                                     let elapsed_ns =
                                                         time.as_nanos() - current_front.1;
-                                                    let delay_ns = elapsed_ns.next_power_of_two();
                                                     let delay_count =
-                                                        delay_map.entry(delay_ns).or_insert(0);
+                                                        delay_map.entry(elapsed_ns).or_insert(0);
                                                     *delay_count += 1;
                                                     frontier_delay_session.give((
-                                                        (name, *source_id, worker, delay_ns),
+                                                        (name, *source_id, worker, elapsed_ns),
                                                         time_ms,
                                                         1,
                                                     ));
@@ -347,16 +346,23 @@ pub fn construct<A: Allocate>(
 
         let frontier_delay = frontier_delay
             .as_collection()
+            .explode(|(dataflow, source_id, worker, delay)| {
+                Some((
+                    (dataflow, source_id, worker, delay.next_power_of_two()),
+                    (i128::try_from(delay).expect("delay too big"), 1),
+                ))
+            })
             // TODO(#16549): Use explicit arrangement
             .count_total_core::<i64>()
             .map({
-                move |((dataflow, source_id, worker, delay_pow), count)| {
+                move |((dataflow, source_id, worker, delay_pow), (sum, count))| {
                     Row::pack_slice(&[
                         Datum::String(&dataflow.to_string()),
                         Datum::String(&source_id.to_string()),
                         Datum::UInt64(u64::cast_from(worker)),
                         Datum::UInt64(delay_pow.try_into().expect("pow too big")),
-                        Datum::Int64(count.into()),
+                        Datum::Int64(count.try_into().expect("count too big")),
+                        u64::try_from(sum).ok().into(),
                     ])
                 }
             });
@@ -383,9 +389,7 @@ pub fn construct<A: Allocate>(
                     Datum::UInt64(u64::cast_from(worker)),
                     Datum::UInt64(bucket.try_into().expect("pow too big")),
                     Datum::UInt64(count.try_into().expect("count too big")),
-                    sum.try_into()
-                        .map(|sum| Datum::UInt64(sum))
-                        .unwrap_or(Datum::Null),
+                    u64::try_from(sum).ok().into(),
                 ])
             });
 
