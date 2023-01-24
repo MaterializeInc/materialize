@@ -308,6 +308,7 @@ Field            | Type        | Meaning
 `connection_id`  | [`text`]    | The ID of the connection associated with the sink, if any.
 `size`           | [`text`]    | The size of the sink.
 `envelope_type`  | [`text`]    | The [envelope](/sql/create-sink/#envelopes) of the sink: `upsert`, or `debezium`.
+`cluster_id`     | [`text`]    | The ID of the cluster maintaining the sink
 
 ### `mz_sources`
 
@@ -323,6 +324,7 @@ Field            | Type       | Meaning
 `connection_id`  | [`text`]   | The ID of the connection associated with the source, if any.
 `size`           | [`text`]   | The [size](/sql/create-source/#sizing-a-source) of the source.
 `envelope_type`  | [`text`]   | The [envelope](/sql/create-source/#envelopes) of the source: `none`, `upsert`, or `debezium`.
+`cluster_id`     | [`text`]   | The ID of the cluster maintaining the source.
 
 ### `mz_storage_usage`
 

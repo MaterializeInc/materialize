@@ -106,7 +106,17 @@ others are high traffic and require hefty resource allocations. You choose the
 amount of CPU and memory available to a sink using the `SIZE` option, and
 adjust the provisioned size after sink creation using the [`ALTER SINK`](/sql/alter-sink) command.
 
-By default, Materialize provisions sinks using the smallest size (`3xsmall`).
+Sinks that specify the `SIZE` option are linked to a single-purpose cluster
+dedicated to maintaining that sink.
+
+You can also choose to place a sink in an existing
+[cluster](/overview/key-concepts/#clusters) by using the `IN CLUSTER` option.
+Sinks in a cluster share the resource allocation of the cluster with all other
+objects in the cluster.
+
+Colocating multiple sinks onto the same cluster can be more resource efficient
+when you have many low-traffic sinks that occasionally need some burst
+capacity.
 
 [//]: # "TODO(morsapaes) Add best practices for sizing sinks."
 

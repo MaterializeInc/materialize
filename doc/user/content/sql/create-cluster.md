@@ -8,8 +8,8 @@ menu:
 ---
 
 `CREATE CLUSTER` creates a logical [cluster](/overview/key-concepts#clusters),
-which contains indexes. By default, a cluster named `default` with a single
-cluster replica will exist in every environment.
+which contains dataflow-powered objects. By default, a cluster named `default`
+with a single cluster replica will exist in every environment.
 
 To switch your active cluster, use the `SET` command:
 
@@ -20,9 +20,20 @@ SET cluster = other_cluster;
 ## Conceptual framework
 
 Clusters are logical components that let you express resource isolation for all
-dataflow-powered objects, e.g. indexes. When creating dataflow-powered
-objects, you must specify which cluster you want to use. (Not explicitly naming
-a cluster uses your session's default cluster.)
+dataflow-powered objects: sources, sinks, indexes, and materialized views. When
+creating dataflow-powered objects, you must specify which cluster you want to
+use.
+
+For indexes and materialized views, not explicitly naming a cluster uses your
+session's default cluster.
+
+{{< warning >}}
+A given cluster may contain any number of indexes and materialized views *or*
+any number of sources and sinks, but not both types of objects. For example,
+you may not create a cluster with a source and an index.
+
+We plan to remove this restriction in a future version of Materialize.
+{{< /warning >}}
 
 Importantly, clusters are strictly a logical component; they rely on [cluster
 replicas](/overview/key-concepts#cluster-replicas) to run dataflows. Said a
@@ -37,6 +48,12 @@ cluster replicas. Each object in a cluster gets instantiated on every replica,
 meaning that on a given physical replica, objects in the cluster are in
 contention for the same physical resources. To achieve the performance you need,
 this might require setting up more than one cluster.
+
+{{< warning >}}
+Clusters containing sources and sinks can have at most one replica.
+
+We plan to remove this restriction in a future version of Materialize.
+{{< /warning >}}
 
 ## Syntax
 

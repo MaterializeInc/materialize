@@ -20,14 +20,15 @@ Materialize and how its components differ from traditional databases.
 
 Materialize offers the following components through its SQL API:
 
-Component              | Use
------------------------|-----
-**[Sources]**          | Sources describe an external system you want Materialize to read data from (e.g. Kafka).
-**[Views]**            | Views represent queries of sources and other views that you want to save for repeated execution.
-**[Indexes]**          | Indexes represent query results stored in memory.
-**[Sinks]**            | Sinks represent output streams or files that Materialize sends data to.
-**[Clusters]**         | Clusters represent a logical set of indexes that share physical resources.
-**[Cluster replicas]** | Cluster replicas provide physical resources for a cluster's indexes.
+Component                | Use
+-------------------------|-----
+**[Sources]**            | Sources describe an external system you want Materialize to read data from (e.g. Kafka).
+**[Views]**              | Views represent queries of sources and other views that you want to save for repeated execution.
+**[Indexes]**            | Indexes represent query results stored in memory.
+**[Materialized views]** | Materialized views represent query results stored durably.
+**[Sinks]**              | Sinks represent output streams or files that Materialize sends data to.
+**[Clusters]**           | Clusters describe logical compute resources that can be used by sources, sinks, indexes, and materialized views.
+**[Cluster replicas]**   | Cluster replicas allocate physical compute resources for a cluster.
 
 ## Sources
 
@@ -162,10 +163,11 @@ For a deeper dive into how indexes work, see [Arrangements](/overview/arrangemen
 
 ## Clusters
 
-Clusters are logical components that let you express resource isolation for all
-dataflow-powered objects, e.g. indexes. When creating dataflow-powered
-objects, you must specify which cluster you want to use. (Not explicitly naming
-a cluster uses your session's default cluster.)
+Clusters are logical components that let you describe how to allocate compute
+resources for a group of dataflow-powered objects, i.e., sources, sinks,
+indexes, and materialized views. When creating dataflow-powered objects, you
+must specify which cluster you want to use. (Not explicitly naming a cluster
+uses your session's default cluster.)
 
 Importantly, clusters are strictly a logical component; they rely on [cluster
 replicas](#cluster-replicas) to run dataflows. Said a slightly different way, a
@@ -234,6 +236,7 @@ Add replicas to a cluster | Greater tolerance to replica failure
 [Clusters]: #clusters
 [Cluster replicas]: #cluster-replicas
 [Indexes]: #indexes
+[Materialized views]: #materialized-views
 [Debezium]: http://debezium.io
 [Sinks]: #sinks
 [Sources]: #sources

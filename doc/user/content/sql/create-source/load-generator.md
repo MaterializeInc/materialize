@@ -26,6 +26,7 @@ tests.
 Field | Use
 ------|-----
 _src_name_  | The name for the source.
+**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source. If not specified, the `SIZE` option must be specified.
 **COUNTER** | Use the [counter](#counter) load generator.
 **AUCTION** | Use the [auction](#auction) load generator.
 **TPCH**    | Use the [tpch](#tpch) load generator.
@@ -39,7 +40,7 @@ _src_name_  | The name for the source.
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
-`SIZE`                               | `text`    | **Required.** The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`.
+`SIZE`                               | `text`    | The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`. Required if the `IN CLUSTER` option is not specified.
 
 ## Description
 
