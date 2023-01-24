@@ -254,16 +254,18 @@ The explanation divides in two parts:
 
 #### Determinations for a timestamp
 
-Queries in Materialize have a logical timestamp, known as _query timestamp_. It plays a critical role to retun a correct result. Returning a correct result implies retrieving data with the same logical time from each source present in a query. In this case, sources are objects providing data: a materialized view, view, index, table, or source. Each source will have a pair of logical timestamps, denoted as _frontiers_.
+Queries in Materialize have a logical timestamp, known as _query timestamp_. It plays a critical role to return a correct result. Returning a correct result implies retrieving data with the same logical time from each source present in a query.
+
+In this case, sources are objects providing data: materialized views, views, indexes, tables, or sources. Each will have a pair of logical timestamps frontiers, denoted as _sources frontiers_.
 
 #### Sources frontiers
 
-Sources frontiers are the _read frontier_ and the _write frontier_. They stand for a source’s limits to return a correct result immediately:
+Every source has a beginning _read frontier_ and an ending _write frontier_. They stand for a source’s limits to return a correct result immediately:
 
 * Read frontier: Indicates the minimum logical timestamp to return a correct result (known as _compaction_)
-* Write frontier: Represents the maximum timestamp to build a correct result without waiting unprocessed data.
+* Write frontier: Indicates the maximum timestamp to build a correct result without waiting unprocessed data.
 
-Having a _query timestamp_ outside the limits of the frontiers can explain the presence of delays. While in the middle, the space of processed but not yet compacted data, allows building and returning a correct result immediately.
+Having a _query timestamp_ outside the values of the frontiers can explain the presence of delays. While in the middle, the space of processed but not yet compacted data, allows building and returning a correct result immediately.
 
 #### Example
 
