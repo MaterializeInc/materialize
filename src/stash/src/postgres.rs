@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt::Write;
 use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -23,7 +24,7 @@ use rand::Rng;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tokio_postgres::error::SqlState;
-use tokio_postgres::{Client, Statement};
+use tokio_postgres::{Client, Statement, ToStatement};
 use tracing::{error, event, info, warn, Level};
 
 use mz_ore::metric;
@@ -141,7 +142,7 @@ pub(crate) struct CountedStatements<'a> {
     // Due to our use of try_join and futures, this needs to be an Arc Mutex.
     // Use a BTreeMap for deterministic debug printing. Use an Option to avoid
     // allocating an Arc when unused.
-    counts: Option<Arc<Mutex<BTreeMap<&'static str, usize>>>>,
+    counts: Option<Arc<Mutex<BTreeMap<String, usize>>>>,
 }
 
 impl<'a> CountedStatements<'a> {
@@ -156,11 +157,11 @@ impl<'a> CountedStatements<'a> {
         }
     }
 
-    pub fn inc(&self, name: &'static str) {
+    pub fn inc<S: Into<String>>(&self, name: S) {
         if let Some(counts) = &self.counts {
             let mut map = counts.lock().unwrap();
-            *map.entry(name).or_default() += 1;
-            *map.entry("_total").or_default() += 1;
+            *map.entry(name.into()).or_default() += 1;
+            *map.entry("_total".into()).or_default() += 1;
         }
     }
 
@@ -196,9 +197,36 @@ impl<'a> CountedStatements<'a> {
         self.inc("compact");
         &self.stmts.compact
     }
-    pub fn update_many(&self) -> &Statement {
-        self.inc("update_many");
-        &self.stmts.update_many
+    /// Returns a ToStatement to INSERT a specified number of rows. First
+    /// statement parameter is collection_id. Then key, value, time, diff as
+    /// sets of 4 for each row.
+    pub fn update(&self, rows: usize) -> Box<(dyn ToStatement + Sync + Send)> {
+        self.inc(format!("update[{rows}]"));
+        if rows == 1 {
+            return Box::new(self.stmts.update_many.clone());
+        }
+
+        // TODO: We could prepare and save this for future re-use, but we don't
+        // currently have mutable access to self.stmts.
+
+        let mut stmt =
+            String::from("INSERT INTO data (collection_id, key, value, time, diff) VALUES");
+        let mut sep = ' ';
+        for i in 0..rows {
+            let idx = 1 + i * 4;
+            write!(
+                &mut stmt,
+                "{}($1, ${}, ${}, ${}, ${})",
+                sep,
+                idx + 1,
+                idx + 2,
+                idx + 3,
+                idx + 4
+            )
+            .unwrap();
+            sep = ',';
+        }
+        Box::new(stmt)
     }
 }
 

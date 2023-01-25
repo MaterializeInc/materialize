@@ -21,7 +21,7 @@ use mz_ore::collections::CollectionExt;
 use serde_json::Value;
 use timely::{progress::Antichain, PartialOrder};
 use tokio::sync::mpsc;
-use tokio_postgres::Client;
+use tokio_postgres::{types::ToSql, Client};
 
 use crate::{
     consolidate_updates_kv, postgres::CountedStatements, AntichainFormatter, AppendBatch, Data,
@@ -558,41 +558,41 @@ impl<'a> Transaction<'a> {
             assert!(*savepoint);
         }
 
-        let mut futures = Vec::with_capacity(entries.len());
-        for ((key, value), time, diff) in entries {
-            futures.push(async move {
-                self.client
-                    .execute(
-                        self.stmts.update_many(),
-                        &[&collection_id, &key, &value, &time, &diff],
-                    )
-                    .map_err(|err| err.into())
-                    .await
-            });
+        if entries.is_empty() {
+            return Ok(());
         }
 
         // Check the upper in a separate future so we can issue the updates without
         // waiting for it first.
-        try_join(
-            async {
-                let upper = match upper {
-                    Some(upper) => upper,
-                    None => self.upper(collection_id).await?,
-                };
-                for ((_key, _value), time, _diff) in entries {
-                    if !upper.less_equal(time) {
-                        return Err(StashError::from(format!(
-                            "entry time {} is less than the current upper frontier {}",
-                            time,
-                            AntichainFormatter(&upper)
-                        )));
-                    }
+        let upper_fut = async {
+            let upper = match upper {
+                Some(upper) => upper,
+                None => self.upper(collection_id).await?,
+            };
+            for ((_key, _value), time, _diff) in entries {
+                if !upper.less_equal(time) {
+                    return Err(StashError::from(format!(
+                        "entry time {} is less than the current upper frontier {}",
+                        time,
+                        AntichainFormatter(&upper)
+                    )));
                 }
-                Ok(upper)
-            },
-            try_join_all(futures),
-        )
-        .await?;
+            }
+            Ok(upper)
+        };
+
+        let mut args: Vec<&'_ (dyn ToSql + Sync)> = Vec::with_capacity(1 + entries.len() * 4);
+        // All rows use the collection id, so hard code it as the first.
+        args.push(&collection_id);
+        for ((key, value), time, diff) in entries {
+            args.push(key);
+            args.push(value);
+            args.push(time);
+            args.push(diff);
+        }
+        let stmt = self.stmts.update(entries.len());
+        let insert_fut = self.client.execute(&*stmt, &args).map_err(|err| err.into());
+        try_join(upper_fut, insert_fut).await?;
         Ok(())
     }
 
