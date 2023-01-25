@@ -109,6 +109,7 @@ where
             .map(
                 |(
                     id,
+                    // TODO(guswynn): produce the schema for each shard.
                     super::DurableCollectionMetadata {
                         remap_shard,
                         data_shard,
