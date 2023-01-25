@@ -6,17 +6,17 @@ menu:
     parent: 'sql-patterns'
 ---
 
-Percentiles are often used to understand and interpret data. Informally speaking, the k-th percentile is the value such that k percent of all values are lower than the percentile.
+Percentiles are a statistical measure used to understand and interpret data. The k-th percentile is the value such that k percent of all values are lower than the percentile.
 
 A naive way to compute percentiles is to simply order all values and pick the value at the position of the corresponding percentile. This can be easily expressed in Materialize through `order by`, `offset`, and `limit`. But this way of computing percentiles keeps all values around and therefore requires memory that linearly grows with the number of values that are tracked. There are better suited alternatives that reduce the required memory footprint, two of which are explained below: histograms and High Dynamic Range (HDR) histograms.
 
-Histograms have a reduced memory footprint that is linear in the number of *unique* values while they are still computing precise percentiles. HDR histograms further reduce the memory footprint at the expense of returning approximate percentiles only. They are particularly interesting if there is a long tail of large values that you want to track, which is often the case for latency measurements.
+Histograms have a lower memory footprint, linear to the number of *unique* values, and computes precise percentiles. HDR histograms further reduce the memory footprint but at the expense of computing approximate percentiles. They are particularly interesting if there is a long tail of large values that you want to track, which is often the case for latency measurements.
 
 ## Using histograms to compute percentiles
 
-Histograms reduce the required memory by tracking a count for each unique value instead of tracking all values. Given an `input` table or view, the histogram for `values` is defined as follows:
+Histograms reduce the memory footprint by tracking a count for each unique value, in a `bucket`, instead of tracking all values. Given an `input`, define the histogram for `values` as follows:
 
-```
+```sql
 CREATE VIEW histogram AS
 SELECT
   value AS bucket,
@@ -25,9 +25,9 @@ FROM input
 GROUP BY value;
 ```
 
-To query percentiles from that view, it's no longer possible to just order the `values` and pick a value from the right spot. Instead, the distribution of values needs to be reconstructed by determining the cumulative count (the sum of counts up through each bucket that came before) for each `bucket`. This is accomplished through a cross join the following view:
+To query percentiles from the view `histogram`, it's no longer possible to just order the `values` and pick a value from the right spot. Instead, the distribution of values needs to be reconstructed. It is done by determining the cumulative count (the sum of counts up through each bucket that came before) for each `bucket`. This is accomplished through a cross-join in the following view:
 
-```
+```sql
 CREATE VIEW distribution AS
 SELECT
   h.bucket,
@@ -42,7 +42,7 @@ ORDER BY cumulative_distribution;
 
 The cumulative count and the cumulative distribution can then be used to query for arbitrary percentiles. The following query returns the 90-th percentile.
 
-```
+```sql
 SELECT bucket AS percentile
 FROM distribution
 WHERE cumulative_distribution >= 0.9
@@ -52,7 +52,7 @@ LIMIT 1;
 
 To increase query performance, it can make sense to keep the `distribution` always up to date by creating an index on the view:
 
-```
+```sql
 CREATE INDEX distribution_idx ON distribution (cumulative_distribution);
 ```
 
@@ -61,19 +61,19 @@ Histograms work well for a domain with low cardinality. But note the cross join 
 
 ## Using HDR histograms to compute approximate percentiles
 
-HDR histograms can be used to approximate percentiles in a space efficient manner that scales well even for large domains with many distinct values. HDR histograms reduce the precision of values that are tracked and use buckets with variable width. Buckets that are closer to 0 are smaller whereas buckets far away from 0 are wider. This works particularly well for data that exhibits a long tail of large values, e.g., latency measurements.
+[HDR histograms](https://github.com/HdrHistogram/HdrHistogram) can be used to approximate percentiles in a space efficient manner that scales well even for large domains with many distinct values. HDR histograms reduce the precision of values that are tracked and use buckets with variable width. Buckets that are closer to 0 are smaller whereas buckets far away from 0 are wider. This works particularly well for data that exhibits a long tail of large values, e.g., latency measurements.
 
-HDR histograms are related to how floating point numbers are represented as integers. The underlying assumption is that smaller numbers require a higher precision to be distinguishable (e.g. 5 ms and 6 ms are different and should be in different bucket) whereas larger numbers can be rounded more aggressively as their relative error becomes less relevant (e.g. 10000 ms and 10001 ms are basically the same and can reside in the same bucket).
+HDR histograms are related to how [floating point numbers are represented](https://en.wikipedia.org/wiki/Double-precision_floating-point_format) as integers. The underlying assumption is that smaller numbers require a higher precision to be distinguishable (e.g. 5 ms and 6 ms are different and should be in different buckets) whereas larger numbers can be rounded more aggressively as their relative error becomes less relevant (e.g. 10000 ms and 10001 ms are almost the same and can reside in the same bucket).
 
-In the following, the precision of numbers is reduced to limit the number of required buckets using the underlying approach of HDR histograms and floating point number representation. Numbers are decomposed into their floating point representation
+The following snippets reduce the precision of numbers to limit the amount of required buckets. Numbers are decomposed into their floating point representation
 
 	n = sign * mantissa * 2**exponent
 
 and the precision of the mantissa is then reduced to compute the respective bucket.
 
-The basic ideas of using histograms to compute percentiles remains the same, though. Merely the bucket becomes more complicated because it’s now composed of the triple (sign, mantissa, exponent).
+The basic ideas of using histograms to compute percentiles remain the same; but determining the bucket becomes more involved because it’s now composed of the triple (sign, mantissa, exponent).
 
-```
+```sql
 -- precision for the representation of the mantissa in bits
 \set precision 4
 
@@ -87,9 +87,9 @@ FROM input
 GROUP BY sign, exponent, mantissa;
 ```
 
-The `hdr_distribution` view below reconstructs the `bucket` (with reduced precision) and determines the cumulative count and cumulative distribution.
+The `hdr_distribution` view below reconstructs the `bucket` (with reduced precision), and determines the cumulative count and cumulative distribution.
 
-```
+```sql
 CREATE VIEW hdr_distribution AS
 SELECT
   h.sign*(1.0+h.mantissa/pow(2.0, :precision))*pow(2.0,h.exponent) AS bucket,
@@ -104,7 +104,7 @@ ORDER BY 1;
 
 This view can then be used to query *approximate* percentiles. More precisely, the query returns the lower bound for the percentile (the next larger bucket represents the upper bound).
 
-```
+```sql
 SELECT bucket AS approximate_percentile
 FROM hdr_distribution
 WHERE cumulative_distribution >= 0.9
@@ -112,29 +112,30 @@ ORDER BY cumulative_distribution
 LIMIT 1;
 ```
 
-As before, query performance can be increased by creating an index on `distribution`.
+As with histograms, increase query performance by creating an index on the `cumulative_distribution` column.
 
-```
+```sql
 CREATE INDEX hdr_distribution_idx ON hdr_distribution (cumulative_distribution);
 ```
 
 
 ## Examples
 
-```
+```sql
 CREATE TABLE input (value BIGINT);
 ```
 
 Let's add the values 1 to 10 into the `input` table.
 
-```
+```sql
 INSERT INTO input SELECT n FROM generate_series(1,10) AS n;
 ```
 
 For small numbers, `distribution` and `hdr_distribution` are identical. All numbers from 1 to 10 are stored in their own buckets.
 
-```
+```sql
 SELECT * FROM hdr_distribution;
+
  bucket | frequency | cumulative_count | cumulative_distribution
 --------+-----------+------------------+-------------------------
       1 |         1 |                1 |                     0.1
@@ -152,14 +153,15 @@ SELECT * FROM hdr_distribution;
 
 But if values grow larger, buckets can contain more than one value. Let's see what happens if more values are added to the `input` table.
 
-```
+```sql
 INSERT INTO input SELECT n FROM generate_series(11,10001) AS n;
 ```
 
 In the case of the `hdr_distribution`, a single bucket represents up to 512 distinct values, whereas each bucket of the `distribution` contains only a single value.
 
-```
+```sql
 SELECT * FROM hdr_distribution ORDER BY cumulative_distribution;
+
  bucket | frequency | cumulative_count |          cumulative_distribution
 --------+-----------+------------------+-------------------------------------------
       1 |         1 |                1 |     0.00000999990000099999000009999900001
@@ -180,7 +182,7 @@ SELECT * FROM hdr_distribution ORDER BY cumulative_distribution;
 
 Note that `hdr_distribution` only contains 163 rows as opposed to the 10001 rows of `distribution`, which is used in the histogram approach. However, when querying for the 90-th percentile, the query returns an approximate percentile of `8704` whereas the precise percentile is `9001`.
 
-```
+```sql
 SELECT bucket AS approximate_percentile
 FROM hdr_distribution
 WHERE cumulative_distribution >= 0.9
@@ -194,10 +196,3 @@ LIMIT 1;
 ```
 
 The precision of the approximation can be adapted by changing the `precision` in the definition of `hdr_histogram`. The higher the `precision` the closer is the value to the actual percentile. The lower the `precision`, the less memory is required.
-
-## Further reading
-
-- https://github.com/HdrHistogram/HdrHistogram
-- https://en.wikipedia.org/wiki/Double-precision_floating-point_format
-- https://www.h-schmidt.net/FloatConverter/IEEE754.html
-- http://www.david-andrzejewski.com/publications/hdr.pdf
