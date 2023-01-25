@@ -64,14 +64,14 @@ from cities;
 
 To avoid creating a new enum variant in MirRelationExpr, we will recognize the above pattern during the MIR-to-LIR lowering, and create a new LIR enum variant for window functions. I estimate this pattern recognition to need about 15-20 if/match statements. It can happen that this pattern recognition approach turns out to be too brittle: we might accidentally leave out cases when the pattern is slightly different due to unrelated MIR transforms, plus we might break it from time to time with unrelated MIR transform changes. If this happens, then we might reconsider creating a new MIR enum variant later. (Which would be easier after the optimizer refactoring/cleanup.) For an extended discussion on alternative representations in HIR/MIR/LIR, see the [Alternatives](#alternatives) section.
 
-Also, we will want to entirely transform away certain window function patterns, most notably, the ROW_NUMBER-to-TopK transform. For this, we need to canonicalize scalar expressions, which I think we usually do in MIR. This means that this transform should happen on MIR. This will start by again recognizing the above general windowing pattern, and then performing pattern recognition of the TopK pattern. 
+Also, we will want to entirely transform away certain window function patterns, most notably, the ROW_NUMBER-to-TopK transform. For this, we need to canonicalize scalar expressions, which I think we usually do in MIR. This means that this transform should happen on MIR. This will start by again recognizing the above general windowing pattern, and then performing pattern recognition of the TopK pattern.
 
 In the rendering, we’ll use several approaches to solve the many cases mentioned in the “Goals” section:
 
 1. We’ll use [DD’s prefix_sum](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/algorithms/prefix_sum.rs) with some tricky sum functions.
 2. As an extension of 1., we’ll use a generalization of DD’s prefix sum to arbitrary intervals (i.e., not just prefixes).
 3. We'll transform away window functions in some special cases (e.g., to TopK, or a simple grouped aggregation + self-join)
-4. Initially, we will resort to the old window function implementation in some cases, but this should become less and less over time. I think it will be possible to eventually implement all window function usage with the above 1.-3., but it will take time to get there. 
+4. Initially, we will resort to the old window function implementation in some cases, but this should become less and less over time. I think it will be possible to eventually implement all window function usage with the above 1.-3., but it will take time to get there.
 
 We’ll use the word **index** in the below text to mean the values of the ORDER BY column of the OVER clause, i.e., they are simply the values that determine the ordering. (Note that it’s sparse indexing, i.e., not every number occurs from 1 to n, but there are usually (big) gaps.)
 
@@ -105,7 +105,7 @@ In most situations other than TopK, these functions cannot be implemented effici
 
 #### 2. Window aggregations
 
-These operate on so-called **frames**, i.e., a certain subset of a window partition. Frames are specified in relation to the current row. For example, "sum up column `x` for the preceding 5 rows from the current row". For all the frame options, see https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-WINDOW-FUNCTIONS 
+These operate on so-called **frames**, i.e., a certain subset of a window partition. Frames are specified in relation to the current row. For example, "sum up column `x` for the preceding 5 rows from the current row". For all the frame options, see https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-WINDOW-FUNCTIONS
 
 There is a special case where the frame includes the entire window partition: An aggregation where the frame is both UNBOUNDED PRECEDING and UNBOUNDED FOLLOWING at the same time (or there is no ORDER BY, which has a similar effect) should be transformed to a grouped aggregation + self join.
 
@@ -139,7 +139,7 @@ To have better performance (and to support non-invertible aggregations, e.g., mi
     - `requests`: We can similarly compute a set of requests from `queries`. The change will only be inside the `flat_map`.
     - `full_ranges`, `zero_ranges`, `used_ranges` stay the same.
     - `init_states` won’t start at position 0, but at the lower end of the intervals in `queries`
-    - The iteration at the end will be mostly the same. 
+    - The iteration at the end will be mostly the same.
 
 #### 3. FIRST_VALUE / LAST_VALUE / NTH_VALUE
 
