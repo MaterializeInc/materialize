@@ -17,7 +17,6 @@ use std::time::Duration;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::count::CountTotal;
-use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -127,7 +126,7 @@ pub fn construct<A: Allocate>(
             let mut peek_stash = HashMap::new();
             let mut storage_sources = HashMap::<
                 (GlobalId, usize),
-                HashMap<GlobalId, (VecDeque<(mz_repr::Timestamp, u128)>, HashMap<u128, i128>)>,
+                HashMap<GlobalId, (VecDeque<(mz_repr::Timestamp, u128)>, HashMap<u128, i32>)>,
             >::new();
             move |_frontiers| {
                 let mut dataflow = dataflow_out.activate();
@@ -190,10 +189,14 @@ pub fn construct<A: Allocate>(
                                     if let Some(source_map) = storage_sources.remove(key) {
                                         for (source_id, (_, delay_map)) in source_map {
                                             for (delay_ns, delay_count) in delay_map {
+                                                let delay_pow = delay_ns.next_power_of_two();
+                                                let delay_ns: i128 =
+                                                    delay_ns.try_into().expect("delay too big");
+                                                let delay_count: i128 = delay_count.into();
                                                 frontier_delay_session.give((
-                                                    (id, source_id, worker, delay_ns),
+                                                    (id, source_id, worker, delay_pow),
                                                     time_ms,
-                                                    -delay_count,
+                                                    (-(delay_ns * delay_count), -delay_count),
                                                 ));
                                             }
                                         }
@@ -240,10 +243,15 @@ pub fn construct<A: Allocate>(
                                                     let delay_count =
                                                         delay_map.entry(elapsed_ns).or_insert(0);
                                                     *delay_count += 1;
+                                                    let elapsed_pow =
+                                                        elapsed_ns.next_power_of_two();
+                                                    let elapsed_ns: i128 = elapsed_ns
+                                                        .try_into()
+                                                        .expect("elapsed_ns too big");
                                                     frontier_delay_session.give((
-                                                        (name, *source_id, worker, elapsed_ns),
+                                                        (name, *source_id, worker, elapsed_pow),
                                                         time_ms,
-                                                        1,
+                                                        (elapsed_ns, 1),
                                                     ));
                                                 } else {
                                                     time_deque.push_front(current_front);
@@ -302,10 +310,13 @@ pub fn construct<A: Allocate>(
                                     peek_session.give(((peek, worker), time_ms, -1));
                                     if let Some(start) = peek_stash.remove(&key) {
                                         let elapsed_ns = time.as_nanos() - start;
+                                        let elapsed_pow = elapsed_ns.next_power_of_two();
+                                        let elapsed_ns: i128 =
+                                            elapsed_ns.try_into().expect("elapsed_ns too big");
                                         peek_duration_session.give((
-                                            (key.0, elapsed_ns),
+                                            (key.0, elapsed_pow),
                                             time_ms,
-                                            1,
+                                            (elapsed_ns, 1),
                                         ));
                                     } else {
                                         error!(
@@ -347,12 +358,6 @@ pub fn construct<A: Allocate>(
 
         let frontier_delay = frontier_delay
             .as_collection()
-            .explode_one(|(dataflow, source_id, worker, delay)| {
-                (
-                    (dataflow, source_id, worker, delay.next_power_of_two()),
-                    (i128::try_from(delay).expect("delay too big"), 1),
-                )
-            })
             // TODO(#16549): Use explicit arrangement
             .count_total_core::<i64>()
             .map({
@@ -382,7 +387,6 @@ pub fn construct<A: Allocate>(
         // Duration statistics derive from the non-rounded event times.
         let peek_duration = peek_duration
             .as_collection()
-            .explode_one(|(worker, val)| ((worker, val.next_power_of_two()), (val, 1)))
             // TODO(#16549): Use explicit arrangement
             .count_total_core()
             .map(|((worker, bucket), (sum, count))| {
