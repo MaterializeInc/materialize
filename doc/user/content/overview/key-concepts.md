@@ -166,8 +166,8 @@ For a deeper dive into how indexes work, see [Arrangements](/overview/arrangemen
 Clusters are logical components that let you describe how to allocate compute
 resources for a group of dataflow-powered objects, i.e., sources, sinks,
 indexes, and materialized views. When creating dataflow-powered objects, you
-must specify which cluster you want to use. (Not explicitly naming a cluster
-uses your session's default cluster.)
+must specify which cluster you want to use. Not explicitly naming a cluster
+uses your session's default cluster.
 
 Importantly, clusters are strictly a logical component; they rely on [cluster
 replicas](#cluster-replicas) to run dataflows. Said a slightly different way, a

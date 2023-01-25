@@ -60,7 +60,7 @@ Field               | Type      | Meaning
 --------------------|-----------|--------
 `id`                | [`uint8`] | Materialize's unique ID for the cluster replica.
 `name`              | [`text`]  | The name of the cluster replica.
-`cluster_id`        | [`text`]  | The ID of the cluster to which the replica belongs.
+`cluster_id`        | [`text`]  | The ID of the cluster to which the replica belongs. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `size`              | [`text`]  | The cluster replica's size, selected during creation.
 `availability_zone` | [`text`]  | The availability zone in which the cluster is running.
 
@@ -96,7 +96,7 @@ Field            | Type        | Meaning
 -----------------|-------------|--------
 `id`             | [`text`]    | The unique ID of the connection.
 `oid`            | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the connection.
-`schema_id`      | [`uint8`]   | The ID of the schema to which the connection belongs.
+`schema_id`      | [`uint8`]   | The ID of the schema to which the connection belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`           | [`text`]    | The name of the connection.
 `type`           | [`text`]    | The type of the connection: `confluent-schema-registry`, `kafka`, `postgres`, or `ssh-tunnel`.
 
@@ -127,7 +127,7 @@ Field                       | Type              | Meaning
 ----------------------------|-------------------|--------
 `id`                        | [`text`]          | Materialize's unique ID for the function.
 `oid`                       | [`oid`]           | A [PostgreSQL-compatible OID][oid] for the function.
-`schema_id`                 | [`uint8`]         | The ID of the schema to which the function belongs.
+`schema_id`                 | [`uint8`]         | The ID of the schema to which the function belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`                      | [`text`]          | The name of the function.
 `argument_type_ids`         | [`text array`]    | The ID of each argument's type. Each entry refers to `mz_types.id`.
 `variadic_argument_type_id` | [`text`]          | The ID of the variadic argument's type, or `NULL` if the function does not have a variadic argument. Refers to `mz_types.id`.
@@ -156,7 +156,7 @@ vice-versa.
 
 Field            | Type        | Meaning
 -----------------|-------------|--------
-`index_id`       | [`text`]    | The ID of the index which contains this column.
+`index_id`       | [`text`]    | The ID of the index which contains this column. Corresponds to [`mz_indexes.id`](/sql/system-catalog/mz_catalog/#mz_indexes).
 `index_position` | [`uint8`]   | The 1-indexed position of this column within the index. (The order of columns in an index does not necessarily match the order of columns in the relation on which the index is built.)
 `on_position`    | [`uint8`]   | If not `NULL`, specifies the 1-indexed position of a column in the relation on which this index is built that determines the value of this index column.
 `on_expression`  | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
@@ -209,9 +209,9 @@ Field          | Type      | Meaning
 ---------------|-----------|----------
 `id`           | [`text`]  | Materialize's unique ID for the materialized view.
 `oid`          | [`oid`]   | A [PostgreSQL-compatible OID][oid] for the materialized view.
-`schema_id`    | [`uint8`] | The ID of the schema to which the materialized view belongs.
+`schema_id`    | [`uint8`] | The ID of the schema to which the materialized view belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`         | [`text`]  | The name of the materialized view.
-`cluster_id`   | [`text`]  | The ID of the cluster maintaining the materialized view.
+`cluster_id`   | [`text`]  | The ID of the cluster maintaining the materialized view. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `definition`   | [`text`]  | The materialized view definition (a `SELECT` query).
 
 ### `mz_objects`
@@ -227,7 +227,7 @@ Field       | Type       | Meaning
 ------------|------------|--------
 `id`        | [`text`]   | Materialize's unique ID for the object.
 `oid`       | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the object.
-`schema_id` | [`uint8`]  | The ID of the schema to which the object belongs.
+`schema_id` | [`uint8`]  | The ID of the schema to which the object belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`      | [`text`]   | The name of the object.
 `type`      | [`text`]   | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
 
@@ -248,7 +248,7 @@ Field       | Type       | Meaning
 ------------|------------|--------
 `id`        | [`text`]   | Materialize's unique ID for the relation.
 `oid`       | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the relation.
-`schema_id` | [`uint8`]  | The ID of the schema to which the relation belongs.
+`schema_id` | [`uint8`]  | The ID of the schema to which the relation belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`      | [`text`]   | The name of the relation.
 `type`      | [`text`]   | The type of the relation: either `table`, `source`, `view`, or `materialized view`.
 
@@ -270,7 +270,7 @@ Field         | Type       | Meaning
 --------------|------------|--------
 `id`          | [`uint8`]  | Materialize's unique ID for the schema.
 `oid`         | [`oid`]    | A [PostgreSQL-compatible oid][oid] for the schema.
-`database_id` | [`uint8`]  | The ID of the database containing the schema.
+`database_id` | [`uint8`]  | The ID of the database containing the schema. Corresponds to [`mz_databases.id`](/sql/system-catalog/mz_catalog/#mz_databases).
 `name`        | [`text`]   | The name of the schema.
 
 ### `mz_secrets`
@@ -280,7 +280,7 @@ The `mz_secrets` table contains a row for each connection in the system.
 Field            | Type        | Meaning
 -----------------|-------------|--------
 `id`             | [`text`]    | The unique ID of the secret.
-`schema_id`      | [`uint8`]   | The ID of the schema to which the secret belongs.
+`schema_id`      | [`uint8`]   | The ID of the schema to which the secret belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`           | [`text`]    | The name of the secret.
 
 ### `mz_ssh_tunnel_connections`
@@ -302,13 +302,13 @@ Field            | Type        | Meaning
 -----------------|-------------|--------
 `id`             | [`text`]    | Materialize's unique ID for the sink.
 `oid`            | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the sink.
-`schema_id`      | [`uint8`]   | The ID of the schema to which the sink belongs.
+`schema_id`      | [`uint8`]   | The ID of the schema to which the sink belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`           | [`text`]    | The name of the sink.
 `type`           | [`text`]    | The type of the sink: `kafka`.
-`connection_id`  | [`text`]    | The ID of the connection associated with the sink, if any.
+`connection_id`  | [`text`]    | The ID of the connection associated with the sink, if any. Corresponds to [`mz_connections.id`](/sql/system-catalog/mz_catalog/#mz_connections).
 `size`           | [`text`]    | The size of the sink.
 `envelope_type`  | [`text`]    | The [envelope](/sql/create-sink/#envelopes) of the sink: `upsert`, or `debezium`.
-`cluster_id`     | [`text`]    | The ID of the cluster maintaining the sink
+`cluster_id`     | [`text`]    | The ID of the cluster maintaining the sink. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 
 ### `mz_sources`
 
@@ -318,13 +318,13 @@ Field            | Type       | Meaning
 -----------------|------------|----------
 `id`             | [`text`]   | Materialize's unique ID for the source.
 `oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the source.
-`schema_id`      | [`uint8`]  | The ID of the schema to which the source belongs.
+`schema_id`      | [`uint8`]  | The ID of the schema to which the source belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`           | [`text`]   | The name of the source.
 `type`           | [`text`]   | The type of the source: `kafka`, `postgres`, `load-generator`, or `subsource`.
-`connection_id`  | [`text`]   | The ID of the connection associated with the source, if any.
+`connection_id`  | [`text`]   | The ID of the connection associated with the source, if any. Corresponds to [`mz_connections.id`](/sql/system-catalog/mz_catalog/#mz_connections).
 `size`           | [`text`]   | The [size](/sql/create-source/#sizing-a-source) of the source.
 `envelope_type`  | [`text`]   | The [envelope](/sql/create-source/#envelopes) of the source: `none`, `upsert`, or `debezium`.
-`cluster_id`     | [`text`]   | The ID of the cluster maintaining the source.
+`cluster_id`     | [`text`]   | The ID of the cluster maintaining the source. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 
 ### `mz_storage_usage`
 
@@ -346,7 +346,7 @@ Field            | Type       | Meaning
 -----------------|------------|----------
 `id`             | [`text`]   | Materialize's unique ID for the table.
 `oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the table.
-`schema_id`      | [`uint8`]  | The ID of the schema to which the table belongs.
+`schema_id`      | [`uint8`]  | The ID of the schema to which the table belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`           | [`text`]   | The name of the table.
 
 ### `mz_types`
@@ -357,7 +357,7 @@ Field          | Type       | Meaning
 ---------------|------------|----------
 `id`           | [`text`]   | Materialize's unique ID for the type.
 `oid`          | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the type.
-`schema_id`    | [`uint8`]  | The ID of the schema to which the type belongs.
+`schema_id`    | [`uint8`]  | The ID of the schema to which the type belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`         | [`text`]   | The name of the type.
 
 ### `mz_views`
@@ -368,7 +368,7 @@ Field          | Type        | Meaning
 ---------------|-------------|----------
 `id`           | [`text`]    | Materialize's unique ID for the view.
 `oid`          | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the view.
-`schema_id`    | [`uint8`]   | The ID of the schema to which the view belongs.
+`schema_id`    | [`uint8`]   | The ID of the schema to which the view belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`         | [`text`]    | The name of the view.
 `definition`   | [`text`]    | The view definition (a `SELECT` query).
 
