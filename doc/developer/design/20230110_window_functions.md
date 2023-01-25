@@ -285,7 +285,5 @@ There are many window functions, and many frame options. We will gradually add t
 
 # Open questions
 
-- MIR/LIR representation.
-
 - How to have automated performance tests? Can we check in Testdrive that some materialized view (that has window functions) is being updated fast enough?
 - We should check that there is correct parallelization inside window partitions, see above.
