@@ -78,7 +78,11 @@ them for any kind of capacity planning.
 
 ### `mz_cluster_links`
 
-The `mz_cluster_links` table exposes the mappings between sources/sinks and their linked cluster.
+The `mz_cluster_links` table contains a row for each cluster that is linked to a
+source or sink. When present, the lifetime of the specified cluster is tied to
+the lifetime of the specified source or sink: the cluster cannot be dropped
+without dropping the linked source or sink, and dropping the linked source or
+sink will also drop the cluster. There is at most one row per cluster.
 
 {{< note >}}
 The concept of a linked cluster is not user-facing, and is intentionally undocumented. Linked clusters are meant to preserve the soon-to-be legacy interface for sizing sources and sinks.
@@ -465,48 +469,6 @@ Field       | Type       | Meaning
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`mz_timestamp`] | The next timestamp at which the dataflow may change.
 
-### `mz_source_utilization`
-
-The `mz_source_utilization` table gives the last known CPU and RAM utilization
-statistics for all extant sources, as a percentage of the total allocation.
-
-At this time, we do not make any guarantees about the exactness or freshness of these numbers.
-
-| Field            | Type      | Meaning                                                    |
-|------------------|-----------|------------------------------------------------------------|
-| `source_id`      | [`uint8`] | The ID of a source.                                        |
-| `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
-| `cpu_percent_normalized`    | [`uint8`] | Approximate CPU usage, in percent of the total number of timely workers. Can exceed 100, as threads other than timely workers may be scheduled. |
-| `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
-
-### `mz_sink_utilization`
-
-The `mz_sink_utilization` table gives the last known CPU and RAM utilization
-statistics for all extant sinks, as a percentage of the total allocation.
-
-Materialize does not make any guarantees about the exactness or freshness of these numbers.
-
-| Field            | Type      | Meaning                                                    |
-|------------------|-----------|------------------------------------------------------------|
-| `sink_id`        | [`uint8`] | The ID of a sink.                                          |
-| `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
-| `cpu_percent_normalized`    | [`uint8`] | Approximate CPU usage, in percent of the total number of timely workers. Can exceed 100, as threads other than timely workers may be scheduled. |
-| `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
-
-### `mz_storage_host_metrics`
-
-The `mz_storage_host_metrics` table gives the last known CPU and RAM utilization statistics
-for all processes of all extant storage hosts.
-
-At this time, we do not make any guarantees about the exactness or freshness of these numbers.
-
-Field              | Type       | Meaning
--------------------|------------|--------
-`id`               | [`text`]   | The ID of the storage object (source or sink).
-`process_id`       | [`bigint`] | An identifier of a process within a host.
-`cpu_nano_cores`   | [`bigint`] | Approximate CPU usage, in billionths of a vCPU core.
-`memory_bytes`     | [`bigint`] | Approximate RAM usage, in bytes.
-
 ### `mz_source_statistics`
 
 The `mz_source_statistics` table contains statistics for each worker thread of
@@ -543,23 +505,6 @@ Field                 | Type         | Meaning
 `messaged_commited`   | [`bigint`]   | The number of messages committed to the sink.
 `bytes_staged`        | [`bigint`]   | The number of bytes staged but possibly not committed to the sink. This counts both keys and values, if applicable.
 `bytes_committed`     | [`bigint`]   | The number of bytes committed to the sink. This counts both keys and values, if applicable.
-
-### `mz_storage_host_sizes`
-
-The `mz_storage_host_sizes` table contains a mapping of logical sizes
-(e.g. "xlarge") to physical sizes (number of workers, and CPU and memory allocations per process).
-
-{{< warning >}}
-The values in this table may change at any time, and users should not rely on
-them for any kind of capacity planning.
-{{< /warning >}}
-
-| Field            | Type      | Meaning                                                       |
-|------------------|-----------|---------------------------------------------------------------|
-| `size`           | [`text`]  | The human-readable size.                                      |
-| `workers`        | [`uint8`] | The number of Timely Dataflow workers per process.            |
-| `cpu_nano_cores` | [`uint8`] | The CPU allocation per process, in billionths of a vCPU core. |
-| `memory_bytes`   | [`uint8`] | The RAM allocation per process, in billionths of a vCPU core. |
 
 ### `mz_source_statuses`
 

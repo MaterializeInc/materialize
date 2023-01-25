@@ -28,6 +28,7 @@ Field | Use
 ------|-----
 _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
+**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source. If not specified, the `SIZE` option must be specified.
 **CONNECTION** _connection_name_ | The name of the PostgreSQL connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgres) documentation page.
 **FOR ALL TABLES** | Create subsources for all tables in the publication.
 **FOR TABLES (** _table_list_ **)** | Create subsources for specific tables in the publication.
@@ -43,7 +44,7 @@ Field                                | Value     | Description
 
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
-`SIZE`                               | `text`    | **Required.** The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`.
+`SIZE`                               | `text`    | The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`. Required if the `IN CLUSTER` option is not specified.
 
 ## Features
 

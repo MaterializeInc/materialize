@@ -42,6 +42,7 @@ Field | Use
 ------|-----
 **IF NOT EXISTS** | If specified, _do not_ generate an error if a sink of the same name already exists. <br/><br/>If _not_ specified, throw an error if a sink of the same name already exists. _(Default)_
 _sink&lowbar;name_ | A name for the sink. This name is only used within Materialize.
+**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this sink. If not specified, the `SIZE` option must be specified.
 _item&lowbar;name_ | The name of the source, table or materialized view you want to send to the sink.
 **CONNECTION** _connection_name_ | The name of the connection to use in the sink. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
 **KEY (** _key&lowbar;column_ **)** | An optional list of columns to use for the Kafka key. If unspecified, the Kafka key is left unset.
@@ -66,7 +67,7 @@ Field                | Value  | Description
 Field                | Value  | Description
 ---------------------|--------|------------
 `SNAPSHOT`           | `bool` | Default: `true`. Whether to emit the consolidated results of the query before the sink was created at the start of the sink. To see only results after the sink is created, specify `WITH (SNAPSHOT = false)`.
-`SIZE`               | `text`    | **Required.** The [size](#sizing-a-sink) for the sink. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`.
+`SIZE`               | `text`    | The [size](#sizing-a-sink) for the sink. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`. Required if the `IN CLUSTER` option is not specified.
 
 ## Supported formats
 

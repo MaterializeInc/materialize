@@ -28,6 +28,12 @@ complex materialized views on the same cluster, you choose some other
 distribution, or you replace all replicas in a cluster with more powerful
 machines.
 
+{{< warning >}}
+Clusters containing sources and sinks can have at most one replica.
+
+We plan to remove this restriction in a future version of Materialize.
+{{< /warning >}}
+
 ## Syntax
 
 {{< diagram "create-cluster-replica.svg" >}}
