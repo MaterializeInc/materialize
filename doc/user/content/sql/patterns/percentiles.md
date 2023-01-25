@@ -14,7 +14,7 @@ Histograms have a reduced memory footprint that is linear in the number of *uniq
 
 ## Using histograms to compute percentiles
 
-Histograms reduce the required memory by tracking a count for each unique value instead of tracking all values. Given an `input` table or view, the historgram for `values` is defined as follows:
+Histograms reduce the required memory by tracking a count for each unique value instead of tracking all values. Given an `input` table or view, the histogram for `values` is defined as follows:
 
 ```
 CREATE VIEW histogram AS
@@ -50,7 +50,7 @@ ORDER BY cumulative_distribution
 LIMIT 1;
 ```
 
-To increase query performance, it can make sense to keep the `distribution` in memory by creating an index on the view:
+To increase query performance, it can make sense to keep the `distribution` always up to date by creating an index on the view:
 
 ```
 CREATE INDEX distribution_idx ON distribution (cumulative_distribution);
@@ -61,7 +61,7 @@ Histograms work well for a domain with low cardinality. But note the cross join 
 
 ## Using HDR histograms to compute approximate percentiles
 
-HDR histograms can be used to approximate percentiles in a space efficient manner that scales well even for large domains with many distinct values. HDR histograms basically reduce the precision of values that are tracked and use buckets with variable width. Buckets that are closer to 0 are smaller whereas buckets far away from 0 are wider. This works particularly well for data that exhibits a long tail of large values, e.g. latency measurements.
+HDR histograms can be used to approximate percentiles in a space efficient manner that scales well even for large domains with many distinct values. HDR histograms reduce the precision of values that are tracked and use buckets with variable width. Buckets that are closer to 0 are smaller whereas buckets far away from 0 are wider. This works particularly well for data that exhibits a long tail of large values, e.g., latency measurements.
 
 HDR histograms are related to how floating point numbers are represented as integers. The underlying assumption is that smaller numbers require a higher precision to be distinguishable (e.g. 5 ms and 6 ms are different and should be in different bucket) whereas larger numbers can be rounded more aggressively as their relative error becomes less relevant (e.g. 10000 ms and 10001 ms are basically the same and can reside in the same bucket).
 
@@ -156,7 +156,7 @@ But if values grow larger, buckets can contain more than one value. Let's see wh
 INSERT INTO input SELECT n FROM generate_series(11,10001) AS n;
 ```
 
-In case of the `hdr_distribution`, a single bucket represents up to 512 distinct values whereas each bucket of the `distribution` contains only a single value.
+In the case of the `hdr_distribution`, a single bucket represents up to 512 distinct values, whereas each bucket of the `distribution` contains only a single value.
 
 ```
 SELECT * FROM hdr_distribution ORDER BY cumulative_distribution;
@@ -178,7 +178,7 @@ SELECT * FROM hdr_distribution ORDER BY cumulative_distribution;
 (163 rows)
 ```
 
-Note that `hdr_distribution` only contains 163 rows as opposed to the 10001 rows of `distribution`, which is used in the historgam approch. However, when querying for the 90-th percentils, the query returns an approximate percentile of `8704` whereas the precise percentile is `9001`.
+Note that `hdr_distribution` only contains 163 rows as opposed to the 10001 rows of `distribution`, which is used in the histogram approach. However, when querying for the 90-th percentile, the query returns an approximate percentile of `8704` whereas the precise percentile is `9001`.
 
 ```
 SELECT bucket AS approximate_percentile
@@ -193,7 +193,7 @@ LIMIT 1;
 (1 row)
 ```
 
-The precision of the approximation can be adapted by changing the `precision` in the defiintion of `hdr_histogram`. A higher the `precision` the closer is the value to the actual percentile. The lower the `precision` the less memory is required.
+The precision of the approximation can be adapted by changing the `precision` in the definition of `hdr_histogram`. The higher the `precision` the closer is the value to the actual percentile. The lower the `precision`, the less memory is required.
 
 ## Further reading
 
