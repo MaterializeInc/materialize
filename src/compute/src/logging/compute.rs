@@ -192,11 +192,13 @@ pub fn construct<A: Allocate>(
                                                 let delay_pow = delay_ns.next_power_of_two();
                                                 let delay_ns: i128 =
                                                     delay_ns.try_into().expect("delay too big");
-                                                let delay_count: i128 = delay_count.into();
                                                 frontier_delay_session.give((
                                                     (id, source_id, worker, delay_pow),
                                                     time_ms,
-                                                    (-(delay_ns * delay_count), -delay_count),
+                                                    (
+                                                        -(delay_ns * i128::from(delay_count)),
+                                                        -delay_count,
+                                                    ),
                                                 ));
                                             }
                                         }
@@ -316,7 +318,7 @@ pub fn construct<A: Allocate>(
                                         peek_duration_session.give((
                                             (key.0, elapsed_pow),
                                             time_ms,
-                                            (elapsed_ns, 1),
+                                            (elapsed_ns, 1u64),
                                         ));
                                     } else {
                                         error!(
@@ -367,7 +369,7 @@ pub fn construct<A: Allocate>(
                         Datum::String(&source_id.to_string()),
                         Datum::UInt64(u64::cast_from(worker)),
                         Datum::UInt64(delay_pow.try_into().expect("pow too big")),
-                        Datum::Int64(count.try_into().expect("count too big")),
+                        Datum::Int64(count.into()),
                         u64::try_from(sum).ok().into(),
                     ])
                 }
@@ -393,7 +395,7 @@ pub fn construct<A: Allocate>(
                 Row::pack_slice(&[
                     Datum::UInt64(u64::cast_from(worker)),
                     Datum::UInt64(bucket.try_into().expect("pow too big")),
-                    Datum::UInt64(count.try_into().expect("count too big")),
+                    Datum::UInt64(count),
                     u64::try_from(sum).ok().into(),
                 ])
             });
