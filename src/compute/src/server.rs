@@ -604,7 +604,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     ),
                     sink_write_frontiers: HashMap::new(),
                     flow_control_probes: HashMap::new(),
-                    pending_peeks: HashMap::new(),
+                    pending_peeks: BTreeMap::new(),
                     reported_frontiers: HashMap::new(),
                     dropped_collections: Vec::new(),
                     compute_logger: None,
@@ -686,7 +686,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // Importantly, act as if all peeks may have been retired (as we cannot know otherwise).
             compute_state
                 .command_history
-                .retain_peeks(&HashMap::<_, ()>::default());
+                .retain_peeks(&BTreeMap::<_, ()>::default());
             compute_state.command_history.reduce();
 
             // At this point, we need to sort out which of the *certainly installed* dataflows are

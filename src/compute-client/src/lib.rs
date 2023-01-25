@@ -74,6 +74,8 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+// Disallow usage of `Hash*` types from std.
+#![warn(clippy::disallowed_types)]
 // This appears to be defective at the moment, with false positives
 // for each variant of the `Command` enum, each of which are documented.
 // #![warn(missing_docs)]

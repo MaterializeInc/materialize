@@ -9,7 +9,7 @@
 
 //! A controller for a compute instance.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroI64;
 
 use differential_dataflow::lattice::Lattice;
@@ -96,13 +96,13 @@ pub(super) struct Instance<T> {
     /// Build info for spawning replicas
     build_info: &'static BuildInfo,
     /// The replicas of this compute instance.
-    replicas: HashMap<ReplicaId, Replica<T>>,
+    replicas: BTreeMap<ReplicaId, Replica<T>>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// IDs of arranged log sources maintained by this compute instance.
     arranged_logs: BTreeMap<LogVariant, GlobalId>,
     /// Currently outstanding peeks.
-    peeks: HashMap<Uuid, PendingPeek<T>>,
+    peeks: BTreeMap<Uuid, PendingPeek<T>>,
     /// Currently in-progress subscribes.
     subscribes: BTreeMap<GlobalId, ActiveSubscribe<T>>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
@@ -114,7 +114,7 @@ pub(super) struct Instance<T> {
     /// A number that increases with each restart of `environmentd`.
     envd_epoch: NonZeroI64,
     /// Numbers that increase with each restart of a replica.
-    replica_epochs: HashMap<ReplicaId, u64>,
+    replica_epochs: BTreeMap<ReplicaId, u64>,
     /// The registry the controller uses to report metrics.
     metrics: InstanceMetrics,
 }

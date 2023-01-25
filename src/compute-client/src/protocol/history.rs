@@ -34,11 +34,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
     ///
     /// This action will reduce the history every time it doubles while retaining the
     /// provided peeks.
-    pub fn push<V>(
-        &mut self,
-        command: ComputeCommand<T>,
-        peeks: &std::collections::HashMap<uuid::Uuid, V>,
-    ) {
+    pub fn push<V>(&mut self, command: ComputeCommand<T>, peeks: &BTreeMap<uuid::Uuid, V>) {
         if let ComputeCommand::CreateDataflows(dataflows) = &command {
             self.dataflow_count += dataflows.len();
         }
@@ -208,7 +204,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
     }
 
     /// Retain only those peeks present in `peeks` and discard the rest.
-    pub fn retain_peeks<V>(&mut self, peeks: &std::collections::HashMap<uuid::Uuid, V>) {
+    pub fn retain_peeks<V>(&mut self, peeks: &BTreeMap<uuid::Uuid, V>) {
         for command in self.commands.iter_mut() {
             if let ComputeCommand::CancelPeeks { uuids } = command {
                 uuids.retain(|uuid| peeks.contains_key(uuid));

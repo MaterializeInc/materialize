@@ -7,7 +7,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
@@ -74,7 +74,7 @@ pub struct ComputeState {
     /// through the corresponding probe handles.
     pub flow_control_probes: HashMap<GlobalId, Vec<probe::Handle<Timestamp>>>,
     /// Peek commands that are awaiting fulfillment.
-    pub pending_peeks: HashMap<Uuid, PendingPeek>,
+    pub pending_peeks: BTreeMap<Uuid, PendingPeek>,
     /// Tracks the frontier information that has been sent over `response_tx`.
     pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     /// Collections that were recently dropped and whose removal needs to be reported.
@@ -302,12 +302,8 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     }
 
     fn handle_cancel_peeks(&mut self, uuids: BTreeSet<uuid::Uuid>) {
-        let pending_peeks_len = self.compute_state.pending_peeks.len();
-        let mut pending_peeks = std::mem::replace(
-            &mut self.compute_state.pending_peeks,
-            HashMap::with_capacity(pending_peeks_len),
-        );
-        for (uuid, peek) in pending_peeks.drain() {
+        let pending_peeks = std::mem::take(&mut self.compute_state.pending_peeks);
+        for (uuid, peek) in pending_peeks {
             if uuids.contains(&uuid) {
                 self.send_peek_response(peek, PeekResponse::Canceled);
             } else {
@@ -665,12 +661,8 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     /// Scan pending peeks and attempt to retire each.
     pub fn process_peeks(&mut self) {
         let mut upper = Antichain::new();
-        let pending_peeks_len = self.compute_state.pending_peeks.len();
-        let mut pending_peeks = std::mem::replace(
-            &mut self.compute_state.pending_peeks,
-            HashMap::with_capacity(pending_peeks_len),
-        );
-        for (uuid, mut peek) in pending_peeks.drain() {
+        let pending_peeks = std::mem::take(&mut self.compute_state.pending_peeks);
+        for (uuid, mut peek) in pending_peeks {
             if let Some(response) =
                 peek.seek_fulfillment(&mut upper, self.compute_state.max_result_size)
             {
