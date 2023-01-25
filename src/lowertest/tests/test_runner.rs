@@ -76,14 +76,13 @@
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use proc_macro2::TokenTree;
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
 
     use mz_lowertest::*;
     use mz_ore::cast::CastFrom;
+    use mz_ore::collections::HashMap;
     use mz_ore::result::ResultExt;
 
     #[derive(Debug, Deserialize, PartialEq, Serialize, MzReflect)]
@@ -289,8 +288,9 @@ mod tests {
     fn run() {
         datadriven::walk("tests/testdata", |f| {
             f.run(move |s| -> String {
+                let args = s.args.clone().into();
                 match s.directive.as_str() {
-                    "build" => match build(&s.input, &s.args) {
+                    "build" => match build(&s.input, &args) {
                         Ok(msg) => format!("{}\n", msg.trim_end()),
                         Err(err) => format!("error: {}\n", err),
                     },

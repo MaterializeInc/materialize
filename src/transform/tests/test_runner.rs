@@ -83,7 +83,7 @@
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
     use std::fmt::Write;
 
     use anyhow::{anyhow, Error};
@@ -93,6 +93,7 @@ mod tests {
         TestCatalog,
     };
     use mz_lowertest::{deserialize, tokenize};
+    use mz_ore::collections::HashMap;
     use mz_ore::str::separated;
     use mz_repr::GlobalId;
     use mz_transform::dataflow::{optimize_dataflow_demand_inner, optimize_dataflow_filters_inner};
@@ -486,14 +487,14 @@ mod tests {
         datadriven::walk("tests/testdata", |f| {
             let mut catalog = TestCatalog::default();
             f.run(move |s| -> String {
+                let args = s.args.clone().into();
                 match s.directive.as_str() {
                     "cat" => match catalog.handle_test_command(&s.input) {
                         Ok(()) => String::from("ok\n"),
                         Err(err) => format!("error: {}\n", err),
                     },
                     "build" => {
-                        match run_single_view_testcase(&s.input, &catalog, &s.args, TestType::Build)
-                        {
+                        match run_single_view_testcase(&s.input, &catalog, &args, TestType::Build) {
                             // Generally, explanations for fully optimized queries
                             // are not allowed to have whitespace at the end;
                             // however, a partially optimized query can.
@@ -509,25 +510,20 @@ mod tests {
                         }
                     }
                     "opt" => {
-                        match run_single_view_testcase(&s.input, &catalog, &s.args, TestType::Opt) {
+                        match run_single_view_testcase(&s.input, &catalog, &args, TestType::Opt) {
                             Ok(msg) => msg,
                             Err(err) => format!("error: {}\n", err),
                         }
                     }
                     "steps" => {
-                        match run_single_view_testcase(&s.input, &catalog, &s.args, TestType::Steps)
-                        {
+                        match run_single_view_testcase(&s.input, &catalog, &args, TestType::Steps) {
                             Ok(msg) => msg,
                             Err(err) => format!("error: {}\n", err),
                         }
                     }
                     "crossview" => {
-                        match run_multiview_testcase(
-                            &s.input,
-                            &mut catalog,
-                            &s.args,
-                            TestType::Build,
-                        ) {
+                        match run_multiview_testcase(&s.input, &mut catalog, &args, TestType::Build)
+                        {
                             Ok(msg) => format!(
                                 "{}",
                                 separated("\n", msg.split('\n').map(|s| s.trim_end()))
@@ -536,12 +532,8 @@ mod tests {
                         }
                     }
                     "crossviewopt" => {
-                        match run_multiview_testcase(
-                            &s.input,
-                            &mut catalog,
-                            &s.args,
-                            TestType::Build,
-                        ) {
+                        match run_multiview_testcase(&s.input, &mut catalog, &args, TestType::Build)
+                        {
                             Ok(msg) => msg,
                             Err(err) => format!("error: {}\n", err),
                         }
