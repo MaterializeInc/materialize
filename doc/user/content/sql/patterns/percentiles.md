@@ -6,9 +6,9 @@ menu:
     parent: 'sql-patterns'
 ---
 
-Percentiles are a statistical measure used to understand and interpret data. The k-th percentile is the value such that k percent of all values are lower than the percentile.
+Percentiles are a useful statistic to understand and interpret data distribution. This pattern covers how to use histograms to efficiently calculate percentiles in Materialize.
 
-A naive way to compute percentiles is to simply order all values and pick the value at the position of the corresponding percentile. This can be easily expressed in Materialize through `order by`, `offset`, and `limit`. But this way of computing percentiles keeps all values around and therefore requires memory that linearly grows with the number of values that are tracked. There are better suited alternatives that reduce the required memory footprint, two of which are explained below: histograms and High Dynamic Range (HDR) histograms.
+A naive way to compute percentiles is to order all values and pick the value at the position of the corresponding percentile. This way of computing percentiles keeps all values around and therefore demands memory to grow linearly with the number of tracked values. Two better approaches to reduce the memory footprint are: histograms and High Dynamic Range (HDR) histograms.
 
 Histograms have a lower memory footprint, linear to the number of *unique* values, and computes precise percentiles. HDR histograms further reduce the memory footprint but at the expense of computing approximate percentiles. They are particularly interesting if there is a long tail of large values that you want to track, which is often the case for latency measurements.
 
