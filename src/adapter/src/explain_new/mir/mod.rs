@@ -14,7 +14,9 @@ pub(crate) mod text;
 use std::collections::HashMap;
 
 use mz_compute_client::types::dataflows::DataflowDescription;
-use mz_expr::{visit::Visit, Id, LocalId, MirRelationExpr, OptimizedMirRelationExpr};
+use mz_expr::{
+    visit::Visit, Id, LocalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
+};
 use mz_ore::{stack::RecursionLimitError, str::bracketed, str::separated};
 use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
 use mz_transform::attribute::{
@@ -23,6 +25,7 @@ use mz_transform::attribute::{
 
 use super::{
     AnnotatedPlan, Attributes, ExplainContext, ExplainMultiPlan, ExplainSinglePlan, Explainable,
+    ScalarOps,
 };
 
 impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
@@ -307,4 +310,20 @@ fn id_gen(expr: &MirRelationExpr) -> Result<impl Iterator<Item = LocalId>, Recur
     })?;
 
     Ok((max_id + 1..).map(LocalId::new))
+}
+
+impl ScalarOps for MirScalarExpr {
+    fn match_col_ref(&self) -> Option<usize> {
+        match self {
+            MirScalarExpr::Column(c) => Some(*c),
+            _ => None,
+        }
+    }
+
+    fn references(&self, column: usize) -> bool {
+        match self {
+            MirScalarExpr::Column(c) => *c == column,
+            _ => false,
+        }
+    }
 }

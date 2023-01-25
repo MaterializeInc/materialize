@@ -35,7 +35,7 @@ use mz_expr::{explain::Indices, Id, MapFilterProject, MirScalarExpr};
 use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
 use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText};
 
-use crate::explain_new::{Displayable, PlanRenderingContext};
+use crate::explain_new::{CompactScalarSeq, Displayable, PlanRenderingContext};
 
 impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
     fn fmt_text(
@@ -85,7 +85,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                         ctx.indent += 1;
                         Displayable::from(mfp).fmt_text(f, ctx)?;
                         {
-                            let key = separated_text(", ", key.iter().map(Displayable::from));
+                            let key = CompactScalarSeq(key);
                             writeln!(f, "{}key={}", ctx.indent, key)?;
                         }
                         if let Some(val) = val {
@@ -151,7 +151,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                     Displayable::from(mfp).fmt_text(f, ctx)?;
                     if let Some((key, val)) = input_key_val {
                         {
-                            let key = separated_text(", ", key.iter().map(Displayable::from));
+                            let key = CompactScalarSeq(key);
                             writeln!(f, "{}input_key={}", ctx.indent, key)?;
                         }
                         if let Some(val) = val {
@@ -168,12 +168,12 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                 mfp,
                 input_key,
             } => {
-                let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                let exprs = CompactScalarSeq(exprs);
                 writeln!(f, "{}FlatMap {}({})", ctx.indent, func, exprs)?;
                 ctx.indented(|ctx| {
                     Displayable::from(mfp).fmt_text(f, ctx)?;
                     if let Some(key) = input_key {
-                        let key = separated_text(", ", key.iter().map(Displayable::from));
+                        let key = CompactScalarSeq(key);
                         writeln!(f, "{}input_key={}", ctx.indent, key)?;
                     }
                     Displayable::from(input.as_ref()).fmt_text(f, ctx)
@@ -247,7 +247,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                         })?;
                     }
                     if let Some(key) = input_key {
-                        let key = separated_text(", ", key.iter().map(Displayable::from));
+                        let key = CompactScalarSeq(key);
                         writeln!(f, "{}input_key={}", ctx.indent, key)?;
                     }
                     Displayable::from(input.as_ref()).fmt_text(f, ctx)
@@ -343,7 +343,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                 writeln!(f, "{}ArrangeBy", ctx.indent)?;
                 ctx.indented(|ctx| {
                     if let Some(key) = input_key {
-                        let key = separated_text(", ", key.iter().map(Displayable::from));
+                        let key = CompactScalarSeq(key);
                         writeln!(f, "{}input_key=[{}]", ctx.indent, key)?;
                     }
                     Displayable::from(input_mfp).fmt_text(f, ctx)?;
@@ -403,8 +403,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, MapFilt
         }
         // render `map` field iff scalars are present
         if !scalars.is_empty() {
-            let scalars = scalars.iter().map(Displayable::from);
-            let scalars = separated_text(", ", scalars);
+            let scalars = CompactScalarSeq(scalars);
             writeln!(f, "{}map=({})", ctx.indent, scalars)?;
         }
 
@@ -435,16 +434,20 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, LinearJ
                 ctx.indented(|ctx| Displayable::from(closure).fmt_text(f, ctx))?;
             }
         }
-        {
-            let source_relation = &plan.source_relation;
-            let source_key = plan.source_key.iter().flatten().map(Displayable::from);
-            let source_key = separated_text(", ", source_key);
-            writeln!(
+        match &plan.source_key {
+            Some(source_key) => writeln!(
                 f,
                 "{}source={{ relation={}, key=[{}] }}",
-                ctx.indent, source_relation, source_key
-            )?;
-        }
+                ctx.indent,
+                &plan.source_relation,
+                CompactScalarSeq(source_key)
+            )?,
+            None => writeln!(
+                f,
+                "{}source={{ relation={}, key=[] }}",
+                ctx.indent, &plan.source_relation
+            )?,
+        };
         Ok(())
     }
 }
@@ -462,7 +465,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, LinearS
         }
         {
             let lookup_relation = &plan.lookup_relation;
-            let lookup_key = separated_text(", ", plan.lookup_key.iter().map(Displayable::from));
+            let lookup_key = CompactScalarSeq(&plan.lookup_key);
             writeln!(
                 f,
                 "{}lookup={{ relation={}, key=[{}] }}",
@@ -470,7 +473,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, LinearS
             )?;
         }
         {
-            let stream_key = separated_text(", ", plan.stream_key.iter().map(Displayable::from));
+            let stream_key = CompactScalarSeq(&plan.stream_key);
             let stream_thinning = Indices(&plan.stream_thinning);
             writeln!(
                 f,
@@ -519,7 +522,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, DeltaPa
         }
         {
             let source_relation = &plan.source_relation;
-            let source_key = separated_text(", ", plan.source_key.iter().map(Displayable::from));
+            let source_key = CompactScalarSeq(&plan.source_key);
             writeln!(
                 f,
                 "{}source={{ relation={}, key=[{}] }}",
@@ -543,7 +546,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, DeltaSt
         }
         {
             let lookup_relation = &plan.lookup_relation;
-            let lookup_key = separated_text(", ", plan.lookup_key.iter().map(Displayable::from));
+            let lookup_key = CompactScalarSeq(&plan.lookup_key);
             writeln!(
                 f,
                 "{}lookup={{ relation={}, key=[{}] }}",
@@ -551,7 +554,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, DeltaSt
             )?;
         }
         {
-            let stream_key = separated_text(", ", plan.stream_key.iter().map(Displayable::from));
+            let stream_key = CompactScalarSeq(&plan.stream_key);
             let stream_thinning = Indices(&plan.stream_thinning);
             writeln!(
                 f,
@@ -726,8 +729,7 @@ impl<'a> From<&'a (Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)> for 
 impl<'a> fmt::Display for Arrangement<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // prepare key
-        let key = separated_text(", ", self.key.iter().map(Displayable::from));
-        let key = bracketed("[", "]", key);
+        let key = CompactScalarSeq(self.key);
         // prepare perumation map
         let permutation = &self.permutation;
         // prepare thinning
@@ -735,7 +737,7 @@ impl<'a> fmt::Display for Arrangement<'a> {
         // write the arrangement spec
         write!(
             f,
-            "{{ key={}, permutation={}, thinning=({}) }}",
+            "{{ key=[{}], permutation={}, thinning=({}) }}",
             key, permutation, thinning
         )
     }

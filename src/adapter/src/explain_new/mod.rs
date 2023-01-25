@@ -345,8 +345,7 @@ impl<'a> DisplayText<RenderingContext<'a>> for Displayable<'a, MapFilterProject>
         }
         // render `map` field iff scalars are present
         if !scalars.is_empty() {
-            let scalars = scalars.iter().map(Displayable::from);
-            let scalars = separated_text(", ", scalars);
+            let scalars = CompactScalarSeq(scalars);
             writeln!(f, "{}map=({})", ctx.indent, scalars)?;
         }
 
@@ -388,4 +387,58 @@ impl<'a, T> AsRef<&'a dyn ExprHumanizer> for PlanRenderingContext<'a, T> {
     fn as_ref(&self) -> &&'a dyn ExprHumanizer {
         &self.humanizer
     }
+}
+
+/// Pretty-prints a list of scalar expressions that may have runs of column
+/// indices as a comma-separated list interleaved with interval expressions.
+///
+/// Interval expressions are used only for runs of three or more elements.
+#[derive(Debug)]
+pub struct CompactScalarSeq<'a, T: ScalarOps>(pub &'a [T]);
+
+impl<'a, T> std::fmt::Display for CompactScalarSeq<'a, T>
+where
+    T: ScalarOps,
+    Displayable<'a, T>: DisplayText,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let mut is_first = true;
+        let mut slice = self.0;
+        while !slice.is_empty() {
+            if !is_first {
+                write!(f, ", ")?;
+            }
+            is_first = false;
+            if let Some(lead) = slice[0].match_col_ref() {
+                if slice.len() > 2 && slice[1].references(lead + 1) && slice[2].references(lead + 2)
+                {
+                    let mut last = 3;
+                    while slice
+                        .get(last)
+                        .map(|expr| expr.references(lead + last))
+                        .unwrap_or(false)
+                    {
+                        last += 1;
+                    }
+                    Displayable::from(&slice[0]).fmt_text(f, &mut ())?;
+                    write!(f, "..=")?;
+                    Displayable::from(&slice[last - 1]).fmt_text(f, &mut ())?;
+                    slice = &slice[last..];
+                } else {
+                    Displayable::from(&slice[0]).fmt_text(f, &mut ())?;
+                    slice = &slice[1..];
+                }
+            } else {
+                Displayable::from(&slice[0]).fmt_text(f, &mut ())?;
+                slice = &slice[1..];
+            }
+        }
+        Ok(())
+    }
+}
+
+pub trait ScalarOps {
+    fn match_col_ref(&self) -> Option<usize>;
+
+    fn references(&self, col_ref: usize) -> bool;
 }
