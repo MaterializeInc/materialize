@@ -553,11 +553,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             .build()?,
     );
 
-    let metrics_registry = MetricsRegistry::new();
-    let metrics = Metrics::register_into(&metrics_registry);
-
-    runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));
-
     // Configure tracing to log the service name when using the process
     // orchestrator, which intermingles log output from multiple services. Other
     // orchestrators separate log output from different services.
@@ -571,6 +566,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             service_name: "environmentd",
             build_info: BUILD_INFO,
         }))?;
+
+    let span = tracing::info_span!("environmentd::run").entered();
+
+    let metrics_registry = MetricsRegistry::new();
+    let metrics = Metrics::register_into(&metrics_registry);
+
+    runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
@@ -796,6 +798,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             .try_into()
             .expect("must fit"),
     );
+    drop(span);
 
     println!(
         "environmentd {} listening...",
