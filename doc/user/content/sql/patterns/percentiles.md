@@ -1,6 +1,6 @@
 ---
-title: "Tracking percentiles"
-description: "How to efficiently track percentiles in Materialize."
+title: "Percentile calculation"
+description: "How to use histograms to efficiently calculate percentiles in Materialize."
 menu:
   main:
     parent: 'sql-patterns'
