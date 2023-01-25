@@ -183,6 +183,10 @@ pub struct StorageState {
     /// example, for shutting down an entire dataflow from within a
     /// operator/worker.
     pub internal_cmd_tx: Option<Rc<RefCell<dyn InternalCommandSender>>>,
+
+    /// Async worker companion, used for running code that requires async, which
+    /// the timely main loop cannot do.
+    pub async_worker: Option<Rc<RefCell<AsyncStorageWorker<mz_repr::Timestamp>>>>,
 }
 
 /// This maintains an additional read hold on the source data for a sink, alongside
@@ -324,14 +328,51 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
         };
 
-        // TODO(aljoscha): This `Activatable` business seems brittle, but that's
-        // also how the command channel works currently. We can wrap it inside a
-        // struct that holds both a channel and an `Activatable`, but I don't
-        // think that would help too much.
-        let mut async_worker = async_storage_worker::AsyncStorageWorker::new(
-            thread::current(),
-            Arc::clone(&self.storage_state.persist_clients),
-        );
+        let async_worker = match self.storage_state.async_worker.as_ref() {
+            Some(async_worker) => Rc::clone(async_worker),
+            None => {
+                // Similar to the internal command sequencer, it is very
+                // important that we only create the async worker once because
+                // a) the `StorageState` is re-used when a new client connects
+                // and b) commands that have already been sent and might yield a
+                // response will be lost if a new iteration of `run_client`
+                // creates a new async worker.
+                //
+                // If we created a new async worker every time we get a new
+                // client (likely because the controller re-started and
+                // re-connected), we can get into an inconsistent state where we
+                // think that a dataflow has been rendered, for example because
+                // there is an entry in `StorageState::ingestions`, while there
+                // is not yet a dataflow. This happens because the dataflow only
+                // gets rendered once we get a response from the async worker
+                // and send off an internal command.
+                //
+                // The core idea is that both the sequencer and the async worker
+                // are part of the per-worker state, and must be treated as
+                // such, meaning they must survive between invocations of
+                // `run_client`.
+
+                // TODO(aljoscha): This `Activatable` business seems brittle, but that's
+                // also how the command channel works currently. We can wrap it inside a
+                // struct that holds both a channel and an `Activatable`, but I don't
+                // think that would help too much.
+                let async_worker = async_storage_worker::AsyncStorageWorker::new(
+                    thread::current(),
+                    Arc::clone(&self.storage_state.persist_clients),
+                );
+
+                let async_worker = Rc::new(RefCell::new(async_worker));
+
+                let async_worker_clone = Rc::clone(&async_worker);
+                self.storage_state.async_worker.replace(async_worker_clone);
+
+                async_worker
+            }
+        };
+        // There can only ever be one timely main loop/thread that sends
+        // commands to the async worker, so we borrow it for the whole lifetime
+        // of the loop below.
+        let mut async_worker = async_worker.borrow_mut();
 
         // At this point, all workers are still reading from the command flow.
         {

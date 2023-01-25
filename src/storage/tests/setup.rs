@@ -240,6 +240,7 @@ where
                 source_statistics: HashMap::new(),
                 sink_statistics: HashMap::new(),
                 internal_cmd_tx: HaltingInternalCommandSender::new(),
+                async_worker: None,
             };
 
             let (_fake_tx, fake_rx) = crossbeam_channel::bounded(1);

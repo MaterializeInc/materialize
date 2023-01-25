@@ -108,6 +108,7 @@ pub fn serve(
                 source_statistics: HashMap::new(),
                 sink_statistics: HashMap::new(),
                 internal_cmd_tx: None,
+                async_worker: None,
             },
         }
         .run()
