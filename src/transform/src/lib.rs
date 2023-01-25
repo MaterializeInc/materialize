@@ -87,6 +87,8 @@
 
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
+// Disallow usage of `Hash*` types from std.
+#![warn(clippy::disallowed_types)]
 
 use std::error::Error;
 use std::fmt;

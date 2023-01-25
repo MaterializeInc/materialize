@@ -74,6 +74,9 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+// Disallow usage of `Hash*` types from std.
+#![warn(clippy::disallowed_types)]
+
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 
 use mz_repr::adt::date::Date;

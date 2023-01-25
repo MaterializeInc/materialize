@@ -77,6 +77,8 @@
 //! Core expression language.
 
 #![warn(missing_debug_implementations)]
+// Disallow usage of `Hash*` types from std.
+#![warn(clippy::disallowed_types)]
 
 use std::collections::BTreeSet;
 use std::ops::Deref;

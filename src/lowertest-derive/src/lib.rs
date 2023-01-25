@@ -78,6 +78,9 @@
 //!
 //! TODO: eliminate macros in favor of using `walkabout`?
 
+// Disallow usage of `Hash*` types from std.
+#![warn(clippy::disallowed_types)]
+
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{parse, Data, DeriveInput, Fields};
