@@ -516,6 +516,24 @@ Field                 | Type         | Meaning
 `updates_committed`   | [`bigint`]   | The number of updates (insertions plus deletions) the worker has committed to the storage layer.
 `bytes_received`      | [`bigint`]   | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.
 
+### `mz_sink_statistics`
+
+The `mz_sink_statistics` table contains statistics for each worker thread of
+each sink in the system.
+
+Materialize does not make any guarantees about the exactness or freshness of
+these statistics. They are occasionally reset to zero as internal components of
+the system are restarted.
+
+Field                 | Type         | Meaning
+----------------------|--------------|--------
+`id`                  | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).
+`worker_id`           | [`bigint`]   | The ID of the worker thread.
+`messages_staged`     | [`bigint`]   | The number of messages staged but possibly not committed to the sink.
+`messaged_commited`   | [`bigint`]   | The number of messages committed to the sink.
+`bytes_staged`        | [`bigint`]   | The number of bytes staged but possibly not committed to the sink. This counts both keys and values, if applicable.
+`bytes_committed`     | [`bigint`]   | The number of bytes committed to the sink. This counts both keys and values, if applicable.
+
 ### `mz_storage_host_sizes`
 
 The `mz_storage_host_sizes` table contains a mapping of logical sizes
