@@ -12,7 +12,7 @@
 //! Consult [DeltaJoinPlan] documentation for details.
 
 #![allow(clippy::op_ref)]
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
@@ -46,7 +46,7 @@ where
             let mut inner_errs = Vec::new();
 
             // Deduplicate the error streams of multiply used arrangements.
-            let mut err_dedup = HashSet::new();
+            let mut err_dedup = BTreeSet::new();
 
             // Our plan is to iterate through each input relation, and attempt
             // to find a plan that maximally uses existing keys (better: uses
@@ -57,7 +57,7 @@ where
             // This reduces redundant imports, and simplifies the dataflow structure.
             // As the arrangements are all shared, it should not dramatically improve
             // the efficiency, but the dataflow simplification is worth doing.
-            let mut arrangements = std::collections::BTreeMap::new();
+            let mut arrangements = BTreeMap::new();
             for path_plan in join_plan.path_plans.iter() {
                 for stage_plan in path_plan.stage_plans.iter() {
                     let lookup_idx = stage_plan.lookup_relation;

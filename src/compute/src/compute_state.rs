@@ -7,7 +7,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
@@ -58,7 +58,7 @@ pub struct ComputeState {
     pub traces: TraceManager,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
-    pub sink_tokens: HashMap<GlobalId, SinkToken>,
+    pub sink_tokens: BTreeMap<GlobalId, SinkToken>,
     /// Shared buffer with SUBSCRIBE operator instances by which they can respond.
     ///
     /// The entries are pairs of sink identifier (to identify the subscribe instance)
@@ -66,17 +66,17 @@ pub struct ComputeState {
     pub subscribe_response_buffer: Rc<RefCell<Vec<(GlobalId, SubscribeResponse)>>>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
-    pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
+    pub sink_write_frontiers: BTreeMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
     /// Probe handles for regulating the output of dataflow sources.
     ///
     /// Keys are IDs of indexes that are (transitively) fed by a flow-controlled source. New
     /// dataflows that depend on these indexes are expected to report their output frontiers
     /// through the corresponding probe handles.
-    pub flow_control_probes: HashMap<GlobalId, Vec<probe::Handle<Timestamp>>>,
+    pub flow_control_probes: BTreeMap<GlobalId, Vec<probe::Handle<Timestamp>>>,
     /// Peek commands that are awaiting fulfillment.
     pub pending_peeks: BTreeMap<Uuid, PendingPeek>,
     /// Tracks the frontier information that has been sent over `response_tx`.
-    pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    pub reported_frontiers: BTreeMap<GlobalId, Antichain<Timestamp>>,
     /// Collections that were recently dropped and whose removal needs to be reported.
     pub dropped_collections: Vec<GlobalId>,
     /// The logger, from Timely's logging framework, if logs are enabled.
@@ -343,10 +343,10 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let c_linked = std::rc::Rc::new(EventLink::new());
         let mut c_logger = BatchLogger::new(Rc::clone(&c_linked), interval);
 
-        let mut t_traces = HashMap::new();
-        let mut r_traces = HashMap::new();
-        let mut d_traces = HashMap::new();
-        let mut c_traces = HashMap::new();
+        let mut t_traces = BTreeMap::new();
+        let mut r_traces = BTreeMap::new();
+        let mut d_traces = BTreeMap::new();
+        let mut c_traces = BTreeMap::new();
 
         let activate_after = 128;
 

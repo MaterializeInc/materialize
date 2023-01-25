@@ -10,7 +10,6 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -30,6 +29,7 @@ use tracing::trace;
 
 use mz_compute_client::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::HashMap;
 use mz_persist_client::batch::Batch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
@@ -562,10 +562,14 @@ where
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
         // determines batch descriptions for all writers.
-        let mut in_flight_batches: HashMap<
+        //
+        // `Antichain` does not implement `Ord`, so we cannot use a `BTreeMap`. We need to search
+        // through the map, so we cannot use the `mz_ore` wrapper either.
+        #[allow(clippy::disallowed_types)]
+        let mut in_flight_batches = std::collections::HashMap::<
             (Antichain<Timestamp>, Antichain<Timestamp>),
             Capability<Timestamp>,
-        > = HashMap::new();
+        >::new();
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
         let persist_client = persist_clients
@@ -895,13 +899,18 @@ where
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
         // determines batch descriptions for all writers.
-        let mut in_flight_descriptions: HashSet<(Antichain<Timestamp>, Antichain<Timestamp>)> =
-            HashSet::new();
+        //
+        // `Antichain` does not implement `Ord`, so we cannot use a `BTreeSet`. We need to search
+        // through the set, so we cannot use the `mz_ore` wrapper either.
+        #[allow(clippy::disallowed_types)]
+        let mut in_flight_descriptions = std::collections::HashSet::<
+            (Antichain<Timestamp>, Antichain<Timestamp>)
+        >::new();
 
-        let mut in_flight_batches: HashMap<
+        let mut in_flight_batches = HashMap::<
             (Antichain<Timestamp>, Antichain<Timestamp>),
             Vec<Batch<_, _, _, _>>,
-        > = HashMap::new();
+        >::new();
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
         let persist_client = persist_clients

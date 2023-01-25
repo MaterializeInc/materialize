@@ -10,7 +10,7 @@
 //! An interactive dataflow server.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -598,14 +598,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         self.trace_metrics.clone(),
                         self.timely_worker.index(),
                     ),
-                    sink_tokens: HashMap::new(),
+                    sink_tokens: BTreeMap::new(),
                     subscribe_response_buffer: std::rc::Rc::new(
                         std::cell::RefCell::new(Vec::new()),
                     ),
-                    sink_write_frontiers: HashMap::new(),
-                    flow_control_probes: HashMap::new(),
+                    sink_write_frontiers: BTreeMap::new(),
+                    flow_control_probes: BTreeMap::new(),
                     pending_peeks: BTreeMap::new(),
-                    reported_frontiers: HashMap::new(),
+                    reported_frontiers: BTreeMap::new(),
                     dropped_collections: Vec::new(),
                     compute_logger: None,
                     persist_clients: Arc::clone(&self.persist_clients),

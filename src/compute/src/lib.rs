@@ -77,6 +77,9 @@
 
 //! Materialize's compute layer.
 
+// Disallow usage of `Hash*` types from std.
+#![warn(clippy::disallowed_types)]
+
 pub(crate) mod arrangement;
 pub mod communication;
 pub mod compute_state;
