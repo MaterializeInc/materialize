@@ -118,7 +118,7 @@ use mz_transform::Optimizer;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog,
-    CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, StorageSinkConnectionState,
+    CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -640,6 +640,90 @@ impl Coordinator {
             &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
         ));
 
+        let mut collections_to_create = Vec::new();
+
+        fn source_desc<T>(
+            id: GlobalId,
+            source_status_collection_id: Option<GlobalId>,
+            source: &Source,
+        ) -> CollectionDescription<T> {
+            let (data_source, status_collection_id) = match &source.data_source {
+                // Re-announce the source description.
+                DataSourceDesc::Ingestion(ingestion) => {
+                    let mut source_imports = BTreeMap::new();
+                    for source_import in &ingestion.source_imports {
+                        source_imports.insert(*source_import, ());
+                    }
+
+                    let mut source_exports = BTreeMap::new();
+                    // By convention the first output corresponds to the main source object
+                    let main_export = SourceExport {
+                        output_index: 0,
+                        storage_metadata: (),
+                    };
+                    source_exports.insert(id, main_export);
+                    for (subsource, output_index) in ingestion.subsource_exports.clone() {
+                        let export = SourceExport {
+                            output_index,
+                            storage_metadata: (),
+                        };
+                        source_exports.insert(subsource, export);
+                    }
+                    (
+                        DataSource::Ingestion(IngestionDescription {
+                            desc: ingestion.desc.clone(),
+                            ingestion_metadata: (),
+                            source_imports,
+                            source_exports,
+                            instance_id: ingestion.cluster_id,
+                        }),
+                        source_status_collection_id,
+                    )
+                }
+                DataSourceDesc::Source => (DataSource::Other, None),
+                DataSourceDesc::Introspection(introspection) => {
+                    (DataSource::Introspection(*introspection), None)
+                }
+            };
+            CollectionDescription {
+                desc: source.desc.clone(),
+                data_source,
+                since: None,
+                status_collection_id,
+            }
+        }
+
+        // Do a first pass looking for collections to create so we can call
+        // create_collections only once with a large batch. This batches only
+        // tables and system sources. Replicas above, user sources, and
+        // materialized views below could be added here, but they take some
+        // additional work due to their dependencies.
+        for entry in &entries {
+            match entry.item() {
+                CatalogItem::Table(table) => {
+                    let collection_desc = table.desc.clone().into();
+                    collections_to_create.push((entry.id(), collection_desc));
+                }
+                // User sources can have dependencies, so do avoid them in the
+                // batch.
+                CatalogItem::Source(source) if entry.id().is_system() => {
+                    collections_to_create.push((
+                        entry.id(),
+                        source_desc(entry.id(), source_status_collection_id, source),
+                    ));
+                }
+                _ => {
+                    // No collections to create.
+                }
+            }
+        }
+
+        self.controller
+            .storage
+            .create_collections(collections_to_create)
+            .await
+            .unwrap();
+
         info!("coordinator init: installing existing objects in catalog");
         let mut privatelink_connections = HashMap::new();
         for entry in &entries {
@@ -665,72 +749,23 @@ impl Coordinator {
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
-                    let (data_source, status_collection_id) = match &source.data_source {
-                        // Re-announce the source description.
-                        DataSourceDesc::Ingestion(ingestion) => {
-                            let mut source_imports = BTreeMap::new();
-                            for source_import in &ingestion.source_imports {
-                                source_imports.insert(*source_import, ());
-                            }
-
-                            let mut source_exports = BTreeMap::new();
-                            // By convention the first output corresponds to the main source object
-                            let main_export = SourceExport {
-                                output_index: 0,
-                                storage_metadata: (),
-                            };
-                            source_exports.insert(entry.id(), main_export);
-                            for (subsource, output_index) in ingestion.subsource_exports.clone() {
-                                let export = SourceExport {
-                                    output_index,
-                                    storage_metadata: (),
-                                };
-                                source_exports.insert(subsource, export);
-                            }
-                            (
-                                DataSource::Ingestion(IngestionDescription {
-                                    desc: ingestion.desc.clone(),
-                                    ingestion_metadata: (),
-                                    source_imports,
-                                    source_exports,
-                                    instance_id: ingestion.cluster_id,
-                                }),
-                                source_status_collection_id,
-                            )
-                        }
-                        DataSourceDesc::Source => (DataSource::Other, None),
-                        DataSourceDesc::Introspection(introspection) => {
-                            (DataSource::Introspection(*introspection), None)
-                        }
-                    };
-
-                    self.controller
-                        .storage
-                        .create_collections(vec![(
-                            entry.id(),
-                            CollectionDescription {
-                                desc: source.desc.clone(),
-                                data_source,
-                                since: None,
-                                status_collection_id,
-                            },
-                        )])
-                        .await
-                        .unwrap();
+                    // System sources were created above, add others here.
+                    if !entry.id().is_system() {
+                        let source_desc =
+                            source_desc(entry.id(), source_status_collection_id, source);
+                        self.controller
+                            .storage
+                            .create_collections(vec![(entry.id(), source_desc)])
+                            .await
+                            .unwrap();
+                    }
                     policies_to_set
                         .entry(policy.expect("sources have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
                         .insert(entry.id());
                 }
-                CatalogItem::Table(table) => {
-                    let collection_desc = table.desc.clone().into();
-                    self.controller
-                        .storage
-                        .create_collections(vec![(entry.id(), collection_desc)])
-                        .await
-                        .unwrap();
-
+                CatalogItem::Table(_) => {
                     policies_to_set
                         .entry(policy.expect("tables have a compaction window"))
                         .or_insert_with(Default::default)
