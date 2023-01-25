@@ -237,7 +237,6 @@ impl Coordinator {
         let TransactionResult {
             builtin_table_updates,
             audit_events,
-            collections,
             result,
         } = self
             .catalog
@@ -316,10 +315,6 @@ impl Coordinator {
             }
         }
         .await;
-
-        self.consolidations_tx
-            .send(collections)
-            .expect("sending on consolidations_tx must succeed");
 
         if let (Some(segment_client), Some(user_metadata)) = (
             &self.segment_client,

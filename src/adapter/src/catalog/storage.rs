@@ -1598,15 +1598,6 @@ impl<'a> Transaction<'a> {
 
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn commit(self) -> Result<(), Error> {
-        let (stash, collections) = self.commit_without_consolidate().await?;
-        stash.consolidate_batch(&collections).await?;
-        Ok(())
-    }
-
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn commit_without_consolidate(
-        self,
-    ) -> Result<(&'a mut Stash, Vec<mz_stash::Id>), Error> {
         async fn add_batch<'tx, K, V>(
             tx: &'tx mz_stash::Transaction<'tx>,
             batches: &mut Vec<AppendBatch>,
@@ -1652,8 +1643,7 @@ impl<'a> Transaction<'a> {
         let audit_log_updates = Arc::new(self.audit_log_updates);
         let storage_usage_updates = Arc::new(self.storage_usage_updates);
 
-        let ids = self
-            .stash
+        self.stash
             .with_transaction(move |tx| {
                 Box::pin(async move {
                     let mut batches = Vec::new();
@@ -1702,17 +1692,12 @@ impl<'a> Transaction<'a> {
                         &storage_usage_updates,
                     )
                     .await?;
-
-                    let ids = batches
-                        .iter()
-                        .map(|batch| batch.collection_id)
-                        .collect::<Vec<_>>();
                     tx.append(batches).await?;
-                    Ok(ids)
+                    Ok(())
                 })
             })
             .await?;
-        Ok((self.stash, ids))
+        Ok(())
     }
 }
 

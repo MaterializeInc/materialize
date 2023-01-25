@@ -1636,7 +1636,6 @@ pub struct Connection {
 pub struct TransactionResult<R> {
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
     pub audit_events: Vec<VersionedEvent>,
-    pub collections: Vec<mz_stash::Id>,
     pub result: R,
 }
 
@@ -4011,7 +4010,7 @@ impl Catalog {
         let result = f(&state)?;
 
         // The user closure was successful, apply the updates.
-        let (_stash, collections) = tx.commit_without_consolidate().await?;
+        tx.commit().await?;
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
@@ -4021,7 +4020,6 @@ impl Catalog {
         Ok(TransactionResult {
             builtin_table_updates,
             audit_events,
-            collections,
             result,
         })
     }
