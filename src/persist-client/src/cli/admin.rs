@@ -28,7 +28,7 @@ use tracing::{info, warn};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::cli::inspect::StateArgs;
-use crate::internal::compact::{CompactReq, Compactor};
+use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
 use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::{MetricsBlob, MetricsConsensus};
@@ -79,9 +79,10 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
     match command.command {
         Command::ForceCompaction(args) => {
             let shard_id = ShardId::from_str(&args.state.shard_id).expect("invalid shard id");
-            let mut cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+            let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
             if args.compaction_memory_bound_bytes > 0 {
-                cfg.compaction_memory_bound_bytes = args.compaction_memory_bound_bytes;
+                cfg.dynamic
+                    .set_compaction_memory_bound_bytes(args.compaction_memory_bound_bytes);
             }
             let metrics_registry = MetricsRegistry::new();
             let () = force_compaction(
@@ -217,7 +218,7 @@ pub async fn force_compaction(
             }
             let res =
                 Compactor::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>::compact(
-                    cfg.clone(),
+                    CompactConfig::from(&cfg),
                     Arc::clone(&blob),
                     Arc::clone(&metrics),
                     Arc::new(CpuHeavyRuntime::new()),

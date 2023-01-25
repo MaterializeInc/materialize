@@ -974,12 +974,11 @@ pub mod datadriven {
     use anyhow::anyhow;
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
-    use mz_build_info::DUMMY_BUILD_INFO;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
-    use crate::batch::{validate_truncate_batch, BatchBuilder};
+    use crate::batch::{validate_truncate_batch, BatchBuilder, BatchBuilderConfig};
     use crate::fetch::fetch_batch_part;
-    use crate::internal::compact::{CompactReq, Compactor};
+    use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
@@ -1005,11 +1004,13 @@ pub mod datadriven {
     impl MachineState {
         pub async fn new() -> Self {
             let shard_id = ShardId::new();
-            let mut client = new_test_client().await;
+            let client = new_test_client().await;
             // Reset blob_target_size. Individual batch writes and compactions
             // can override it with an arg.
-            client.cfg.blob_target_size =
-                PersistConfig::new(&DUMMY_BUILD_INFO, client.cfg.now.clone()).blob_target_size;
+            client
+                .cfg
+                .dynamic
+                .set_blob_target_size(PersistConfig::DEFAULT_BLOB_TARGET_SIZE);
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
                 Arc::clone(&client.consensus),
@@ -1167,7 +1168,7 @@ pub mod datadriven {
         let consolidate = args.optional("consolidate").unwrap_or(true);
         let updates = args.input.split('\n').flat_map(DirectiveArgs::parse_update);
 
-        let mut cfg = datadriven.client.cfg.clone();
+        let mut cfg = BatchBuilderConfig::from(&datadriven.client.cfg);
         if let Some(target_size) = target_size {
             cfg.blob_target_size = target_size;
         };
@@ -1315,12 +1316,12 @@ pub mod datadriven {
             );
         }
 
-        let mut cfg = datadriven.client.cfg.clone();
+        let cfg = datadriven.client.cfg.clone();
         if let Some(target_size) = target_size {
-            cfg.blob_target_size = target_size;
+            cfg.dynamic.set_blob_target_size(target_size);
         };
         if let Some(memory_bound) = memory_bound {
-            cfg.compaction_memory_bound_bytes = memory_bound;
+            cfg.dynamic.set_compaction_memory_bound_bytes(memory_bound);
         }
         let req = CompactReq {
             shard_id: datadriven.shard_id,
@@ -1329,7 +1330,7 @@ pub mod datadriven {
         };
         let writer_id = writer_id.unwrap_or_else(WriterId::new);
         let res = Compactor::<String, (), u64, i64>::compact(
-            cfg,
+            CompactConfig::from(&cfg),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.client.cpu_heavy_runtime),

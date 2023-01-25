@@ -29,7 +29,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
-use crate::batch::{validate_truncate_batch, Added, Batch, BatchBuilder};
+use crate::batch::{validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig};
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
 use crate::internal::encoding::SerdeWriterEnrichedHollowBatch;
@@ -524,7 +524,7 @@ where
     /// O(MB) come talk to us.
     pub fn builder(&mut self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
         BatchBuilder::new(
-            self.cfg.clone(),
+            BatchBuilderConfig::from(&self.cfg),
             Arc::clone(&self.metrics),
             self.metrics.user.clone(),
             lower,
