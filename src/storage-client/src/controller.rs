@@ -2123,24 +2123,39 @@ where
             .unwrap();
 
         for (shard_id, shard_purpose) in shards {
-            let (mut write, mut read) = persist_client
-                .open::<crate::types::sources::SourceData, (), T, Diff>(
+            let mut critical_since_handle: SinceHandle<
+                crate::types::sources::SourceData,
+                (),
+                T,
+                Diff,
+                PersistEpoch,
+            > = persist_client
+                .open_critical_since(
+                    *shard_id,
+                    PersistClient::CONTROLLER_CRITICAL_SINCE,
+                    shard_purpose.as_str(),
+                )
+                .await
+                .expect("invalid persist usage");
+
+            let our_epoch = PersistEpoch::from(self.state.envd_epoch);
+            match critical_since_handle
+                .compare_and_downgrade_since(&our_epoch, (&our_epoch, &Antichain::new()))
+                .await
+            {
+                Ok(_) => info!("successfully finalized read handle for shard {shard_id:?}"),
+                Err(e) => mz_ore::halt!("fenced by envd @ {e:?}. ours = {our_epoch:?}"),
+            }
+
+            let mut write = persist_client
+                .open_writer(
                     *shard_id,
                     shard_purpose.as_str(),
-                    // We have to _read_ the shard to figure out if its been migrated or not, so we
-                    // hedge on setting a `RelationDesc`.
                     Arc::new(RelationDesc::empty()),
                     Arc::new(UnitSchema),
                 )
                 .await
                 .expect("invalid persist usage");
-
-            read.downgrade_since(&Antichain::new()).await;
-
-            info!(
-                "successfully finalized read handle for shard {:?}",
-                shard_id
-            );
 
             if write.upper().is_empty() {
                 info!("write handle for shard {:?} already finalized", shard_id);
