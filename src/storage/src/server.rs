@@ -107,8 +107,7 @@ pub fn serve(
                 dropped_ids: Vec::new(),
                 source_statistics: HashMap::new(),
                 sink_statistics: HashMap::new(),
-                // TODO(aljoscha): We can refactor when `StorageState` is being
-                // created, to get around this being an `Option`.
+                internal_cmd_tx: None,
             },
         }
         .run()
