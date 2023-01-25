@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from textwrap import dedent
 
 import pg8000.exceptions
 
@@ -164,8 +165,71 @@ def workflow_storage_managed_collections(c: Composition) -> None:
         raise Exception("user shards empty or not equal after restart")
 
 
+def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
+    c.up("testdrive_no_reset", persistent=True)
+    c.start_and_wait_for_tcp(services=["materialized"])
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+
+            # We can create a cluster with sizes '1' and '2'
+            > CREATE CLUSTER test REPLICAS (r1 (SIZE '1'), r2 (SIZE '2'))
+
+            > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            test r1 1 true
+            test r2 2 true
+
+            # We cannot create replicas with size '2' after restricting allowed_cluster_replica_sizes to '1'
+            $ postgres-execute connection=mz_system
+            ALTER SYSTEM SET allowed_cluster_replica_sizes = '1'
+
+            ! CREATE CLUSTER REPLICA test.r3 SIZE '2'
+            contains:unknown cluster replica size 2
+            """
+        ),
+    )
+
+    # Assert that mz restarts successfully even in the presence of replica sizes that are not allowed
+    c.kill("materialized")
+    c.up("materialized")
+    c.wait_for_materialized()
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+
+            # Cluster replica of disallowed sizes still exist
+            > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            test r1 1 true
+            test r2 2 true
+
+            # We cannot create replicas with size '2' (system parameter value persists across restarts)
+            ! CREATE CLUSTER REPLICA test.r3 SIZE '2'
+            contains:unknown cluster replica size 2
+
+            # We can create replicas with size '2' after listing that size as allowed
+            $ postgres-execute connection=mz_system
+            ALTER SYSTEM SET allowed_cluster_replica_sizes = '1', '2'
+
+            > CREATE CLUSTER REPLICA test.r3 SIZE '2'
+
+            > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            test r1 1 true
+            test r2 2 true
+            test r3 2 true
+            """
+        ),
+    )
+
+
 def workflow_default(c: Composition) -> None:
     c.workflow("github-8021")
     c.workflow("audit-log")
     c.workflow("timelines")
     c.workflow("stash")
+    c.workflow("allowed-cluster-replica-sizes")

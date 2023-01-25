@@ -9,6 +9,7 @@
 
 from itertools import chain
 from os import environ
+from textwrap import dedent
 from time import sleep
 from typing import Any, List, Optional
 from uuid import uuid1
@@ -183,12 +184,12 @@ def workflow_default(c: Composition) -> None:
         c.stop("materialized")
     except launchdarkly_api.ApiException as e:
         raise UIError(
-            "\n".join(
-                [
-                    "Error when calling the Launch Darkly API.",
-                    "- Status: %s." % e.status,
-                    "- Reason: %s." % e.reason,
-                ]
+            dedent(
+                f"""
+                Error when calling the Launch Darkly API.
+                - Status: {e.status},
+                - Reason: {e.reason},
+                """
             )
         )
     finally:
