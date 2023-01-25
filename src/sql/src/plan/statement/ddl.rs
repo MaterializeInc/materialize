@@ -419,7 +419,7 @@ pub fn plan_create_source(
                 .expect("validated exists during purification");
             let group_id_prefix = extracted_options.group_id_prefix;
 
-            let mut start_offsets = HashMap::new();
+            let mut start_offsets = BTreeMap::new();
             match optional_start_offset {
                 None => (),
                 Some(KafkaStartOffsetType::StartOffset(offsets)) => {

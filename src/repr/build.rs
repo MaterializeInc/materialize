@@ -83,6 +83,7 @@ fn main() {
     env::set_var("PROTOC", protobuf_src::protoc());
 
     prost_build::Config::new()
+        .btree_map(["."])
         .compile_protos(
             &[
                 "repr/src/antichain.proto",

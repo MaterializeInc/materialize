@@ -82,6 +82,7 @@ fn main() {
     prost_build::Config::new()
         .extern_path(".mz_proto", "::mz_proto")
         .type_attribute(".mz_persist_client.internal", "#[derive(serde::Serialize)]")
+        .btree_map(["."])
         .compile_protos(
             &[
                 "persist-client/src/cfg.proto",

@@ -1354,7 +1354,7 @@ pub struct KafkaSourceConnection {
     pub connection_id: GlobalId,
     pub topic: String,
     // Map from partition -> starting offset
-    pub start_offsets: HashMap<i32, i64>,
+    pub start_offsets: BTreeMap<i32, i64>,
     pub group_id_prefix: Option<String>,
     pub environment_id: String,
     /// If present, include the timestamp as an output column of the source with the given name
@@ -1395,7 +1395,7 @@ impl Arbitrary for KafkaSourceConnection {
             any::<KafkaConnection>(),
             any::<GlobalId>(),
             any::<String>(),
-            proptest::collection::hash_map(any::<i32>(), any::<i64>(), 1..4),
+            proptest::collection::btree_map(any::<i32>(), any::<i64>(), 1..4),
             any::<Option<String>>(),
             any::<String>(),
             any::<Option<IncludedColumnPos>>(),

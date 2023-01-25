@@ -80,6 +80,7 @@ fn main() {
     env::set_var("PROTOC", protobuf_src::protoc());
 
     prost_build::Config::new()
+        .btree_map(["."])
         .compile_protos(
             &["proto/src/proto.proto", "proto/src/tokio_postgres.proto"],
             &[".."],
