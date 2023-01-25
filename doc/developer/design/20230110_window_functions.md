@@ -140,6 +140,8 @@ For this to perform well, we are assuming that groups are small.
 This is not an unreasonable assumption, because a group is identified here by a value of the PARTITION BY expression + a value of the ORDER BY expression.
 Also note that if there is no ORDER BY, then groups might be large, but in this case we don’t employ Prefix Sum, but we transform away the window functions to grouped aggregation + self-join (as noted above).
 
+Alternatively, we could change Prefix Sum so that it correctly handles duplicate indexes.
+
 ### Parallelism
 
 DD's Prefix Sum should be data-parallel even inside a window partition. (It’s similar to [a Fenwick tree](https://en.wikipedia.org/wiki/Fenwick_tree), with sums maintained over power-of-2 sized intervals, from which you can compute a prefix sum by putting together LogN intervals.) TODO: But I wasn't able to actually observe a speedup in a simple test when adding cores, so we should investigate what’s going on with parallelization. There was probably just some technical issue, because all operations in the Prefix Sum implementation look parallelizable.
