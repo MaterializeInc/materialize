@@ -977,205 +977,299 @@ SELECT abs(min(a) - max(a)) FROM t
         "Let": {
           "id": 0,
           "value": {
-            "Reduce": {
+            "Project": {
               "input": {
-                "Project": {
-                  "input": {
-                    "Get": {
-                      "id": {
-                        "Global": {
-                          "User": 1
-                        }
-                      },
-                      "typ": {
-                        "column_types": [
-                          {
-                            "scalar_type": "Int32",
-                            "nullable": true
-                          },
-                          {
-                            "scalar_type": "Int32",
-                            "nullable": true
-                          }
-                        ],
-                        "keys": []
-                      }
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 1
                     }
                   },
-                  "outputs": [
-                    0
-                  ]
+                  "typ": {
+                    "column_types": [
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": true
+                      },
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": true
+                      }
+                    ],
+                    "keys": []
+                  }
                 }
               },
-              "group_key": [],
-              "aggregates": [
-                {
-                  "func": "MinInt32",
-                  "expr": {
-                    "Column": 0
-                  },
-                  "distinct": false
-                },
-                {
-                  "func": "MaxInt32",
-                  "expr": {
-                    "Column": 0
-                  },
-                  "distinct": false
-                }
-              ],
-              "monotonic": false,
-              "expected_group_size": null
+              "outputs": [
+                0
+              ]
             }
           },
           "body": {
-            "Project": {
-              "input": {
-                "Map": {
-                  "input": {
-                    "Union": {
-                      "base": {
-                        "Get": {
-                          "id": {
-                            "Local": 0
-                          },
-                          "typ": {
-                            "column_types": [
-                              {
-                                "scalar_type": "Int32",
-                                "nullable": true
-                              },
-                              {
-                                "scalar_type": "Int32",
-                                "nullable": true
-                              }
-                            ],
-                            "keys": [
-                              []
-                            ]
-                          }
-                        }
-                      },
-                      "inputs": [
-                        {
-                          "Map": {
+            "Let": {
+              "id": 1,
+              "value": {
+                "Join": {
+                  "inputs": [
+                    {
+                      "ArrangeBy": {
+                        "input": {
+                          "Reduce": {
                             "input": {
-                              "Union": {
-                                "base": {
-                                  "Negate": {
-                                    "input": {
-                                      "Project": {
-                                        "input": {
-                                          "Get": {
-                                            "id": {
-                                              "Local": 0
-                                            },
-                                            "typ": {
-                                              "column_types": [
-                                                {
-                                                  "scalar_type": "Int32",
-                                                  "nullable": true
-                                                },
-                                                {
-                                                  "scalar_type": "Int32",
-                                                  "nullable": true
-                                                }
-                                              ],
-                                              "keys": [
-                                                []
-                                              ]
-                                            }
-                                          }
-                                        },
-                                        "outputs": []
-                                      }
-                                    }
-                                  }
+                              "Get": {
+                                "id": {
+                                  "Local": 0
                                 },
-                                "inputs": [
-                                  {
-                                    "Constant": {
-                                      "rows": {
-                                        "Ok": [
-                                          [
-                                            {
-                                              "data": []
-                                            },
-                                            1
-                                          ]
-                                        ]
-                                      },
-                                      "typ": {
-                                        "column_types": [],
-                                        "keys": []
-                                      }
+                                "typ": {
+                                  "column_types": [
+                                    {
+                                      "scalar_type": "Int32",
+                                      "nullable": true
                                     }
-                                  }
-                                ]
+                                  ],
+                                  "keys": []
+                                }
                               }
                             },
-                            "scalars": [
+                            "group_key": [],
+                            "aggregates": [
                               {
-                                "Literal": [
-                                  {
-                                    "Ok": {
-                                      "data": [
-                                        0
-                                      ]
+                                "func": "MinInt32",
+                                "expr": {
+                                  "Column": 0
+                                },
+                                "distinct": false
+                              }
+                            ],
+                            "monotonic": false,
+                            "expected_group_size": null
+                          }
+                        },
+                        "keys": [
+                          []
+                        ]
+                      }
+                    },
+                    {
+                      "ArrangeBy": {
+                        "input": {
+                          "Reduce": {
+                            "input": {
+                              "Get": {
+                                "id": {
+                                  "Local": 0
+                                },
+                                "typ": {
+                                  "column_types": [
+                                    {
+                                      "scalar_type": "Int32",
+                                      "nullable": true
                                     }
+                                  ],
+                                  "keys": []
+                                }
+                              }
+                            },
+                            "group_key": [],
+                            "aggregates": [
+                              {
+                                "func": "MaxInt32",
+                                "expr": {
+                                  "Column": 0
+                                },
+                                "distinct": false
+                              }
+                            ],
+                            "monotonic": false,
+                            "expected_group_size": null
+                          }
+                        },
+                        "keys": [
+                          []
+                        ]
+                      }
+                    }
+                  ],
+                  "equivalences": [],
+                  "implementation": {
+                    "Differential": [
+                      [
+                        1,
+                        []
+                      ],
+                      [
+                        [
+                          0,
+                          [],
+                          {
+                            "unique_key": true,
+                            "key_length": 0,
+                            "arranged": true,
+                            "filters": {
+                              "literal_equality": false,
+                              "like": false,
+                              "is_null": false,
+                              "literal_inequality": 0,
+                              "any_filter": false
+                            },
+                            "input": 0
+                          }
+                        ]
+                      ]
+                    ]
+                  }
+                }
+              },
+              "body": {
+                "Project": {
+                  "input": {
+                    "Map": {
+                      "input": {
+                        "Union": {
+                          "base": {
+                            "Get": {
+                              "id": {
+                                "Local": 1
+                              },
+                              "typ": {
+                                "column_types": [
+                                  {
+                                    "scalar_type": "Int32",
+                                    "nullable": true
                                   },
                                   {
                                     "scalar_type": "Int32",
                                     "nullable": true
                                   }
+                                ],
+                                "keys": [
+                                  []
                                 ]
-                              },
-                              {
-                                "Literal": [
+                              }
+                            }
+                          },
+                          "inputs": [
+                            {
+                              "Map": {
+                                "input": {
+                                  "Union": {
+                                    "base": {
+                                      "Negate": {
+                                        "input": {
+                                          "Project": {
+                                            "input": {
+                                              "Get": {
+                                                "id": {
+                                                  "Local": 1
+                                                },
+                                                "typ": {
+                                                  "column_types": [
+                                                    {
+                                                      "scalar_type": "Int32",
+                                                      "nullable": true
+                                                    },
+                                                    {
+                                                      "scalar_type": "Int32",
+                                                      "nullable": true
+                                                    }
+                                                  ],
+                                                  "keys": [
+                                                    []
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            "outputs": []
+                                          }
+                                        }
+                                      }
+                                    },
+                                    "inputs": [
+                                      {
+                                        "Constant": {
+                                          "rows": {
+                                            "Ok": [
+                                              [
+                                                {
+                                                  "data": []
+                                                },
+                                                1
+                                              ]
+                                            ]
+                                          },
+                                          "typ": {
+                                            "column_types": [],
+                                            "keys": []
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                },
+                                "scalars": [
                                   {
-                                    "Ok": {
-                                      "data": [
-                                        0
-                                      ]
-                                    }
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "data": [
+                                            0
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "scalar_type": "Int32",
+                                        "nullable": true
+                                      }
+                                    ]
                                   },
                                   {
-                                    "scalar_type": "Int32",
-                                    "nullable": true
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "data": [
+                                            0
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "scalar_type": "Int32",
+                                        "nullable": true
+                                      }
+                                    ]
                                   }
                                 ]
                               }
-                            ]
+                            }
+                          ]
+                        }
+                      },
+                      "scalars": [
+                        {
+                          "CallUnary": {
+                            "func": {
+                              "AbsInt32": null
+                            },
+                            "expr": {
+                              "CallBinary": {
+                                "func": "SubInt32",
+                                "expr1": {
+                                  "Column": 0
+                                },
+                                "expr2": {
+                                  "Column": 1
+                                }
+                              }
+                            }
                           }
                         }
                       ]
                     }
                   },
-                  "scalars": [
-                    {
-                      "CallUnary": {
-                        "func": {
-                          "AbsInt32": null
-                        },
-                        "expr": {
-                          "CallBinary": {
-                            "func": "SubInt32",
-                            "expr1": {
-                              "Column": 0
-                            },
-                            "expr2": {
-                              "Column": 1
-                            }
-                          }
-                        }
-                      }
-                    }
+                  "outputs": [
+                    2
                   ]
                 }
-              },
-              "outputs": [
-                2
-              ]
+              }
             }
           }
         }
@@ -1200,52 +1294,160 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
           "input": {
             "Map": {
               "input": {
-                "Reduce": {
-                  "input": {
-                    "Get": {
-                      "id": {
-                        "Global": {
-                          "User": 1
-                        }
-                      },
-                      "typ": {
-                        "column_types": [
-                          {
-                            "scalar_type": "Int32",
-                            "nullable": true
-                          },
-                          {
-                            "scalar_type": "Int32",
-                            "nullable": true
+                "Join": {
+                  "inputs": [
+                    {
+                      "ArrangeBy": {
+                        "input": {
+                          "Reduce": {
+                            "input": {
+                              "Get": {
+                                "id": {
+                                  "Global": {
+                                    "User": 1
+                                  }
+                                },
+                                "typ": {
+                                  "column_types": [
+                                    {
+                                      "scalar_type": "Int32",
+                                      "nullable": true
+                                    },
+                                    {
+                                      "scalar_type": "Int32",
+                                      "nullable": true
+                                    }
+                                  ],
+                                  "keys": []
+                                }
+                              }
+                            },
+                            "group_key": [
+                              {
+                                "Column": 1
+                              }
+                            ],
+                            "aggregates": [
+                              {
+                                "func": "MinInt32",
+                                "expr": {
+                                  "Column": 0
+                                },
+                                "distinct": false
+                              }
+                            ],
+                            "monotonic": false,
+                            "expected_group_size": null
                           }
-                        ],
-                        "keys": []
+                        },
+                        "keys": [
+                          [
+                            {
+                              "Column": 0
+                            }
+                          ]
+                        ]
                       }
-                    }
-                  },
-                  "group_key": [
-                    {
-                      "Column": 1
-                    }
-                  ],
-                  "aggregates": [
-                    {
-                      "func": "MinInt32",
-                      "expr": {
-                        "Column": 0
-                      },
-                      "distinct": false
                     },
                     {
-                      "func": "MaxInt32",
-                      "expr": {
-                        "Column": 0
-                      },
-                      "distinct": false
+                      "ArrangeBy": {
+                        "input": {
+                          "Reduce": {
+                            "input": {
+                              "Get": {
+                                "id": {
+                                  "Global": {
+                                    "User": 1
+                                  }
+                                },
+                                "typ": {
+                                  "column_types": [
+                                    {
+                                      "scalar_type": "Int32",
+                                      "nullable": true
+                                    },
+                                    {
+                                      "scalar_type": "Int32",
+                                      "nullable": true
+                                    }
+                                  ],
+                                  "keys": []
+                                }
+                              }
+                            },
+                            "group_key": [
+                              {
+                                "Column": 1
+                              }
+                            ],
+                            "aggregates": [
+                              {
+                                "func": "MaxInt32",
+                                "expr": {
+                                  "Column": 0
+                                },
+                                "distinct": false
+                              }
+                            ],
+                            "monotonic": false,
+                            "expected_group_size": null
+                          }
+                        },
+                        "keys": [
+                          [
+                            {
+                              "Column": 0
+                            }
+                          ]
+                        ]
+                      }
                     }
                   ],
-                  "monotonic": false,
-                  "expected_group_size": null
+                  "equivalences": [
+                    [
+                      {
+                        "Column": 0
+                      },
+                      {
+                        "Column": 2
+                      }
+                    ]
+                  ],
+                  "implementation": {
+                    "Differential": [
+                      [
+                        1,
+                        [
+                          {
+                            "Column": 0
+                          }
+                        ]
+                      ],
+                      [
+                        [
+                          0,
+                          [
+                            {
+                              "Column": 0
+                            }
+                          ],
+                          {
+                            "unique_key": true,
+                            "key_length": 1,
+                            "arranged": true,
+                            "filters": {
+                              "literal_equality": false,
+                              "like": false,
+                              "is_null": false,
+                              "literal_inequality": 0,
+                              "any_filter": false
+                            },
+                            "input": 0
+                          }
+                        ]
+                      ]
+                    ]
+                  }
                 }
               },
               "scalars": [
@@ -1261,7 +1463,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                           "Column": 1
                         },
                         "expr2": {
-                          "Column": 2
+                          "Column": 3
                         }
                       }
                     }
@@ -1271,7 +1473,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
             }
           },
           "outputs": [
-            3
+            4
           ]
         }
       }

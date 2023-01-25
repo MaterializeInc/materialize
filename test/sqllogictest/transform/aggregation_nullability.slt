@@ -108,7 +108,37 @@ EXPLAIN WITH(arity, join_impls) select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f
 ----
 Explained Query:
   Return // { arity: 9 }
-    Reduce group_by=[#0] aggregates=[count(#2), sum(#2), max(#2), min(#2), count(#1), sum(#1), min(#1), max(#1)] // { arity: 9 }
+    Project (#0, #9, #10, #1, #3, #11, #12, #5, #7) // { arity: 9 }
+      Join on=(eq(#0, #2, #4, #6, #8)) type=delta // { arity: 13 }
+        implementation
+          %0 » %1[#0]UKA » %2[#0]UKA » %3[#0]UKA » %4[#0]UKA
+          %1 » %0[#0]UKA » %2[#0]UKA » %3[#0]UKA » %4[#0]UKA
+          %2 » %0[#0]UKA » %1[#0]UKA » %3[#0]UKA » %4[#0]UKA
+          %3 » %0[#0]UKA » %1[#0]UKA » %2[#0]UKA » %4[#0]UKA
+          %4 » %0[#0]UKA » %1[#0]UKA » %2[#0]UKA » %3[#0]UKA
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
+            Get l2 // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+            Get l2 // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+            Get l3 // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
+            Get l3 // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 5 }
+          Reduce group_by=[#0] aggregates=[count(#2), sum(#2), count(#1), sum(#1)] // { arity: 5 }
+            Get l1 // { arity: 3 }
+  With
+    cte l3 =
+      Project (#0, #1) // { arity: 2 }
+        Get l1 // { arity: 3 }
+    cte l2 =
+      Project (#0, #2) // { arity: 2 }
+        Get l1 // { arity: 3 }
+    cte l1 =
       Union // { arity: 3 }
         Map (null) // { arity: 3 }
           Union // { arity: 2 }
@@ -126,7 +156,6 @@ Explained Query:
             Get materialize.public.t1 // { arity: 2 }
         Project (#0, #1, #0) // { arity: 3 }
           Get l0 // { arity: 2 }
-  With
     cte l0 =
       Project (#0, #1) // { arity: 2 }
         Join on=(#0 = #2) type=differential // { arity: 3 }
@@ -150,26 +179,55 @@ EXPLAIN WITH(arity, join_impls) select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f
 ----
 Explained Query:
   Return // { arity: 9 }
-    Filter (#6 >= 0) // { arity: 9 }
-      Reduce group_by=[#0] aggregates=[count(#2), sum(#2), max(#2), min(#2), count(#1), sum(#1), min(#1), max(#1)] // { arity: 9 }
-        Union // { arity: 3 }
-          Map (null) // { arity: 3 }
-            Union // { arity: 2 }
-              Negate // { arity: 2 }
-                Project (#0, #1) // { arity: 2 }
-                  Join on=(#0 = #2) type=differential // { arity: 3 }
-                    implementation
-                      %0:t1[#0] » %1[#0]UKA
-                    ArrangeBy keys=[[#0]] // { arity: 2 }
-                      Get materialize.public.t1 // { arity: 2 }
-                    ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
-                        Project (#0) // { arity: 1 }
-                          Get l0 // { arity: 2 }
-              Get materialize.public.t1 // { arity: 2 }
-          Project (#0, #1, #0) // { arity: 3 }
-            Get l0 // { arity: 2 }
+    Project (#0, #9, #10, #1, #3, #11, #12, #5, #7) // { arity: 9 }
+      Filter (#12 >= 0) // { arity: 13 }
+        Join on=(eq(#0, #2, #4, #6, #8)) type=delta // { arity: 13 }
+          implementation
+            %0 » %4[#0]UKAif » %1[#0]UKA » %2[#0]UKA » %3[#0]UKA
+            %1 » %4[#0]UKAif » %0[#0]UKA » %2[#0]UKA » %3[#0]UKA
+            %2 » %4[#0]UKAif » %0[#0]UKA » %1[#0]UKA » %3[#0]UKA
+            %3 » %4[#0]UKAif » %0[#0]UKA » %1[#0]UKA » %2[#0]UKA
+            %4 » %0[#0]UKA » %1[#0]UKA » %2[#0]UKA » %3[#0]UKA
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
+              Get l2 // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+              Get l2 // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+              Get l3 // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
+              Get l3 // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 5 }
+            Reduce group_by=[#0] aggregates=[count(#2), sum(#2), count(#1), sum(#1)] // { arity: 5 }
+              Get l1 // { arity: 3 }
   With
+    cte l3 =
+      Project (#0, #1) // { arity: 2 }
+        Get l1 // { arity: 3 }
+    cte l2 =
+      Project (#0, #2) // { arity: 2 }
+        Get l1 // { arity: 3 }
+    cte l1 =
+      Union // { arity: 3 }
+        Map (null) // { arity: 3 }
+          Union // { arity: 2 }
+            Negate // { arity: 2 }
+              Project (#0, #1) // { arity: 2 }
+                Join on=(#0 = #2) type=differential // { arity: 3 }
+                  implementation
+                    %0:t1[#0] » %1[#0]UKA
+                  ArrangeBy keys=[[#0]] // { arity: 2 }
+                    Get materialize.public.t1 // { arity: 2 }
+                  ArrangeBy keys=[[#0]] // { arity: 1 }
+                    Distinct group_by=[#0] // { arity: 1 }
+                      Project (#0) // { arity: 1 }
+                        Get l0 // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+        Project (#0, #1, #0) // { arity: 3 }
+          Get l0 // { arity: 2 }
     cte l0 =
       Project (#0, #1) // { arity: 2 }
         Join on=(#0 = #2) type=differential // { arity: 3 }
@@ -193,26 +251,55 @@ EXPLAIN WITH(arity, join_impls) select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f
 ----
 Explained Query:
   Return // { arity: 9 }
-    Filter (#2 >= 0) // { arity: 9 }
-      Reduce group_by=[#0] aggregates=[count(#2), sum(#2), max(#2), min(#2), count(#1), sum(#1), min(#1), max(#1)] // { arity: 9 }
-        Union // { arity: 3 }
-          Map (null) // { arity: 3 }
-            Union // { arity: 2 }
-              Negate // { arity: 2 }
-                Project (#0, #1) // { arity: 2 }
-                  Join on=(#0 = #2) type=differential // { arity: 3 }
-                    implementation
-                      %0:t1[#0] » %1[#0]UKA
-                    ArrangeBy keys=[[#0]] // { arity: 2 }
-                      Get materialize.public.t1 // { arity: 2 }
-                    ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
-                        Project (#0) // { arity: 1 }
-                          Get l0 // { arity: 2 }
-              Get materialize.public.t1 // { arity: 2 }
-          Project (#0, #1, #0) // { arity: 3 }
-            Get l0 // { arity: 2 }
+    Project (#0, #9, #10, #1, #3, #11, #12, #5, #7) // { arity: 9 }
+      Filter (#10 >= 0) // { arity: 13 }
+        Join on=(eq(#0, #2, #4, #6, #8)) type=delta // { arity: 13 }
+          implementation
+            %0 » %4[#0]UKAif » %1[#0]UKA » %2[#0]UKA » %3[#0]UKA
+            %1 » %4[#0]UKAif » %0[#0]UKA » %2[#0]UKA » %3[#0]UKA
+            %2 » %4[#0]UKAif » %0[#0]UKA » %1[#0]UKA » %3[#0]UKA
+            %3 » %4[#0]UKAif » %0[#0]UKA » %1[#0]UKA » %2[#0]UKA
+            %4 » %0[#0]UKA » %1[#0]UKA » %2[#0]UKA » %3[#0]UKA
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
+              Get l2 // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+              Get l2 // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
+              Get l3 // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
+              Get l3 // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 5 }
+            Reduce group_by=[#0] aggregates=[count(#2), sum(#2), count(#1), sum(#1)] // { arity: 5 }
+              Get l1 // { arity: 3 }
   With
+    cte l3 =
+      Project (#0, #1) // { arity: 2 }
+        Get l1 // { arity: 3 }
+    cte l2 =
+      Project (#0, #2) // { arity: 2 }
+        Get l1 // { arity: 3 }
+    cte l1 =
+      Union // { arity: 3 }
+        Map (null) // { arity: 3 }
+          Union // { arity: 2 }
+            Negate // { arity: 2 }
+              Project (#0, #1) // { arity: 2 }
+                Join on=(#0 = #2) type=differential // { arity: 3 }
+                  implementation
+                    %0:t1[#0] » %1[#0]UKA
+                  ArrangeBy keys=[[#0]] // { arity: 2 }
+                    Get materialize.public.t1 // { arity: 2 }
+                  ArrangeBy keys=[[#0]] // { arity: 1 }
+                    Distinct group_by=[#0] // { arity: 1 }
+                      Project (#0) // { arity: 1 }
+                        Get l0 // { arity: 2 }
+            Get materialize.public.t1 // { arity: 2 }
+        Project (#0, #1, #0) // { arity: 3 }
+          Get l0 // { arity: 2 }
     cte l0 =
       Project (#0, #1) // { arity: 2 }
         Join on=(#0 = #2) type=differential // { arity: 3 }
@@ -256,8 +343,20 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Explained Query:
-  Filter (#2 >= 0) // { arity: 3 }
-    Reduce group_by=[#0] aggregates=[sum(#0), max(#0)] // { arity: 3 }
+  Return // { arity: 3 }
+    Project (#0, #3, #1) // { arity: 3 }
+      Filter (#1 >= 0) // { arity: 4 }
+        Join on=(#0 = #2) type=differential // { arity: 4 }
+          implementation
+            %1[#0] » %0[#0]UKAif
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[max(#0)] // { arity: 2 }
+              Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[sum(#0)] // { arity: 2 }
+              Get l0 // { arity: 1 }
+  With
+    cte l0 =
       Project (#0) // { arity: 1 }
         Join on=(#0 = #1) type=differential // { arity: 2 }
           implementation
@@ -283,8 +382,20 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0 and sum(t2.f1) >= 0;
 ----
 Explained Query:
-  Filter (#1 >= 0) AND (#2 >= 0) // { arity: 3 }
-    Reduce group_by=[#0] aggregates=[sum(#0), max(#0)] // { arity: 3 }
+  Return // { arity: 3 }
+    Project (#0, #3, #1) // { arity: 3 }
+      Filter (#1 >= 0) AND (#3 >= 0) // { arity: 4 }
+        Join on=(#0 = #2) type=differential // { arity: 4 }
+          implementation
+            %1[#0] » %0[#0]UKAiif
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[max(#0)] // { arity: 2 }
+              Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[sum(#0)] // { arity: 2 }
+              Get l0 // { arity: 1 }
+  With
+    cte l0 =
       Project (#0) // { arity: 1 }
         Join on=(#0 = #1) type=differential // { arity: 2 }
           implementation
@@ -311,26 +422,38 @@ EXPLAIN WITH(arity, join_impls) select t1.f1, sum(t2.f2), max(t2.f1) from t1 LEF
 ----
 Explained Query:
   Return // { arity: 3 }
-    Filter (#2 >= 0) // { arity: 3 }
-      Reduce group_by=[#0] aggregates=[sum(#2), max(#1)] // { arity: 3 }
-        Union // { arity: 3 }
-          Map (null, null) // { arity: 3 }
-            Union // { arity: 1 }
-              Negate // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Join on=(#0 = #1) type=differential // { arity: 2 }
-                    implementation
-                      %0:l1[#0] » %1[#0]UKA
-                    ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Get l1 // { arity: 1 }
-                    ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
-                        Project (#0) // { arity: 1 }
-                          Get l0 // { arity: 2 }
-              Get l1 // { arity: 1 }
-          Project (#0, #0, #1) // { arity: 3 }
-            Get l0 // { arity: 2 }
+    Project (#0, #3, #1) // { arity: 3 }
+      Filter (#1 >= 0) // { arity: 4 }
+        Join on=(#0 = #2) type=differential // { arity: 4 }
+          implementation
+            %1[#0] » %0[#0]UKAif
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
+              Project (#0, #1) // { arity: 2 }
+                Get l2 // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[sum(#1)] // { arity: 2 }
+              Project (#0, #2) // { arity: 2 }
+                Get l2 // { arity: 3 }
   With
+    cte l2 =
+      Union // { arity: 3 }
+        Map (null, null) // { arity: 3 }
+          Union // { arity: 1 }
+            Negate // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Join on=(#0 = #1) type=differential // { arity: 2 }
+                  implementation
+                    %0:l1[#0] » %1[#0]UKA
+                  ArrangeBy keys=[[#0]] // { arity: 1 }
+                    Get l1 // { arity: 1 }
+                  ArrangeBy keys=[[#0]] // { arity: 1 }
+                    Distinct group_by=[#0] // { arity: 1 }
+                      Project (#0) // { arity: 1 }
+                        Get l0 // { arity: 2 }
+            Get l1 // { arity: 1 }
+        Project (#0, #0, #1) // { arity: 3 }
+          Get l0 // { arity: 2 }
     cte l1 =
       Project (#0) // { arity: 1 }
         Get materialize.public.t1 // { arity: 2 }
@@ -357,8 +480,21 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) select t1.f1, sum(t2.f1 + t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Explained Query:
-  Filter (#2 >= 0) // { arity: 3 }
-    Reduce group_by=[#0] aggregates=[sum((#0 + #1)), max(#0)] // { arity: 3 }
+  Return // { arity: 3 }
+    Project (#0, #3, #1) // { arity: 3 }
+      Filter (#1 >= 0) // { arity: 4 }
+        Join on=(#0 = #2) type=differential // { arity: 4 }
+          implementation
+            %1[#0] » %0[#0]UKAif
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[max(#0)] // { arity: 2 }
+              Project (#0) // { arity: 1 }
+                Get l0 // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[sum((#0 + #1))] // { arity: 2 }
+              Get l0 // { arity: 2 }
+  With
+    cte l0 =
       Project (#0, #2) // { arity: 2 }
         Join on=(#0 = #1) type=differential // { arity: 3 }
           implementation
@@ -383,8 +519,20 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) select t1.f1, sum(t1.f1 + t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Explained Query:
-  Filter (#2 >= 0) // { arity: 3 }
-    Reduce group_by=[#0] aggregates=[sum((#0 + #0)), max(#0)] // { arity: 3 }
+  Return // { arity: 3 }
+    Project (#0, #3, #1) // { arity: 3 }
+      Filter (#1 >= 0) // { arity: 4 }
+        Join on=(#0 = #2) type=differential // { arity: 4 }
+          implementation
+            %1[#0] » %0[#0]UKAif
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[max(#0)] // { arity: 2 }
+              Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[sum((#0 + #0))] // { arity: 2 }
+              Get l0 // { arity: 1 }
+  With
+    cte l0 =
       Project (#0) // { arity: 1 }
         Join on=(#0 = #1) type=differential // { arity: 2 }
           implementation
@@ -411,25 +559,36 @@ EXPLAIN WITH(arity, join_impls) select t1.f1, sum(t1.f1), max(t2.f1) from t1 LEF
 ----
 Explained Query:
   Return // { arity: 3 }
-    Filter (#2 >= 0) // { arity: 3 }
-      Reduce group_by=[#0] aggregates=[sum(#0), max(#1)] // { arity: 3 }
-        Union // { arity: 2 }
-          Map (null) // { arity: 2 }
-            Union // { arity: 1 }
-              Negate // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Join on=(#0 = #1) type=differential // { arity: 2 }
-                    implementation
-                      %0:l1[#0] » %1[#0]UKA
-                    ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Get l1 // { arity: 1 }
-                    ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
-                        Get l0 // { arity: 1 }
-              Get l1 // { arity: 1 }
-          Project (#0, #0) // { arity: 2 }
-            Get l0 // { arity: 1 }
+    Project (#0, #3, #1) // { arity: 3 }
+      Filter (#1 >= 0) // { arity: 4 }
+        Join on=(#0 = #2) type=differential // { arity: 4 }
+          implementation
+            %1[#0] » %0[#0]UKAif
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
+              Get l2 // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[sum(#0)] // { arity: 2 }
+              Project (#0) // { arity: 1 }
+                Get l2 // { arity: 2 }
   With
+    cte l2 =
+      Union // { arity: 2 }
+        Map (null) // { arity: 2 }
+          Union // { arity: 1 }
+            Negate // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Join on=(#0 = #1) type=differential // { arity: 2 }
+                  implementation
+                    %0:l1[#0] » %1[#0]UKA
+                  ArrangeBy keys=[[#0]] // { arity: 1 }
+                    Get l1 // { arity: 1 }
+                  ArrangeBy keys=[[#0]] // { arity: 1 }
+                    Distinct group_by=[#0] // { arity: 1 }
+                      Get l0 // { arity: 1 }
+            Get l1 // { arity: 1 }
+        Project (#0, #0) // { arity: 2 }
+          Get l0 // { arity: 1 }
     cte l1 =
       Project (#0) // { arity: 1 }
         Get materialize.public.t1 // { arity: 2 }
@@ -503,7 +662,18 @@ EXPLAIN WITH(arity, join_impls) select t1.f1, count(t2.f2), max(t2.f2) from t1 L
 ----
 Explained Query:
   Return // { arity: 3 }
-    Reduce group_by=[#0] aggregates=[count(#1), max(#1)] // { arity: 3 }
+    Project (#0, #3, #1) // { arity: 3 }
+      Join on=(#0 = #2) type=differential // { arity: 4 }
+        implementation
+          %1[#0] » %0[#0]UKA
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
+            Get l2 // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
+            Get l2 // { arity: 2 }
+  With
+    cte l2 =
       Union // { arity: 2 }
         Map (null) // { arity: 2 }
           Union // { arity: 1 }
@@ -520,7 +690,6 @@ Explained Query:
                         Get l0 // { arity: 2 }
             Get l1 // { arity: 1 }
         Get l0 // { arity: 2 }
-  With
     cte l1 =
       Project (#0) // { arity: 1 }
         Get materialize.public.t1 // { arity: 2 }
@@ -547,8 +716,20 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f2) > 0;
 ----
 Explained Query:
-  Filter (#2 > 0) // { arity: 3 }
-    Reduce group_by=[#0] aggregates=[count(#1), max(#1)] // { arity: 3 }
+  Return // { arity: 3 }
+    Project (#0, #3, #1) // { arity: 3 }
+      Filter (#1 > 0) // { arity: 4 }
+        Join on=(#0 = #2) type=differential // { arity: 4 }
+          implementation
+            %1[#0] » %0[#0]UKAif
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
+              Get l0 // { arity: 2 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
+              Get l0 // { arity: 2 }
+  With
+    cte l0 =
       Project (#0, #2) // { arity: 2 }
         Join on=(#0 = #1) type=differential // { arity: 3 }
           implementation
@@ -573,8 +754,21 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) select t1.f1, max(t1.f1 + t2.f2), sum(t1.f2 + t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t1.f1 + t2.f2) > 0;
 ----
 Explained Query:
-  Filter (#1 > 0) // { arity: 3 }
-    Reduce group_by=[#0] aggregates=[max((#0 + #2)), sum((#1 + #2))] // { arity: 3 }
+  Return // { arity: 3 }
+    Project (#0, #1, #3) // { arity: 3 }
+      Filter (#1 > 0) // { arity: 4 }
+        Join on=(#0 = #2) type=differential // { arity: 4 }
+          implementation
+            %1[#0] » %0[#0]UKAif
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[max((#0 + #1))] // { arity: 2 }
+              Project (#0, #2) // { arity: 2 }
+                Get l0 // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[sum((#1 + #2))] // { arity: 2 }
+              Get l0 // { arity: 3 }
+  With
+    cte l0 =
       Project (#0, #1, #3) // { arity: 3 }
         Join on=(#0 = #2) type=differential // { arity: 4 }
           implementation
@@ -627,7 +821,20 @@ explain with(arity, join_impls) select t1.f1, count(t1.f2), max(t2.f2) from t1 l
 ----
 Explained Query:
   Return // { arity: 3 }
-    Reduce group_by=[#0] aggregates=[count(#1), max(#2)] // { arity: 3 }
+    Project (#0, #3, #1) // { arity: 3 }
+      Join on=(#0 = #2) type=differential // { arity: 4 }
+        implementation
+          %1[#0] » %0[#0]UKA
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
+            Project (#0, #2) // { arity: 2 }
+              Get l1 // { arity: 3 }
+        ArrangeBy keys=[[#0]] // { arity: 2 }
+          Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
+            Project (#0, #1) // { arity: 2 }
+              Get l1 // { arity: 3 }
+  With
+    cte l1 =
       Union // { arity: 3 }
         Map (null) // { arity: 3 }
           Union // { arity: 2 }
@@ -644,7 +851,6 @@ Explained Query:
                         Get l0 // { arity: 3 }
             Get materialize.public.t1 // { arity: 2 }
         Get l0 // { arity: 3 }
-  With
     cte l0 =
       Project (#0, #1, #3) // { arity: 3 }
         Join on=(#1 = #2) type=differential // { arity: 4 }
@@ -667,25 +873,37 @@ explain with(arity, join_impls) select t1.f1, count(t1.f2), max(t2.f2) from t1 l
 ----
 Explained Query:
   Return // { arity: 3 }
-    Filter (#2 > 0) // { arity: 3 }
-      Reduce group_by=[#0] aggregates=[count(#1), max(#2)] // { arity: 3 }
-        Union // { arity: 3 }
-          Map (null) // { arity: 3 }
-            Union // { arity: 2 }
-              Negate // { arity: 2 }
-                Project (#0, #1) // { arity: 2 }
-                  Join on=(#1 = #2) type=differential // { arity: 3 }
-                    implementation
-                      %0:t1[#1] » %1[#0]UKA
-                    ArrangeBy keys=[[#1]] // { arity: 2 }
-                      Get materialize.public.t1 // { arity: 2 }
-                    ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
-                        Project (#1) // { arity: 1 }
-                          Get l0 // { arity: 3 }
-              Get materialize.public.t1 // { arity: 2 }
-          Get l0 // { arity: 3 }
+    Project (#0, #3, #1) // { arity: 3 }
+      Filter (#1 > 0) // { arity: 4 }
+        Join on=(#0 = #2) type=differential // { arity: 4 }
+          implementation
+            %1[#0] » %0[#0]UKAif
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
+              Project (#0, #2) // { arity: 2 }
+                Get l1 // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
+              Project (#0, #1) // { arity: 2 }
+                Get l1 // { arity: 3 }
   With
+    cte l1 =
+      Union // { arity: 3 }
+        Map (null) // { arity: 3 }
+          Union // { arity: 2 }
+            Negate // { arity: 2 }
+              Project (#0, #1) // { arity: 2 }
+                Join on=(#1 = #2) type=differential // { arity: 3 }
+                  implementation
+                    %0:t1[#1] » %1[#0]UKA
+                  ArrangeBy keys=[[#1]] // { arity: 2 }
+                    Get materialize.public.t1 // { arity: 2 }
+                  ArrangeBy keys=[[#0]] // { arity: 1 }
+                    Distinct group_by=[#0] // { arity: 1 }
+                      Project (#1) // { arity: 1 }
+                        Get l0 // { arity: 3 }
+            Get materialize.public.t1 // { arity: 2 }
+        Get l0 // { arity: 3 }
     cte l0 =
       Project (#0, #1, #3) // { arity: 3 }
         Join on=(#1 = #2) type=differential // { arity: 4 }
@@ -807,36 +1025,42 @@ WHERE t1.f2 = derived.agg2;
 ----
 Explained Query:
   Return // { arity: 1 }
-    Project (#1) // { arity: 1 }
-      Join on=(#0 = #2) type=differential // { arity: 3 }
+    Project (#2) // { arity: 1 }
+      Join on=(#0 = #1) type=differential // { arity: 3 }
         implementation
-          %0:t1[#0] » %1[#1]UKA
+          %0:t1[#0] » %1[#0]UKA » %2[×]UA
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Project (#1) // { arity: 1 }
             Get materialize.public.t1 // { arity: 2 }
-        ArrangeBy keys=[[#1]] // { arity: 2 }
-          Filter (#1) IS NOT NULL // { arity: 2 }
-            Reduce aggregates=[count(*), max(#0)] // { arity: 2 }
-              Union // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Get l0 // { arity: 2 }
-                Project (#4) // { arity: 1 }
-                  Map (null) // { arity: 5 }
-                    Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
-                      implementation
-                        %1:t3[#0, #1] » %0[#0, #1]KKA
-                      ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-                        Union // { arity: 2 }
-                          Map (6) // { arity: 2 }
-                            Negate // { arity: 1 }
-                              Distinct group_by=[#0] // { arity: 1 }
-                                Project (#1) // { arity: 1 }
-                                  Get l0 // { arity: 2 }
-                          Distinct group_by=[#0, #1] // { arity: 2 }
-                            Get materialize.public.t3 // { arity: 2 }
-                      ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-                        Get materialize.public.t3 // { arity: 2 }
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Filter (#0) IS NOT NULL // { arity: 1 }
+            Reduce aggregates=[max(#0)] // { arity: 1 }
+              Get l1 // { arity: 1 }
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Reduce aggregates=[count(*)] // { arity: 1 }
+            Project () // { arity: 0 }
+              Get l1 // { arity: 1 }
   With
+    cte l1 =
+      Union // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Get l0 // { arity: 2 }
+        Project (#4) // { arity: 1 }
+          Map (null) // { arity: 5 }
+            Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
+              implementation
+                %1:t3[#0, #1] » %0[#0, #1]KKA
+              ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                Union // { arity: 2 }
+                  Map (6) // { arity: 2 }
+                    Negate // { arity: 1 }
+                      Distinct group_by=[#0] // { arity: 1 }
+                        Project (#1) // { arity: 1 }
+                          Get l0 // { arity: 2 }
+                  Distinct group_by=[#0, #1] // { arity: 2 }
+                    Get materialize.public.t3 // { arity: 2 }
+              ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                Get materialize.public.t3 // { arity: 2 }
     cte l0 =
       CrossJoin type=differential // { arity: 2 }
         implementation

@@ -469,27 +469,38 @@ EXPLAIN WITH(arity, join_impls) SELECT MIN((SELECT f1 FROM t1 WHERE f1 = 1)), MA
 Explained Query:
   Return // { arity: 2 }
     Union // { arity: 2 }
-      Get l3 // { arity: 2 }
+      Get l4 // { arity: 2 }
       Map (null, null) // { arity: 2 }
         Union // { arity: 0 }
           Negate // { arity: 0 }
             Project () // { arity: 0 }
-              Get l3 // { arity: 2 }
+              Get l4 // { arity: 2 }
           Constant // { arity: 0 }
             - ()
   With
+    cte l4 =
+      CrossJoin type=differential // { arity: 2 }
+        implementation
+          %1[×] » %0[×]UA
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Reduce aggregates=[min(#0)] // { arity: 1 }
+            Project (#0) // { arity: 1 }
+              Get l3 // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Reduce aggregates=[max(#0)] // { arity: 1 }
+            Project (#1) // { arity: 1 }
+              Get l3 // { arity: 2 }
     cte l3 =
-      Reduce aggregates=[min(#0), max(#1)] // { arity: 2 }
-        CrossJoin type=delta // { arity: 2 }
-          implementation
-            %0:t1 » %1:l2[×]A » %2:l2[×]A
-            %1:l2 » %0:t1[×]A » %2:l2[×]A
-            %2:l2 » %0:t1[×]A » %1:l2[×]A
-          ArrangeBy keys=[[]] // { arity: 0 }
-            Project () // { arity: 0 }
-              Get materialize.public.t1 // { arity: 2 }
-          Get l2 // { arity: 1 }
-          Get l2 // { arity: 1 }
+      CrossJoin type=delta // { arity: 2 }
+        implementation
+          %0:t1 » %1:l2[×]A » %2:l2[×]A
+          %1:l2 » %0:t1[×]A » %2:l2[×]A
+          %2:l2 » %0:t1[×]A » %1:l2[×]A
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Project () // { arity: 0 }
+            Get materialize.public.t1 // { arity: 2 }
+        Get l2 // { arity: 1 }
+        Get l2 // { arity: 1 }
     cte l2 =
       ArrangeBy keys=[[]] // { arity: 1 }
         Union // { arity: 1 }

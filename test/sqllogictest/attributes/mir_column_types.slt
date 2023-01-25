@@ -64,9 +64,16 @@ Explained Query:
   Threshold // { types: "(bigint?, text?, date?)" }
     Union // { types: "(bigint?, text?, date?)" }
       Negate // { types: "(bigint?, text?, date?)" }
-        Project (#1, #2, #0) // { types: "(bigint?, text?, date?)" }
-          Reduce group_by=[#2] aggregates=[sum(#0), max(#1)] // { types: "(date?, bigint?, text?)" }
-            Get materialize.public.t // { types: "(integer?, text?, date?)" }
+        Project (#3, #1, #0) // { types: "(bigint?, text?, date?)" }
+          Join on=(#0 = #2) type=differential // { types: "(date?, text?, date?, bigint?)" }
+            ArrangeBy keys=[[#0]] // { types: "(date?, text?)" }
+              Reduce group_by=[#1] aggregates=[max(#0)] // { types: "(date?, text?)" }
+                Project (#1, #2) // { types: "(text?, date?)" }
+                  Get materialize.public.t // { types: "(integer?, text?, date?)" }
+            ArrangeBy keys=[[#0]] // { types: "(date?, bigint?)" }
+              Reduce group_by=[#1] aggregates=[sum(#0)] // { types: "(date?, bigint?)" }
+                Project (#0, #2) // { types: "(integer?, date?)" }
+                  Get materialize.public.t // { types: "(integer?, text?, date?)" }
       Constant // { types: "(bigint?, text?, date?)" }
         - (1, "hello", null)
 
@@ -116,31 +123,41 @@ EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT FOR
 (SELECT null::boolean as f1, 10 as f2) EXCEPT (SELECT min(f), count(*) FROM v WHERE (select d::double FROM u) = v.e GROUP BY e LIMIT 1)
 ----
 Explained Query:
-  Threshold // { types: "(boolean?, bigint)" }
-    Union // { types: "(boolean?, bigint)" }
-      Negate // { types: "(boolean?, bigint)" }
-        TopK limit=1 monotonic=false // { types: "(boolean?, bigint)" }
-          Project (#1, #2) // { types: "(boolean?, bigint)" }
-            Reduce group_by=[#0] aggregates=[min(#1), count(*)] // { types: "(double precision, boolean?, bigint)" }
-              Project (#0, #1) // { types: "(double precision, boolean?)" }
-                Join on=(#0 = #2) type=differential // { types: "(double precision, boolean?, double precision)" }
-                  ArrangeBy keys=[[#0]] // { types: "(double precision, boolean?)" }
-                    Filter (#0) IS NOT NULL // { types: "(double precision, boolean?)" }
-                      Get materialize.public.v // { types: "(double precision?, boolean?)" }
-                  ArrangeBy keys=[[#0]] // { types: "(double precision)" }
-                    Union // { types: "(double precision)" }
-                      Project (#1) // { types: "(double precision)" }
-                        Filter (#1) IS NOT NULL // { types: "(integer?, double precision)" }
-                          Map (integer_to_double(#0)) // { types: "(integer?, double precision?)" }
-                            Get materialize.public.u // { types: "(integer?)" }
-                      Map (error("more than one record produced in subquery")) // { types: "(double precision)" }
-                        Project () // { types: "()" }
-                          Filter error("more than one record produced in subquery") AND (#0 > 1) // { types: "(bigint)" }
-                            Reduce aggregates=[count(*)] // { types: "(bigint)" }
-                              Project () // { types: "()" }
-                                Get materialize.public.u // { types: "(integer?)" }
-      Constant // { types: "(boolean?, bigint)" }
-        - (null, 10)
+  Return // { types: "(boolean?, bigint)" }
+    Threshold // { types: "(boolean?, bigint)" }
+      Union // { types: "(boolean?, bigint)" }
+        Negate // { types: "(boolean?, bigint)" }
+          TopK limit=1 monotonic=false // { types: "(boolean?, bigint)" }
+            Project (#1, #3) // { types: "(boolean?, bigint)" }
+              Join on=(#0 = #2) type=differential // { types: "(double precision, boolean?, double precision, bigint)" }
+                ArrangeBy keys=[[#0]] // { types: "(double precision, boolean?)" }
+                  Reduce group_by=[#0] aggregates=[min(#1)] // { types: "(double precision, boolean?)" }
+                    Get l0 // { types: "(double precision, boolean?)" }
+                ArrangeBy keys=[[#0]] // { types: "(double precision, bigint)" }
+                  Reduce group_by=[#0] aggregates=[count(*)] // { types: "(double precision, bigint)" }
+                    Project (#0) // { types: "(double precision)" }
+                      Get l0 // { types: "(double precision, boolean?)" }
+        Constant // { types: "(boolean?, bigint)" }
+          - (null, 10)
+  With
+    cte l0 =
+      Project (#0, #1) // { types: "(double precision, boolean?)" }
+        Join on=(#0 = #2) type=differential // { types: "(double precision, boolean?, double precision)" }
+          ArrangeBy keys=[[#0]] // { types: "(double precision, boolean?)" }
+            Filter (#0) IS NOT NULL // { types: "(double precision, boolean?)" }
+              Get materialize.public.v // { types: "(double precision?, boolean?)" }
+          ArrangeBy keys=[[#0]] // { types: "(double precision)" }
+            Union // { types: "(double precision)" }
+              Project (#1) // { types: "(double precision)" }
+                Filter (#1) IS NOT NULL // { types: "(integer?, double precision)" }
+                  Map (integer_to_double(#0)) // { types: "(integer?, double precision?)" }
+                    Get materialize.public.u // { types: "(integer?)" }
+              Map (error("more than one record produced in subquery")) // { types: "(double precision)" }
+                Project () // { types: "()" }
+                  Filter error("more than one record produced in subquery") AND (#0 > 1) // { types: "(bigint)" }
+                    Reduce aggregates=[count(*)] // { types: "(bigint)" }
+                      Project () // { types: "()" }
+                        Get materialize.public.u // { types: "(integer?)" }
 
 Source materialize.public.v
   filter=((#0) IS NOT NULL)
