@@ -45,9 +45,28 @@ The current way of execution is to put entire partitions into scalars, and execu
 
 ## Proposal
 
-We will use [DD’s prefix_sum](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/algorithms/prefix_sum.rs) (with some generalizations) for most of the window functions. The bulk of this work will be applied in the rendering, but currently window functions disappear in the HIR-to-MIR lowering. I propose to create a new relation expression enum variant in both MIR and LIR. This would allow us to focus on window functions for this epic (the epic is quite big already), and then we could have a separate epic for unifying window functions, TopK, and the current Reduce into a “super Reduce”. For a discussion on window function representations, see the [Alternatives section](https://www.notion.so/Efficient-Window-Functions-87682d6de73a4f6088acde21aba41fe6).
+We will use [DD’s prefix_sum](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/algorithms/prefix_sum.rs) (with some generalizations) for most of the window functions. The bulk of this work will be applied in the rendering, but we have to get the window functions from SQL to the rendering somehow.
+Currently, the direct representation of window functions disappears during the HIR-to-MIR lowering, and is instead replaced by a pattern involving a `Reduce`, a `FlatMap` with an `unnest_list`, plus some `record` trickery inside `MirScalarExpr`. For example:
 
-We’ll use three approaches to solve the many cases mentioned in the “Goals” section:
+```c
+materialize=> explain select name, pop, LAG(name) OVER (partition by state order by pop)
+from cities;
+                                          Optimized Plan
+--------------------------------------------------------------------------------------------------
+ Explained Query:                                                                                +
+   Project (#3..=#5)                                                                             +
+     Map (record_get[1](#1), record_get[0](#2), record_get[2](#2), record_get[0](#1))            +
+       FlatMap unnest_list(#0)                                                                   +
+         Project (#1)                                                                            +
+           Reduce group_by=[#1] aggregates=[lag(row(row(row(#0, #1, #2), row(#0, 1, null)), #2))]+
+             Get materialize.public.cities                                                       +
+```
+
+To avoid creating a new enum variant in MirRelationExpr, we will recognize the above pattern during the MIR-to-LIR lowering, and create a new LIR enum variant for window functions. I estimate this pattern recognition to need about 15-20 if/match statements. It can happen that this pattern recognition approach turns out to be too brittle: we might accidentally leave out cases when the pattern is slightly different due to unrelated MIR transforms, plus we might break it from time to time with unrelated MIR transform changes. If this happens, then we might reconsider creating a new MIR enum variant later. (Which would be easier after the optimizer refactoring/cleanup.) For an extended discussion on alternative representations in HIR/MIR/LIR, see the [Alternatives](#alternatives) section.
+
+Also, we will want to entirely transform away certain window function patterns, most notably, the ROW_NUMBER-to-TopK transform. For this, we need to canonicalize scalar expressions, which I think we usually do in MIR. This means that this transform should happen on MIR. This will start by again recognizing the above general windowing pattern, and then performing pattern recognition of the TopK pattern. 
+
+In the rendering, we’ll use several approaches to solve the many cases mentioned in the “Goals” section:
 
 1. We’ll use [DD’s prefix_sum](https://github.com/TimelyDataflow/differential-dataflow/blob/master/src/algorithms/prefix_sum.rs) with some tricky sum functions.
 2. As an extension of 1., we’ll use a generalization of DD’s prefix sum to arbitrary intervals (i.e., not just prefixes).
@@ -162,32 +181,6 @@ There are several options for how to represent window functions in HIR, MIR, and
 2. Hide away window functions in scalar expressions. (the current way in HIR)
 3. Reuse an existing relation expression enum variant, e.g., `Reduce`.
 
-I propose doing 1. for MIR and LIR, and later have a separate EPIC to consider unifying window functions and Reduce (and potentially TopK) into a many-to-many “super-reduce”. (We might only unify it in MIR, but not LIR. But we can decide this later.)
-
-There is a discussion below on each of the three above options for each of the IRs, but first we discuss another option, which bypasses any MIR/LIR modifications.
-
-### Recognizing the current window functions pattern in just the rendering
-
-There is one more option that bypasses any MIR/LIR modifications: we could leave HIR, MIR, and LIR unchanged, and just make the rendering detect that pattern that the current HIR lowering creates, and do a custom rendering to it. However, this might be too brittle: we might accidentally leave out cases when the pattern somehow ends up slightly different, plus we might break it from time to time with unrelated changes. An example, for what gets created by the current HIR lowering from a window function call (`LAG`):
-
-```c
-materialize=> explain select name, pop, LAG(name) OVER (partition by state order by pop)
-from cities;
-                                          Optimized Plan
---------------------------------------------------------------------------------------------------
- Explained Query:                                                                                +
-   Project (#3..=#5)                                                                             +
-     Map (record_get[1](#1), record_get[0](#2), record_get[2](#2), record_get[0](#1))            +
-       FlatMap unnest_list(#0)                                                                   +
-         Project (#1)                                                                            +
-           Reduce group_by=[#1] aggregates=[lag(row(row(row(#0, #1, #2), row(#0, 1, null)), #2))]+
-             Get materialize.public.cities                                                       +
-```
-
-(And this is just the MIR, but we would work with the LIR.)
-
-Also, we will want other transforms for window functions, most notably, the ROW_NUMBER-to-TopK transform. For this, we need to canonicalize scalar expressions, which I think we usually do in MIR. This means that this transform should happen on MIR, meaning that we would need an MIR representation of window functions.
-
 ### Extended discussion on each of the IRs
 
 **HIR**
@@ -213,7 +206,7 @@ We need an MIR representation for two things:
         - We can get a first version done more quickly. (And then potentially add optimizations later.)
         - But we might leave some easy optimization opportunities on the table, which would come from already-existing transform code for `Reduce`.
    - A new `MirRelationExpr` variant would mean we have to modify about 12-14 transforms (`LetRec` is pattern-matched in 12 files in the `transform` crate, `TopK` 14 times. See also [the recent LetRec addition](https://github.com/MaterializeInc/materialize/commit/9ac8e060d82487752ba28c42f7b146ff9f730ca3) for an example of how it looks when we add a new `MirRelationExpr` variant.)
-   - (When considering sharing a new many-to-many Reduce variant between window functions and TopK, we should keep in mind that the output columns are different: TopK keeps exactly the existing columns, but a window function adds an extra column.)
+   - When considering sharing a new many-to-many Reduce variant between window functions and TopK, we should keep in mind that the output columns are different: TopK keeps exactly the existing columns, but a window function adds an extra column.
 2. An argument can also be made for hiding window functions in `MirScalarExpr`:
     - This seems scary to me, because scalar expressions should generally produce exactly one value by looking at exactly one record, which is not true for window functions. It's hard to tell that none of the code that is dealing with scalar expressions would suddenly break.
     - `MirScalarExpr` can occur in several places (JoinClosure, etc.), so we would have to attend to window functions in the lowerings of each of these.
