@@ -590,8 +590,9 @@ impl Coordinator {
                     .storage_ids
                     .extend(replica.config.compute.logging.source_ids());
 
+                let replica_role = replica.role();
                 self.controller
-                    .create_replica(instance.id, replica_id, replica.config)
+                    .create_replica(instance.id, replica_id, replica_role, replica.config)
                     .await?;
             }
         }

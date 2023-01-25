@@ -112,6 +112,21 @@ impl ReplicaLocation {
     }
 }
 
+/// The "role" of a replica, which is currently used to determine the
+/// severity of alerts for problems with it.
+pub enum ReplicaRole {
+    /// The existence and proper functioning of the replica is
+    /// business-critical for Materialize.
+    SystemCritical,
+    /// Assuming no bugs, the replica should always exist and function
+    /// properly. If it doesn't, however, that is less urgent than
+    /// would be the case for a `SystemCritical` replica.
+    System,
+    /// The replica is controlled by the user, and might go down for
+    /// reasons outside our control (e.g., OOMs).
+    User,
+}
+
 /// The location of an unmanaged replica.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UnmanagedReplicaLocation {
@@ -194,6 +209,7 @@ where
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
+        replica_role: ReplicaRole,
         config: ReplicaConfig,
     ) -> Result<(), anyhow::Error> {
         let (storage_addr, compute_location) = match config.location {
@@ -208,7 +224,9 @@ where
             }
             ReplicaLocation::Managed(m) => {
                 let workers = m.allocation.workers;
-                let service = self.provision_replica(cluster_id, replica_id, m).await?;
+                let service = self
+                    .provision_replica(cluster_id, replica_id, replica_role, m)
+                    .await?;
                 let storage_addr = service
                     .addresses("storagectl")
                     .into_iter()
@@ -321,10 +339,15 @@ where
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
+        replica_role: ReplicaRole,
         location: ManagedReplicaLocation,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let service_name = generate_replica_service_name(cluster_id, replica_id);
-
+        let role_label = match replica_role {
+            ReplicaRole::SystemCritical => "system-critical",
+            ReplicaRole::System => "system",
+            ReplicaRole::User => "user",
+        };
         let service = self
             .orchestrator
             .ensure_service(
@@ -373,6 +396,7 @@ where
                         ("replica-id".into(), replica_id.to_string()),
                         ("cluster-id".into(), cluster_id.to_string()),
                         ("type".into(), "cluster".into()),
+                        ("replica-role".into(), role_label.into()),
                     ]),
                     availability_zone: Some(location.availability_zone),
                     // This constrains the orchestrator (for those orchestrators that support

@@ -19,6 +19,7 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use futures::Future;
 use itertools::Itertools;
+use mz_controller::clusters::ReplicaRole;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -1363,6 +1364,15 @@ pub struct ClusterReplica {
 }
 
 impl ClusterReplica {
+    pub fn role(&self) -> ReplicaRole {
+        // NOTE - These roles power monitoring systems. Do not change
+        // them without talking to the cloud or observability groups.
+        match self.name.as_str() {
+            "mz_system" => ReplicaRole::SystemCritical,
+            "mz_introspection" => ReplicaRole::System,
+            _ => ReplicaRole::User,
+        }
+    }
     /// Computes the status of the cluster replica as a whole.
     pub fn status(&self) -> ClusterStatus {
         self.process_status
