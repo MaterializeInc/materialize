@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import json
-from textwrap import dedent
 
 from materialize.cloudtest.application import MaterializeApplication
 
