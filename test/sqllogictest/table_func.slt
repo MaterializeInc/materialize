@@ -1372,3 +1372,27 @@ Explained Query:
       Get materialize.public.y // { arity: 1 }
 
 EOF
+
+# Test that table functions should produce deterministic plans
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT jsonb_object_keys('{"1":2}'::JSONB), jsonb_object_keys('{"1":2}'::JSONB);
+----
+Project (#0, #0)
+  CallTable jsonb_object_keys(text_to_jsonb("{\"1\":2}"))
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT jsonb_object_keys('{"1":2}'::JSONB), jsonb_object_keys('{"3":4}'::JSONB);
+----
+Project (#5, #6)
+  Map (case when (#1) IS NULL then null else #0 end, case when (#3) IS NULL then null else #2 end)
+    Project (#0, #1, #3..=#5)
+      Map (coalesce(#2, #4))
+        FullOuterJoin (#2 = #4)
+          Map (row_number() over (), #1)
+            CallTable jsonb_object_keys(text_to_jsonb("{\"1\":2}"))
+          Map (row_number() over ())
+            CallTable jsonb_object_keys(text_to_jsonb("{\"3\":4}"))
+
+EOF

@@ -2055,7 +2055,7 @@ fn plan_view_select(
 
 fn plan_scalar_table_funcs(
     qcx: &QueryContext,
-    table_funcs: HashMap<TableFunction<Aug>, String>,
+    table_funcs: BTreeMap<TableFunction<Aug>, String>,
     table_func_names: &mut HashMap<String, Ident>,
     relation_expr: &HirRelationExpr,
     from_scope: &Scope,
@@ -4964,7 +4964,7 @@ struct AggregateTableFuncVisitor<'a> {
     scx: &'a StatementContext<'a>,
     aggs: Vec<Function<Aug>>,
     within_aggregate: bool,
-    tables: HashMap<TableFunction<Aug>, String>,
+    tables: BTreeMap<TableFunction<Aug>, String>,
     table_disallowed_context: Vec<&'static str>,
     in_select_item: bool,
     err: Option<PlanError>,
@@ -4976,7 +4976,7 @@ impl<'a> AggregateTableFuncVisitor<'a> {
             scx,
             aggs: Vec::new(),
             within_aggregate: false,
-            tables: HashMap::new(),
+            tables: BTreeMap::new(),
             table_disallowed_context: Vec::new(),
             in_select_item: false,
             err: None,
@@ -4985,7 +4985,7 @@ impl<'a> AggregateTableFuncVisitor<'a> {
 
     fn into_result(
         self,
-    ) -> Result<(Vec<Function<Aug>>, HashMap<TableFunction<Aug>, String>), PlanError> {
+    ) -> Result<(Vec<Function<Aug>>, BTreeMap<TableFunction<Aug>, String>), PlanError> {
         match self.err {
             Some(err) => Err(err),
             None => {

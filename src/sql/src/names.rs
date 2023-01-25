@@ -154,7 +154,7 @@ impl From<String> for PartialObjectName {
 }
 
 /// A fully-qualified human readable name of a schema in the catalog.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct FullSchemaName {
     /// The database name
     pub database: RawDatabaseSpecifier,
@@ -235,7 +235,7 @@ impl From<Option<String>> for RawDatabaseSpecifier {
 }
 
 /// An id of a database.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ResolvedDatabaseSpecifier {
     /// The "ambient" database, which is always present and is not named
     /// explicitly, but by omission.
@@ -272,7 +272,7 @@ impl From<u64> for ResolvedDatabaseSpecifier {
  * their Id.
  */
 /// An id of a schema.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SchemaSpecifier {
     /// A temporary schema
     Temporary,
@@ -342,16 +342,16 @@ impl From<SchemaSpecifier> for u64 {
 // Aug is the type variable assigned to an AST that has already been
 // name-resolved. An AST in this state has global IDs populated next to table
 // names, and local IDs assigned to CTE definitions and references.
-#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Default)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Copy, Clone, Default)]
 pub struct Aug;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ObjectQualifiers {
     pub database_spec: ResolvedDatabaseSpecifier,
     pub schema_spec: SchemaSpecifier,
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedObjectName {
     Object {
         id: GlobalId,
@@ -414,7 +414,7 @@ impl std::fmt::Display for ResolvedObjectName {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedSchemaName {
     Schema {
         database_spec: ResolvedDatabaseSpecifier,
@@ -451,7 +451,7 @@ impl AstDisplay for ResolvedSchemaName {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedDatabaseName {
     Database { id: DatabaseId, name: String },
     Error,
@@ -466,7 +466,7 @@ impl AstDisplay for ResolvedDatabaseName {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ResolvedClusterName {
     pub id: ClusterId,
     /// If set, a name to print in the `AstDisplay` implementation instead of
@@ -488,7 +488,7 @@ impl AstDisplay for ResolvedClusterName {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedDataType {
     AnonymousList(Box<ResolvedDataType>),
     AnonymousMap {

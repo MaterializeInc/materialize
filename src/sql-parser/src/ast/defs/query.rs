@@ -29,7 +29,7 @@ use crate::ast::{
 
 /// The most complete variant of a `SELECT` query expression, optionally
 /// including `WITH`, `UNION` / other set operations, and `ORDER BY`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Query<T: AstInfo> {
     /// WITH (common table expressions, or CTEs)
     pub ctes: CteBlock<T>,
@@ -115,7 +115,7 @@ impl<T: AstInfo> Query<T> {
 
 /// A node in a tree, representing a "query body" expression, roughly:
 /// `SELECT ... [ {UNION|EXCEPT|INTERSECT} SELECT ...]`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SetExpr<T: AstInfo> {
     /// Restricted SELECT .. FROM .. HAVING (no ORDER BY or set operations)
     Select(Box<Select<T>>),
@@ -165,7 +165,7 @@ impl<T: AstInfo> AstDisplay for SetExpr<T> {
 }
 impl_display_t!(SetExpr);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SetOperator {
     Union,
     Except,
@@ -183,7 +183,7 @@ impl AstDisplay for SetOperator {
 }
 impl_display!(SetOperator);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SelectOptionName {
     ExpectedGroupSize,
 }
@@ -197,7 +197,7 @@ impl AstDisplay for SelectOptionName {
 }
 impl_display!(SelectOptionName);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SelectOption<T: AstInfo> {
     pub name: SelectOptionName,
     pub value: Option<WithOptionValue<T>>,
@@ -216,7 +216,7 @@ impl<T: AstInfo> AstDisplay for SelectOption<T> {
 /// A restricted variant of `SELECT` (without CTEs/`ORDER BY`), which may
 /// appear either as the only body item of an `SQLQuery`, or as an operand
 /// to a set operation like `UNION`.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Select<T: AstInfo> {
     pub distinct: Option<Distinct<T>>,
     /// projection expressions
@@ -286,7 +286,7 @@ impl<T: AstInfo> Select<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Distinct<T: AstInfo> {
     EntireRow,
     On(Vec<Expr<T>>),
@@ -311,7 +311,7 @@ impl<T: AstInfo> AstDisplay for Distinct<T> {
 /// The block can either be entirely "simple" (traditional SQL `WITH` block),
 /// or "mutually recursive", which introduce their bindings before the block
 /// and may result in mutually recursive definitions.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CteBlock<T: AstInfo> {
     Simple(Vec<Cte<T>>),
     MutuallyRecursive(Vec<CteMutRec<T>>),
@@ -370,7 +370,7 @@ impl<T: AstInfo> AstDisplay for CteBlock<T> {
 /// The names in the column list before `AS`, when specified, replace the names
 /// of the columns returned by the query. The parser does not validate that the
 /// number of columns in the query matches the number of columns in the query.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Cte<T: AstInfo> {
     pub alias: TableAlias,
     pub id: T::CteId,
@@ -387,7 +387,7 @@ impl<T: AstInfo> AstDisplay for Cte<T> {
 }
 impl_display_t!(Cte);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CteMutRec<T: AstInfo> {
     pub name: Ident,
     pub columns: Vec<CteMutRecColumnDef<T>>,
@@ -411,7 +411,7 @@ impl<T: AstInfo> AstDisplay for CteMutRec<T> {
 impl_display_t!(CteMutRec);
 
 /// A column definition in a [`CteMutRec`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CteMutRecColumnDef<T: AstInfo> {
     pub name: Ident,
     pub data_type: T::DataType,
@@ -427,7 +427,7 @@ impl<T: AstInfo> AstDisplay for CteMutRecColumnDef<T> {
 impl_display_t!(CteMutRecColumnDef);
 
 /// One item of the comma-separated list following `SELECT`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SelectItem<T: AstInfo> {
     /// An expression, optionally followed by `[ AS ] alias`.
     Expr { expr: Expr<T>, alias: Option<Ident> },
@@ -451,7 +451,7 @@ impl<T: AstInfo> AstDisplay for SelectItem<T> {
 }
 impl_display_t!(SelectItem);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TableWithJoins<T: AstInfo> {
     pub relation: TableFactor<T>,
     pub joins: Vec<Join<T>>,
@@ -481,7 +481,7 @@ impl<T: AstInfo> TableWithJoins<T> {
 }
 
 /// A table name or a parenthesized subquery with an optional alias
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TableFactor<T: AstInfo> {
     Table {
         name: T::ObjectName,
@@ -582,7 +582,7 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
 }
 impl_display_t!(TableFactor);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TableFunction<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub args: FunctionArgs<T>,
@@ -597,7 +597,7 @@ impl<T: AstInfo> AstDisplay for TableFunction<T> {
 }
 impl_display_t!(TableFunction);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TableAlias {
     pub name: Ident,
     pub columns: Vec<Ident>,
@@ -621,7 +621,7 @@ impl AstDisplay for TableAlias {
 }
 impl_display!(TableAlias);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Join<T: AstInfo> {
     pub relation: TableFactor<T>,
     pub join_operator: JoinOperator<T>,
@@ -696,7 +696,7 @@ impl<T: AstInfo> AstDisplay for Join<T> {
 }
 impl_display_t!(Join);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum JoinOperator<T: AstInfo> {
     Inner(JoinConstraint<T>),
     LeftOuter(JoinConstraint<T>),
@@ -705,7 +705,7 @@ pub enum JoinOperator<T: AstInfo> {
     CrossJoin,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum JoinConstraint<T: AstInfo> {
     On(Expr<T>),
     Using(Vec<Ident>),
@@ -713,7 +713,7 @@ pub enum JoinConstraint<T: AstInfo> {
 }
 
 /// SQL ORDER BY expression
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct OrderByExpr<T: AstInfo> {
     pub expr: Expr<T>,
     pub asc: Option<bool>,
@@ -737,13 +737,13 @@ impl<T: AstInfo> AstDisplay for OrderByExpr<T> {
 }
 impl_display_t!(OrderByExpr);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Limit<T: AstInfo> {
     pub with_ties: bool,
     pub quantity: Expr<T>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Values<T: AstInfo>(pub Vec<Vec<Expr<T>>>);
 
 impl<T: AstInfo> AstDisplay for Values<T> {

@@ -25,7 +25,7 @@ use crate::ast::AstInfo;
 use crate::keywords::Keyword;
 
 /// An identifier.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Ident(pub(crate) String);
 
 impl Ident {
@@ -103,7 +103,7 @@ impl AstDisplay for Ident {
 impl_display!(Ident);
 
 /// A name of a table, view, custom type, etc., possibly multi-part, i.e. db.schema.obj
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct UnresolvedObjectName(pub Vec<Ident>);
 
 pub enum CatalogName {
@@ -142,7 +142,7 @@ impl AstDisplay for &UnresolvedObjectName {
 }
 
 /// A name of a schema
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct UnresolvedSchemaName(pub Vec<Ident>);
 
 impl AstDisplay for UnresolvedSchemaName {
@@ -153,7 +153,7 @@ impl AstDisplay for UnresolvedSchemaName {
 impl_display!(UnresolvedSchemaName);
 
 /// A name of a database
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct UnresolvedDatabaseName(pub Ident);
 
 impl AstDisplay for UnresolvedDatabaseName {
