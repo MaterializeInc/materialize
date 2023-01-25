@@ -81,9 +81,6 @@ impl Coordinator {
             Message::StorageUsageUpdate(sizes) => {
                 self.storage_usage_update(sizes).await;
             }
-            Message::Consolidate(collections) => {
-                self.consolidate(&collections).await;
-            }
             Message::RealTimeRecencyTimestamp {
                 conn_id,
                 transient_revision,
@@ -96,13 +93,6 @@ impl Coordinator {
                 )
                 .await;
             }
-        }
-    }
-
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn consolidate(&mut self, collections: &[mz_stash::Id]) {
-        if let Err(err) = self.catalog.consolidate(collections).await {
-            warn!("consolidation error: {:?}", err);
         }
     }
 

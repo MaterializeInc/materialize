@@ -198,7 +198,6 @@ pub enum Message<T = mz_repr::Timestamp> {
     LinearizeReads(Vec<PendingReadTxn>),
     StorageUsageFetch,
     StorageUsageUpdate(HashMap<Option<ShardId>, u64>),
-    Consolidate(Vec<mz_stash::Id>),
     RealTimeRecencyTimestamp {
         conn_id: ConnectionId,
         transient_revision: u64,
@@ -307,8 +306,6 @@ pub struct Config {
     pub segment_client: Option<mz_segment::Client>,
     pub egress_ips: Vec<Ipv4Addr>,
     pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
-    pub consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
-    pub consolidations_rx: mpsc::UnboundedReceiver<Vec<mz_stash::Id>>,
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
 }
@@ -428,9 +425,6 @@ pub struct Coordinator {
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<PendingReadTxn>,
-
-    /// Channel for catalog stash consolidations.
-    consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
@@ -1029,7 +1023,6 @@ impl Coordinator {
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
-        mut consolidations_rx: mpsc::UnboundedReceiver<Vec<mz_stash::Id>>,
     ) {
         // For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
         // table's timestamps, but there are cases where timestamps are not bumped but
@@ -1100,15 +1093,6 @@ impl Coordinator {
                 // `tick()` on `Interval` is cancel-safe:
                 // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                 _ = advance_timelines_interval.tick() => Message::GroupCommitInitiate,
-                // `recv()` on `UnboundedReceiver` is cancellation safe:
-                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
-                Some(collections) = consolidations_rx.recv() => {
-                    let mut ids:HashSet<mz_stash::Id> = HashSet::from_iter(collections);
-                    while let Ok(collections) = consolidations_rx.try_recv() {
-                        ids.extend(collections);
-                    }
-                    Message::Consolidate(ids.into_iter().collect())
-                }
 
                 // Process the idle metric at the lowest priority to sample queue non-idle time.
                 // `recv()` on `Receiver` is cancellation safe:
@@ -1161,8 +1145,6 @@ pub async fn serve(
         storage_usage_collection_interval,
         segment_client,
         egress_ips,
-        consolidations_tx,
-        consolidations_rx,
         aws_account_id,
         aws_privatelink_availability_zones,
         system_parameter_frontend,
@@ -1260,7 +1242,6 @@ pub async fn serve(
                 catalog,
                 internal_cmd_tx,
                 strict_serializable_reads_tx,
-                consolidations_tx,
                 global_timelines: timestamp_oracles,
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
@@ -1298,12 +1279,7 @@ pub async fn serve(
             let ok = bootstrap.is_ok();
             bootstrap_tx.send(bootstrap).unwrap();
             if ok {
-                handle.block_on(coord.serve(
-                    internal_cmd_rx,
-                    strict_serializable_reads_rx,
-                    cmd_rx,
-                    consolidations_rx,
-                ));
+                handle.block_on(coord.serve(internal_cmd_rx, strict_serializable_reads_rx, cmd_rx));
             }
         })
         .unwrap();
