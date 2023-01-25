@@ -435,6 +435,7 @@ impl CatalogState {
     }
 
     /// Create and insert the per replica log sources and log views.
+    #[tracing::instrument(level = "info", skip_all)]
     fn insert_replica_introspection_items(&mut self, logging: &ReplicaLogging, replica_id: u64) {
         for (variant, source_id) in &logging.sources {
             let oid = self
@@ -509,6 +510,7 @@ impl CatalogState {
 
     /// Parse a SQL string into a catalog view item with only a limited
     /// context.
+    #[tracing::instrument(level = "info", skip_all)]
     pub fn parse_view_item(&self, create_sql: String) -> Result<CatalogItem, anyhow::Error> {
         let session_catalog = ConnCatalog {
             state: Cow::Borrowed(self),
@@ -2276,53 +2278,56 @@ impl Catalog {
 
         let mut mz_object_dependencies_updates = vec![];
 
-        for (builtin, id) in builtin_non_indexes {
-            let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
-            let name = QualifiedObjectName {
-                qualifiers: ObjectQualifiers {
-                    database_spec: ResolvedDatabaseSpecifier::Ambient,
-                    schema_spec: SchemaSpecifier::Id(schema_id),
-                },
-                item: builtin.name().into(),
-            };
-            match builtin {
-                Builtin::Log(log) => {
-                    let oid = catalog.allocate_oid()?;
-                    catalog.state.insert_item(
-                        id,
-                        oid,
-                        name.clone(),
-                        CatalogItem::Log(Log {
-                            variant: log.variant.clone(),
-                            has_storage_collection: false,
-                        }),
-                    );
-                }
+        {
+            let span = tracing::span!(tracing::Level::DEBUG, "builtin_non_indexes");
+            let _enter = span.enter();
+            for (builtin, id) in builtin_non_indexes {
+                let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
+                let name = QualifiedObjectName {
+                    qualifiers: ObjectQualifiers {
+                        database_spec: ResolvedDatabaseSpecifier::Ambient,
+                        schema_spec: SchemaSpecifier::Id(schema_id),
+                    },
+                    item: builtin.name().into(),
+                };
+                match builtin {
+                    Builtin::Log(log) => {
+                        let oid = catalog.allocate_oid()?;
+                        catalog.state.insert_item(
+                            id,
+                            oid,
+                            name.clone(),
+                            CatalogItem::Log(Log {
+                                variant: log.variant.clone(),
+                                has_storage_collection: false,
+                            }),
+                        );
+                    }
 
-                Builtin::Table(table) => {
-                    let oid = catalog.allocate_oid()?;
-                    catalog.state.insert_item(
-                        id,
-                        oid,
-                        name.clone(),
-                        CatalogItem::Table(Table {
-                            create_sql: CREATE_SQL_TODO.to_string(),
-                            desc: table.desc.clone(),
-                            defaults: vec![Expr::null(); table.desc.arity()],
-                            conn_id: None,
-                            depends_on: vec![],
-                            custom_logical_compaction_window: table
-                                .is_retained_metrics_relation
-                                .then(|| catalog.state.system_config().metrics_retention()),
-                            is_retained_metrics_relation: table.is_retained_metrics_relation,
-                        }),
-                    );
-                }
-                Builtin::Index(_) => {
-                    unreachable!("handled later once clusters have been created")
-                }
-                Builtin::View(view) => {
-                    let item = catalog
+                    Builtin::Table(table) => {
+                        let oid = catalog.allocate_oid()?;
+                        catalog.state.insert_item(
+                            id,
+                            oid,
+                            name.clone(),
+                            CatalogItem::Table(Table {
+                                create_sql: CREATE_SQL_TODO.to_string(),
+                                desc: table.desc.clone(),
+                                defaults: vec![Expr::null(); table.desc.arity()],
+                                conn_id: None,
+                                depends_on: vec![],
+                                custom_logical_compaction_window: table
+                                    .is_retained_metrics_relation
+                                    .then(|| catalog.state.system_config().metrics_retention()),
+                                is_retained_metrics_relation: table.is_retained_metrics_relation,
+                            }),
+                        );
+                    }
+                    Builtin::Index(_) => {
+                        unreachable!("handled later once clusters have been created")
+                    }
+                    Builtin::View(view) => {
+                        let item = catalog
                         .parse_item(
                             id,
                             view.sql.into(),
@@ -2338,46 +2343,47 @@ impl Catalog {
                                 view.name, e
                             )
                         });
-                    let oid = catalog.allocate_oid()?;
-                    mz_object_dependencies_updates.push((id, item.uses().to_owned()));
-                    catalog.state.insert_item(id, oid, name, item);
-                }
+                        let oid = catalog.allocate_oid()?;
+                        mz_object_dependencies_updates.push((id, item.uses().to_owned()));
+                        catalog.state.insert_item(id, oid, name, item);
+                    }
 
-                Builtin::Type(_) => unreachable!("loaded separately"),
+                    Builtin::Type(_) => unreachable!("loaded separately"),
 
-                Builtin::Func(func) => {
-                    let oid = catalog.allocate_oid()?;
-                    catalog.state.insert_item(
-                        id,
-                        oid,
-                        name.clone(),
-                        CatalogItem::Func(Func { inner: func.inner }),
-                    );
-                }
+                    Builtin::Func(func) => {
+                        let oid = catalog.allocate_oid()?;
+                        catalog.state.insert_item(
+                            id,
+                            oid,
+                            name.clone(),
+                            CatalogItem::Func(Func { inner: func.inner }),
+                        );
+                    }
 
-                Builtin::Source(coll) => {
-                    let introspection_type = match &coll.data_source {
-                        Some(i) => i.clone(),
-                        None => continue,
-                    };
+                    Builtin::Source(coll) => {
+                        let introspection_type = match &coll.data_source {
+                            Some(i) => i.clone(),
+                            None => continue,
+                        };
 
-                    let oid = catalog.allocate_oid()?;
-                    catalog.state.insert_item(
-                        id,
-                        oid,
-                        name.clone(),
-                        CatalogItem::Source(Source {
-                            create_sql: CREATE_SQL_TODO.to_string(),
-                            data_source: DataSourceDesc::Introspection(introspection_type),
-                            desc: coll.desc.clone(),
-                            timeline: Timeline::EpochMilliseconds,
-                            depends_on: vec![],
-                            custom_logical_compaction_window: coll
-                                .is_retained_metrics_relation
-                                .then(|| catalog.state.system_config().metrics_retention()),
-                            is_retained_metrics_relation: coll.is_retained_metrics_relation,
-                        }),
-                    );
+                        let oid = catalog.allocate_oid()?;
+                        catalog.state.insert_item(
+                            id,
+                            oid,
+                            name.clone(),
+                            CatalogItem::Source(Source {
+                                create_sql: CREATE_SQL_TODO.to_string(),
+                                data_source: DataSourceDesc::Introspection(introspection_type),
+                                desc: coll.desc.clone(),
+                                timeline: Timeline::EpochMilliseconds,
+                                depends_on: vec![],
+                                custom_logical_compaction_window: coll
+                                    .is_retained_metrics_relation
+                                    .then(|| catalog.state.system_config().metrics_retention()),
+                                is_retained_metrics_relation: coll.is_retained_metrics_relation,
+                            }),
+                        );
+                    }
                 }
             }
         }
@@ -2672,6 +2678,7 @@ impl Catalog {
     ///    `system_parameter_frontend` (if present).
     ///
     /// # Errors
+    #[tracing::instrument(level = "info", skip_all)]
     async fn load_system_configuration(
         &mut self,
         bootstrap_system_parameters: BTreeMap<String, String>,
@@ -2778,6 +2785,7 @@ impl Catalog {
     /// references are circular. This makes loading built-in types more complicated than other
     /// built-in objects, and requires us to make multiple passes over the types to correctly
     /// resolve all references.
+    #[tracing::instrument(level = "info", skip_all)]
     async fn load_builtin_types(&mut self) -> Result<(), Error> {
         let persisted_builtin_ids = self.storage().await.load_system_gids().await?;
 
@@ -3132,6 +3140,7 @@ impl Catalog {
         Ok(())
     }
 
+    #[tracing::instrument(level = "info", skip_all)]
     pub async fn apply_persisted_builtin_migration(
         &mut self,
         migration_metadata: &mut BuiltinMigrationMetadata,
@@ -3185,6 +3194,7 @@ impl Catalog {
     /// objects, which is necessary for at least one catalog migration.
     ///
     /// TODO(justin): it might be nice if these were two different types.
+    #[tracing::instrument(level = "info", skip_all)]
     pub fn load_catalog_items<'a>(
         tx: &mut storage::Transaction<'a>,
         c: &Catalog,
@@ -5440,6 +5450,7 @@ impl Catalog {
     }
 
     // Parses the given SQL string into a `CatalogItem`.
+    #[tracing::instrument(level = "info", skip(self, pcx))]
     fn parse_item(
         &self,
         id: GlobalId,

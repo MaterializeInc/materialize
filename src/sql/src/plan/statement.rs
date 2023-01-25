@@ -224,6 +224,7 @@ pub fn describe(
 /// The returned plan is tied to the state of the provided catalog. If the state
 /// of the catalog changes after planning, the validity of the plan is not
 /// guaranteed.
+#[tracing::instrument(level = "debug", skip_all)]
 pub fn plan(
     pcx: Option<&PlanContext>,
     catalog: &dyn SessionCatalog,
