@@ -19,11 +19,12 @@ from materialize.cloudtest.application import MaterializeApplication
 # This will need to be done properly (i.e., by actually looking up
 # the cluster id->name mapping in SQL) if that assumption ever changes.
 def test_roles(mz: MaterializeApplication) -> None:
+    mz.wait_replicas()
     pods = json.loads(mz.kubectl("get", "pods", "-o", "json"))
     names_roles = (
         (
-            item.metadata.name,
-            item.metadata.labels.get(
+            item["metadata"]["name"],
+            item["metadata"]["labels"].get(
                 "cluster.environmentd.materialize.cloud/replica-role"
             ),
         )
