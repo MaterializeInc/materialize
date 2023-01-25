@@ -94,6 +94,8 @@ where
     pub fn flush(&mut self) {
         if let Some(cap) = &self.cap {
             self.output_handle.session(cap).give_vec(&mut self.buffer);
+            self.buffer
+                .reserve_exact(::timely::container::buffer::default_capacity::<(D, T, R)>());
         }
     }
 }
