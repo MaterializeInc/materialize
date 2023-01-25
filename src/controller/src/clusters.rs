@@ -112,17 +112,17 @@ impl ReplicaLocation {
     }
 }
 
-/// The "role" of a replica, which is currently used to determine the
-/// severity of alerts for problems with it.
-pub enum ReplicaRole {
-    /// The existence and proper functioning of the replica is
+/// The "role" of a cluster, which is currently used to determine the
+/// severity of alerts for problems with its replicas.
+pub enum ClusterRole {
+    /// The existence and proper functioning of the cluster's replicas is
     /// business-critical for Materialize.
     SystemCritical,
-    /// Assuming no bugs, the replica should always exist and function
+    /// Assuming no bugs, the cluster's replicas should always exist and function
     /// properly. If it doesn't, however, that is less urgent than
     /// would be the case for a `SystemCritical` replica.
     System,
-    /// The replica is controlled by the user, and might go down for
+    /// The cluster is controlled by the user, and might go down for
     /// reasons outside our control (e.g., OOMs).
     User,
 }
@@ -209,7 +209,7 @@ where
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-        replica_role: ReplicaRole,
+        role: ClusterRole,
         config: ReplicaConfig,
     ) -> Result<(), anyhow::Error> {
         let (storage_addr, compute_location) = match config.location {
@@ -225,7 +225,7 @@ where
             ReplicaLocation::Managed(m) => {
                 let workers = m.allocation.workers;
                 let service = self
-                    .provision_replica(cluster_id, replica_id, replica_role, m)
+                    .provision_replica(cluster_id, replica_id, role, m)
                     .await?;
                 let storage_addr = service
                     .addresses("storagectl")
@@ -339,14 +339,14 @@ where
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-        replica_role: ReplicaRole,
+        role: ClusterRole,
         location: ManagedReplicaLocation,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let service_name = generate_replica_service_name(cluster_id, replica_id);
-        let role_label = match replica_role {
-            ReplicaRole::SystemCritical => "system-critical",
-            ReplicaRole::System => "system",
-            ReplicaRole::User => "user",
+        let role_label = match role {
+            ClusterRole::SystemCritical => "system-critical",
+            ClusterRole::System => "system",
+            ClusterRole::User => "user",
         };
         let service = self
             .orchestrator

@@ -19,7 +19,7 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use futures::Future;
 use itertools::Itertools;
-use mz_controller::clusters::ReplicaRole;
+use mz_controller::clusters::ClusterRole;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -1356,6 +1356,21 @@ pub struct Cluster {
     pub replicas_by_id: HashMap<ReplicaId, ClusterReplica>,
 }
 
+impl Cluster {
+    /// The role of the cluster. Currently used to set alert severity.
+    pub fn role(&self) -> ClusterRole {
+        // NOTE - These roles power monitoring systems. Do not change
+        // them without talking to the cloud or observability groups.
+        if self.name == SYSTEM_USER.name {
+            ClusterRole::SystemCritical
+        } else if self.name == INTROSPECTION_USER.name {
+            ClusterRole::System
+        } else {
+            ClusterRole::User
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct ClusterReplica {
     pub name: String,
@@ -1364,15 +1379,6 @@ pub struct ClusterReplica {
 }
 
 impl ClusterReplica {
-    pub fn role(&self) -> ReplicaRole {
-        // NOTE - These roles power monitoring systems. Do not change
-        // them without talking to the cloud or observability groups.
-        match self.name.as_str() {
-            "mz_system" => ReplicaRole::SystemCritical,
-            "mz_introspection" => ReplicaRole::System,
-            _ => ReplicaRole::User,
-        }
-    }
     /// Computes the status of the cluster replica as a whole.
     pub fn status(&self) -> ClusterStatus {
         self.process_status
