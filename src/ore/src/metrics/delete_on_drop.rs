@@ -27,7 +27,9 @@
 //! * When using owned data (an extension over what Prometheus allows, which only lets you use
 //!   references to refer to labels), the created metric is also allowed to live for `'static`.
 
-use std::{collections::HashMap, marker::PhantomData, ops::Deref};
+use std::collections::BTreeMap;
+use std::marker::PhantomData;
+use std::ops::Deref;
 
 use prometheus::core::{
     Atomic, GenericCounter, GenericCounterVec, GenericGauge, GenericGaugeVec, MetricVec,
@@ -36,7 +38,7 @@ use prometheus::core::{
 use prometheus::{Histogram, HistogramVec};
 
 /// An extension trait for types that are valid (or convertible into) prometheus labels:
-/// slices/vectors of strings, and [`HashMap`]s.
+/// slices/vectors of strings, and [`BTreeMap`]s.
 pub trait PromLabelsExt<'a> {
     /// Returns or creates a metric with the given metric label values.
     /// Panics if retrieving the metric returns an error.
@@ -105,13 +107,12 @@ impl<'a> PromLabelsExt<'a> for Vec<&'a str> {
     }
 }
 
-impl PromLabelsExt<'static> for HashMap<String, String> {
+impl PromLabelsExt<'static> for BTreeMap<String, String> {
     fn get_from_metric_vec<P: MetricVecBuilder>(
         &self,
         vec: &MetricVec<P>,
     ) -> <P as MetricVecBuilder>::M {
-        let labels: HashMap<&str, &str> =
-            self.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let labels = self.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         vec.get_metric_with(&labels)
             .expect("retrieving a metric by label values")
     }
@@ -120,18 +121,18 @@ impl PromLabelsExt<'static> for HashMap<String, String> {
         &self,
         vec: &MetricVec<P>,
     ) -> Result<(), prometheus::Error> {
-        let labels: HashMap<&str, &str> =
-            self.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let labels = self.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         vec.remove(&labels)
     }
 }
 
-impl<'a> PromLabelsExt<'a> for HashMap<&'a str, &'a str> {
+impl<'a> PromLabelsExt<'a> for BTreeMap<&'a str, &'a str> {
     fn get_from_metric_vec<P: MetricVecBuilder>(
         &self,
         vec: &MetricVec<P>,
     ) -> <P as MetricVecBuilder>::M {
-        vec.get_metric_with(self)
+        let labels = self.iter().map(|(k, v)| (*k, *v)).collect();
+        vec.get_metric_with(&labels)
             .expect("retrieving a metric by label values")
     }
 
@@ -139,7 +140,8 @@ impl<'a> PromLabelsExt<'a> for HashMap<&'a str, &'a str> {
         &self,
         vec: &MetricVec<P>,
     ) -> Result<(), prometheus::Error> {
-        vec.remove(self)
+        let labels = self.iter().map(|(k, v)| (*k, *v)).collect();
+        vec.remove(&labels)
     }
 }
 

@@ -87,6 +87,8 @@
 //! small to warrant their own crate.
 
 #![warn(missing_docs, missing_debug_implementations)]
+// Disallow usage of `Hash*` types from std.
+#![warn(clippy::disallowed_types)]
 #![cfg_attr(nightly_doc_features, feature(doc_cfg))]
 
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "test")))]
