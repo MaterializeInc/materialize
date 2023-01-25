@@ -175,15 +175,22 @@ We'll have to generalize DD's Prefix Sum to orderings over types other than a si
 
 ## Alternatives
 
+### Where to put the idiom recognition?
+
+We could do the idiom recognition in the rendering instead of the MIR-to-LIR lowering. However, the lowering seems to be a more natural place for it:
+- We shouldn't have conditional code in the rendering, and this idiom recognition will be a giant piece of conditional code,
+- We want EXPLAIN PHYSICAL PLAN to show how we'll execute a window function.
+- We need to know the type of the ORDER BY columns, which we don't know in LIR. (Although we could add extra type info to window function calls.)
+
+### Representing window functions in each of the IRs
+
 There are several options for how to represent window functions in HIR, MIR, and LIR. For each of the IRs, I can see 3 options:
 
 1. Create a new relation expression enum variant. This could be a dedicated variant just for window functions, or it could be a many-to-many Reduce, which would initially only handle window functions, but later we could also merge `TopK` into it. (Standard Reduce is N-to-1, TopK is N-to-K, a window function is N-to-N. There are differences also in output columns.)
 2. Hide away window functions in scalar expressions. (the current way in HIR)
 3. Reuse an existing relation expression enum variant, e.g., `Reduce`.
 
-### Extended discussion on each of the IRs
-
-**HIR**
+#### HIR
 
 In HIR, the window functions are currently in the scalar expressions (option 2. from above), but it’s possible to change this.
 
@@ -194,7 +201,7 @@ In HIR, the window functions are currently in the scalar expressions (option 2. 
     - It’s already implemented this way, so if there is no strong argument for 1. or 3., then I’d like to just leave it as it is.
 3. *Reusing `Reduce`*
 
-**MIR**
+#### MIR
 
 We need an MIR representation for two things:
 
@@ -233,9 +240,9 @@ We need an MIR representation for two things:
       - `LiteralLifting`: The two inlinings at the beginning could be reused. (But those are already copy-pasted ~5 times, so they should rather be factored out into a function, and then they could be called when processing a new enum variant for window functions.)
       - …
 
-**LIR**
+#### LIR
 
-1. We could add a dedicated LIR `Plan` enum variant, because window functions will have a pretty specific rendering (Prefix Sum) that’s distinct from all other operators, and LIR is supposed to be a close representation of what we are about to render.
+1. We could add a dedicated LIR `Plan` enum variant. This sounds like the right approach to me, because window functions will have a pretty specific rendering (Prefix Sum) that’s distinct from all other operators, and LIR is supposed to be a close representation of what we are about to render.
 2. (We can pretty much rule out hiding them in scalar expressions at this point, because scalar expressions get absorbed into operators in all kinds of ways, and we don't want to separately handle window functions all over the place.)
 3. Another option is to model it as a variant of `Reduce`.
     - But I don’t see any advantage of this over an own enum variant. I don’t see any code reuse possibility between the existing `Reduce` rendering and the rendering of window functions by Prefix Sum.
@@ -247,9 +254,11 @@ We need an MIR representation for two things:
 - Correctness:
     - Since there is already some window functions support (it’s just inefficient), there is already `window_funcs.slt` (4845 lines). However, some window functions and window aggregations (and some options, e.g., IGNORE NULLS, some tricky frames) are not supported at all currently, so those are not covered. I’ll add tests to this file for these as well.
     - Additionally, there is `cockroach/window.slt` (3140 lines), which is currently disabled (with a `halt` at the top of the file). We’ll re-enable this, when our window function support will be (nearly) complete.
-    - If we reuse `MirRelationExpr:Reduce` to represent window functions, then we’ll have to pay extra attention that existing transforms dealing with `Reduce` are not messing up window functions.
-    - Philip’s random-generated queries testing would be great, because there is a large number of options and window functions, so it’s hard to cover all combinations with manualy written queries.
+    - (If we were to reuse `MirRelationExpr::Reduce` to represent window functions, then we’ll have to pay extra attention that existing transforms dealing with `Reduce` are not messing up window functions.)
+    - Philip’s random-generated queries testing would be great, because there is a large number of options and window functions, so it’s hard to cover all combinations with manually written queries.
         - Also, it would be good to have randomly generated other stuff around the window functions, to test that other transforms are not breaking.
+    - We'll need to extensively test the idiom recognition. Fortunately, the first step of the idiom recognition is quite easy: we just need to look at the aggregate function of the `Reduce`, and decide if it is a window function. If this first step finds a window function, then we could add a soft assert that we manage to recognize all the other parts of the pattern. This way, all the above tests would be testing also the idiom recognition (even when a test doesn't involve EXPLAIN).
+      - Also, there could be a sentry warning with the above soft assert, so that we know if a customer is probably running into a performance problem due to falling back to the old window function implementation.
 - Performance testing: Importantly, we need to test that we efficiently support situations when small input changes lead to small output changes.
     - Writing automated performance tests is tricky though. Currently, we don’t have any automated performance tests.
     - At least manual testing should definitely be performed before merging the PRs, since the whole point of this work is performance.
