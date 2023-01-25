@@ -78,6 +78,9 @@
 //!
 //! See [README.md].
 
+// Disallow usage of `Hash*` types from std.
+#![warn(clippy::disallowed_types)]
+
 use std::collections::BTreeMap;
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};

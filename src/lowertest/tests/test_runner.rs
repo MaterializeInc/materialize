@@ -74,6 +74,9 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+// Disallow usage of `Hash*` types from std.
+#![warn(clippy::disallowed_types)]
+
 #[cfg(test)]
 mod tests {
     use proc_macro2::TokenTree;

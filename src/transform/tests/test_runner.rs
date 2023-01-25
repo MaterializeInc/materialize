@@ -74,12 +74,15 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-/// This module defines a small language for directly constructing RelationExprs and running
-/// various optimizations on them. It uses datadriven, so the output of each test can be rewritten
-/// by setting the REWRITE environment variable.
-/// TODO(justin):
-/// * It's currently missing a mechanism to run just a single test file
-/// * There is some duplication between this and the SQL planner
+//! This module defines a small language for directly constructing RelationExprs and running
+//! various optimizations on them. It uses datadriven, so the output of each test can be rewritten
+//! by setting the REWRITE environment variable.
+//! TODO(justin):
+//! * It's currently missing a mechanism to run just a single test file
+//! * There is some duplication between this and the SQL planner
+
+// Disallow usage of `Hash*` types from std.
+#![warn(clippy::disallowed_types)]
 
 #[cfg(test)]
 mod tests {

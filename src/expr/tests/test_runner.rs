@@ -74,6 +74,9 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+// Disallow usage of `Hash*` types from std.
+#![warn(clippy::disallowed_types)]
+
 mod test {
     use mz_expr::canonicalize::{canonicalize_equivalences, canonicalize_predicates};
     use mz_expr::{MapFilterProject, MirScalarExpr};

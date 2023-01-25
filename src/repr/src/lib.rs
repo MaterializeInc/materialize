@@ -88,6 +88,8 @@
 //!   corresponds most closely to what is returned from querying our dataflows
 
 #![warn(missing_debug_implementations)]
+// Disallow usage of `Hash*` types from std.
+#![warn(clippy::disallowed_types)]
 
 mod datum_vec;
 mod diff;
