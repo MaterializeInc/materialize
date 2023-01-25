@@ -10,7 +10,7 @@ Percentiles are often used to understand and interpret data. Informally speaking
 
 A naive way to compute percentiles is to simply order all values and pick the value at the position of the corresponding percentile. This can be easily expressed in Materialize through `order by`, `offset`, and `limit`. But this way of computing percentiles keeps all values around and therefore requires memory that linearly grows with the number of values that are tracked. There are better suited alternatives that reduce the required memory footprint, two of which are explained below: histograms and High Dynamic Range (HDR) histograms.
 
-Histograms have a reduced memory footprint that is linear in the number of *unique* values while they are still computing precise percentiles. HDR histograms further reduce the memory footprint at the expense of returning approximate percentiles only. They are particularly interesting if there is a long tail of large values that you want to track, which is often the case for latency meassurements.
+Histograms have a reduced memory footprint that is linear in the number of *unique* values while they are still computing precise percentiles. HDR histograms further reduce the memory footprint at the expense of returning approximate percentiles only. They are particularly interesting if there is a long tail of large values that you want to track, which is often the case for latency measurements.
 
 ## Using histograms to compute percentiles
 
