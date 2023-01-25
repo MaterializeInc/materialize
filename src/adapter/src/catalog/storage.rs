@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use itertools::{max, Itertools};
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
@@ -520,7 +519,6 @@ pub struct BootstrapArgs {
 #[derive(Debug)]
 pub struct Connection {
     stash: Stash,
-    consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
     boot_ts: mz_repr::Timestamp,
 }
 
@@ -530,7 +528,6 @@ impl Connection {
         mut stash: Stash,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
-        consolidations_tx: mpsc::UnboundedSender<Vec<mz_stash::Id>>,
     ) -> Result<Connection, Error> {
         // The `user_version` field stores the index of the last migration that
         // was run. If the upper is min, the config collection is empty.
@@ -561,11 +558,7 @@ impl Connection {
             .unwrap_or(mz_repr::Timestamp::MIN);
         let boot_ts = timeline::monotonic_now(now, previous_now_ts);
 
-        let mut conn = Connection {
-            stash,
-            consolidations_tx,
-            boot_ts,
-        };
+        let mut conn = Connection { stash, boot_ts };
 
         if !conn.stash.is_readonly() {
             // IMPORTANT: we durably record the new timestamp before using it.
@@ -908,8 +901,8 @@ impl Connection {
         let key = IdAllocKey {
             name: id_type.to_string(),
         };
-        let (prev, next, consolidate_ids) = COLLECTION_ID_ALLOC
-            .upsert_key_no_consolidate(&mut self.stash, key, move |prev| {
+        let (prev, next) = COLLECTION_ID_ALLOC
+            .upsert_key(&mut self.stash, key, move |prev| {
                 let id = prev.expect("must exist").next_id;
                 match id.checked_add(amount) {
                     Some(next_gid) => Ok(IdAllocValue { next_id: next_gid }),
@@ -917,9 +910,6 @@ impl Connection {
                 }
             })
             .await??;
-        self.consolidations_tx
-            .send(consolidate_ids)
-            .expect("coordinator unexpectedly gone");
         let id = prev.expect("must exist").next_id;
         Ok((id..next.next_id).collect())
     }
@@ -946,17 +936,14 @@ impl Connection {
         let key = TimestampKey {
             id: timeline.to_string(),
         };
-        let (prev, next, consolidate_ids) = COLLECTION_TIMESTAMP
-            .upsert_key_no_consolidate(&mut self.stash, key, move |_| {
+        let (prev, next) = COLLECTION_TIMESTAMP
+            .upsert_key(&mut self.stash, key, move |_| {
                 Ok::<_, Error>(TimestampValue { ts: timestamp })
             })
             .await??;
         if let Some(prev) = prev {
             assert!(next >= prev, "global timestamp must always go up");
         }
-        self.consolidations_tx
-            .send(consolidate_ids)
-            .expect("coordinator unexpectedly gone");
         Ok(())
     }
 
@@ -1598,15 +1585,6 @@ impl<'a> Transaction<'a> {
 
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn commit(self) -> Result<(), Error> {
-        let (stash, collections) = self.commit_without_consolidate().await?;
-        stash.consolidate_batch(&collections).await?;
-        Ok(())
-    }
-
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn commit_without_consolidate(
-        self,
-    ) -> Result<(&'a mut Stash, Vec<mz_stash::Id>), Error> {
         async fn add_batch<'tx, K, V>(
             tx: &'tx mz_stash::Transaction<'tx>,
             batches: &mut Vec<AppendBatch>,
@@ -1652,8 +1630,7 @@ impl<'a> Transaction<'a> {
         let audit_log_updates = Arc::new(self.audit_log_updates);
         let storage_usage_updates = Arc::new(self.storage_usage_updates);
 
-        let ids = self
-            .stash
+        self.stash
             .with_transaction(move |tx| {
                 Box::pin(async move {
                     let mut batches = Vec::new();
@@ -1702,17 +1679,12 @@ impl<'a> Transaction<'a> {
                         &storage_usage_updates,
                     )
                     .await?;
-
-                    let ids = batches
-                        .iter()
-                        .map(|batch| batch.collection_id)
-                        .collect::<Vec<_>>();
                     tx.append(batches).await?;
-                    Ok(ids)
+                    Ok(())
                 })
             })
             .await?;
-        Ok((self.stash, ids))
+        Ok(())
     }
 }
 

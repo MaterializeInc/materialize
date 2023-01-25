@@ -22,7 +22,7 @@ use itertools::Itertools;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, Mutex, MutexGuard};
+use tokio::sync::{Mutex, MutexGuard};
 use tracing::{info, trace, warn};
 use uuid::Uuid;
 
@@ -1636,7 +1636,6 @@ pub struct Connection {
 pub struct TransactionResult<R> {
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
     pub audit_events: Vec<VersionedEvent>,
-    pub collections: Vec<mz_stash::Id>,
     pub result: R,
 }
 
@@ -3265,9 +3264,6 @@ impl Catalog {
     /// Opens a debug catalog from a stash.
     pub async fn open_debug_stash(stash: Stash, now: NowFn) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
-        let (consolidations_tx, consolidations_rx) = mpsc::unbounded_channel();
-        // Leak the receiver so it's not dropped and send will work.
-        std::mem::forget(consolidations_rx);
         let storage = storage::Connection::open(
             stash,
             now.clone(),
@@ -3276,7 +3272,6 @@ impl Catalog {
                 builtin_cluster_replica_size: "1".into(),
                 default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
             },
-            consolidations_tx.clone(),
         )
         .await?;
         let secrets_reader = Arc::new(InMemorySecretsController::new());
@@ -4011,7 +4006,7 @@ impl Catalog {
         let result = f(&state)?;
 
         // The user closure was successful, apply the updates.
-        let (_stash, collections) = tx.commit_without_consolidate().await?;
+        tx.commit().await?;
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
@@ -4021,7 +4016,6 @@ impl Catalog {
         Ok(TransactionResult {
             builtin_table_updates,
             audit_events,
-            collections,
             result,
         })
     }

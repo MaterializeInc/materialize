@@ -597,27 +597,6 @@ where
         F: FnOnce(Option<&V>) -> Result<V, R> + Clone + Send + Sync + 'static,
         K: 'static,
     {
-        let (prev, next, ids) = match self.upsert_key_no_consolidate(stash, key, f).await? {
-            Ok(inner) => inner,
-            Err(e) => return Ok(Err(e)),
-        };
-        stash.consolidate_batch(&ids).await?;
-        Ok(Ok((prev, next)))
-    }
-
-    /// Same as `upsert_key`, but doesn't consolidate. Additionally returns ids
-    /// needing consolidation.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn upsert_key_no_consolidate<F, R>(
-        &self,
-        stash: &mut Stash,
-        key: K,
-        f: F,
-    ) -> Result<Result<(Option<V>, V, Vec<Id>), R>, StashError>
-    where
-        F: FnOnce(Option<&V>) -> Result<V, R> + Clone + Send + Sync + 'static,
-        K: 'static,
-    {
         let name = self.name;
         let key = Arc::new(key);
         stash
@@ -645,15 +624,14 @@ where
                         Err(e) => return Ok(Err(e)),
                     };
                     // Do nothing if the values are the same.
-                    if Some(&next) == prev.as_ref() {
-                        return Ok(Ok((prev, next, Vec::new())));
+                    if Some(&next) != prev.as_ref() {
+                        if let Some(prev) = &prev {
+                            collection.append_to_batch(&mut batch, &key, prev, -1);
+                        }
+                        collection.append_to_batch(&mut batch, &key, &next, 1);
+                        tx.append(vec![batch]).await?;
                     }
-                    if let Some(prev) = &prev {
-                        collection.append_to_batch(&mut batch, &key, prev, -1);
-                    }
-                    collection.append_to_batch(&mut batch, &key, &next, 1);
-                    tx.append(vec![batch]).await?;
-                    Ok(Ok((prev, next, vec![collection.id])))
+                    Ok(Ok((prev, next)))
                 })
             })
             .await

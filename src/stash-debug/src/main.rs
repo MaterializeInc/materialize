@@ -88,7 +88,6 @@ use std::{
 
 use clap::Parser;
 use once_cell::sync::Lazy;
-use tokio::sync::mpsc;
 
 use mz_adapter::{
     catalog::{
@@ -374,9 +373,6 @@ impl Usage {
 
         let metrics_registry = &MetricsRegistry::new();
         let now = SYSTEM_TIME.clone();
-        let (consolidations_tx, consolidations_rx) = mpsc::unbounded_channel();
-        // Leak the receiver so it's not dropped and send will work.
-        std::mem::forget(consolidations_rx);
         let storage = mz_adapter::catalog::storage::Connection::open(
             stash,
             now.clone(),
@@ -385,7 +381,6 @@ impl Usage {
                 builtin_cluster_replica_size: "1".into(),
                 default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
             },
-            consolidations_tx.clone(),
         )
         .await?;
         let secrets_reader = Arc::new(InMemorySecretsController::new());
