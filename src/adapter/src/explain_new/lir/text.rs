@@ -117,7 +117,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
 
                 writeln!(f, "{}Return", ctx.indent)?;
                 ctx.indented(|ctx| Displayable::from(head).fmt_text(f, ctx))?;
-                writeln!(f, "{}Where", ctx.indent)?;
+                writeln!(f, "{}With", ctx.indent)?;
                 ctx.indented(|ctx| {
                     for (id, value) in bindings.iter().rev() {
                         writeln!(f, "{}cte {} =", ctx.indent, *id)?;
@@ -132,7 +132,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
 
                 writeln!(f, "{}Return", ctx.indent)?;
                 ctx.indented(|ctx| Displayable::from(head).fmt_text(f, ctx))?;
-                writeln!(f, "{}Where Mutually Recursive", ctx.indent)?;
+                writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
                 ctx.indented(|ctx| {
                     for (id, value) in bindings.iter().rev() {
                         writeln!(f, "{}cte {} =", ctx.indent, *id)?;

@@ -193,7 +193,7 @@ Explained Query:
         key=#0
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
-  Where
+  With
     cte l0 =
       Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
         ArrangeBy
@@ -347,7 +347,7 @@ Explained Query:
               arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
           Constant
             - ()
-  Where
+  With
     cte l0 =
       Reduce::Accumulable
         simple_aggrs[0]=(0, 0, sum(#0))
@@ -425,7 +425,7 @@ Explained Query:
               arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
           Constant
             - ()
-  Where
+  With
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
@@ -504,7 +504,7 @@ Explained Query:
               arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
           Constant
             - ()
-  Where
+  With
     cte l0 =
       Reduce::Basic
         aggrs[0]=(0, string_agg(row(row((integer_to_text(#0) || "1"), ","))))
@@ -600,7 +600,7 @@ Explained Query:
               arrangements[0]={ key=[], permutation=id, thinning=(#0..=#5) }
           Constant
             - ()
-  Where
+  With
     cte l0 =
       Reduce::Collation
         aggregate_types=[a, b, h, h, a, b]

@@ -115,7 +115,7 @@ Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0, #1]
     Return
       Map (row_number() over (#0) order by (#0))
         Get l0
-    Where
+    With
       cte l0 =
         CallTable wrap2("a", 1, "b", 2, "c", 1)
 

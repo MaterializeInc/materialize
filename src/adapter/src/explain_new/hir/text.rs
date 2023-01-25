@@ -111,7 +111,7 @@ impl<'a> Displayable<'a, HirRelationExpr> {
 
                 writeln!(f, "{}Return", ctx.indent)?;
                 ctx.indented(|ctx| Displayable::from(head).fmt_text(f, ctx))?;
-                writeln!(f, "{}Where", ctx.indent)?;
+                writeln!(f, "{}With", ctx.indent)?;
                 ctx.indented(|ctx| {
                     for (id, value) in bindings.iter().rev() {
                         // TODO: print the name and not the id
@@ -124,7 +124,7 @@ impl<'a> Displayable<'a, HirRelationExpr> {
             LetRec { bindings, body } => {
                 writeln!(f, "{}Return", ctx.indent)?;
                 ctx.indented(|ctx| Displayable::from(body.as_ref()).fmt_text(f, ctx))?;
-                writeln!(f, "{}Where Recursive", ctx.indent)?;
+                writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
                 ctx.indented(|ctx| {
                     for (_name, id, value, _type) in bindings.iter().rev() {
                         // TODO: print the name and not the id

@@ -1832,14 +1832,14 @@ Finish order_by=[#0 asc nulls_last] output=[#0, #1]
         CrossJoin
           Get materialize.public.supplier
           Get materialize.public.nation
-    Where
+    With
       cte l3 =
         Reduce aggregates=[any((#^0 = #0))]
           Project (#1)
             Return
               Filter (select(Get l1) AND (integer_to_numeric(#2) > select(Get l2)))
                 Get materialize.public.partsupp
-            Where
+            With
               cte l1 =
                 Reduce aggregates=[any((#^0 = #0))]
                   Project (#0)
