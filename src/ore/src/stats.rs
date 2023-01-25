@@ -16,7 +16,18 @@
 //! Statistics utilities.
 
 /// Buckets that can capture data between 1/8th of a millisecond and 8 seconds.
-pub const HISTOGRAM_BUCKETS: [f64; 17] = [
+pub const HISTOGRAM_SECOND_BUCKETS: [f64; 17] = [
     0.000_128, 0.000_256, 0.000_512, 0.001, 0.002, 0.004, 0.008, 0.016, 0.032, 0.064, 0.128, 0.256,
     0.512, 1.0, 2.0, 4.0, 8.0,
+];
+
+/// Buckets that capture sizes of 64 bytes up to a gigabyte
+pub const HISTOGRAM_BYTE_BUCKETS: [f64; 7] = [
+    64.0,
+    1024.0,
+    16384.0,
+    262144.0,
+    4194304.0,
+    67108864.0,
+    1073741824.0,
 ];

@@ -291,6 +291,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             storage_stash_url,
             now: SYSTEM_TIME.clone(),
             postgres_factory,
+            metrics_registry: metrics_registry.clone(),
         },
         secrets_controller,
         cloud_resource_controller: None,

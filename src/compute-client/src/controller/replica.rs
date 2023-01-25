@@ -24,6 +24,7 @@ use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_service::client::GenericClient;
 
 use crate::logging::LoggingConfig;
+use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, ComputeStartupEpoch, TimelyConfig};
 use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -67,6 +68,7 @@ where
         build_info: &'static BuildInfo,
         config: ReplicaConfig,
         epoch: ComputeStartupEpoch,
+        metrics: ReplicaMetrics,
     ) -> Self {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
@@ -83,6 +85,7 @@ where
                 command_rx,
                 response_tx,
                 epoch,
+                metrics,
             }
             .run(),
         );
@@ -126,6 +129,8 @@ struct ReplicaTask<T> {
     /// A number (technically, pair of numbers) identifying this incarnation of the replica.
     /// The semantics of this don't matter, except that it must strictly increase.
     epoch: ComputeStartupEpoch,
+    /// Replica metrics
+    metrics: ReplicaMetrics,
 }
 
 impl<T> ReplicaTask<T>
@@ -142,6 +147,7 @@ where
             command_rx,
             response_tx,
             epoch,
+            metrics,
         } = self;
 
         tracing::info!("starting replica task for {replica_id}");
@@ -166,6 +172,7 @@ where
             build_info,
             addrs,
             cmd_spec,
+            metrics,
         )
         .await;
 
@@ -190,6 +197,7 @@ async fn run_message_loop<T>(
     build_info: &BuildInfo,
     addrs: Vec<String>,
     cmd_spec: CommandSpecialization,
+    metrics: ReplicaMetrics,
 ) -> Result<(), anyhow::Error>
 where
     T: Timestamp + Lattice,
@@ -198,11 +206,15 @@ where
     let mut client = Retry::default()
         .clamp_backoff(Duration::from_secs(32))
         .retry_async(|state| {
-            let addrs = addrs.clone();
+            let dests = addrs
+                .clone()
+                .into_iter()
+                .map(|addr| (addr, metrics.clone()))
+                .collect();
             let version = build_info.semver_version();
 
             async move {
-                match ComputeGrpcClient::connect_partitioned(addrs, version).await {
+                match ComputeGrpcClient::connect_partitioned(dests, version).await {
                     Ok(client) => Ok(client),
                     Err(e) => {
                         if state.i >= mz_service::retry::INFO_MIN_RETRIES {

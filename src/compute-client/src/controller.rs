@@ -45,12 +45,14 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_expr::RowSetFinishing;
 use mz_orchestrator::ServiceProcessMetrics;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 use mz_storage_client::types::instances::StorageInstanceId;
 
 use crate::logging::{LogVariant, LogView, LoggingConfig};
+use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::ComputeParameters;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -174,11 +176,17 @@ pub struct ComputeController<T> {
     stats_update_ticker: tokio::time::Interval,
     /// Set to `true` if `process` should produce a `ReplicaWriteFrontiers` next.
     stats_update_pending: bool,
+    /// The compute controller metrics
+    metrics: ComputeControllerMetrics,
 }
 
 impl<T> ComputeController<T> {
     /// Construct a new [`ComputeController`].
-    pub fn new(build_info: &'static BuildInfo, envd_epoch: NonZeroI64) -> Self {
+    pub fn new(
+        build_info: &'static BuildInfo,
+        envd_epoch: NonZeroI64,
+        metrics_registry: MetricsRegistry,
+    ) -> Self {
         let mut stats_update_ticker = tokio::time::interval(Duration::from_secs(1));
         stats_update_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -193,6 +201,7 @@ impl<T> ComputeController<T> {
             envd_epoch,
             stats_update_ticker,
             stats_update_pending: false,
+            metrics: ComputeControllerMetrics::new(metrics_registry),
         }
     }
 
@@ -260,7 +269,12 @@ where
 
         self.instances.insert(
             id,
-            Instance::new(self.build_info, arranged_logs, self.envd_epoch),
+            Instance::new(
+                self.build_info,
+                arranged_logs,
+                self.envd_epoch,
+                self.metrics.for_instance(id),
+            ),
         );
 
         let instance = self.instances.get_mut(&id).expect("instance just added");

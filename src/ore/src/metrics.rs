@@ -46,12 +46,10 @@ use std::sync::Arc;
 
 use prometheus::core::{
     Atomic, AtomicF64, AtomicI64, AtomicU64, Collector, Desc, GenericCounter, GenericCounterVec,
-    GenericGauge, GenericGaugeVec, Opts,
+    GenericGauge, GenericGaugeVec,
 };
 use prometheus::proto::MetricFamily;
 use prometheus::{HistogramOpts, Registry};
-
-use crate::stats::HISTOGRAM_BUCKETS;
 
 pub use prometheus::Opts as PrometheusOpts;
 
@@ -68,6 +66,7 @@ macro_rules! metric {
         help: $help:expr
         $(, const_labels: { $($cl_key:expr => $cl_value:expr ),* })?
         $(, var_labels: [ $($vl_name:expr),* ])?
+        $(, buckets: $bk_name:expr)?
         $(,)?
     ) => {{
         let const_labels: ::std::collections::HashMap<String, String> = (&[
@@ -79,10 +78,28 @@ macro_rules! metric {
             $(
                 $($vl_name.into(),)*
             )?];
-        $crate::metrics::PrometheusOpts::new($name, $help)
-            .const_labels(const_labels)
-            .variable_labels(var_labels)
+        #[allow(unused_mut)]
+        let mut mk_opts = $crate::metrics::MakeCollectorOpts {
+            opts:
+                $crate::metrics::PrometheusOpts::new($name, $help)
+                    .const_labels(const_labels)
+                    .variable_labels(var_labels),
+            buckets: None,
+        };
+        // Set buckets if passed
+        $(mk_opts.buckets = Some($bk_name);)*
+        mk_opts
     }}
+}
+
+/// Options for MakeCollector. This struct should be instantiated using the metric macro.
+#[derive(Debug, Clone)]
+pub struct MakeCollectorOpts {
+    /// Common Prometheus options
+    pub opts: PrometheusOpts,
+    /// Buckets to be used with Histogram and HistogramVec. Must be set to create Histogram types
+    /// and must not be set for other types.
+    pub buckets: Option<Vec<f64>>,
 }
 
 /// The materialize metrics registry.
@@ -120,7 +137,7 @@ impl<M: Collector> Collector for DeleteOnDropWrapper<M> {
 }
 
 impl<M: MakeCollector> MakeCollector for DeleteOnDropWrapper<M> {
-    fn make_collector(opts: PrometheusOpts) -> Self {
+    fn make_collector(opts: MakeCollectorOpts) -> Self {
         DeleteOnDropWrapper {
             inner: M::make_collector(opts),
         }
@@ -197,7 +214,7 @@ impl MetricsRegistry {
     }
 
     /// Register a metric defined with the [`metric`] macro.
-    pub fn register<M>(&self, opts: prometheus::Opts) -> M
+    pub fn register<M>(&self, opts: MakeCollectorOpts) -> M
     where
         M: MakeCollector,
     {
@@ -209,7 +226,7 @@ impl MetricsRegistry {
     /// Registers a gauge whose value is computed when observed.
     pub fn register_computed_gauge<F, P>(
         &self,
-        opts: prometheus::Opts,
+        opts: MakeCollectorOpts,
         f: F,
     ) -> ComputedGenericGauge<P>
     where
@@ -245,15 +262,16 @@ impl MetricsRegistry {
 /// not normally be used outside the metric registration flow.
 pub trait MakeCollector: Collector + Clone + 'static {
     /// Creates a new collector.
-    fn make_collector(opts: Opts) -> Self;
+    fn make_collector(opts: MakeCollectorOpts) -> Self;
 }
 
 impl<T> MakeCollector for GenericCounter<T>
 where
     T: Atomic + 'static,
 {
-    fn make_collector(opts: Opts) -> Self {
-        Self::with_opts(opts).expect("defining a counter")
+    fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
+        assert!(mk_opts.buckets.is_none());
+        Self::with_opts(mk_opts.opts).expect("defining a counter")
     }
 }
 
@@ -261,10 +279,11 @@ impl<T> MakeCollector for GenericCounterVec<T>
 where
     T: Atomic + 'static,
 {
-    fn make_collector(opts: Opts) -> Self {
-        let labels: Vec<String> = opts.variable_labels.clone();
+    fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
+        assert!(mk_opts.buckets.is_none());
+        let labels: Vec<String> = mk_opts.opts.variable_labels.clone();
         let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-        Self::new(opts, label_refs.as_slice()).expect("defining a counter vec")
+        Self::new(mk_opts.opts, label_refs.as_slice()).expect("defining a counter vec")
     }
 }
 
@@ -272,8 +291,9 @@ impl<T> MakeCollector for GenericGauge<T>
 where
     T: Atomic + 'static,
 {
-    fn make_collector(opts: Opts) -> Self {
-        Self::with_opts(opts).expect("defining a gauge")
+    fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
+        assert!(mk_opts.buckets.is_none());
+        Self::with_opts(mk_opts.opts).expect("defining a gauge")
     }
 }
 
@@ -281,21 +301,23 @@ impl<T> MakeCollector for GenericGaugeVec<T>
 where
     T: Atomic + 'static,
 {
-    fn make_collector(opts: Opts) -> Self {
-        let labels = opts.variable_labels.clone();
+    fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
+        assert!(mk_opts.buckets.is_none());
+        let labels = mk_opts.opts.variable_labels.clone();
         let labels = &labels.iter().map(|x| x.as_str()).collect::<Vec<_>>();
-        Self::new(opts, labels).expect("defining a gauge vec")
+        Self::new(mk_opts.opts, labels).expect("defining a gauge vec")
     }
 }
 
 impl MakeCollector for raw::HistogramVec {
-    fn make_collector(opts: Opts) -> Self {
-        let labels = opts.variable_labels.clone();
+    fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
+        assert!(mk_opts.buckets.is_some());
+        let labels = mk_opts.opts.variable_labels.clone();
         let labels = &labels.iter().map(|x| x.as_str()).collect::<Vec<_>>();
         Self::new(
             HistogramOpts {
-                common_opts: opts,
-                buckets: HISTOGRAM_BUCKETS.to_vec(),
+                common_opts: mk_opts.opts,
+                buckets: mk_opts.buckets.unwrap(),
             },
             labels,
         )

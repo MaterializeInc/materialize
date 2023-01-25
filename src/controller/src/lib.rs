@@ -112,6 +112,7 @@ use mz_compute_client::controller::{
 use mz_compute_client::protocol::response::{PeekResponse, SubscribeResponse};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -151,6 +152,8 @@ pub struct ControllerConfig {
     pub now: NowFn,
     /// The postgres stash factory.
     pub postgres_factory: StashFactory,
+    /// The metrics registry.
+    pub metrics_registry: MetricsRegistry,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -343,10 +346,15 @@ where
             config.now,
             &config.postgres_factory,
             envd_epoch,
+            config.metrics_registry.clone(),
         )
         .await;
 
-        let compute_controller = ComputeController::new(config.build_info, envd_epoch);
+        let compute_controller = ComputeController::new(
+            config.build_info,
+            envd_epoch,
+            config.metrics_registry.clone(),
+        );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 
         Self {

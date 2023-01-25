@@ -27,6 +27,7 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::logging::LogVariant;
+use crate::metrics::InstanceMetrics;
 use crate::protocol::command::{ComputeCommand, ComputeParameters, ComputeStartupEpoch, Peek};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
@@ -114,6 +115,8 @@ pub(super) struct Instance<T> {
     envd_epoch: NonZeroI64,
     /// Numbers that increase with each restart of a replica.
     replica_epochs: HashMap<ReplicaId, u64>,
+    /// The registry the controller uses to report metrics.
+    metrics: InstanceMetrics,
 }
 
 impl<T> Instance<T> {
@@ -181,6 +184,7 @@ where
         build_info: &'static BuildInfo,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         envd_epoch: NonZeroI64,
+        metrics: InstanceMetrics,
     ) -> Self {
         let collections = arranged_logs
             .iter()
@@ -202,6 +206,7 @@ where
             ready_responses: Default::default(),
             envd_epoch,
             replica_epochs: Default::default(),
+            metrics,
         };
 
         instance.send(ComputeCommand::CreateTimely {
@@ -370,6 +375,7 @@ where
             self.compute.build_info,
             config,
             ComputeStartupEpoch::new(self.compute.envd_epoch, *replica_epoch),
+            self.compute.metrics.for_replica(id),
         );
 
         // Take this opportunity to clean up the history we should present.

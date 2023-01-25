@@ -722,6 +722,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         init_container_image: args.orchestrator_kubernetes_init_container_image,
         now: SYSTEM_TIME.clone(),
         postgres_factory: StashFactory::new(&metrics_registry),
+        metrics_registry: metrics_registry.clone(),
     };
 
     let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
