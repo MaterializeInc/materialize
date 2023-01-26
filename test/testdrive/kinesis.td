@@ -57,5 +57,7 @@ contains:Unable to validate AWS credentials
 "here is a test string"
 "here is a second test string"
 
+$ set-regex match=\d+ replacement=<NUMBER>
+
 > SELECT * FROM f_progress
-0 1
+<NUMBER> <NUMBER>
