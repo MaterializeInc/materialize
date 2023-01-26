@@ -23,6 +23,7 @@ use mz_persist_types::{Codec, Codec64, Opaque};
 use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use tracing::info;
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
@@ -1100,6 +1101,30 @@ where
         Continue((work_ret, new_state))
     }
 
+    /// Expire all readers and writers up to the given walltime_ms.
+    pub fn expire_at(&mut self, walltime_ms: EpochMillis) -> ExpiryMetrics {
+        let mut metrics = ExpiryMetrics::default();
+        let shard_id = self.shard_id();
+        self.collections.leased_readers.retain(|k, v| {
+            let retain = v.last_heartbeat_timestamp_ms + v.lease_duration_ms >= walltime_ms;
+            if !retain {
+                info!("Force expiring reader ({k}) of shard ({shard_id}) due to inactivity");
+                metrics.readers_expired += 1;
+            }
+            retain
+        });
+        // critical_readers don't need forced expiration. (In fact, that's the point!)
+        self.collections.writers.retain(|k, v| {
+            let retain = (v.last_heartbeat_timestamp_ms + v.lease_duration_ms) >= walltime_ms;
+            if !retain {
+                info!("Force expiring writer ({k}) of shard ({shard_id}) due to inactivity");
+                // We don't track writer expiration metrics yet.
+            }
+            retain
+        });
+        metrics
+    }
+
     /// Returns the batches that contain updates up to (and including) the given `as_of`. The
     /// result `Vec` contains blob keys, along with a [`Description`] of what updates in the
     /// referenced parts are valid to read.
@@ -1154,31 +1179,6 @@ where
         ret
     }
 
-    pub fn handles_needing_expiration(
-        &self,
-        now_ms: EpochMillis,
-    ) -> (Vec<LeasedReaderId>, Vec<WriterId>) {
-        let mut readers = Vec::new();
-        for (reader, state) in self.collections.leased_readers.iter() {
-            let time_since_last_heartbeat_ms =
-                now_ms.saturating_sub(state.last_heartbeat_timestamp_ms);
-            if time_since_last_heartbeat_ms > state.lease_duration_ms {
-                readers.push(reader.clone());
-            }
-        }
-        // critical_readers don't need forced expiration (in fact, that's the
-        // point)
-        let mut writers = Vec::new();
-        for (writer, state) in self.collections.writers.iter() {
-            let time_since_last_heartbeat_ms =
-                now_ms.saturating_sub(state.last_heartbeat_timestamp_ms);
-            if time_since_last_heartbeat_ms > state.lease_duration_ms {
-                writers.push(writer.clone());
-            }
-        }
-        (readers, writers)
-    }
-
     pub fn need_rollup(&self) -> Option<SeqNo> {
         let (latest_rollup_seqno, _) = self.latest_rollup();
         if self.seqno.0.saturating_sub(latest_rollup_seqno.0) > PersistConfig::NEED_ROLLUP_THRESHOLD
@@ -1188,6 +1188,11 @@ where
             None
         }
     }
+}
+
+#[derive(Default)]
+pub struct ExpiryMetrics {
+    pub(crate) readers_expired: usize,
 }
 
 /// Wrapper for Antichain that represents a Since

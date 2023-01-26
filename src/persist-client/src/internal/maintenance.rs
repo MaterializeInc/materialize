@@ -13,7 +13,7 @@
 
 use crate::internal::compact::CompactReq;
 use crate::internal::gc::GcReq;
-use crate::{Compactor, GarbageCollector, LeasedReaderId, Machine, WriterId};
+use crate::{Compactor, GarbageCollector, Machine};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures_util::future::BoxFuture;
@@ -22,13 +22,6 @@ use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
 use std::fmt::Debug;
 use timely::progress::Timestamp;
-use tracing::info;
-
-#[derive(Debug, Default)]
-pub struct LeaseExpiration {
-    pub(crate) readers: Vec<LeasedReaderId>,
-    pub(crate) writers: Vec<WriterId>,
-}
 
 /// Every handle to this shard may be occasionally asked to perform
 /// routine maintenance after a successful compare_and_set operation.
@@ -44,7 +37,6 @@ pub struct LeaseExpiration {
 #[derive(Debug, Default)]
 pub struct RoutineMaintenance {
     pub(crate) garbage_collection: Option<GcReq>,
-    pub(crate) lease_expiration: LeaseExpiration,
     pub(crate) write_rollup: Option<SeqNo>,
 }
 
@@ -129,37 +121,6 @@ impl RoutineMaintenance {
             );
         }
 
-        for expired in self.lease_expiration.readers {
-            let mut machine = machine.clone();
-            futures.push(
-                mz_ore::task::spawn(|| "persist::automatic_read_expiration", async move {
-                    info!(
-                        "Force expiring reader ({}) of shard ({}) due to inactivity",
-                        expired,
-                        machine.shard_id()
-                    );
-                    let _ = machine.expire_leased_reader(&expired).await;
-                })
-                .map(|_| ())
-                .boxed(),
-            );
-        }
-        for expired in self.lease_expiration.writers {
-            let mut machine = machine.clone();
-            futures.push(
-                mz_ore::task::spawn(|| "persist::automatic_write_expiration", async move {
-                    info!(
-                        "Force expiring writer ({}) of shard ({}) due to inactivity",
-                        expired,
-                        machine.shard_id()
-                    );
-                    machine.expire_writer(&expired).await;
-                })
-                .map(|_| ())
-                .boxed(),
-            );
-        }
-
         futures
     }
 
@@ -172,18 +133,11 @@ impl RoutineMaintenance {
         // added.
         let RoutineMaintenance {
             garbage_collection,
-            lease_expiration:
-                LeaseExpiration {
-                    mut readers,
-                    mut writers,
-                },
             write_rollup,
         } = other;
         if let Some(garbage_collection) = garbage_collection {
             self.garbage_collection = Some(garbage_collection);
         }
-        self.lease_expiration.readers.append(&mut readers);
-        self.lease_expiration.writers.append(&mut writers);
         if let Some(write_rollup) = write_rollup {
             self.write_rollup = Some(write_rollup);
         }

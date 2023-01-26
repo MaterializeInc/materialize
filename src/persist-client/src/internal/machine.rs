@@ -21,7 +21,7 @@ use mz_ore::task::spawn;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
@@ -32,7 +32,7 @@ use mz_persist_types::{Codec, Codec64, Opaque};
 use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::compact::CompactReq;
-use crate::internal::maintenance::{LeaseExpiration, RoutineMaintenance, WriterMaintenance};
+use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics, ShardMetrics,
 };
@@ -192,6 +192,17 @@ where
                 )
             })
             .await;
+
+        if !self.state.collections.is_tombstone()
+            && !self
+                .state
+                .collections
+                .leased_readers
+                .contains_key(reader_id)
+        {
+            error!("Reader {reader_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
+                    This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
+        }
         // Usually, the reader gets an initial seqno hold of the seqno at which
         // it was registered. However, on a tombstone shard the seqno hold
         // happens to get computed as the tombstone seqno + 1
@@ -242,6 +253,12 @@ where
                 )
             })
             .await;
+        if !self.state.collections.is_tombstone()
+            && !self.state.collections.writers.contains_key(writer_id)
+        {
+            error!("Writer {writer_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
+                    This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
+        }
         (shard_upper, writer_state)
     }
 
@@ -904,6 +921,7 @@ where
         let shard_metrics = Arc::clone(&self.shard_metrics);
         cmd.run_cmd(&shard_metrics, |cas_mismatch_metric| async move {
             let mut garbage_collection;
+            let mut expiry_metrics;
 
             loop {
                 let was_tombstone_before = self.state.collections.is_tombstone();
@@ -917,6 +935,7 @@ where
                         return Ok((self.state.seqno(), Err(err), RoutineMaintenance::default()))
                     }
                 };
+                expiry_metrics = new_state.expire_at((self.cfg.now)());
 
                 // Sanity check that all state transitions have special case for
                 // being a tombstone. The ones that do will return a Break and
@@ -988,16 +1007,10 @@ where
                         );
                         self.state = new_state;
 
-                        let (expired_readers, expired_writers) =
-                            self.state.handles_needing_expiration((self.cfg.now)());
                         self.metrics
                             .lease
                             .timeout_read
-                            .inc_by(u64::cast_from(expired_readers.len()));
-                        let lease_expiration = Some(LeaseExpiration {
-                            readers: expired_readers,
-                            writers: expired_writers,
-                        });
+                            .inc_by(u64::cast_from(expiry_metrics.readers_expired));
 
                         if let Some(gc) = garbage_collection.as_ref() {
                             debug!("Assigned gc request: {:?}", gc);
@@ -1005,7 +1018,6 @@ where
 
                         let maintenance = RoutineMaintenance {
                             garbage_collection,
-                            lease_expiration: lease_expiration.unwrap_or_default(),
                             write_rollup: self.state.need_rollup(),
                         };
 
