@@ -92,6 +92,7 @@ fn main() {
         .extern_path(".mz_expr.relation", "::mz_expr")
         .extern_path(".mz_expr.scalar", "::mz_expr")
         .extern_path(".mz_kafka_util.addr", "::mz_kafka_util")
+        .extern_path(".mz_persist_client", "::mz_persist_client")
         .extern_path(".mz_proto", "::mz_proto")
         .extern_path(".mz_postgres_util.desc", "::mz_postgres_util::desc")
         .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")

@@ -80,7 +80,14 @@ fn main() {
     env::set_var("PROTOC", protobuf_src::protoc());
 
     prost_build::Config::new()
-        .type_attribute(".", "#[derive(serde::Serialize)]")
-        .compile_protos(&["persist-client/src/internal/state.proto"], &[".."])
+        .extern_path(".mz_proto", "::mz_proto")
+        .type_attribute(".mz_persist_client.internal", "#[derive(serde::Serialize)]")
+        .compile_protos(
+            &[
+                "persist-client/src/cfg.proto",
+                "persist-client/src/internal/state.proto",
+            ],
+            &[".."],
+        )
         .unwrap();
 }

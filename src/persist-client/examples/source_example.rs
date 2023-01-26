@@ -37,7 +37,8 @@ use tracing::error;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::ExternalError;
 use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
-use mz_persist_client::{PersistClient, PersistConfig};
+use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::PersistClient;
 
 use crate::source_example::types::PartitionOffset;
 use crate::BUILD_INFO;

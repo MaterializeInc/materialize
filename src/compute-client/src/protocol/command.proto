@@ -13,6 +13,7 @@ import "compute-client/src/logging.proto";
 import "compute-client/src/types/dataflows.proto";
 import "expr/src/linear.proto";
 import "expr/src/relation.proto";
+import "persist-client/src/cfg.proto";
 import "proto/src/proto.proto";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
@@ -73,5 +74,5 @@ message ProtoPeek {
 
 message ProtoComputeParameters {
     optional uint32 max_result_size = 1;
-    mz_storage_client.types.parameters.ProtoPersistParameters persist = 2;
+    mz_persist_client.cfg.ProtoPersistParameters persist = 2;
 }

@@ -10,10 +10,10 @@
 syntax = "proto3";
 
 import "proto/src/proto.proto";
-import "persist-client/src/cfg.proto";
 
-package mz_storage_client.types.parameters;
+package mz_persist_client.cfg;
 
-message ProtoStorageParameters {
-    mz_persist_client.cfg.ProtoPersistParameters persist = 1;
+message ProtoPersistParameters {
+    optional uint64 blob_target_size = 1;
+    mz_proto.ProtoDuration compaction_minimum_timeout = 2;
 }

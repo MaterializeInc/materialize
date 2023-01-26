@@ -612,7 +612,6 @@ mod tests {
 
     use futures::Stream;
     use itertools::Itertools;
-    use mz_persist_types::codec_impls::UnitSchema;
     use once_cell::sync::Lazy;
     use timely::progress::Timestamp as _;
     use tokio::sync::Mutex;
@@ -621,7 +620,9 @@ mod tests {
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cache::PersistClientCache;
-    use mz_persist_client::{PersistConfig, PersistLocation, ShardId};
+    use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::{PersistLocation, ShardId};
+    use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::{GlobalId, RelationDesc, Timestamp};
     use mz_storage_client::controller::CollectionMetadata;
     use mz_storage_client::types::sources::{MzOffset, SourceData};

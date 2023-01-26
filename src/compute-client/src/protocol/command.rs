@@ -21,11 +21,11 @@ use uuid::Uuid;
 
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::cfg::PersistParameters;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::client::ProtoAllowCompaction;
 use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::parameters::PersistParameters;
 
 use crate::logging::LoggingConfig;
 use crate::types::dataflows::DataflowDescription;

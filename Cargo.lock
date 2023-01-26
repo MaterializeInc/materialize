@@ -3586,6 +3586,7 @@ dependencies = [
  "mz-orchestrator",
  "mz-ore",
  "mz-persist",
+ "mz-persist-client",
  "mz-persist-types",
  "mz-proto",
  "mz-repr",
