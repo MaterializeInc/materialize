@@ -12,7 +12,7 @@
 //! This module houses the handlers for statements that modify the catalog, like
 //! `ALTER`, `CREATE`, and `DROP`.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 use aws_arn::ResourceName as AmazonResourceName;
@@ -612,20 +612,20 @@ pub fn plan_create_source(
                 .map_err(|e| sql_err!("{}", e))?;
 
             // Create a "catalog" of the tables in the PG details.
-            let mut tables_by_name = HashMap::new();
+            let mut tables_by_name = BTreeMap::new();
             for table in details.tables.iter() {
                 tables_by_name
                     .entry(table.name.clone())
-                    .or_insert_with(HashMap::new)
+                    .or_insert_with(BTreeMap::new)
                     .entry(table.namespace.clone())
-                    .or_insert_with(HashMap::new)
+                    .or_insert_with(BTreeMap::new)
                     .entry(connection.database.clone())
                     .or_insert(table);
             }
 
             let publication_catalog = crate::catalog::ErsatzCatalog(tables_by_name);
 
-            let mut text_cols: HashMap<Oid, HashSet<String>> = HashMap::new();
+            let mut text_cols: BTreeMap<Oid, BTreeSet<String>> = BTreeMap::new();
 
             // Look up the referenced text_columns in the publication_catalog.
             for name in text_columns {
@@ -663,7 +663,7 @@ pub fn plan_create_source(
             // columns into the appropriate target types, creating a Vec<MirScalarExpr> per table.
             // The postgres source reader will then eval each of those on the incoming rows based
             // on the target table
-            let mut table_casts = HashMap::new();
+            let mut table_casts = BTreeMap::new();
 
             for (i, table) in details.tables.iter().enumerate() {
                 // First, construct an expression context where the expression is evaluated on an
@@ -877,7 +877,7 @@ pub fn plan_create_source(
         (None, None) => (BTreeMap::new(), vec![]),
     };
 
-    let mut subsource_exports = HashMap::new();
+    let mut subsource_exports = BTreeMap::new();
     for (name, target) in requested_subsources {
         let name = normalize::full_name(name)?;
         let idx = match available_subsources.get(&name) {
@@ -909,7 +909,7 @@ pub fn plan_create_source(
         // unused table casts from this connection; this represents the
         // authoritative statement about which publication tables should be
         // used within storage.
-        let used_pos: HashSet<_> = subsource_exports.values().collect();
+        let used_pos: BTreeSet<_> = subsource_exports.values().collect();
         table_casts.retain(|pos, _| used_pos.contains(pos));
     }
 
@@ -998,7 +998,7 @@ pub fn plan_create_source(
             .map(normalize::column_name)
             .collect::<Vec<_>>();
 
-        let mut uniq = HashSet::new();
+        let mut uniq = BTreeSet::new();
         for col in key_columns.iter() {
             if !uniq.insert(col) {
                 sql_bail!("Repeated column name in source key constraint: {}", col);
@@ -1066,7 +1066,7 @@ pub fn plan_create_source(
         ingestion: Some(Ingestion {
             desc: source_desc,
             // Currently no source reads from another source
-            source_imports: HashSet::new(),
+            source_imports: BTreeSet::new(),
             subsource_exports,
         }),
         desc,
@@ -1822,7 +1822,7 @@ pub fn plan_create_sink(
                     .into_iter()
                     .map(normalize::column_name)
                     .collect::<Vec<_>>();
-                let mut uniq = HashSet::new();
+                let mut uniq = BTreeSet::new();
                 for col in key_columns.iter() {
                     if !uniq.insert(col) {
                         sql_bail!("Repeated column name in sink key: {}", col);
@@ -2752,13 +2752,13 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
 
         Ok(out)
     }
-    pub fn ssl_config(&self) -> HashSet<KafkaConnectionOptionName> {
+    pub fn ssl_config(&self) -> BTreeSet<KafkaConnectionOptionName> {
         use KafkaConnectionOptionName::*;
-        HashSet::from([SslKey, SslCertificate])
+        BTreeSet::from([SslKey, SslCertificate])
     }
-    pub fn sasl_config(&self) -> HashSet<KafkaConnectionOptionName> {
+    pub fn sasl_config(&self) -> BTreeSet<KafkaConnectionOptionName> {
         use KafkaConnectionOptionName::*;
-        HashSet::from([SaslMechanisms, SaslUsername, SaslPassword])
+        BTreeSet::from([SaslMechanisms, SaslUsername, SaslPassword])
     }
 }
 
@@ -3563,7 +3563,7 @@ pub fn plan_alter_index_options(
         AlterIndexAction::ResetOptions(options) => {
             Ok(Plan::AlterIndexResetOptions(AlterIndexResetOptionsPlan {
                 id,
-                options: options.into_iter().collect::<HashSet<IndexOptionName>>(),
+                options: options.into_iter().collect(),
             }))
         }
         AlterIndexAction::SetOptions(options) => {

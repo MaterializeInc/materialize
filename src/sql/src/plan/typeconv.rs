@@ -13,7 +13,6 @@
 use itertools::Itertools;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 
 use once_cell::sync::Lazy;
 
@@ -122,7 +121,7 @@ macro_rules! casts(
             $from_to:expr => $cast_context:ident: $cast_template:expr
         ),+
     } => {{
-        let mut m = HashMap::new();
+        let mut m = BTreeMap::new();
         $(
             m.insert($from_to, CastImpl {
                 template: $cast_template.into(),
@@ -133,7 +132,7 @@ macro_rules! casts(
     }};
 );
 
-static VALID_CASTS: Lazy<HashMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = Lazy::new(|| {
+static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = Lazy::new(|| {
     use ScalarBaseType::*;
     use UnaryFunc::*;
 

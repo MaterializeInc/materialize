@@ -194,7 +194,7 @@ pub struct CatalogState {
     system_configuration: SystemVars,
     egress_ips: Vec<Ipv4Addr>,
     aws_principal_context: Option<AwsPrincipalContext>,
-    aws_privatelink_availability_zones: Option<HashSet<String>>,
+    aws_privatelink_availability_zones: Option<BTreeSet<String>>,
 }
 
 impl CatalogState {
@@ -750,9 +750,9 @@ impl CatalogState {
                 name: name.clone(),
                 id,
                 linked_object_id,
-                bound_objects: HashSet::new(),
+                bound_objects: BTreeSet::new(),
                 log_indexes,
-                replica_id_by_name: HashMap::new(),
+                replica_id_by_name: BTreeMap::new(),
                 replicas_by_id: HashMap::new(),
             },
         );
@@ -1383,8 +1383,8 @@ pub struct Cluster {
     pub linked_object_id: Option<GlobalId>,
     /// Objects bound to this cluster. Does not include introspection source
     /// indexes.
-    pub bound_objects: HashSet<GlobalId>,
-    pub replica_id_by_name: HashMap<String, ReplicaId>,
+    pub bound_objects: BTreeSet<GlobalId>,
+    pub replica_id_by_name: BTreeMap<String, ReplicaId>,
     pub replicas_by_id: HashMap<ReplicaId, ClusterReplica>,
 }
 
@@ -1574,13 +1574,13 @@ pub struct Ingestion {
     // TODO(benesch): this field contains connection information that could be
     // derived from the connection ID. Too hard to fix at the moment.
     pub desc: SourceDesc,
-    pub source_imports: HashSet<GlobalId>,
+    pub source_imports: BTreeSet<GlobalId>,
     /// The *additional* subsource exports of this ingestion. Each collection identified by its
     /// GlobalId will contain the contents of this ingestion's output stream that is identified by
     /// the index.
     ///
     /// This map does *not* include the export of the source associated with the ingestion itself
-    pub subsource_exports: HashMap<GlobalId, usize>,
+    pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub cluster_id: ClusterId,
 }
 
@@ -2099,7 +2099,11 @@ pub enum CatalogItemRebuilder {
 }
 
 impl CatalogItemRebuilder {
-    fn new(entry: &CatalogEntry, id: GlobalId, ancestor_ids: &HashMap<GlobalId, GlobalId>) -> Self {
+    fn new(
+        entry: &CatalogEntry,
+        id: GlobalId,
+        ancestor_ids: &BTreeMap<GlobalId, GlobalId>,
+    ) -> Self {
         if id.is_system() && (entry.is_table() || entry.is_introspection_source()) {
             Self::SystemSource(entry.item().clone())
         } else {
@@ -3014,7 +3018,7 @@ impl Catalog {
 
         // Then process all objects in sorted order.
         let mut migration_metadata = BuiltinMigrationMetadata::new();
-        let mut ancestor_ids = HashMap::new();
+        let mut ancestor_ids = BTreeMap::new();
         let mut migrated_log_ids = HashMap::new();
         let log_name_map: HashMap<_, _> = BUILTINS::logs()
             .map(|log| (log.variant.clone(), log.name))
@@ -6310,7 +6314,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         (self.state.config().now)()
     }
 
-    fn aws_privatelink_availability_zones(&self) -> Option<HashSet<String>> {
+    fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>> {
         self.state.aws_privatelink_availability_zones.clone()
     }
 }
@@ -6370,11 +6374,11 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
         self.linked_object_id
     }
 
-    fn bound_objects(&self) -> &HashSet<GlobalId> {
+    fn bound_objects(&self) -> &BTreeSet<GlobalId> {
         &self.bound_objects
     }
 
-    fn replicas(&self) -> &HashMap<String, ReplicaId> {
+    fn replicas(&self) -> &BTreeMap<String, ReplicaId> {
         &self.replica_id_by_name
     }
 }

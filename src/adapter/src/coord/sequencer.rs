@@ -3109,7 +3109,7 @@ impl Coordinator {
                     id: plan.id,
                     selection,
                     finishing,
-                    assignments: HashMap::new(),
+                    assignments: BTreeMap::new(),
                     kind: MutationKind::Insert,
                     returning: plan.returning,
                 };

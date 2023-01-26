@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
@@ -59,7 +59,7 @@ pub struct Config<'a> {
     /// Context for generating an AWS Principal.
     pub aws_principal_context: Option<AwsPrincipalContext>,
     /// Supported AWS PrivateLink availability zone ids.
-    pub aws_privatelink_availability_zones: Option<HashSet<String>>,
+    pub aws_privatelink_availability_zones: Option<BTreeSet<String>>,
     /// A optional frontend used to pull system parameters for initial sync in
     /// Catalog::open. A `None` value indicates that the initial sync should be
     /// skipped.

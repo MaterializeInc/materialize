@@ -9,11 +9,11 @@
 
 //! Structured name types for SQL objects.
 
-use anyhow::anyhow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 
 use mz_controller::clusters::ClusterId;
@@ -94,7 +94,7 @@ impl fmt::Display for QualifiedObjectName {
 ///
 /// This is like a [`FullObjectName`], but either the database or schema name may be
 /// omitted.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PartialObjectName {
     pub database: Option<String>,
     pub schema: Option<String>,
@@ -700,18 +700,18 @@ impl fmt::Display for RoleId {
 #[derive(Debug)]
 pub struct NameResolver<'a> {
     catalog: &'a dyn SessionCatalog,
-    ctes: HashMap<String, LocalId>,
+    ctes: BTreeMap<String, LocalId>,
     status: Result<(), PlanError>,
-    ids: HashSet<GlobalId>,
+    ids: BTreeSet<GlobalId>,
 }
 
 impl<'a> NameResolver<'a> {
     fn new(catalog: &'a dyn SessionCatalog) -> NameResolver {
         NameResolver {
             catalog,
-            ctes: HashMap::new(),
+            ctes: BTreeMap::new(),
             status: Ok(()),
-            ids: HashSet::new(),
+            ids: BTreeSet::new(),
         }
     }
 
@@ -1173,7 +1173,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 pub fn resolve<N>(
     catalog: &dyn SessionCatalog,
     node: N,
-) -> Result<(N::Folded, HashSet<GlobalId>), PlanError>
+) -> Result<(N::Folded, BTreeSet<GlobalId>), PlanError>
 where
     N: FoldNode<Raw, Aug>,
 {
@@ -1197,13 +1197,13 @@ where
 /// the final `GlobalIds` and use this TransientResolver to walk through all the ASTs and make them
 /// refer to the final GlobalIds of the objects.
 pub struct TransientResolver<'a> {
-    /// A HashMap mapping each transient global id to its final non-transient global id
-    allocation: &'a HashMap<GlobalId, GlobalId>,
+    /// A map from transient `GlobalId`s to their final non-transient `GlobalId`s.
+    allocation: &'a BTreeMap<GlobalId, GlobalId>,
     status: Result<(), PlanError>,
 }
 
 impl<'a> TransientResolver<'a> {
-    fn new(allocation: &'a HashMap<GlobalId, GlobalId>) -> Self {
+    fn new(allocation: &'a BTreeMap<GlobalId, GlobalId>) -> Self {
         TransientResolver {
             allocation,
             status: Ok(()),
@@ -1276,7 +1276,7 @@ impl Fold<Aug, Aug> for TransientResolver<'_> {
 }
 
 pub fn resolve_transient_ids<N>(
-    allocation: &HashMap<GlobalId, GlobalId>,
+    allocation: &BTreeMap<GlobalId, GlobalId>,
     node: N,
 ) -> Result<N::Folded, PlanError>
 where
@@ -1290,7 +1290,7 @@ where
 
 #[derive(Debug, Default)]
 pub struct DependencyVisitor {
-    ids: HashSet<GlobalId>,
+    ids: BTreeSet<GlobalId>,
 }
 
 impl<'ast> Visit<'ast, Aug> for DependencyVisitor {
@@ -1318,7 +1318,7 @@ impl<'ast> Visit<'ast, Aug> for DependencyVisitor {
     }
 }
 
-pub fn visit_dependencies<'ast, N>(node: &'ast N) -> HashSet<GlobalId>
+pub fn visit_dependencies<'ast, N>(node: &'ast N) -> BTreeSet<GlobalId>
 where
     N: VisitNode<'ast, Aug> + 'ast,
 {

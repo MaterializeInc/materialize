@@ -197,7 +197,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     },
     LinearizeReads(Vec<PendingReadTxn>),
     StorageUsageFetch,
-    StorageUsageUpdate(HashMap<Option<ShardId>, u64>),
+    StorageUsageUpdate(BTreeMap<Option<ShardId>, u64>),
     RealTimeRecencyTimestamp {
         conn_id: ConnectionId,
         transient_revision: u64,
@@ -1221,7 +1221,7 @@ pub async fn serve(
         };
 
     let aws_privatelink_availability_zones = aws_privatelink_availability_zones
-        .map(|azs_vec| HashSet::from_iter(azs_vec.iter().cloned()));
+        .map(|azs_vec| BTreeSet::from_iter(azs_vec.iter().cloned()));
 
     info!("coordinator init: opening catalog");
     let (mut catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =

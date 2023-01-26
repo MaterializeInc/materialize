@@ -502,7 +502,7 @@ macro_rules! generate_extracted_config {
         paste::paste! {
             #[derive(Debug)]
             pub struct [<$option_ty Extracted>] {
-                seen: HashSet::<[<$option_ty Name>]>,
+                seen: ::std::collections::BTreeSet::<[<$option_ty Name>]>,
                 $(
                     pub(crate) [<$option_name:snake>]: $t,
                 )*
@@ -511,7 +511,7 @@ macro_rules! generate_extracted_config {
             impl std::default::Default for [<$option_ty Extracted>] {
                 fn default() -> Self {
                     [<$option_ty Extracted>] {
-                        seen: HashSet::<[<$option_ty Name>]>::new(),
+                        seen: ::std::collections::BTreeSet::<[<$option_ty Name>]>::new(),
                         $(
                             [<$option_name:snake>]: $t::from($v),
                         )*

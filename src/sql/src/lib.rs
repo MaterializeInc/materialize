@@ -131,6 +131,8 @@
 //! [`Plan`]: crate::plan::Plan
 
 #![warn(missing_debug_implementations)]
+// Disallow usage of `Hash*` types from std.
+#![warn(clippy::disallowed_types)]
 
 macro_rules! bail_unsupported {
     ($feature:expr) => {

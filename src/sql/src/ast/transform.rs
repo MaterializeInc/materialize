@@ -9,10 +9,10 @@
 
 //! Provides a publicly available interface to transform our SQL ASTs.
 
-use mz_repr::GlobalId;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_ore::str::StrExt;
+use mz_repr::GlobalId;
 
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
@@ -139,10 +139,10 @@ fn ambiguous_err(n: &Ident, t: &str) -> String {
 struct QueryIdentAgg<'a> {
     /// The name whose usage you want to assess.
     name: &'a Ident,
-    /// Tracks all second-level qualifiers used on `name` in a `HashMap`, as
+    /// Tracks all second-level qualifiers used on `name` in a `BTreeMap`, as
     /// well as any third-level qualifiers used on those second-level qualifiers
-    /// in a `HashSet`.
-    qualifiers: HashMap<Ident, HashSet<Ident>>,
+    /// in a `BTreeSet`.
+    qualifiers: BTreeMap<Ident, BTreeSet<Ident>>,
     /// Tracks the least qualified instance of `name` seen.
     min_qual_depth: usize,
     /// Provides an option to fail the visit if encounters a specified `Ident`.
@@ -168,7 +168,7 @@ impl<'a> QueryIdentAgg<'a> {
         query: &Query<Raw>,
     ) -> Result<usize, String> {
         let mut v = QueryIdentAgg {
-            qualifiers: HashMap::new(),
+            qualifiers: BTreeMap::new(),
             min_qual_depth: usize::MAX,
             err: None,
             name,
@@ -352,14 +352,14 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
 /// Updates all `GlobalId`s from the keys of `ids` to the values of `ids` within `create_stmt`.
 pub fn create_stmt_replace_ids(
     create_stmt: &mut Statement<Raw>,
-    ids: &HashMap<GlobalId, GlobalId>,
+    ids: &BTreeMap<GlobalId, GlobalId>,
 ) {
     let mut id_replacer = CreateSqlIdReplacer { ids };
     id_replacer.visit_statement_mut(create_stmt);
 }
 
 struct CreateSqlIdReplacer<'a> {
-    ids: &'a HashMap<GlobalId, GlobalId>,
+    ids: &'a BTreeMap<GlobalId, GlobalId>,
 }
 
 impl<'ast> VisitMut<'ast, Raw> for CreateSqlIdReplacer<'_> {
