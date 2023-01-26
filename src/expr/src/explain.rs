@@ -24,6 +24,8 @@
 //! printed in contexts where trailing whitespace is unacceptable, like
 //! sqllogictest files.
 
+#![deprecated = "Use `explain_new` instead."]
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::iter;

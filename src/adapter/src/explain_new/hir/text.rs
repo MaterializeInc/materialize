@@ -20,11 +20,10 @@
 
 use std::fmt;
 
-use mz_expr::explain::Indices;
 use mz_expr::virtual_syntax::{AlgExcept, Except};
 use mz_expr::Id;
 use mz_ore::str::{separated, IndentLike};
-use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText};
+use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, Indices};
 use mz_sql::plan::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
 
 use crate::explain_new::{CompactScalarSeq, Displayable, PlanRenderingContext};

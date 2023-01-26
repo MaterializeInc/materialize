@@ -28,7 +28,6 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::stack;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::explain_new::DummyHumanizer;
 use mz_repr::*;
 
 use crate::plan::error::PlanError;
@@ -41,8 +40,6 @@ pub use mz_expr::{
     BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
     WindowFrameBound, WindowFrameUnits,
 };
-
-use super::Explanation;
 
 #[allow(missing_debug_implementations)]
 pub struct Hir;
@@ -1132,11 +1129,6 @@ impl HirRelationExpr {
                 ..
             } => group_key.len() + aggregates.len(),
         }
-    }
-
-    /// Pretty-print this HirRelationExpr to a string.
-    pub fn pretty(&self) -> String {
-        Explanation::new(self, &DummyHumanizer).to_string()
     }
 
     /// Reports whether this expression contains a column reference to its

@@ -23,15 +23,15 @@
 use std::fmt;
 
 use mz_expr::{
-    explain::Indices, AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics,
-    MapFilterProject, MirRelationExpr, MirScalarExpr,
+    AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics, MapFilterProject,
+    MirRelationExpr, MirScalarExpr,
 };
 use mz_ore::soft_assert;
 use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
 use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
 use mz_repr::{GlobalId, Row};
 
-use crate::explain_new::{CompactScalarSeq, Displayable, PlanRenderingContext};
+use crate::explain_new::{CompactScalarSeq, Displayable, Indices, PlanRenderingContext};
 
 impl<'a> DisplayText<PlanRenderingContext<'_, MirRelationExpr>>
     for Displayable<'a, MirRelationExpr>
