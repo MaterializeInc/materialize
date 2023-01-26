@@ -337,8 +337,10 @@ a  b
 > SHOW SOURCES
 name     type    size
 ---------------------
-data     kafka   ${arg.default-storage-size}
-mat_data kafka   ${arg.default-storage-size}
+data              kafka     ${arg.default-storage-size}
+data_progress     subsource <null>
+mat_data          kafka     ${arg.default-storage-size}
+mat_data_progress subsource <null>
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the
