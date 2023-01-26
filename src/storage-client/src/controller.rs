@@ -32,7 +32,6 @@ use bytes::BufMut;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
-use mz_persist_types::codec_impls::UnitSchema;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -49,7 +48,9 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
@@ -1006,55 +1007,14 @@ where
                     id, metadata.remap_shard, metadata.data_shard, metadata.status_shard
                 );
 
-                let purpose = format!("controller data {}", id);
-                let write = persist_client
-                    .open_writer(
-                        metadata.data_shard,
-                        &purpose,
-                        Arc::new(metadata.relation_desc.clone()),
-                        Arc::new(UnitSchema),
+                let (write, since_handle) = this
+                    .acquire_data_handles(
+                        id,
+                        metadata.data_shard.clone(),
+                        metadata.relation_desc.clone(),
+                        persist_client,
                     )
-                    .await
-                    .expect("invalid persist usage");
-
-                // Construct the handle in a separate block to ensure all error paths are diverging
-                let since_handle = {
-                    let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
-                        .open_critical_since(
-                            metadata.data_shard,
-                            PersistClient::CONTROLLER_CRITICAL_SINCE,
-                            &purpose,
-                        )
-                        .await
-                        .expect("invalid persist usage");
-
-                    let since = description
-                        .since
-                        .clone()
-                        .unwrap_or_else(|| handle.since().clone());
-
-                    // We should only continue if we can fence out any other processes
-                    let our_epoch = this.state.envd_epoch;
-                    loop {
-                        let their_epoch: PersistEpoch = handle.opaque().clone();
-
-                        let should_exchange = their_epoch.0.map(|e| e < our_epoch).unwrap_or(true);
-                        if should_exchange {
-                            let fenced_others = handle
-                                .compare_and_downgrade_since(
-                                    &their_epoch,
-                                    (&PersistEpoch::from(our_epoch), &since),
-                                )
-                                .await
-                                .is_ok();
-                            if fenced_others {
-                                break handle;
-                            }
-                        } else {
-                            mz_ore::halt!("fenced by envd @ {their_epoch:?}. ours = {our_epoch}");
-                        }
-                    }
-                };
+                    .await;
 
                 let cs = CollectionState::new(
                     description.clone(),
@@ -1762,6 +1722,66 @@ where
         Ok(())
     }
 
+    /// Acquires persist handles for the given `shard`. This will `halt!` the
+    /// process if we cannot successfully acquire a critical handle with our
+    /// current epoch.
+    async fn acquire_data_handles(
+        &self,
+        id: GlobalId,
+        shard: ShardId,
+        relation_desc: RelationDesc,
+        persist_client: &PersistClient,
+    ) -> (
+        WriteHandle<SourceData, (), T, Diff>,
+        SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
+    ) {
+        let purpose = format!("controller data {}", id);
+
+        let write = persist_client
+            .open_writer(
+                shard,
+                &purpose,
+                Arc::new(relation_desc),
+                Arc::new(UnitSchema),
+            )
+            .await
+            .expect("invalid persist usage");
+
+        // Construct the handle in a separate block to ensure all error paths are diverging
+        let since_handle = {
+            let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
+                .open_critical_since(shard, PersistClient::CONTROLLER_CRITICAL_SINCE, &purpose)
+                .await
+                .expect("invalid persist usage");
+
+            let since = handle.since().clone();
+
+            // We should only continue if we can fence out any other processes
+            let our_epoch = self.state.envd_epoch;
+            loop {
+                let their_epoch: PersistEpoch = handle.opaque().clone();
+
+                let should_exchange = their_epoch.0.map(|e| e < our_epoch).unwrap_or(true);
+                if should_exchange {
+                    let fenced_others = handle
+                        .compare_and_downgrade_since(
+                            &their_epoch,
+                            (&PersistEpoch::from(our_epoch), &since),
+                        )
+                        .await
+                        .is_ok();
+                    if fenced_others {
+                        break handle;
+                    }
+                } else {
+                    mz_ore::halt!("fenced by envd @ {their_epoch:?}. ours = {our_epoch}");
+                }
+            }
+        };
+
+        (write, since_handle)
+    }
+
     // Should only fail if collection doesn't exist. N.B. We can't just take in the mut ref because then the borrow checker wouldn't let us read state.
     fn generate_new_capability_for_collection<F>(
         &mut self,
@@ -2034,50 +2054,14 @@ where
                     .await
                     .unwrap();
 
-                let purpose = format!("controller data {}", id);
-                let write = persist_client
-                    .open_writer(
-                        data_shard,
-                        &purpose,
-                        Arc::new(metadata.collection_metadata.relation_desc.clone()),
-                        Arc::new(UnitSchema),
-                    )
-                    .await
-                    .expect("invalid persist usage");
+                let relation_desc = metadata.collection_metadata.relation_desc.clone();
 
-                // Construct the handle in a separate block to ensure all error paths are diverging
-                let since_handle = {
-                    let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
-                        .open_critical_since(
-                            data_shard,
-                            PersistClient::CONTROLLER_CRITICAL_SINCE,
-                            &purpose,
-                        )
-                        .await
-                        .expect("invalid persist usage");
-
-                    let since = handle.since().clone();
-
-                    // When rewriting data, must be guaranteed to be able to
-                    // move shard into our epoch.
-                    let their_epoch: PersistEpoch = handle.opaque().clone();
-                    let our_epoch = self.state.envd_epoch;
-
-                    let fenced_others = handle
-                        .compare_and_downgrade_since(
-                            &their_epoch,
-                            (&PersistEpoch::from(our_epoch), &since),
-                        )
-                        .await
-                        .is_ok();
-
-                    assert!(
-                        fenced_others,
-                        "when rewriting metdata, must be guaranteed to be able to move shard into our epoch."
-                    );
-
-                    handle
-                };
+                // This will halt! if any of the handles cannot be acquired
+                // because we're not the leader anymore. But that's fine, we
+                // already updated all the persistent state (in stash).
+                let (write, since_handle) = self
+                    .acquire_data_handles(id, data_shard, relation_desc, &persist_client)
+                    .await;
 
                 self.state.persist_write_handles.update(id, write);
                 self.state.persist_read_handles.update(id, since_handle);
