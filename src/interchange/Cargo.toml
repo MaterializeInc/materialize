@@ -35,7 +35,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 criterion = { version = "0.4.0", features = ["async_tokio"] }
-tokio = { version = "1.23.0", features = ["macros"] }
+tokio = { version = "1.24.2", features = ["macros"] }
 
 [build-dependencies]
 prost-build = "0.11.2"

@@ -461,19 +461,11 @@ where
         match &self.prefix {
             None => self.inner.format_event(ctx, writer, event)?,
             Some(prefix) => {
-                let style = ansi_term::Style::new();
-                let target_style = if writer.has_ansi_escapes() {
-                    style.bold()
-                } else {
-                    style
-                };
-                write!(
-                    writer,
-                    "{}{}:{} ",
-                    target_style.prefix(),
-                    prefix,
-                    target_style.infix(style)
-                )?;
+                let mut prefix = yansi::Paint::new(prefix);
+                if writer.has_ansi_escapes() {
+                    prefix = prefix.bold();
+                }
+                write!(writer, "{}: ", prefix)?;
                 self.inner.format_event(ctx, writer, event)?;
             }
         }
