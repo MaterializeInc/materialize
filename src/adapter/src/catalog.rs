@@ -424,6 +424,10 @@ impl CatalogState {
             .map(|id| &self.clusters_by_id[id])
     }
 
+    fn get_linked_object(&self, cluster_id: ClusterId) -> Option<GlobalId> {
+        self.clusters_by_id[&cluster_id].linked_object_id
+    }
+
     fn get_storage_object_size(&self, object_id: GlobalId) -> Option<&str> {
         let cluster = self.get_linked_cluster(object_id)?;
         let replica_id = cluster.replica_id_by_name[LINKED_CLUSTER_REPLICA_NAME];
@@ -982,6 +986,21 @@ impl CatalogState {
             || schema == PG_CATALOG_SCHEMA
             || schema == INFORMATION_SCHEMA
             || schema == MZ_INTERNAL_SCHEMA
+    }
+
+    pub fn is_system_schema_id(&self, id: &SchemaId) -> bool {
+        id == self.get_mz_catalog_schema_id()
+            || id == self.get_pg_catalog_schema_id()
+            || id == self.get_information_schema_id()
+        || id == self.get_mz_internal_schema_id()
+        
+    }
+
+    pub fn is_system_schema_specifier(&self, spec: &SchemaSpecifier) -> bool {
+        match spec {
+            SchemaSpecifier::Temporary => false,
+            SchemaSpecifier::Id(id) => self.is_system_schema_id(id)
+        }
     }
 
     /// Optimized lookup for a builtin table
@@ -3887,6 +3906,12 @@ impl Catalog {
     /// exists.
     pub fn get_linked_cluster(&self, object_id: GlobalId) -> Option<&Cluster> {
         self.state.get_linked_cluster(object_id)
+    }
+
+    /// Gets the linked object associated with the provided cluster ID, if it
+    /// exists. Panics if there is no such cluster.
+    pub fn get_linked_object(&self, cluster_id: ClusterId) -> Option<GlobalId> {
+        self.state.get_linked_object(cluster_id)
     }
 
     /// Gets the size associated with the provided source or sink ID, if a
