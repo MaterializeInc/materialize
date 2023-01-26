@@ -931,6 +931,7 @@ impl Coordinator {
 
         let replica_ids: Vec<_> = cluster.replicas_by_id.keys().copied().collect();
         for replica_id in replica_ids {
+            // lalal
             self.create_cluster_replica(cluster_id, replica_id).await;
         }
 
@@ -1077,7 +1078,7 @@ impl Coordinator {
             .unwrap();
 
         self.controller
-            .create_replica(cluster.id, replica_id, role, replica_config)
+            .create_replicas(vec![(cluster.id, replica_id, role, replica_config)])
             .await
             .expect("creating replica must not fail");
 

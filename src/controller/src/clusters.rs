@@ -16,7 +16,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
-use futures::stream::{BoxStream, StreamExt};
+use futures::stream::{BoxStream, StreamExt, TryStreamExt};
 use mz_ore::halt;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -33,7 +33,7 @@ use mz_orchestrator::{
     CpuLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
     ServiceEvent, ServicePort,
 };
-use mz_ore::task::JoinHandleExt;
+use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_repr::GlobalId;
 
 use crate::Controller;
@@ -205,49 +205,93 @@ where
 
     /// Creates a replica of the specified cluster with the specified identifier
     /// and configuration.
-    pub async fn create_replica(
+    ///
+    /// This method is NOT idempotent; It can fail between processing of different
+    /// replicas and leave the controller in an inconsistent state. It is almost
+    /// always wrong to do anything but abort the process on `Err`.
+    pub async fn create_replicas(
         &mut self,
-        cluster_id: ClusterId,
-        replica_id: ReplicaId,
-        role: ClusterRole,
-        config: ReplicaConfig,
+        replicas: Vec<(ClusterId, ReplicaId, ClusterRole, ReplicaConfig)>,
     ) -> Result<(), anyhow::Error> {
-        let (storage_addr, compute_location) = match config.location {
-            ReplicaLocation::Unmanaged(u) => {
-                let storage_addr = u.storagectl_addr;
-                let compute_location = ComputeReplicaLocation {
-                    computectl_addrs: u.computectl_addrs,
-                    compute_addrs: u.compute_addrs,
-                    workers: u.workers,
-                };
-                (storage_addr, compute_location)
-            }
-            ReplicaLocation::Managed(m) => {
-                let workers = m.allocation.workers;
-                let service = self
-                    .provision_replica(cluster_id, replica_id, role, m)
-                    .await?;
-                let storage_addr = service
-                    .addresses("storagectl")
-                    .into_iter()
-                    .next()
-                    .expect("should be at least one process");
-                let compute_location = ComputeReplicaLocation {
-                    computectl_addrs: service.addresses("computectl"),
-                    compute_addrs: service.addresses("compute"),
-                    workers,
-                };
-                (storage_addr, compute_location)
-            }
-        };
+        // Reborrow the `&mut self` as immutable, as all the concurrent work to be processed in
+        // this stream cannot all have exclusive access.
+        let this = &*self;
+        let replicas: Vec<_> = futures::stream::iter(replicas)
+            .map(|(cluster_id, replica_id, role, config)| async move {
+                match config.location {
+                    // This branch doesn't do any async work, so there is a slight performance
+                    // opportunity to serially process it, but it makes the code worse to read.
+                    ReplicaLocation::Unmanaged(u) => {
+                        let storage_addr = u.storagectl_addr;
+                        let compute_location = ComputeReplicaLocation {
+                            computectl_addrs: u.computectl_addrs,
+                            compute_addrs: u.compute_addrs,
+                            workers: u.workers,
+                        };
+                        Ok::<_, anyhow::Error>((
+                            cluster_id,
+                            replica_id,
+                            config.compute,
+                            storage_addr,
+                            compute_location,
+                            None,
+                        ))
+                    }
+                    ReplicaLocation::Managed(m) => {
+                        let workers = m.allocation.workers;
+                        let (service, metrics_task_join_handle) = this
+                            .provision_replica(cluster_id, replica_id, role, m)
+                            .await?;
+                        let storage_addr = service
+                            .addresses("storagectl")
+                            .into_iter()
+                            .next()
+                            .expect("should be at least one process");
+                        let compute_location = ComputeReplicaLocation {
+                            computectl_addrs: service.addresses("computectl"),
+                            compute_addrs: service.addresses("compute"),
+                            workers,
+                        };
+                        Ok((
+                            cluster_id,
+                            replica_id,
+                            config.compute,
+                            storage_addr,
+                            compute_location,
+                            Some(metrics_task_join_handle),
+                        ))
+                    }
+                }
+            })
+            // TODO(guswynn): make this configurable.
+            .buffer_unordered(50)
+            // `try_collect` and `collect` are the only safe ways to process a
+            // `buffer_unordered`. See the docs in `mz_storage_client::controller` for more
+            // details.
+            .try_collect()
+            .await?;
 
-        self.storage.connect_replica(cluster_id, storage_addr);
-        self.active_compute().add_replica_to_instance(
+        for (
             cluster_id,
             replica_id,
+            compute_config,
+            storage_addr,
             compute_location,
-            config.compute,
-        )?;
+            metrics_task_join_handle,
+        ) in replicas
+        {
+            if let Some(jh) = metrics_task_join_handle {
+                self.metrics_tasks.insert(replica_id, jh);
+            }
+            self.storage.connect_replica(cluster_id, storage_addr);
+            self.active_compute().add_replica_to_instance(
+                cluster_id,
+                replica_id,
+                compute_location,
+                compute_config,
+            )?;
+        }
+
         Ok(())
     }
 
@@ -336,12 +380,12 @@ where
 
     /// Provisions a replica with the service orchestrator.
     async fn provision_replica(
-        &mut self,
+        &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
         role: ClusterRole,
         location: ManagedReplicaLocation,
-    ) -> Result<Box<dyn Service>, anyhow::Error> {
+    ) -> Result<(Box<dyn Service>, AbortOnDropHandle<()>), anyhow::Error> {
         let service_name = generate_replica_service_name(cluster_id, replica_id);
         let role_label = match role {
             ClusterRole::SystemCritical => "system-critical",
@@ -453,10 +497,8 @@ where
                 }
             }
         });
-        self.metrics_tasks
-            .insert(replica_id, metrics_task.abort_on_drop());
 
-        Ok(service)
+        Ok((service, metrics_task.abort_on_drop()))
     }
 
     /// Deprovisions a replica with the service orchestrator.
