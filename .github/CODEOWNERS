@@ -30,6 +30,7 @@
 /src/clusterd                       @MaterializeInc/compute @MaterializeInc/storage
 /src/compute                        @MaterializeInc/compute
 /src/compute-client                 @MaterializeInc/compute
+/src/controller                     @MaterializeInc/compute @MaterializeInc/storage
 /src/environmentd                   @MaterializeInc/surfaces
 /src/expr                           @MaterializeInc/compute
 /src/expr-test-util                 @MaterializeInc/compute
