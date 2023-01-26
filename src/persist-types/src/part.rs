@@ -23,7 +23,7 @@ use arrow2::io::parquet::write::Encoding;
 
 use crate::columnar::sealed::ColumnRef;
 use crate::columnar::{ColumnFormat, ColumnGet, ColumnPush, Data, DataType, Schema};
-use crate::ord::{ColOrd, ColsOrd};
+use crate::ord::{ColOrd, ColsOrd, ColsOrdKey};
 
 /// A columnar representation of one blob's worth of data.
 #[derive(Debug, Default)]
@@ -242,12 +242,12 @@ impl Part {
         Ok(part)
     }
 
-    /// Returns a sorted copy of this Part.
+    /// Returns a sorted and consolidated copy of this Part.
     ///
     /// This is a full deep clone of the data. Sort ordering is `(K, V, T, D)`
     /// where each column is ordered according to the parquet ordering
     /// semantics.
-    pub fn sort(&self) -> Self {
+    pub fn consolidate(&self) -> Self {
         let key_cols = self
             .key
             .iter()
@@ -289,19 +289,45 @@ impl Part {
             let diff = Vec::new();
             PartBuilder { key, val, ts, diff }
         };
-        for (key_idx, val_idx, ts_idx) in indexes {
-            let idx = key_idx.idx;
+        let mut prev: Option<((ColsOrdKey, ColsOrdKey, ColsOrdKey), i64)> = None;
+        for current in indexes {
+            if let Some((prev_key, prev_diff)) = prev.as_ref() {
+                if prev_key != &current {
+                    // WIP figure out how to have just one idx: usize
+                    let prev_idx = prev_key.0.idx;
+                    assert_eq!(prev_idx, prev_key.1.idx);
+                    assert_eq!(prev_idx, prev_key.2.idx);
+                    for ((_, src), (_, dst)) in self.key.iter().zip(sorted.key.iter_mut()) {
+                        dst.push_from(src, prev_idx).expect("WIP");
+                    }
+                    for ((_, src), (_, dst)) in self.val.iter().zip(sorted.val.iter_mut()) {
+                        dst.push_from(src, prev_idx).expect("WIP");
+                    }
+                    sorted.ts.push(self.ts[prev_idx]);
+                    sorted.diff.push(*prev_diff);
+                    let _ = prev.take();
+                }
+            }
+            let current_diff = self.diff[current.2.idx];
+            if let Some((_, diff)) = prev.as_mut() {
+                *diff = *diff + current_diff;
+            } else {
+                prev = Some((current, current_diff));
+            }
+        }
+        if let Some((prev_key, prev_diff)) = prev.as_ref() {
             // WIP figure out how to have just one idx: usize
-            assert_eq!(idx, val_idx.idx);
-            assert_eq!(idx, ts_idx.idx);
+            let prev_idx = prev_key.0.idx;
+            assert_eq!(prev_idx, prev_key.1.idx);
+            assert_eq!(prev_idx, prev_key.2.idx);
             for ((_, src), (_, dst)) in self.key.iter().zip(sorted.key.iter_mut()) {
-                dst.push_from(src, idx).expect("WIP");
+                dst.push_from(src, prev_idx).expect("WIP");
             }
             for ((_, src), (_, dst)) in self.val.iter().zip(sorted.val.iter_mut()) {
-                dst.push_from(src, idx).expect("WIP");
+                dst.push_from(src, prev_idx).expect("WIP");
             }
-            sorted.ts.push(self.ts[idx]);
-            sorted.diff.push(self.diff[idx]);
+            sorted.ts.push(self.ts[prev_idx]);
+            sorted.diff.push(*prev_diff);
         }
         sorted.finish().expect("WIP")
     }
@@ -727,7 +753,7 @@ mod tests {
     }
 
     #[test]
-    fn part_sort() {
+    fn part_consolidate() {
         let mut part = PartBuilder::new(&StringSchema, &UnitSchema);
         {
             let mut keys = StringSchema.encoder(part.key_mut()).unwrap();
@@ -735,15 +761,19 @@ mod tests {
             keys.encode(&format!("foo"));
             keys.encode(&format!("foo"));
             keys.encode(&format!("bar"));
+            keys.encode(&format!("foo"));
             keys.encode(&format!("baz"));
+            keys.encode(&format!("foo"));
         }
         part.push_ts_diff(3, 1);
         part.push_ts_diff(1, 1);
         part.push_ts_diff(2, 1);
         part.push_ts_diff(1, 1);
         part.push_ts_diff(1, 1);
+        part.push_ts_diff(1, 1);
+        part.push_ts_diff(1, 1);
         let part = part.finish().unwrap();
-        let sorted = part.sort();
-        eprintln!("{:?}", sorted);
+        let consolidated = part.consolidate();
+        eprintln!("{:?}", consolidated);
     }
 }
