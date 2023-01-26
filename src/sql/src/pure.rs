@@ -650,19 +650,15 @@ pub async fn purify_create_source(
         }
     };
 
-    let (columns, table_constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
+    let (columns, constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
 
     *progress_subsource = Some(DeferredObjectName::Named(subsource));
 
-    // Create the subsource statement for the progress collection.
+    // Create the subsource statement
     let subsource = CreateSubsourceStatement {
         name,
         columns,
-        // unlike sources that come from an external upstream, we
-        // have more leniency to introduce different constraints
-        // every time the load generator is run; i.e. we are not as
-        // worried about introducing junk data.
-        constraints: table_constraints,
+        constraints,
         if_not_exists: false,
         with_options: vec![CreateSubsourceOption {
             name: CreateSubsourceOptionName::Progress,

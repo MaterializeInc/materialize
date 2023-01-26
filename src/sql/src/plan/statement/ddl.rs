@@ -1025,6 +1025,9 @@ pub fn plan_create_source(
         timestamp_interval,
     };
 
+    // TODO: This can be converted to an unwrap in v0.45, i.e. once we no longer
+    // need to maintain upgrade compatibility with the version prior to
+    // subsources being introduced.
     let progress_subsource = progress_subsource
         .as_ref()
         .map(|name| match name {
