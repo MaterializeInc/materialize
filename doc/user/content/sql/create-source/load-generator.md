@@ -255,6 +255,7 @@ To provision a specific amount of CPU and memory to a source on creation, use th
 ```sql
 CREATE SOURCE auction_load
   FROM LOAD GENERATOR AUCTION
+  FOR ALL TABLES
   WITH (SIZE = '3xsmall');
 ```
 
