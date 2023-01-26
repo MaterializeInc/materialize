@@ -100,7 +100,7 @@ use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::{IngestionDescription, SourceData};
 
 use crate::decode::metrics::DecodeMetrics;
-use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
+use crate::internal_control::{self, InternalCommandSender, InternalStorageCommand};
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::statistics::{SinkStatisticsMetrics, SourceStatisticsMetrics, StorageStatistics};
@@ -122,9 +122,9 @@ pub struct Worker<'w, A: Allocate> {
     pub timely_worker: &'w mut TimelyWorker<A>,
     /// The channel over which communication handles for newly connected clients
     /// are delivered.
-    client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
+    pub client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
     /// The state associated with collection ingress and egress.
-    storage_state: StorageState,
+    pub storage_state: StorageState,
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {
@@ -139,6 +139,46 @@ impl<'w, A: Allocate> Worker<'w, A> {
         connection_context: ConnectionContext,
         persist_clients: Arc<Mutex<PersistClientCache>>,
     ) -> Self {
+        // It is very important that we only create the internal control
+        // flow/command sequencer once because a) the worker state is re-used
+        // when a new client connects and b) dataflows that have already been
+        // rendered into the timely worker are reused as well.
+        //
+        // If we created a new sequencer every time we get a new client (likely
+        // because the controller re-started and re-connected), dataflows that
+        // were rendered before would still hold a handle to the old sequencer
+        // but we would not read their commands anymore.
+        let command_sequencer = internal_control::setup_command_sequencer(timely_worker);
+        let command_sequencer = Rc::new(RefCell::new(command_sequencer));
+
+        // Similar to the internal command sequencer, it is very important that
+        // we only create the async worker once because a) the worker state is
+        // re-used when a new client connects and b) commands that have already
+        // been sent and might yield a response will be lost if a new iteration
+        // of `run_client` creates a new async worker.
+        //
+        // If we created a new async worker every time we get a new client
+        // (likely because the controller re-started and re-connected), we can
+        // get into an inconsistent state where we think that a dataflow has
+        // been rendered, for example because there is an entry in
+        // `StorageState::ingestions`, while there is not yet a dataflow. This
+        // happens because the dataflow only gets rendered once we get a
+        // response from the async worker and send off an internal command.
+        //
+        // The core idea is that both the sequencer and the async worker are
+        // part of the per-worker state, and must be treated as such, meaning
+        // they must survive between invocations of `run_client`.
+
+        // TODO(aljoscha): This `Activatable` business seems brittle, but that's
+        // also how the command channel works currently. We can wrap it inside a
+        // struct that holds both a channel and an `Activatable`, but I don't
+        // think that would help too much.
+        let async_worker = async_storage_worker::AsyncStorageWorker::new(
+            thread::current(),
+            Arc::clone(&persist_clients),
+        );
+        let async_worker = Rc::new(RefCell::new(async_worker));
+
         let storage_state = StorageState {
             source_uppers: HashMap::new(),
             source_tokens: HashMap::new(),
@@ -159,10 +199,16 @@ impl<'w, A: Allocate> Worker<'w, A> {
             dropped_ids: Vec::new(),
             source_statistics: HashMap::new(),
             sink_statistics: HashMap::new(),
-            internal_cmd_tx: None,
-            async_worker: None,
+            internal_cmd_tx: command_sequencer,
+            async_worker,
         };
 
+        // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
+        // be fields of `Worker` instead of `StorageState`, but at least for the
+        // command flow sources and sinks need access to that. We can refactor
+        // this once we have a clearer boundary between what sources/sinks need
+        // and the full "power" of the internal command flow, which should stay
+        // internal to the worker/not be exposed to source/sink implementations.
         Self {
             timely_worker,
             client_rx,
@@ -228,11 +274,11 @@ pub struct StorageState {
     /// within workers/operators and will be distributed to all workers. For
     /// example, for shutting down an entire dataflow from within a
     /// operator/worker.
-    pub internal_cmd_tx: Option<Rc<RefCell<dyn InternalCommandSender>>>,
+    pub internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
 
     /// Async worker companion, used for running code that requires async, which
     /// the timely main loop cannot do.
-    pub async_worker: Option<Rc<RefCell<AsyncStorageWorker<mz_repr::Timestamp>>>>,
+    pub async_worker: Rc<RefCell<AsyncStorageWorker<mz_repr::Timestamp>>>,
 }
 
 /// This maintains an additional read hold on the source data for a sink, alongside
@@ -348,77 +394,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// workers responsibilities, how it communicates with the other workers and
     /// how commands flow from the controller and through the workers.
     fn run_client(&mut self, command_rx: CommandReceiver, response_tx: ResponseSender) {
-        let command_sequencer = match self.storage_state.internal_cmd_tx.as_ref() {
-            Some(command_sequencer) => Rc::clone(command_sequencer),
-            None => {
-                // It is very important that we only create the internal control
-                // flow/command sequencer once because a) the `StorageState` is
-                // re-used when a new client connects and b) dataflows that have
-                // already been rendered into the timely worker are reused as
-                // well.
-                //
-                // If we created a new sequencer every time we get a new client
-                // (likely because the controller re-started and re-connected),
-                // dataflows that were rendered before would still hold a handle
-                // to the old sequencer but we would not read their commands
-                // anymore.
-                let command_sequencer = self.setup_command_sequencer();
-                let command_sequencer = Rc::new(RefCell::new(command_sequencer));
-
-                let command_sequencer_clone = Rc::clone(&command_sequencer);
-                self.storage_state
-                    .internal_cmd_tx
-                    .replace(command_sequencer_clone);
-
-                command_sequencer
-            }
-        };
-
-        let async_worker = match self.storage_state.async_worker.as_ref() {
-            Some(async_worker) => Rc::clone(async_worker),
-            None => {
-                // Similar to the internal command sequencer, it is very
-                // important that we only create the async worker once because
-                // a) the `StorageState` is re-used when a new client connects
-                // and b) commands that have already been sent and might yield a
-                // response will be lost if a new iteration of `run_client`
-                // creates a new async worker.
-                //
-                // If we created a new async worker every time we get a new
-                // client (likely because the controller re-started and
-                // re-connected), we can get into an inconsistent state where we
-                // think that a dataflow has been rendered, for example because
-                // there is an entry in `StorageState::ingestions`, while there
-                // is not yet a dataflow. This happens because the dataflow only
-                // gets rendered once we get a response from the async worker
-                // and send off an internal command.
-                //
-                // The core idea is that both the sequencer and the async worker
-                // are part of the per-worker state, and must be treated as
-                // such, meaning they must survive between invocations of
-                // `run_client`.
-
-                // TODO(aljoscha): This `Activatable` business seems brittle, but that's
-                // also how the command channel works currently. We can wrap it inside a
-                // struct that holds both a channel and an `Activatable`, but I don't
-                // think that would help too much.
-                let async_worker = async_storage_worker::AsyncStorageWorker::new(
-                    thread::current(),
-                    Arc::clone(&self.storage_state.persist_clients),
-                );
-
-                let async_worker = Rc::new(RefCell::new(async_worker));
-
-                let async_worker_clone = Rc::clone(&async_worker);
-                self.storage_state.async_worker.replace(async_worker_clone);
-
-                async_worker
-            }
-        };
         // There can only ever be one timely main loop/thread that sends
         // commands to the async worker, so we borrow it for the whole lifetime
         // of the loop below.
+        let async_worker = Rc::clone(&self.storage_state.async_worker);
         let mut async_worker = async_worker.borrow_mut();
+
+        // We need this to get around having to borrow the sequencer but also
+        // passing around references to `self.storage_state`.
+        let command_sequencer = Rc::clone(&self.storage_state.internal_cmd_tx);
 
         // At this point, all workers are still reading from the command flow.
         {

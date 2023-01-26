@@ -123,12 +123,7 @@ where
             Antichain::new()
         }));
 
-        let internal_cmd_tx = Rc::clone(
-            storage_state
-                .internal_cmd_tx
-                .as_ref()
-                .expect("missing internal command sender"),
-        );
+        let internal_cmd_tx = Rc::clone(&storage_state.internal_cmd_tx);
 
         let token = kafka(
             sinked_collection,

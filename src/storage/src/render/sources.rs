@@ -110,12 +110,7 @@ where
     // a million fields
     let resumption_calculator = description.clone();
 
-    let internal_cmd_tx = Rc::clone(
-        storage_state
-            .internal_cmd_tx
-            .as_ref()
-            .expect("missing internal command sender"),
-    );
+    let internal_cmd_tx = Rc::clone(&storage_state.internal_cmd_tx);
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations

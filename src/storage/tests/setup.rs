@@ -81,7 +81,6 @@ use std::collections::BTreeMap;
 use std::marker::{Send, Sync};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use mz_ore::halt;
@@ -98,7 +97,6 @@ use mz_repr::{Diff, GlobalId, RelationDesc, Timestamp};
 use mz_storage::sink::SinkBaseMetrics;
 use mz_storage::source::metrics::SourceBaseMetrics;
 use mz_storage::source::testscript::ScriptCommand;
-use mz_storage::storage_state::async_storage_worker::AsyncStorageWorker;
 use mz_storage::DecodeMetrics;
 use mz_storage_client::types::sources::{
     encoding::SourceDataEncoding, GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope,
@@ -222,16 +220,22 @@ where
             };
 
             let (_fake_tx, fake_rx) = crossbeam_channel::bounded(1);
-            let mut worker = mz_storage::storage_state::Worker::new(
-                timely_worker,
-                fake_rx,
-                decode_metrics,
-                source_metrics,
-                sink_metrics,
-                SYSTEM_TIME.clone(),
-                connection_context,
-                Arc::clone(&persist_clients),
-            );
+
+            let mut worker = {
+                // Worker::new creates an async worker internally.
+                let _tokio_guard = tokio_runtime.enter();
+
+                mz_storage::storage_state::Worker::new(
+                    timely_worker,
+                    fake_rx,
+                    decode_metrics,
+                    source_metrics,
+                    sink_metrics,
+                    SYSTEM_TIME.clone(),
+                    connection_context,
+                    Arc::clone(&persist_clients),
+                )
+            };
 
             let collection_metadata = mz_storage_client::controller::CollectionMetadata {
                 persist_location,
@@ -255,8 +259,7 @@ where
             {
                 let _tokio_guard = tokio_runtime.enter();
 
-                let mut async_storage_worker =
-                    AsyncStorageWorker::new(thread::current(), Arc::clone(&persist_clients));
+                let async_storage_worker = Rc::clone(&worker.storage_state.async_worker);
                 let internal_command_fabric = &mut HaltingInternalCommandSender::new();
 
                 // NOTE: We only feed internal commands into the worker,
@@ -266,7 +269,7 @@ where
                 // reason.
                 worker.handle_internal_storage_command(
                     &mut *internal_command_fabric.as_mut().unwrap().borrow_mut(),
-                    &mut async_storage_worker,
+                    &mut async_storage_worker.borrow_mut(),
                     InternalStorageCommand::CreateIngestionDataflow {
                         id,
                         ingestion_description:

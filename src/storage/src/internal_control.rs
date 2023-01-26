@@ -12,13 +12,12 @@ use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
 use timely::progress::Antichain;
 use timely::synchronization::Sequencer;
+use timely::worker::Worker as TimelyWorker;
 
 use mz_repr::GlobalId;
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::IngestionDescription;
-
-use crate::storage_state::Worker;
 
 /// Internal commands that can be sent by individual operators/workers that will
 /// be broadcast to all workers. The worker main loop will receive those and act
@@ -72,9 +71,9 @@ impl InternalCommandSender for Sequencer<InternalStorageCommand> {
     }
 }
 
-impl<'w, A: Allocate> Worker<'w, A> {
-    pub(crate) fn setup_command_sequencer(&mut self) -> Sequencer<InternalStorageCommand> {
-        // TODO(aljoscha): Use something based on `mz_ore::NowFn`?
-        Sequencer::new(self.timely_worker, Instant::now())
-    }
+pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
+    timely_worker: &'w mut TimelyWorker<A>,
+) -> Sequencer<InternalStorageCommand> {
+    // TODO(aljoscha): Use something based on `mz_ore::NowFn`?
+    Sequencer::new(timely_worker, Instant::now())
 }
