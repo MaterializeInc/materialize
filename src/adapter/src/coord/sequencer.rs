@@ -516,7 +516,14 @@ impl Coordinator {
                         })
                     }
                     mz_sql::plan::DataSourceDesc::Progress => {
-                        unreachable!("PROGRESS subsources error in purification");
+                        assert!(
+                            matches!(
+                                plan.cluster_config,
+                                mz_sql::plan::SourceSinkClusterConfig::Undefined
+                            ),
+                            "subsources must not have a host config defined"
+                        );
+                        DataSourceDesc::Progress
                     }
                     mz_sql::plan::DataSourceDesc::Source => {
                         assert!(
@@ -580,7 +587,9 @@ impl Coordinator {
                                     source_imports,
                                     source_exports,
                                     instance_id: ingestion.cluster_id,
-                                    remap_collection_id: ingestion.remap_collection_id.unwrap(),
+                                    remap_collection_id: ingestion.remap_collection_id.expect(
+                                        "ingestion-based collection must name remap collection before going to storage",
+                                    ),
                                 }),
                                 source_status_collection_id,
                             )
