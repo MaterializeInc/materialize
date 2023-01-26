@@ -25,6 +25,7 @@ use mz_repr::adt::system::Oid;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
 use mz_repr::strconv;
 use mz_repr::ColumnName;
+use mz_repr::GlobalId;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedObjectName;
 use mz_sql_parser::parser::ParserError;
@@ -77,6 +78,7 @@ pub enum PlanError {
     UpsertSinkWithoutKey,
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
+    InvalidId(GlobalId),
     InvalidObject(Box<ResolvedObjectName>),
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
     InvalidSecret(Box<ResolvedObjectName>),
@@ -308,6 +310,7 @@ impl fmt::Display for PlanError {
             Self::InvalidVarCharMaxLength(e) => e.fmt(f),
             Self::Parser(e) => e.fmt(f),
             Self::Unstructured(e) => write!(f, "{}", e),
+            Self::InvalidId(id) => write!(f, "invalid id {}", id),
             Self::InvalidObject(i) => write!(f, "{} is not a database object", i.full_name_str()),
             Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
             Self::InvalidTemporarySchema => {

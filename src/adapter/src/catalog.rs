@@ -10,7 +10,7 @@
 //! Persistent metadata storage for the coordinator.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -3247,8 +3247,10 @@ impl Catalog {
         c: &Catalog,
     ) -> Result<Catalog, Error> {
         let mut c = c.clone();
-        let items = tx.loaded_items();
-        for (id, name, def) in items {
+        let mut awaiting_dependencies: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
+        let mut items: VecDeque<_> = tx.loaded_items().into_iter().collect();
+        while let Some((id, name, def)) = items.pop_front() {
+            let d_c = def.clone();
             // TODO(benesch): a better way of detecting when a view has depended
             // upon a non-existent logging view. This is fine for now because
             // the only goal is to produce a nicer error message; we'll bail out
@@ -3256,7 +3258,7 @@ impl Catalog {
             static LOGGING_ERROR: Lazy<Regex> =
                 Lazy::new(|| Regex::new("mz_catalog.[^']*").unwrap());
 
-            let item = match c.deserialize_item(id, def) {
+            let item = match c.deserialize_item(id, d_c) {
                 Ok(item) => item,
                 Err(AdapterError::SqlCatalog(SqlCatalogError::UnknownItem(name)))
                     if LOGGING_ERROR.is_match(&name.to_string()) =>
@@ -3264,6 +3266,14 @@ impl Catalog {
                     return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
                         depender_name: name,
                     }));
+                }
+                // If we were missing a dependency, wait for it to be added.
+                Err(AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep))) => {
+                    awaiting_dependencies
+                        .entry(missing_dep)
+                        .or_default()
+                        .push((id, name, def));
+                    continue;
                 }
                 Err(e) => {
                     return Err(Error::new(ErrorKind::Corruption {
@@ -3273,7 +3283,16 @@ impl Catalog {
             };
             let oid = c.allocate_oid()?;
             c.state.insert_item(id, oid, name, item);
+            if let Some(dependent_items) = awaiting_dependencies.remove(&id) {
+                items.extend(dependent_items);
+            }
         }
+
+        assert!(
+            awaiting_dependencies.is_empty(),
+            "the following dependencies were never filled {:?}",
+            awaiting_dependencies
+        );
         c.transient_revision = 1;
         Ok(c)
     }
