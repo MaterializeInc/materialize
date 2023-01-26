@@ -23,9 +23,9 @@ def test_roles(mz: MaterializeApplication) -> None:
     names_roles = (
         (
             item["metadata"]["name"],
-            item["metadata"]["labels"].get(
-                "cluster.environmentd.materialize.cloud/replica-role"
-            ),
+            item["metadata"]
+            .get("labels", {})
+            .get("cluster.environmentd.materialize.cloud/replica-role"),
         )
         for item in pods["items"]
     )
