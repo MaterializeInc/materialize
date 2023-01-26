@@ -75,7 +75,7 @@ class MaterializeConnectionManager(PostgresConnectionManager):
         cursor.execute("SELECT mz_version()")
         mz_version = cursor.fetchone()[0].split()[0].strip("v")
         if not versions_compatible(mz_version, SUPPORTED_MATERIALIZE_VERSIONS):
-            raise dbt.exceptions.RuntimeException(
+            raise dbt.exceptions.DbtRuntimeError(
                 f"Detected unsupported Materialize version {mz_version}\n"
                 f"  Supported versions: {SUPPORTED_MATERIALIZE_VERSIONS}"
             )
