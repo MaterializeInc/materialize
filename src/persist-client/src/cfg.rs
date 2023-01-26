@@ -25,6 +25,53 @@ use serde::{Deserialize, Serialize};
 include!(concat!(env!("OUT_DIR"), "/mz_persist_client.cfg.rs"));
 
 /// The tunable knobs for persist.
+///
+/// Tuning inputs:
+/// - A larger blob_target_size (capped at KEY_VAL_DATA_MAX_LEN) results in
+///   fewer entries in consensus state. Before we have compaction and/or
+///   incremental state, it is already growing without bound, so this is a
+///   concern. OTOH, for any "reasonable" size (> 100MiB?) of blob_target_size,
+///   it seems we'd end up with a pretty tremendous amount of data in the shard
+///   before this became a real issue.
+/// - A larger blob_target_size will results in fewer s3 operations, which are
+///   charged per operation. (Hmm, maybe not if we're charged per call in a
+///   multipart op. The S3Blob impl already chunks things at 8MiB.)
+/// - A smaller blob_target_size will result in more even memory usage in
+///   readers.
+/// - A larger batch_builder_max_outstanding_parts increases throughput (to a
+///   point).
+/// - A smaller batch_builder_max_outstanding_parts provides a bound on the
+///   amount of memory used by a writer.
+/// - A larger compaction_heuristic_min_inputs means state size is larger.
+/// - A smaller compaction_heuristic_min_inputs means more compactions happen
+///   (higher write amp).
+/// - A larger compaction_heuristic_min_updates means more consolidations are
+///   discovered while reading a snapshot (higher read amp and higher space
+///   amp).
+/// - A smaller compaction_heuristic_min_updates means more compactions happen
+///   (higher write amp).
+///
+/// Tuning logic:
+/// - blob_target_size was initially selected to be an exact multiple of 8MiB
+///   (the s3 multipart size) that was in the same neighborhood as our initial
+///   max throughput (~250MiB).
+/// - batch_builder_max_outstanding_parts was initially selected to be as small
+///   as possible without harming pipelining. 0 means no pipelining, 1 is full
+///   pipelining as long as generating data takes less time than writing to s3
+///   (hopefully a fair assumption), 2 is a little extra slop on top of 1.
+/// - compaction_heuristic_min_inputs was set by running the open-loop benchmark
+///   with batches of size 10,240 bytes (selected to be small but such that the
+///   overhead of our columnar encoding format was less than 10%) and manually
+///   increased until the write amp stopped going down. This becomes much less
+///   important once we have incremental state. The initial value is a
+///   placeholder and should be revisited at some point.
+/// - compaction_heuristic_min_updates was set via a thought experiment. This is
+///   an `O(n*log(n))` upper bound on the number of unconsolidated updates that
+///   would be consolidated if we compacted as the in-mem Spine does. The
+///   initial value is a placeholder and should be revisited at some point.
+///
+/// TODO: Move these tuning notes into SessionVar descriptions once we have
+/// SystemVars for most of these.
 #[derive(Debug, Clone)]
 pub struct PersistConfig {
     /// Info about which version of the code is running.
@@ -110,48 +157,6 @@ pub struct PersistConfig {
     pub hostname: String,
 }
 
-// Tuning inputs:
-// - A larger blob_target_size (capped at KEY_VAL_DATA_MAX_LEN) results in fewer
-//   entries in consensus state. Before we have compaction and/or incremental
-//   state, it is already growing without bound, so this is a concern. OTOH, for
-//   any "reasonable" size (> 100MiB?) of blob_target_size, it seems we'd end up
-//   with a pretty tremendous amount of data in the shard before this became a
-//   real issue.
-// - A larger blob_target_size will results in fewer s3 operations, which are
-//   charged per operation. (Hmm, maybe not if we're charged per call in a
-//   multipart op. The S3Blob impl already chunks things at 8MiB.)
-// - A smaller blob_target_size will result in more even memory usage in
-//   readers.
-// - A larger batch_builder_max_outstanding_parts increases throughput (to a
-//   point).
-// - A smaller batch_builder_max_outstanding_parts provides a bound on the
-//   amount of memory used by a writer.
-// - A larger compaction_heuristic_min_inputs means state size is larger.
-// - A smaller compaction_heuristic_min_inputs means more compactions happen
-//   (higher write amp).
-// - A larger compaction_heuristic_min_updates means more consolidations are
-//   discovered while reading a snapshot (higher read amp and higher space amp).
-// - A smaller compaction_heuristic_min_updates means more compactions happen
-//   (higher write amp).
-//
-// Tuning logic:
-// - blob_target_size was initially selected to be an exact multiple of 8MiB
-//   (the s3 multipart size) that was in the same neighborhood as our initial
-//   max throughput (~250MiB).
-// - batch_builder_max_outstanding_parts was initially selected to be as small
-//   as possible without harming pipelining. 0 means no pipelining, 1 is full
-//   pipelining as long as generating data takes less time than writing to s3
-//   (hopefully a fair assumption), 2 is a little extra slop on top of 1.
-// - compaction_heuristic_min_inputs was set by running the open-loop benchmark
-//   with batches of size 10,240 bytes (selected to be small but such that the
-//   overhead of our columnar encoding format was less than 10%) and manually
-//   increased until the write amp stopped going down. This becomes much less
-//   important once we have incremental state. The initial value is a
-//   placeholder and should be revisited at some point.
-// - compaction_heuristic_min_updates was set via a thought experiment. This is
-//   an `O(n*log(n))` upper bound on the number of unconsolidated updates that
-//   would be consolidated if we compacted as the in-mem Spine does. The initial
-//   value is a placeholder and should be revisited at some point.
 impl PersistConfig {
     /// Returns a new instance of [PersistConfig] with default tuning.
     pub fn new(build_info: &BuildInfo, now: NowFn) -> Self {
