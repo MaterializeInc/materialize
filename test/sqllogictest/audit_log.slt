@@ -129,3 +129,29 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 44  create  source  {"database":"materialize","id":"u13","item":"multiplex","schema":"public","size":"1","type":"load-generator"}  materialize
 45  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","replica_id":"4","replica_name":"r"}  materialize
 46  drop  cluster  {"id":"u2","name":"foo"}  materialize
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET mock_audit_event_timestamp = 666
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE tt ()
+
+query ITTTTT
+SELECT id, event_type, object_type, details, user, occurred_at FROM mz_audit_events ORDER BY id DESC LIMIT 1
+----
+47  create  table  {"database":"materialize","id":"u14","item":"tt","schema":"public"}  materialize  1970-01-01␠00:00:00.666+00
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET mock_audit_event_timestamp
+----
+COMPLETE 0
+
+statement ok
+DROP TABLE tt
+
+query B
+SELECT occurred_at::text = '1970-01-01 00:00:00.666+00' FROM mz_audit_events ORDER BY id DESC LIMIT 1
+----
+false
