@@ -4562,6 +4562,7 @@ name = "mz-sql-parser"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bytesize",
  "datadriven",
  "enum-kinds",
  "itertools",

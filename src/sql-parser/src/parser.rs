@@ -23,6 +23,7 @@
 use std::error::Error;
 use std::fmt;
 
+use bytesize::ByteSize;
 use itertools::Itertools;
 use tracing::warn;
 
@@ -40,6 +41,9 @@ use crate::lexer::{self, Token};
 // a healthy factor to be conservative.
 const RECURSION_LIMIT: usize = 128;
 
+/// Maximum allowed size for a batch of statements
+pub const MAX_STATEMENT_BATCH_SIZE: ByteSize = ByteSize::mb(1);
+
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
     ($parser:expr, $pos:expr, $MSG:expr) => {
@@ -53,6 +57,12 @@ macro_rules! parser_err {
 /// Parses a SQL string containing zero or more SQL statements.
 #[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
 pub fn parse_statements(sql: &str) -> Result<Vec<Statement<Raw>>, ParserError> {
+    if sql.bytes().count() > usize::cast_from(MAX_STATEMENT_BATCH_SIZE.as_u64()) {
+        return Err(ParserError::new(
+            usize::cast_from(MAX_STATEMENT_BATCH_SIZE.as_u64()),
+            format!("statement batch size cannot exceed {MAX_STATEMENT_BATCH_SIZE}"),
+        ));
+    }
     let tokens = lexer::lex(sql)?;
     Parser::new(sql, tokens).parse_statements()
 }
