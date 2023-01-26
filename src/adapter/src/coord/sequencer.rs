@@ -1061,6 +1061,7 @@ impl Coordinator {
     async fn create_cluster_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
         let cluster = self.catalog.get_cluster(cluster_id);
         let replica_config = cluster.replicas_by_id[&replica_id].config.clone();
+        let role = cluster.role();
 
         let log_source_ids: Vec<_> = replica_config.compute.logging.source_ids().collect();
         let log_source_collections = replica_config
@@ -1077,7 +1078,7 @@ impl Coordinator {
             .unwrap();
 
         self.controller
-            .create_replica(cluster.id, replica_id, replica_config)
+            .create_replica(cluster.id, replica_id, role, replica_config)
             .await
             .expect("creating replica must not fail");
 
