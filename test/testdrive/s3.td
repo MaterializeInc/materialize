@@ -172,5 +172,7 @@ id value
 4  c
 5  c
 
+$ set-regex match=\d+ replacement=<NUMBER>
+
 > SELECT * FROM s3_csv_headers_progress
-7
+<NUMBER>

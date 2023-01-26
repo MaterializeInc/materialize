@@ -9,10 +9,11 @@
 
 use semver::Version;
 use std::collections::BTreeMap;
+use tracing::info;
 
 use mz_ore::collections::CollectionExt;
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{Raw, Statement};
+use mz_sql::ast::{Raw, Statement, UnresolvedObjectName};
 use mz_sql::plan::{Params, PlanContext};
 
 use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};
@@ -21,14 +22,14 @@ use super::storage::Transaction;
 
 fn rewrite_items<F>(tx: &mut Transaction, mut f: F) -> Result<(), anyhow::Error>
 where
-    F: FnMut(&mut mz_sql::ast::Statement<Raw>) -> Result<(), anyhow::Error>,
+    F: FnMut(&mut Transaction, &mut mz_sql::ast::Statement<Raw>) -> Result<(), anyhow::Error>,
 {
     let mut updated_items = BTreeMap::new();
     let items = tx.loaded_items();
     for (id, name, SerializedCatalogItem::V1 { create_sql }) in items {
         let mut stmt = mz_sql::parse::parse(&create_sql)?.into_element();
 
-        f(&mut stmt)?;
+        f(tx, &mut stmt)?;
 
         let serialized_item = SerializedCatalogItem::V1 {
             create_sql: stmt.to_ast_string_stable(),
@@ -43,13 +44,16 @@ where
 pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> {
     let mut storage = catalog.storage().await;
     let catalog_version = storage.get_catalog_content_version().await?;
-    let _catalog_version = match catalog_version {
+    let catalog_version = match catalog_version {
         Some(v) => Version::parse(&v)?,
         None => Version::new(0, 0, 0),
     };
+
+    info!("migrating from catalog version {:?}", catalog_version);
+
     let mut tx = storage.transaction().await?;
     // First, do basic AST -> AST transformations.
-    rewrite_items(&mut tx, |stmt| {
+    rewrite_items(&mut tx, |_tx, stmt| {
         subsource_type_option_rewrite(stmt);
         csr_url_path_rewrite(stmt);
         Ok(())
@@ -62,12 +66,17 @@ pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> 
     // you are really certain you want one of these crazy migrations.
     let cat = Catalog::load_catalog_items(&mut tx, catalog)?;
     let conn_cat = cat.for_system_session();
-
-    rewrite_items(&mut tx, |item| {
+    rewrite_items(&mut tx, |tx, item| {
         normalize_create_secrets(&conn_cat, item)?;
+        progress_collection_rewrite(&conn_cat, tx, item)?;
         Ok(())
     })?;
-    tx.commit().await.map_err(|e| e.into())
+    tx.commit().await?;
+    info!(
+        "migration from catalog version {:?} complete",
+        catalog_version
+    );
+    Ok(())
 }
 
 // Add new migrations below their appropriate heading, and precede them with a
@@ -169,6 +178,113 @@ fn normalize_create_secrets(
         };
         *stmt = mz_sql::parse::parse(&create_secret_plan.secret.create_sql)?.into_element();
     }
+    Ok(())
+}
 
+// Rewrites all subsource references to be qualified by their IDs, which is the
+// mechanism by which `DeferredObjectName` differentiates between user input and
+// created objects.
+// TODO: delete in version v0.45 (released in v0.43 + 1 additional release)
+fn progress_collection_rewrite(
+    cat: &ConnCatalog<'_>,
+    tx: &mut Transaction<'_>,
+    stmt: &mut mz_sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{CreateSourceConnection, CreateSubsourceOptionName};
+
+    if let Statement::CreateSource(mz_sql::ast::CreateSourceStatement {
+        name,
+        connection,
+        progress_subsource,
+        ..
+    }) = stmt
+    {
+        if progress_subsource.is_some() {
+            return Ok(());
+        }
+
+        let progress_desc = match connection {
+            CreateSourceConnection::Kafka(_) => {
+                &mz_storage_client::types::sources::KAFKA_PROGRESS_DESC
+            }
+            CreateSourceConnection::Kinesis { .. } => {
+                &mz_storage_client::types::sources::KINESIS_PROGRESS_DESC
+            }
+            CreateSourceConnection::S3 { .. } => {
+                &mz_storage_client::types::sources::S3_PROGRESS_DESC
+            }
+            CreateSourceConnection::Postgres { .. } => {
+                &mz_storage_client::types::sources::PG_PROGRESS_DESC
+            }
+            CreateSourceConnection::LoadGenerator { .. } => {
+                &mz_storage_client::types::sources::LOAD_GEN_PROGRESS_DESC
+            }
+            CreateSourceConnection::TestScript { .. } => {
+                &mz_storage_client::types::sources::TEST_SCRIPT_PROGRESS_DESC
+            }
+        };
+
+        // Generate a new GlobalId for the subsource.
+        let progress_subsource_id =
+            mz_repr::GlobalId::User(tx.get_and_increment_id("user".to_string())?);
+
+        // Generate a StatementContext, which is simplest for handling names.
+        let scx = mz_sql::plan::StatementContext::new(None, cat);
+
+        // Find an available name.
+        let (item, prefix) = name.0.split_last().expect("must have at least one element");
+        let mut suggested_name = prefix.to_vec();
+        suggested_name.push(format!("{}_progress", item.as_str()).into());
+
+        let partial =
+            mz_sql::normalize::unresolved_object_name(UnresolvedObjectName(suggested_name))?;
+        let qualified = scx.allocate_qualified_name(partial)?;
+        let found_name = scx.catalog.find_available_name(qualified);
+        let full_name = scx.catalog.resolve_full_name(&found_name);
+
+        // Grab the item name, which is necessary to add this item to the
+        // current transaction.
+        let item_name = full_name.item.clone();
+
+        info!(
+            "adding progress subsource to {:?}; named {:?}, with id {:?}",
+            name, full_name, progress_subsource_id,
+        );
+
+        // Generate an unresolved version of the name, which will
+        // ultimately go in the parent `CREATE SOURCE` statement.
+        let name = UnresolvedObjectName::from(full_name);
+
+        // Generate the progress subsource schema.
+        let (columns, table_constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
+
+        // Create the subsource statement
+        let subsource = mz_sql::ast::CreateSubsourceStatement {
+            name: name.clone(),
+            columns,
+            constraints: table_constraints,
+            if_not_exists: false,
+            with_options: vec![mz_sql::ast::CreateSubsourceOption {
+                name: CreateSubsourceOptionName::Progress,
+                value: Some(mz_sql::ast::WithOptionValue::Value(
+                    mz_sql::ast::Value::Boolean(true),
+                )),
+            }],
+        };
+
+        tx.insert_item(
+            progress_subsource_id,
+            found_name.qualifiers.schema_spec.into(),
+            &item_name,
+            SerializedCatalogItem::V1 {
+                create_sql: subsource.to_ast_string_stable(),
+            },
+        )?;
+
+        // Place the newly created subsource into the `CREATE SOURCE` statement.
+        *progress_subsource = Some(mz_sql::ast::DeferredObjectName::Named(
+            mz_sql::ast::RawObjectName::Id(progress_subsource_id.to_string(), name),
+        ));
+    }
     Ok(())
 }

@@ -23,9 +23,11 @@ one
 > SELECT * from data
 one
 
+$ set-regex match=\d+ replacement=<NUMBER>
+
 # Ensure that we can select from automatically generated remap collection
 > SELECT * FROM data_progress
-0 1
+<NUMBER> <NUMBER>
 
 > CREATE SOURCE d
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -33,4 +35,4 @@ one
   EXPOSE PROGRESS AS exposed_progress_data;
 
 > SELECT * FROM exposed_progress_data
-0 1
+<NUMBER> <NUMBER>
