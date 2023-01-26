@@ -21,6 +21,7 @@ use arrow2::io::parquet::write::Encoding;
 
 use crate::columnar::sealed::ColumnRef;
 use crate::columnar::{ColumnFormat, Data, DataType, Schema};
+use crate::ord::{ColOrd, ColsOrd};
 
 /// A columnar representation of one blob's worth of data.
 #[derive(Debug, Default)]
@@ -239,6 +240,40 @@ impl Part {
         Ok(part)
     }
 
+    /// Returns a sorted copy of this Part.
+    ///
+    /// This is a full deep clone of the data. Sort ordering is `(K, V, T, D)`
+    /// where each column is ordered according to the parquet ordering
+    /// semantics.
+    pub fn sort(&self) -> Self {
+        let key_cols = self
+            .key
+            .iter()
+            .map(|(_, x)| x.to_col_ord())
+            .collect::<Vec<_>>();
+        let key_cols = ColsOrd::new(&key_cols);
+        let val_cols = self
+            .val
+            .iter()
+            .map(|(_, x)| x.to_col_ord())
+            .collect::<Vec<_>>();
+        let val_cols = ColsOrd::new(&val_cols);
+        let ts_col = [ColOrd::I64(&self.ts)];
+        let ts_col = ColsOrd::new(&ts_col);
+        let mut indexes = (0..self.len())
+            .map(|idx| (key_cols.key(idx), val_cols.key(idx), ts_col.key(idx)))
+            .collect::<Vec<_>>();
+        indexes.sort();
+        eprintln!(
+            "{:?}",
+            indexes
+                .iter()
+                .map(|(k, v, t)| (k.idx, v.idx, t.idx))
+                .collect::<Vec<_>>()
+        );
+        todo!("WIP");
+    }
+
     fn validate(&self) -> Result<(), String> {
         for (name, col) in self.key.iter() {
             if self.len != col.len() {
@@ -381,16 +416,28 @@ impl DynColumnRef {
         Ok(col)
     }
 
+    fn expect_downcast<T: Data>(&self) -> &T::Col {
+        self.1
+            .downcast_ref::<T::Col>()
+            .expect("DynColumnRef DataType should have internally consistent")
+    }
+
     pub fn len(&self) -> usize {
         struct LenDataFn<'a>(&'a DynColumnRef);
-        impl DataFn<Result<usize, String>> for LenDataFn<'_> {
-            fn call<T: Data>(self) -> Result<usize, String> {
-                self.0.downcast::<T>().map(|x| x.len())
+        impl DataFn<usize> for LenDataFn<'_> {
+            fn call<T: Data>(self) -> usize {
+                self.0.expect_downcast::<T>().len()
             }
         }
-        self.0
-            .data_fn(LenDataFn(self))
-            .expect("DynColumnRef DataType should have internally consistent")
+        self.0.data_fn(LenDataFn(self))
+    }
+
+    fn to_col_ord<'a>(&'a self) -> ColOrd<'a> {
+        match (self.0.optional, self.0.format) {
+            (false, ColumnFormat::I64) => ColOrd::I64(self.expect_downcast::<i64>()),
+            (false, ColumnFormat::String) => ColOrd::String(self.expect_downcast::<String>()),
+            _ => panic!("WIP"),
+        }
     }
 
     #[allow(clippy::borrowed_box)]
@@ -411,14 +458,12 @@ impl DynColumnRef {
 
     pub(crate) fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
         struct ToArrowDataFn<'a>(&'a DynColumnRef);
-        impl DataFn<Result<(Encoding, Box<dyn Array>), String>> for ToArrowDataFn<'_> {
-            fn call<T: Data>(self) -> Result<(Encoding, Box<dyn Array>), String> {
-                Ok(self.0.downcast::<T>()?.to_arrow())
+        impl DataFn<(Encoding, Box<dyn Array>)> for ToArrowDataFn<'_> {
+            fn call<T: Data>(self) -> (Encoding, Box<dyn Array>) {
+                self.0.expect_downcast::<T>().to_arrow()
             }
         }
-        self.0
-            .data_fn(ToArrowDataFn(self))
-            .expect("DynColumnRef DataType should have internally consistent")
+        self.0.data_fn(ToArrowDataFn(self))
     }
 }
 
@@ -579,6 +624,9 @@ impl DataType {
 mod tests {
     use std::marker::PhantomData;
 
+    use crate::codec_impls::{StringSchema, UnitSchema};
+    use crate::columnar::PartEncoder;
+
     use super::*;
 
     // Make sure that the API structs are Sync + Send, so that they can be used in async tasks.
@@ -591,5 +639,25 @@ mod tests {
 
         assert!(is_send_sync::<Part>(PhantomData));
         assert!(is_send_sync::<PartBuilder>(PhantomData));
+    }
+
+    #[test]
+    fn part_sort() {
+        let mut part = PartBuilder::new(&StringSchema, &UnitSchema);
+        {
+            let mut keys = StringSchema.encoder(part.key_mut()).unwrap();
+            keys.encode(&format!("foo"));
+            keys.encode(&format!("foo"));
+            keys.encode(&format!("foo"));
+            keys.encode(&format!("bar"));
+            keys.encode(&format!("baz"));
+        }
+        part.push_ts_diff(3, 1);
+        part.push_ts_diff(1, 1);
+        part.push_ts_diff(2, 1);
+        part.push_ts_diff(1, 1);
+        part.push_ts_diff(1, 1);
+        let part = part.finish().unwrap();
+        let _sorted = part.sort();
     }
 }
