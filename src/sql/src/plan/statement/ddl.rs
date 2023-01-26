@@ -3360,7 +3360,6 @@ pub fn plan_drop_cluster_replica(
             Err(_) if if_exists => continue,
             Err(e) => return Err(e.into()),
         };
-        // ensure_cluster_is_not_linked(scx, cluster)?;
         let replica_name = replica.into_string();
         // Check to see if name exists
         if let Some(replica_id) = cluster.replicas().get(&replica_name) {

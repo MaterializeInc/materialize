@@ -983,6 +983,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         self.ensure_cluster_is_not_linked(cluster_id)?;
 
+        // Choose default AZ if necessary
         let (compute, location) = match config {
             mz_sql::plan::ReplicaConfig::Unmanaged {
                 storagectl_addr,
