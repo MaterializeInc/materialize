@@ -1225,7 +1225,7 @@ impl CatalogState {
             self.unsafe_mode(),
             self.system_configuration.mock_audit_event_timestamp(),
         ) {
-            (true, Some(ts)) => ts,
+            (true, Some(ts)) => ts.into(),
             _ => oracle_write_ts.into(),
         };
         let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;

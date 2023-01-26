@@ -415,7 +415,7 @@ static EMIT_TRACE_ID_NOTICE: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
-static MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<u64>> = ServerVar {
+static MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = ServerVar {
     name: UncasedStr::new("mock_audit_event_timestamp"),
     value: &None,
     description: "Mocked timestamp to use for audit events for testing purposes",
@@ -1046,7 +1046,7 @@ pub struct SystemVars {
     metrics_retention: SystemVar<Duration>,
 
     // testing
-    mock_audit_event_timestamp: SystemVar<Option<u64>>,
+    mock_audit_event_timestamp: SystemVar<Option<mz_repr::Timestamp>>,
 }
 
 impl Default for SystemVars {
@@ -1433,7 +1433,7 @@ impl SystemVars {
     }
 
     /// Returns the `mock_audit_event_timestamp` configuration parameter.
-    pub fn mock_audit_event_timestamp(&self) -> Option<u64> {
+    pub fn mock_audit_event_timestamp(&self) -> Option<mz_repr::Timestamp> {
         *self.mock_audit_event_timestamp.value()
     }
 }
@@ -1790,10 +1790,10 @@ impl Value for u32 {
     }
 }
 
-impl Value for u64 {
-    const TYPE_NAME: &'static str = "unsigned integer";
+impl Value for mz_repr::Timestamp {
+    const TYPE_NAME: &'static str = "mz-timestamp";
 
-    fn parse(s: &str) -> Result<u64, ()> {
+    fn parse(s: &str) -> Result<mz_repr::Timestamp, ()> {
         s.parse().map_err(|_| ())
     }
 
@@ -2030,13 +2030,13 @@ impl Value for Option<String> {
     }
 }
 
-impl Value for Option<u64> {
+impl Value for Option<mz_repr::Timestamp> {
     const TYPE_NAME: &'static str = "optional unsigned integer";
 
-    fn parse(s: &str) -> Result<Option<u64>, ()> {
+    fn parse(s: &str) -> Result<Option<mz_repr::Timestamp>, ()> {
         match s {
             "" => Ok(None),
-            _ => <u64 as Value>::parse(s).map(Some),
+            _ => <mz_repr::Timestamp as Value>::parse(s).map(Some),
         }
     }
 
