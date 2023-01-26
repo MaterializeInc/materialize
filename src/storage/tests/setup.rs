@@ -77,7 +77,7 @@
 //! Unit tests for sources.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::marker::{Send, Sync};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -215,40 +215,24 @@ where
 
             let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_cache));
 
-            let storage_state = mz_storage::storage_state::StorageState {
-                source_uppers: HashMap::new(),
-                source_tokens: HashMap::new(),
-                decode_metrics,
-                reported_frontiers: HashMap::new(),
-                ingestions: HashMap::new(),
-                exports: HashMap::new(),
-                now: SYSTEM_TIME.clone(),
-                source_metrics,
-                sink_metrics,
-                timely_worker_index: 0,
-                timely_worker_peers: 0,
-                connection_context: mz_storage_client::types::connections::ConnectionContext {
-                    librdkafka_log_level: tracing::Level::INFO,
-                    aws_external_id_prefix: None,
-                    secrets_reader: Arc::new(mz_secrets::InMemorySecretsController::new()),
-                },
-                persist_clients: Arc::clone(&persist_clients),
-                sink_tokens: HashMap::new(),
-                sink_write_frontiers: HashMap::new(),
-                sink_handles: HashMap::new(),
-                dropped_ids: Vec::new(),
-                source_statistics: HashMap::new(),
-                sink_statistics: HashMap::new(),
-                internal_cmd_tx: HaltingInternalCommandSender::new(),
-                async_worker: None,
+            let connection_context = mz_storage_client::types::connections::ConnectionContext {
+                librdkafka_log_level: tracing::Level::INFO,
+                aws_external_id_prefix: None,
+                secrets_reader: Arc::new(mz_secrets::InMemorySecretsController::new()),
             };
 
             let (_fake_tx, fake_rx) = crossbeam_channel::bounded(1);
-            let mut worker = mz_storage::storage_state::Worker {
+            let mut worker = mz_storage::storage_state::Worker::new(
                 timely_worker,
-                storage_state,
-                client_rx: fake_rx,
-            };
+                fake_rx,
+                decode_metrics,
+                source_metrics,
+                sink_metrics,
+                SYSTEM_TIME.clone(),
+                connection_context,
+                Arc::clone(&persist_clients),
+            );
+
             let collection_metadata = mz_storage_client::controller::CollectionMetadata {
                 persist_location,
                 remap_shard: mz_persist_client::ShardId::new(),

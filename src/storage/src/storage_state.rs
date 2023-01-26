@@ -117,12 +117,58 @@ type ResponseSender = mpsc::UnboundedSender<StorageResponse>;
 /// holding state that persists across function calls.
 pub struct Worker<'w, A: Allocate> {
     /// The underlying Timely worker.
+    ///
+    /// NOTE: This is `pub` for testing.
     pub timely_worker: &'w mut TimelyWorker<A>,
     /// The channel over which communication handles for newly connected clients
     /// are delivered.
-    pub client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
+    client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
     /// The state associated with collection ingress and egress.
-    pub storage_state: StorageState,
+    storage_state: StorageState,
+}
+
+impl<'w, A: Allocate> Worker<'w, A> {
+    /// Creates new `Worker` state from the given components.
+    pub fn new(
+        timely_worker: &'w mut TimelyWorker<A>,
+        client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
+        decode_metrics: DecodeMetrics,
+        source_metrics: SourceBaseMetrics,
+        sink_metrics: SinkBaseMetrics,
+        now: NowFn,
+        connection_context: ConnectionContext,
+        persist_clients: Arc<Mutex<PersistClientCache>>,
+    ) -> Self {
+        let storage_state = StorageState {
+            source_uppers: HashMap::new(),
+            source_tokens: HashMap::new(),
+            decode_metrics,
+            reported_frontiers: HashMap::new(),
+            ingestions: HashMap::new(),
+            exports: HashMap::new(),
+            now,
+            source_metrics,
+            sink_metrics,
+            timely_worker_index: timely_worker.index(),
+            timely_worker_peers: timely_worker.peers(),
+            connection_context,
+            persist_clients,
+            sink_tokens: HashMap::new(),
+            sink_write_frontiers: HashMap::new(),
+            sink_handles: HashMap::new(),
+            dropped_ids: Vec::new(),
+            source_statistics: HashMap::new(),
+            sink_statistics: HashMap::new(),
+            internal_cmd_tx: None,
+            async_worker: None,
+        };
+
+        Self {
+            timely_worker,
+            client_rx,
+            storage_state,
+        }
+    }
 }
 
 /// Worker-local state related to the ingress or egress of collections of data.

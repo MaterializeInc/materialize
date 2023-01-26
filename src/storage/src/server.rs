@@ -9,7 +9,6 @@
 
 //! An interactive dataflow server.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
@@ -25,7 +24,7 @@ use mz_storage_client::types::connections::ConnectionContext;
 
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
-use crate::storage_state::{StorageState, Worker};
+use crate::storage_state::Worker;
 use crate::DecodeMetrics;
 
 /// Configures a dataflow server.
@@ -74,7 +73,6 @@ pub fn serve(
 
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
         let timely_worker_index = timely_worker.index();
-        let timely_worker_peers = timely_worker.peers();
 
         // ensure tokio primitives are available on timely workers
         let _tokio_guard = tokio_executor.enter();
@@ -84,34 +82,17 @@ pub fn serve(
             .unwrap();
         let (source_metrics, sink_metrics, decode_metrics) = metrics_bundle.clone();
         let persist_clients = Arc::clone(&config.persist_clients);
-        Worker {
+        let mut worker = Worker::new(
             timely_worker,
             client_rx,
-            storage_state: StorageState {
-                source_uppers: HashMap::new(),
-                source_tokens: HashMap::new(),
-                decode_metrics,
-                reported_frontiers: HashMap::new(),
-                ingestions: HashMap::new(),
-                exports: HashMap::new(),
-                now: now.clone(),
-                source_metrics,
-                sink_metrics,
-                timely_worker_index,
-                timely_worker_peers,
-                connection_context: config.connection_context.clone(),
-                persist_clients,
-                sink_tokens: HashMap::new(),
-                sink_write_frontiers: HashMap::new(),
-                sink_handles: HashMap::new(),
-                dropped_ids: Vec::new(),
-                source_statistics: HashMap::new(),
-                sink_statistics: HashMap::new(),
-                internal_cmd_tx: None,
-                async_worker: None,
-            },
-        }
-        .run()
+            decode_metrics,
+            source_metrics,
+            sink_metrics,
+            now.clone(),
+            config.connection_context.clone(),
+            persist_clients,
+        );
+        worker.run();
     })
     .map_err(|e| anyhow!("{}", e))?;
     let worker_threads = worker_guards
