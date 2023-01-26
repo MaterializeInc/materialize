@@ -82,8 +82,7 @@ use crate::explain_new::optimizer_trace::OptimizerTrace;
 use crate::metrics;
 use crate::notice::AdapterNotice;
 use crate::session::vars::{
-    IsolationLevel, CLUSTER_VAR_NAME, DATABASE_VAR_NAME, REAL_TIME_RECENCY_VAR_NAME,
-    TRANSACTION_ISOLATION_VAR_NAME,
+    IsolationLevel, CLUSTER_VAR_NAME, DATABASE_VAR_NAME, TRANSACTION_ISOLATION_VAR_NAME,
 };
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
@@ -1809,6 +1808,7 @@ impl Coordinator {
                 .iter()
                 .chain(self.catalog.system_config().iter())
                 .filter(|v| !v.experimental() && v.visible(session.user()))
+                .filter(|v| v.safe() || self.catalog.unsafe_mode())
                 .map(|v| {
                     Row::pack_slice(&[
                         Datum::String(v.name()),
@@ -1830,7 +1830,7 @@ impl Coordinator {
             .get(&plan.name)
             .or_else(|_| self.catalog.system_config().get(&plan.name))?;
 
-        if variable.visible(session.user()) {
+        if variable.visible(session.user()) && (variable.safe() || self.catalog.unsafe_mode()) {
             let row = Row::pack_slice(&[Datum::String(&variable.value())]);
             Ok(send_immediate_rows(vec![row]))
         } else {
@@ -1854,8 +1854,9 @@ impl Coordinator {
             value => Some(value.to_string()), // or else use the AstDisplay for SetVariableValue
         };
 
-        if name.as_str() == REAL_TIME_RECENCY_VAR_NAME {
-            self.catalog.require_unsafe_mode("REAL TIME RECENCY")?;
+        let var = vars.get(&name)?;
+        if !var.safe() {
+            self.catalog.require_unsafe_mode(var.name())?;
         }
 
         match &value {
@@ -1904,11 +1905,14 @@ impl Coordinator {
         session: &mut Session,
         plan: ResetVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        session.vars_mut().reset(&plan.name, false)?;
-        Ok(ExecuteResponse::SetVariable {
-            name: plan.name,
-            reset: true,
-        })
+        let vars = session.vars_mut();
+        let name = plan.name;
+        let var = vars.get(&name)?;
+        if !var.safe() {
+            self.catalog.require_unsafe_mode(var.name())?;
+        }
+        session.vars_mut().reset(&name, false)?;
+        Ok(ExecuteResponse::SetVariable { name, reset: true })
     }
 
     pub(crate) fn sequence_end_transaction(
@@ -3599,8 +3603,12 @@ impl Coordinator {
         session: &Session,
         AlterSystemSetPlan { name, value }: AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.is_user_allowed_to_alter_system(session)?;
         use mz_sql::ast::{SetVariableValue, Value};
+        self.is_user_allowed_to_alter_system(session)?;
+        let var = self.catalog.state().get_system_configuration(&name)?;
+        if !var.safe() {
+            self.catalog.require_unsafe_mode(var.name())?;
+        }
         let update_compute_config = session::vars::is_compute_config_var(&name);
         let update_storage_config = session::vars::is_storage_config_var(&name);
         let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
@@ -3637,6 +3645,10 @@ impl Coordinator {
         AlterSystemResetPlan { name }: AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session)?;
+        let var = self.catalog.state().get_system_configuration(&name)?;
+        if !var.safe() {
+            self.catalog.require_unsafe_mode(var.name())?;
+        }
         let update_compute_config = session::vars::is_compute_config_var(&name);
         let update_storage_config = session::vars::is_storage_config_var(&name);
         let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();

@@ -860,6 +860,11 @@ impl CatalogState {
             .process_status[&process_id]
     }
 
+    /// Get system configuration `name`.
+    pub fn get_system_configuration(&self, name: &str) -> Result<&dyn Var, AdapterError> {
+        self.system_configuration.get(name)
+    }
+
     /// Insert system configuration `name` with `value`.
     ///
     /// Return a `bool` value indicating whether the configuration was modified
@@ -1017,6 +1022,10 @@ impl CatalogState {
 
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         &self.config
+    }
+
+    pub fn unsafe_mode(&self) -> bool {
+        self.config.unsafe_mode
     }
 
     pub fn resolve_database(&self, database_name: &str) -> Result<&Database, SqlCatalogError> {
@@ -1212,7 +1221,13 @@ impl CatalogState {
         details: EventDetails,
     ) -> Result<(), Error> {
         let user = session.map(|session| session.user().name.to_string());
-        let occurred_at = oracle_write_ts.into();
+        let occurred_at = match (
+            self.unsafe_mode(),
+            self.system_configuration.mock_audit_event_timestamp(),
+        ) {
+            (true, Some(ts)) => ts,
+            _ => oracle_write_ts.into(),
+        };
         let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
         let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
         builtin_table_updates.push(self.pack_audit_log_update(&event)?);
