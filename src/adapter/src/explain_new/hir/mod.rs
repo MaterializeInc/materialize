@@ -22,7 +22,7 @@ use mz_repr::{
 };
 use mz_sql::plan::{HirRelationExpr, HirScalarExpr};
 
-use super::{AnnotatedPlan, ExplainContext, ExplainSinglePlan, Explainable};
+use super::{AnnotatedPlan, ExplainContext, ExplainSinglePlan, Explainable, ScalarOps};
 
 impl<'a> Explain<'a> for Explainable<'a, HirRelationExpr> {
     type Context = ExplainContext<'a>;
@@ -165,4 +165,20 @@ fn id_gen(expr: &HirRelationExpr) -> Result<impl Iterator<Item = LocalId>, Recur
     })?;
 
     Ok((max_id + 1..).map(LocalId::new))
+}
+
+impl ScalarOps for HirScalarExpr {
+    fn match_col_ref(&self) -> Option<usize> {
+        match self {
+            HirScalarExpr::Column(c) if c.level == 0 => Some(c.column),
+            _ => None,
+        }
+    }
+
+    fn references(&self, column: usize) -> bool {
+        match self {
+            HirScalarExpr::Column(c) => c.column == column && c.level == 0,
+            _ => false,
+        }
+    }
 }

@@ -31,7 +31,7 @@ use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
 use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
 use mz_repr::{GlobalId, Row};
 
-use crate::explain_new::{Displayable, PlanRenderingContext};
+use crate::explain_new::{CompactScalarSeq, Displayable, PlanRenderingContext};
 
 impl<'a> DisplayText<PlanRenderingContext<'_, MirRelationExpr>>
     for Displayable<'a, MirRelationExpr>
@@ -184,7 +184,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
             Map { scalars, input } => {
                 FmtNode {
                     fmt_root: |f, ctx| {
-                        let scalars = separated_text(", ", scalars.iter().map(Displayable::from));
+                        let scalars = CompactScalarSeq(scalars);
                         write!(f, "{}Map ({})", ctx.indent, scalars)?;
                         self.fmt_attributes(f, ctx)
                     },
@@ -198,7 +198,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
             FlatMap { input, func, exprs } => {
                 FmtNode {
                     fmt_root: |f, ctx| {
-                        let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                        let exprs = CompactScalarSeq(exprs);
                         write!(f, "{}FlatMap {}({})", ctx.indent, func, exprs)?;
                         self.fmt_attributes(f, ctx)
                     },
@@ -288,7 +288,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                         if key.is_empty() {
                             "×".to_owned()
                         } else {
-                            separated_text(", ", key.iter().map(Displayable::from)).to_string()
+                            CompactScalarSeq(key).to_string()
                         }
                     };
                     let join_order = |start_idx: usize,
@@ -390,8 +390,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                             write!(f, "{}Distinct", ctx.indent)?;
                         }
                         if group_key.len() > 0 {
-                            let group_key =
-                                separated_text(", ", group_key.iter().map(Displayable::from));
+                            let group_key = CompactScalarSeq(group_key);
                             write!(f, " group_by=[{}]", group_key)?;
                         }
                         if aggregates.len() > 0 {
@@ -486,11 +485,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
             ArrangeBy { input, keys } => {
                 FmtNode {
                     fmt_root: |f, ctx| {
-                        let keys = separated(
-                            "], [",
-                            keys.iter()
-                                .map(|key| separated_text(", ", key.iter().map(Displayable::from))),
-                        );
+                        let keys = separated("], [", keys.iter().map(|key| CompactScalarSeq(key)));
                         write!(f, "{}ArrangeBy keys=[[{}]]", ctx.indent, keys)?;
                         self.fmt_attributes(f, ctx)
                     },

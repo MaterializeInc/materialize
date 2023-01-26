@@ -36,7 +36,7 @@ use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::ConnectionId;
 use crate::coord::timestamp_selection::TimestampContext;
-use crate::explain_new::Displayable;
+use crate::explain_new::{CompactScalarSeq, Displayable};
 use crate::util::send_immediate_rows;
 use crate::{AdapterError, AdapterNotice};
 
@@ -118,7 +118,7 @@ where
                     *ctx.as_mut() += 1;
                 }
                 if !map.is_empty() {
-                    let scalars = separated_text(", ", map.iter().map(Displayable::from));
+                    let scalars = CompactScalarSeq(&map);
                     writeln!(f, "{}Map ({})", ctx.as_mut(), scalars)?;
                     *ctx.as_mut() += 1;
                 }

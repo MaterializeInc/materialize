@@ -27,7 +27,7 @@ use mz_ore::str::{separated, IndentLike};
 use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText};
 use mz_sql::plan::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
 
-use crate::explain_new::{Displayable, PlanRenderingContext};
+use crate::explain_new::{CompactScalarSeq, Displayable, PlanRenderingContext};
 
 impl<'a> DisplayText<PlanRenderingContext<'_, HirRelationExpr>>
     for Displayable<'a, HirRelationExpr>
@@ -150,12 +150,12 @@ impl<'a> Displayable<'a, HirRelationExpr> {
                 ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
             }
             Map { scalars, input } => {
-                let scalars = separated_text(", ", scalars.iter().map(Displayable::from));
+                let scalars = CompactScalarSeq(scalars);
                 writeln!(f, "{}Map ({})", ctx.indent, scalars)?;
                 ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
             }
             CallTable { func, exprs } => {
-                let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                let exprs = CompactScalarSeq(exprs);
                 writeln!(f, "{}CallTable {}({})", ctx.indent, func, exprs)?;
             }
             Filter { predicates, input } => {

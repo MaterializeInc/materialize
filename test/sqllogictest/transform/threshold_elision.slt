@@ -323,7 +323,7 @@ Explained Query:
           Get l0
   With
     cte l0 =
-      Distinct group_by=[#0, #1, #2, #3]
+      Distinct group_by=[#0..=#3]
         Union
           Get materialize.public.people
           Negate

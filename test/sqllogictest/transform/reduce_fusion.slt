@@ -14,7 +14,7 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT * FROM t GROUP BY f1, f2, f0
 ----
 Explained Query:
-  Distinct group_by=[#0, #1, #2] // { arity: 3 }
+  Distinct group_by=[#0..=#2] // { arity: 3 }
     Get materialize.public.t // { arity: 3 }
 
 EOF
