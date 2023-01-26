@@ -27,6 +27,7 @@ use bytesize::ByteSize;
 use itertools::Itertools;
 use tracing::warn;
 
+use mz_ore::cast::u64_to_usize;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
@@ -42,7 +43,7 @@ use crate::lexer::{self, Token};
 const RECURSION_LIMIT: usize = 128;
 
 /// Maximum allowed size for a batch of statements
-pub const MAX_STATEMENT_BATCH_SIZE: ByteSize = ByteSize::mb(1);
+pub const MAX_STATEMENT_BATCH_SIZE: usize = u64_to_usize(bytesize::MB);
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -57,10 +58,13 @@ macro_rules! parser_err {
 /// Parses a SQL string containing zero or more SQL statements.
 #[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
 pub fn parse_statements(sql: &str) -> Result<Vec<Statement<Raw>>, ParserError> {
-    if sql.bytes().count() > usize::cast_from(MAX_STATEMENT_BATCH_SIZE.as_u64()) {
+    if sql.bytes().count() > MAX_STATEMENT_BATCH_SIZE {
         return Err(ParserError::new(
-            usize::cast_from(MAX_STATEMENT_BATCH_SIZE.as_u64()),
-            format!("statement batch size cannot exceed {MAX_STATEMENT_BATCH_SIZE}"),
+            MAX_STATEMENT_BATCH_SIZE,
+            format!(
+                "statement batch size cannot exceed {}",
+                ByteSize::b(u64::cast_from(MAX_STATEMENT_BATCH_SIZE))
+            ),
         ));
     }
     let tokens = lexer::lex(sql)?;

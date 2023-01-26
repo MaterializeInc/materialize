@@ -91,7 +91,6 @@ use std::iter;
 use itertools::Itertools;
 use unicode_width::UnicodeWidthStr;
 
-use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::fmt::FormatBuffer;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -357,7 +356,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
 fn test_max_statement_batch_size() {
     let statement = "SELECT 1;";
     let size = statement.bytes().count();
-    let max_statement_count = usize::cast_from(MAX_STATEMENT_BATCH_SIZE.as_u64()) / size;
+    let max_statement_count = MAX_STATEMENT_BATCH_SIZE / size;
     let statements = iter::repeat(statement).take(max_statement_count).join("");
 
     assert!(parse_statements(&statements).is_ok());
