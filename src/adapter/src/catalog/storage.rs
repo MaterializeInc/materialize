@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hash;
 use std::iter::once;
 use std::sync::Arc;
@@ -394,7 +394,7 @@ async fn migrate(
 }
 
 fn add_new_builtin_roles_migration(txn: &mut Transaction<'_>) -> Result<(), catalog::error::Error> {
-    let role_names: HashSet<_> = txn
+    let role_names: BTreeSet<_> = txn
         .roles
         .items()
         .into_values()
@@ -416,7 +416,7 @@ fn add_new_builtin_roles_migration(txn: &mut Transaction<'_>) -> Result<(), cata
 fn add_new_builtin_clusters_migration(
     txn: &mut Transaction<'_>,
 ) -> Result<(), catalog::error::Error> {
-    let cluster_names: HashSet<_> = txn
+    let cluster_names: BTreeSet<_> = txn
         .clusters
         .items()
         .into_values()
@@ -442,20 +442,20 @@ fn add_new_builtin_cluster_replicas_migration(
     txn: &mut Transaction<'_>,
     bootstrap_args: &BootstrapArgs,
 ) -> Result<(), catalog::error::Error> {
-    let cluster_lookup: HashMap<_, _> = txn
+    let cluster_lookup: BTreeMap<_, _> = txn
         .clusters
         .items()
         .into_iter()
         .map(|(key, value)| (value.name, key.id))
         .collect();
 
-    let replicas: HashMap<_, _> =
+    let replicas: BTreeMap<_, _> =
         txn.cluster_replicas
             .items()
             .into_values()
-            .fold(HashMap::new(), |mut acc, value| {
+            .fold(BTreeMap::new(), |mut acc, value| {
                 acc.entry(value.cluster_id)
-                    .or_insert_with(HashSet::new)
+                    .or_insert_with(BTreeSet::new)
                     .insert(value.name);
                 acc
             });
@@ -1529,7 +1529,7 @@ impl<'a> Transaction<'a> {
     /// Panics if provided id is not a system id.
     pub fn update_system_object_mappings(
         &mut self,
-        mappings: HashMap<GlobalId, SystemObjectMapping>,
+        mappings: BTreeMap<GlobalId, SystemObjectMapping>,
     ) -> Result<(), Error> {
         let n = self.system_gid_mapping.update(|_k, v| {
             if let Some(mapping) = mappings.get(&GlobalId::System(v.id)) {

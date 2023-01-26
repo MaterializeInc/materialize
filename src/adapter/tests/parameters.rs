@@ -74,6 +74,9 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+// Disallow usage of `Hash*` types from std.
+#![warn(clippy::disallowed_types)]
+
 use mz_adapter::catalog::Catalog;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;

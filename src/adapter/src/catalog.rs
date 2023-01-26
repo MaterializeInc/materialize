@@ -10,7 +10,7 @@
 //! Persistent metadata storage for the coordinator.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -181,11 +181,11 @@ pub struct CatalogState {
     entry_by_id: BTreeMap<GlobalId, CatalogEntry>,
     ambient_schemas_by_name: BTreeMap<String, SchemaId>,
     ambient_schemas_by_id: BTreeMap<SchemaId, Schema>,
-    temporary_schemas: HashMap<ConnectionId, Schema>,
-    clusters_by_id: HashMap<ClusterId, Cluster>,
-    clusters_by_name: HashMap<String, ClusterId>,
-    clusters_by_linked_object_id: HashMap<GlobalId, ClusterId>,
-    roles: HashMap<String, Role>,
+    temporary_schemas: BTreeMap<ConnectionId, Schema>,
+    clusters_by_id: BTreeMap<ClusterId, Cluster>,
+    clusters_by_name: BTreeMap<String, ClusterId>,
+    clusters_by_linked_object_id: BTreeMap<GlobalId, ClusterId>,
+    roles: BTreeMap<String, Role>,
     config: mz_sql::catalog::CatalogConfig,
     oid_counter: u32,
     cluster_replica_sizes: ClusterReplicaSizeMap,
@@ -234,7 +234,7 @@ impl CatalogState {
         self.arranged_introspection_dependencies_inner(id, &mut out);
 
         // Filter out persisted logs
-        let mut persisted_source_ids = HashSet::new();
+        let mut persisted_source_ids = BTreeSet::new();
         for cluster in self.clusters_by_id.values() {
             for replica in cluster.replicas_by_id.values() {
                 persisted_source_ids.extend(replica.config.compute.logging.source_ids());
@@ -753,7 +753,7 @@ impl CatalogState {
                 bound_objects: BTreeSet::new(),
                 log_indexes,
                 replica_id_by_name: BTreeMap::new(),
-                replicas_by_id: HashMap::new(),
+                replicas_by_id: BTreeMap::new(),
             },
         );
         assert!(self.clusters_by_name.insert(name, id).is_none());
@@ -1276,7 +1276,7 @@ pub struct ConnCatalog<'a> {
     database: Option<DatabaseId>,
     search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
     user: User,
-    prepared_statements: Option<Cow<'a, HashMap<String, PreparedStatement>>>,
+    prepared_statements: Option<Cow<'a, BTreeMap<String, PreparedStatement>>>,
 }
 
 impl ConnCatalog<'_> {
@@ -1334,7 +1334,7 @@ impl ConnCatalog<'_> {
 }
 
 /// The ID of an entity in the catalog.
-#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub enum CatalogEntityId {
     Cluster(ClusterId),
     ClusterReplica(ReplicaId),
@@ -1385,7 +1385,7 @@ pub struct Cluster {
     /// indexes.
     pub bound_objects: BTreeSet<GlobalId>,
     pub replica_id_by_name: BTreeMap<String, ReplicaId>,
-    pub replicas_by_id: HashMap<ReplicaId, ClusterReplica>,
+    pub replicas_by_id: BTreeMap<ReplicaId, ClusterReplica>,
 }
 
 impl Cluster {
@@ -1407,7 +1407,7 @@ impl Cluster {
 pub struct ClusterReplica {
     pub name: String,
     pub config: ReplicaConfig,
-    pub process_status: HashMap<ProcessId, ClusterReplicaProcessStatus>,
+    pub process_status: BTreeMap<ProcessId, ClusterReplicaProcessStatus>,
 }
 
 impl ClusterReplica {
@@ -2136,9 +2136,10 @@ pub struct BuiltinMigrationMetadata {
     // Used to update in memory catalog state
     pub all_drop_ops: Vec<GlobalId>,
     pub all_create_ops: Vec<(GlobalId, u32, QualifiedObjectName, CatalogItemRebuilder)>,
-    pub introspection_source_index_updates: HashMap<ClusterId, Vec<(LogVariant, String, GlobalId)>>,
+    pub introspection_source_index_updates:
+        BTreeMap<ClusterId, Vec<(LogVariant, String, GlobalId)>>,
     // Used to update persisted on disk catalog state
-    pub migrated_system_object_mappings: HashMap<GlobalId, SystemObjectMapping>,
+    pub migrated_system_object_mappings: BTreeMap<GlobalId, SystemObjectMapping>,
     pub user_drop_ops: Vec<GlobalId>,
     pub user_create_ops: Vec<(GlobalId, SchemaId, String)>,
 }
@@ -2151,8 +2152,8 @@ impl BuiltinMigrationMetadata {
             previous_source_ids: Vec::new(),
             all_drop_ops: Vec::new(),
             all_create_ops: Vec::new(),
-            introspection_source_index_updates: HashMap::new(),
-            migrated_system_object_mappings: HashMap::new(),
+            introspection_source_index_updates: BTreeMap::new(),
+            migrated_system_object_mappings: BTreeMap::new(),
             user_drop_ops: Vec::new(),
             user_create_ops: Vec::new(),
         }
@@ -2185,11 +2186,11 @@ impl Catalog {
                 entry_by_id: BTreeMap::new(),
                 ambient_schemas_by_name: BTreeMap::new(),
                 ambient_schemas_by_id: BTreeMap::new(),
-                temporary_schemas: HashMap::new(),
-                clusters_by_id: HashMap::new(),
-                clusters_by_name: HashMap::new(),
-                clusters_by_linked_object_id: HashMap::new(),
-                roles: HashMap::new(),
+                temporary_schemas: BTreeMap::new(),
+                clusters_by_id: BTreeMap::new(),
+                clusters_by_name: BTreeMap::new(),
+                clusters_by_linked_object_id: BTreeMap::new(),
+                roles: BTreeMap::new(),
                 config: mz_sql::catalog::CatalogConfig {
                     start_time: to_datetime((config.now)()),
                     start_instant: Instant::now(),
@@ -2318,7 +2319,7 @@ impl Catalog {
             )
             .await?;
 
-        let id_fingerprint_map: HashMap<GlobalId, String> = all_builtins
+        let id_fingerprint_map: BTreeMap<GlobalId, String> = all_builtins
             .iter()
             .map(|(builtin, id)| (*id, builtin.fingerprint()))
             .collect();
@@ -2855,7 +2856,7 @@ impl Catalog {
             })
             .await?;
         assert!(migrated_builtins.is_empty(), "types cannot be migrated");
-        let name_to_id_map: HashMap<&str, GlobalId> = all_builtins
+        let name_to_id_map: BTreeMap<&str, GlobalId> = all_builtins
             .into_iter()
             .map(|(typ, id)| (typ.name, id))
             .collect();
@@ -2866,7 +2867,7 @@ impl Catalog {
             .collect();
 
         // Resolve array_id for types
-        let mut element_id_to_array_id = HashMap::new();
+        let mut element_id_to_array_id = BTreeMap::new();
         for typ in &builtin_types {
             match &typ.details.typ {
                 CatalogType::Array { element_reference } => {
@@ -2923,7 +2924,7 @@ impl Catalog {
 
     fn resolve_builtin_type(
         builtin: &BuiltinType<NameReference>,
-        name_to_id_map: &HashMap<&str, GlobalId>,
+        name_to_id_map: &BTreeMap<&str, GlobalId>,
     ) -> BuiltinType<IdReference> {
         let typ: CatalogType<IdReference> = match &builtin.details.typ {
             CatalogType::Array { element_reference } => CatalogType::Array {
@@ -3003,10 +3004,10 @@ impl Catalog {
     pub async fn generate_builtin_migration_metadata(
         &mut self,
         migrated_ids: Vec<GlobalId>,
-        id_fingerprint_map: HashMap<GlobalId, String>,
+        id_fingerprint_map: BTreeMap<GlobalId, String>,
     ) -> Result<BuiltinMigrationMetadata, Error> {
         // First obtain a topological sorting of all migrated objects and their children.
-        let mut visited_set = HashSet::new();
+        let mut visited_set = BTreeSet::new();
         let mut topological_sort = Vec::new();
         for id in migrated_ids {
             if !visited_set.contains(&id) {
@@ -3019,8 +3020,8 @@ impl Catalog {
         // Then process all objects in sorted order.
         let mut migration_metadata = BuiltinMigrationMetadata::new();
         let mut ancestor_ids = BTreeMap::new();
-        let mut migrated_log_ids = HashMap::new();
-        let log_name_map: HashMap<_, _> = BUILTINS::logs()
+        let mut migrated_log_ids = BTreeMap::new();
+        let log_name_map: BTreeMap<_, _> = BUILTINS::logs()
             .map(|log| (log.variant.clone(), log.name))
             .collect();
         for entry in topological_sort {
@@ -3143,7 +3144,7 @@ impl Catalog {
     fn topological_sort(
         &self,
         id: GlobalId,
-        visited_set: &mut HashSet<GlobalId>,
+        visited_set: &mut BTreeSet<GlobalId>,
     ) -> Vec<&CatalogEntry> {
         let mut topological_sort = Vec::new();
         visited_set.insert(id);
@@ -3203,16 +3204,12 @@ impl Catalog {
             let serialized_item = Self::serialize_item(item);
             tx.insert_item(id, schema_id, &name, serialized_item)?;
         }
-        tx.update_system_object_mappings(
-            migration_metadata
-                .migrated_system_object_mappings
-                .drain()
-                .collect(),
-        )?;
+        tx.update_system_object_mappings(std::mem::take(
+            &mut migration_metadata.migrated_system_object_mappings,
+        ))?;
         tx.update_introspection_source_index_gids(
-            migration_metadata
-                .introspection_source_index_updates
-                .drain()
+            std::mem::take(&mut migration_metadata.introspection_source_index_updates)
+                .into_iter()
                 .map(|(cluster_id, updates)| {
                     (
                         cluster_id,
@@ -3720,7 +3717,7 @@ impl Catalog {
 
     pub fn drop_database_ops(&mut self, id: Option<DatabaseId>) -> Vec<Op> {
         let mut ops = vec![];
-        let mut seen = HashSet::new();
+        let mut seen = BTreeSet::new();
         if let Some(id) = id {
             let database = self.get_database(&id);
             for (schema_id, schema) in &database.schemas_by_id {
@@ -3737,7 +3734,7 @@ impl Catalog {
 
     pub fn drop_schema_ops(&mut self, id: Option<(DatabaseId, SchemaId)>) -> Vec<Op> {
         let mut ops = vec![];
-        let mut seen = HashSet::new();
+        let mut seen = BTreeSet::new();
         if let Some((database_id, schema_id)) = id {
             let database = self.get_database(&database_id);
             let schema = &database.schemas_by_id[&schema_id];
@@ -3754,7 +3751,7 @@ impl Catalog {
     pub fn drop_cluster_ops(
         &self,
         ids: &[ClusterId],
-        seen: &mut HashSet<CatalogEntityId>,
+        seen: &mut BTreeSet<CatalogEntityId>,
     ) -> Vec<Op> {
         let mut replica_ids = vec![];
         let mut cluster_ops = vec![];
@@ -3785,7 +3782,7 @@ impl Catalog {
     pub fn drop_cluster_replica_ops(
         &self,
         ids: &[(ClusterId, ReplicaId)],
-        seen: &mut HashSet<CatalogEntityId>,
+        seen: &mut BTreeSet<CatalogEntityId>,
     ) -> Vec<Op> {
         let mut ops = vec![];
         let mut ids_to_drop = vec![];
@@ -3810,7 +3807,7 @@ impl Catalog {
                     .logging;
 
                 let log_and_view_ids = logging.source_and_view_ids();
-                let view_ids: HashSet<_> = logging.view_ids().collect();
+                let view_ids: BTreeSet<_> = logging.view_ids().collect();
 
                 for log_id in log_and_view_ids {
                     // We consider the dependencies of both views and logs, but remove the
@@ -3835,7 +3832,7 @@ impl Catalog {
 
     pub fn drop_items_ops(&self, ids: &[GlobalId]) -> Vec<Op> {
         let mut ops = vec![];
-        let mut seen = HashSet::new();
+        let mut seen = BTreeSet::new();
         for &id in ids {
             self.drop_item_cascade(id, &mut ops, &mut seen);
         }
@@ -3846,7 +3843,7 @@ impl Catalog {
         &self,
         schema: &Schema,
         ops: &mut Vec<Op>,
-        seen: &mut HashSet<CatalogEntityId>,
+        seen: &mut BTreeSet<CatalogEntityId>,
     ) {
         for &id in schema.items.values() {
             self.drop_item_cascade(id, ops, seen);
@@ -3857,7 +3854,7 @@ impl Catalog {
         &self,
         id: GlobalId,
         ops: &mut Vec<Op>,
-        seen: &mut HashSet<CatalogEntityId>,
+        seen: &mut BTreeSet<CatalogEntityId>,
     ) {
         if !seen.contains(&CatalogEntityId::Item(id)) {
             seen.insert(CatalogEntityId::Item(id));
@@ -3880,9 +3877,9 @@ impl Catalog {
     fn temporary_ids(
         &mut self,
         ops: &[Op],
-        temporary_drops: HashSet<(ConnectionId, String)>,
+        temporary_drops: BTreeSet<(ConnectionId, String)>,
     ) -> Result<Vec<GlobalId>, Error> {
-        let mut creating = HashSet::with_capacity(ops.len());
+        let mut creating = BTreeSet::new();
         let mut temporary_ids = Vec::with_capacity(ops.len());
         for op in ops.iter() {
             if let Op::CreateItem {
@@ -3975,7 +3972,7 @@ impl Catalog {
                     let mut entries = cluster_replica_sizes.0.iter().collect::<Vec<_>>();
 
                     if !allowed_sizes.is_empty() {
-                        let allowed_sizes = HashSet::<&String>::from_iter(allowed_sizes.iter());
+                        let allowed_sizes = BTreeSet::<&String>::from_iter(allowed_sizes.iter());
                         entries.retain(|(name, _)| allowed_sizes.contains(name));
                     }
 
@@ -4027,7 +4024,7 @@ impl Catalog {
     {
         trace!("transact: {:?}", ops);
 
-        let drop_ids: HashSet<_> = ops
+        let drop_ids: BTreeSet<_> = ops
             .iter()
             .filter_map(|op| match op {
                 Op::DropItem(id) => Some(*id),
@@ -6491,7 +6488,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{BTreeMap, BTreeSet};
 
     use mz_controller::clusters::ClusterId;
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
@@ -6781,7 +6778,7 @@ mod tests {
             // values.
             fn to_catalog_item(
                 self,
-                id_mapping: &HashMap<String, GlobalId>,
+                id_mapping: &BTreeMap<String, GlobalId>,
             ) -> (String, ItemNamespace, CatalogItem) {
                 let item = match self.item {
                     SimplifiedItem::Table => CatalogItem::Table(Table {
@@ -6892,14 +6889,14 @@ mod tests {
 
         fn convert_name_vec_to_id_vec(
             name_vec: Vec<String>,
-            id_lookup: &HashMap<String, GlobalId>,
+            id_lookup: &BTreeMap<String, GlobalId>,
         ) -> Vec<GlobalId> {
             name_vec.into_iter().map(|name| id_lookup[&name]).collect()
         }
 
         fn convert_id_vec_to_name_vec(
             id_vec: Vec<GlobalId>,
-            name_lookup: &HashMap<GlobalId, String>,
+            name_lookup: &BTreeMap<GlobalId, String>,
         ) -> Vec<String> {
             id_vec
                 .into_iter()
@@ -7301,8 +7298,8 @@ mod tests {
 
         for test_case in test_cases {
             Catalog::with_debug(NOW_ZERO.clone(), |mut catalog| async move {
-                let mut id_mapping = HashMap::new();
-                let mut name_mapping = HashMap::new();
+                let mut id_mapping = BTreeMap::new();
+                let mut name_mapping = BTreeMap::new();
                 for entry in test_case.initial_state {
                     let (name, namespace, item) = entry.to_catalog_item(&id_mapping);
                     let id = add_item(&mut catalog, name.clone(), item, namespace).await;
@@ -7315,7 +7312,7 @@ mod tests {
                     .into_iter()
                     .map(|name| id_mapping[&name])
                     .collect();
-                let id_fingerprint_map: HashMap<GlobalId, String> = id_mapping
+                let id_fingerprint_map: BTreeMap<GlobalId, String> = id_mapping
                     .iter()
                     .filter(|(_name, id)| id.is_system())
                     // We don't use the new fingerprint in this test, so we can just hard code it
@@ -7387,11 +7384,11 @@ mod tests {
                         .migrated_system_object_mappings
                         .values()
                         .map(|mapping| mapping.object_name.clone())
-                        .collect::<HashSet<_>>(),
+                        .collect::<BTreeSet<_>>(),
                     test_case
                         .expected_migrated_system_object_mappings
                         .into_iter()
-                        .collect::<HashSet<_>>(),
+                        .collect::<BTreeSet<_>>(),
                     "{} test failed with wrong migrated system object mappings",
                     test_case.test_name
                 );

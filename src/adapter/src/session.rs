@@ -11,8 +11,8 @@
 
 #![warn(missing_docs)]
 
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 
 use chrono::{DateTime, Utc};
@@ -82,8 +82,8 @@ impl User {
 #[derive(Debug)]
 pub struct Session<T = mz_repr::Timestamp> {
     conn_id: ConnectionId,
-    prepared_statements: HashMap<String, PreparedStatement>,
-    portals: HashMap<String, Portal>,
+    prepared_statements: BTreeMap<String, PreparedStatement>,
+    portals: BTreeMap<String, Portal>,
     transaction: TransactionStatus<T>,
     pcx: Option<PlanContext>,
     user: User,
@@ -128,8 +128,8 @@ impl<T: TimestampManipulation> Session<T> {
             conn_id,
             transaction: TransactionStatus::Default,
             pcx: None,
-            prepared_statements: HashMap::new(),
-            portals: HashMap::new(),
+            prepared_statements: BTreeMap::new(),
+            portals: BTreeMap::new(),
             user,
             vars,
             notices_tx,
@@ -335,7 +335,7 @@ impl<T: TimestampManipulation> Session<T> {
                             if txn_writes
                                 .iter()
                                 .map(|op| op.id)
-                                .collect::<HashSet<_>>()
+                                .collect::<BTreeSet<_>>()
                                 .len()
                                 > 1
                             {
@@ -501,7 +501,7 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// Returns the prepared statements for the session.
-    pub fn prepared_statements(&self) -> &HashMap<String, PreparedStatement> {
+    pub fn prepared_statements(&self) -> &BTreeMap<String, PreparedStatement> {
         &self.prepared_statements
     }
 

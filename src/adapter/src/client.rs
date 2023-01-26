@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::sync::Arc;
@@ -537,7 +537,7 @@ impl Drop for SessionClient {
     }
 }
 
-#[derive(Hash, PartialEq, Eq, Clone, Debug)]
+#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
 pub enum TimeoutType {
     IdleInTransactionSession(TransactionId),
 }
@@ -565,7 +565,7 @@ impl From<TimeoutType> for AdapterError {
 struct Timeout {
     tx: mpsc::UnboundedSender<TimeoutType>,
     rx: mpsc::UnboundedReceiver<TimeoutType>,
-    active_timeouts: HashMap<TimeoutType, AbortOnDropHandle<()>>,
+    active_timeouts: BTreeMap<TimeoutType, AbortOnDropHandle<()>>,
 }
 
 impl Timeout {
@@ -574,7 +574,7 @@ impl Timeout {
         Timeout {
             tx,
             rx,
-            active_timeouts: HashMap::new(),
+            active_timeouts: BTreeMap::new(),
         }
     }
 

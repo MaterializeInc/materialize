@@ -10,7 +10,7 @@
 //! This module encapsulates all of the [`Coordinator`]'s logic for creating, dropping,
 //! and altering objects.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use itertools::Itertools;
@@ -372,7 +372,7 @@ impl Coordinator {
     }
 
     pub(crate) fn drop_indexes(&mut self, indexes: Vec<(ClusterId, GlobalId)>) {
-        let mut by_cluster: HashMap<_, Vec<_>> = HashMap::new();
+        let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for (cluster_id, id) in indexes {
             if self.drop_compute_read_policy(&id) {
                 by_cluster.entry(cluster_id).or_default().push(id);
@@ -389,7 +389,7 @@ impl Coordinator {
     }
 
     fn drop_materialized_views(&mut self, mviews: Vec<(ClusterId, GlobalId)>) {
-        let mut by_cluster: HashMap<_, Vec<_>> = HashMap::new();
+        let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let mut source_ids = Vec::new();
         for (cluster_id, id) in mviews {
             if self.drop_compute_read_policy(&id) {
@@ -577,10 +577,10 @@ impl Coordinator {
         let mut new_sinks = 0;
         let mut new_materialized_views = 0;
         let mut new_clusters = 0;
-        let mut new_replicas_per_cluster = HashMap::new();
+        let mut new_replicas_per_cluster = BTreeMap::new();
         let mut new_databases = 0;
-        let mut new_schemas_per_database = HashMap::new();
-        let mut new_objects_per_schema = HashMap::new();
+        let mut new_schemas_per_database = BTreeMap::new();
+        let mut new_objects_per_schema = BTreeMap::new();
         let mut new_secrets = 0;
         let mut new_roles = 0;
         for op in ops {

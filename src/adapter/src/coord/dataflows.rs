@@ -14,7 +14,7 @@
 //! and indicate which identifiers have arrangements available. This module
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::Antichain;
@@ -443,7 +443,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     /// given view's query expression. If this becomes a performance problem, we could add the
     /// monotonicity information of views into the catalog instead.
     fn monotonic_view(&self, id: GlobalId) -> bool {
-        self.monotonic_view_inner(id, &mut HashMap::new())
+        self.monotonic_view_inner(id, &mut BTreeMap::new())
             .unwrap_or_else(|e| {
                 warn!("Error inspecting view {id} for monotonicity: {e}");
                 false
@@ -453,7 +453,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     fn monotonic_view_inner(
         &self,
         id: GlobalId,
-        memo: &mut HashMap<GlobalId, bool>,
+        memo: &mut BTreeMap<GlobalId, bool>,
     ) -> Result<bool, RecursionLimitError> {
         self.checked_recur(|_| {
             match self.catalog.get_entry(&id).item() {

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
@@ -67,7 +67,7 @@ pub struct Config<'a> {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ClusterReplicaSizeMap(pub HashMap<String, ReplicaAllocation>);
+pub struct ClusterReplicaSizeMap(pub BTreeMap<String, ReplicaAllocation>);
 
 impl Default for ClusterReplicaSizeMap {
     fn default() -> Self {
@@ -101,7 +101,7 @@ impl Default for ClusterReplicaSizeMap {
                     },
                 )
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
 
         for i in 1..=5 {
             let scale = 1 << i;

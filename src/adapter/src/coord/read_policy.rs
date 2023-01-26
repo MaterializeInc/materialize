@@ -14,6 +14,12 @@
 //! the controller from compacting the associated collections, and ensures that they
 //! remain "readable" at a specific time, as long as the hold is held.
 
+//! Allow usage of `std::collections::HashMap`.
+//! The code in this module deals with `Antichain`-keyed maps. `Antichain` does not implement
+//! `Ord`, so we cannot use `BTreeMap`s. We need to iterate through the maps, so we cannot use the
+//! `mz_ore` wrapper either.
+#![allow(clippy::disallowed_types)]
+
 use differential_dataflow::lattice::Lattice;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::Hash;
