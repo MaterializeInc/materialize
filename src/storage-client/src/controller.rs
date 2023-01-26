@@ -19,7 +19,7 @@
 //! empty frontier.
 
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Debug};
 use std::num::NonZeroI64;
@@ -2321,8 +2321,7 @@ where
                             "replacing {:?}'s {} shard {:?} with {:?}",
                             id, desc, old, new
                         );
-                        to_delete_shards
-                            .push((old, format!("retired {} shard for {:?}", desc, id)));
+                        to_delete_shards.push(old);
 
                         replace_data_shard = replace_data_shard | data_shard_replaced;
                     }
@@ -2332,7 +2331,7 @@ where
             }
         };
 
-        self.register_shards_for_finalization(to_delete_shards.iter().map(|(shard, _)| *shard))
+        self.register_shards_for_finalization(to_delete_shards.iter().cloned())
             .await;
 
         // Perform the update.
@@ -2386,11 +2385,11 @@ where
     /// The string accompanying the `ShardId` is the shard's "purpose",
     /// necessary to open read and write handles to the shard.
     #[allow(dead_code)]
-    async fn finalize_shards(&mut self, shards: &[(ShardId, String)]) {
+    async fn finalize_shards(&mut self, shards: &[ShardId]) {
         soft_assert!(
             {
                 let mut all_registered = true;
-                for (shard, _) in shards {
+                for shard in shards {
                     all_registered =
                         self.is_shard_registered_for_finalization(*shard).await && all_registered
                 }
@@ -2406,48 +2405,56 @@ where
             .await
             .unwrap();
 
-        for (shard_id, shard_purpose) in shards {
-            let (mut write, mut critical_since_handle) = self
-                .open_data_handles(
-                    shard_purpose.as_str(),
-                    *shard_id,
-                    RelationDesc::empty(),
-                    &persist_client,
-                )
-                .await;
+        let persist_client = &persist_client;
+        // Reborrow the `&mut self` as immutable, as all the concurrent work to be processed in
+        // this stream cannot all have exclusive access.
+        let this = &*self;
 
-            let our_epoch = PersistEpoch::from(self.state.envd_epoch);
-
-            match critical_since_handle
-                .compare_and_downgrade_since(&our_epoch, (&our_epoch, &Antichain::new()))
-                .await
-            {
-                Ok(_) => info!("successfully finalized read handle for shard {shard_id:?}"),
-                Err(e) => mz_ore::halt!("fenced by envd @ {e:?}. ours = {our_epoch:?}"),
-            }
-
-            if write.upper().is_empty() {
-                info!("write handle for shard {:?} already finalized", shard_id);
-            } else {
-                write
-                    .append(
-                        Vec::<((crate::types::sources::SourceData, ()), T, Diff)>::new(),
-                        write.upper().clone(),
-                        Antichain::new(),
+        use futures::stream::StreamExt;
+        let finalized_shards: BTreeSet<_> = futures::stream::iter(shards)
+            .map(|shard_id| async move {
+                let (mut write, mut critical_since_handle) = this
+                    .open_data_handles(
+                        "finalizing shard",
+                        *shard_id,
+                        RelationDesc::empty(),
+                        &persist_client,
                     )
+                    .await;
+
+                let our_epoch = PersistEpoch::from(this.state.envd_epoch);
+
+                match critical_since_handle
+                    .compare_and_downgrade_since(&our_epoch, (&our_epoch, &Antichain::new()))
                     .await
-                    .expect("failed to connect")
-                    .expect("failed to truncate write handle");
+                {
+                    Ok(_) => info!("successfully finalized read handle for shard {shard_id:?}"),
+                    Err(e) => mz_ore::halt!("fenced by envd @ {e:?}. ours = {our_epoch:?}"),
+                }
 
-                info!(
-                    "successfully finalized write handle for shard {:?}",
-                    shard_id
-                );
-            }
-        }
+                if write.upper().is_empty() {
+                    info!("write handle for shard {:?} already finalized", shard_id);
+                } else {
+                    write
+                        .append(
+                            Vec::<((crate::types::sources::SourceData, ()), T, Diff)>::new(),
+                            write.upper().clone(),
+                            Antichain::new(),
+                        )
+                        .await
+                        .expect("failed to connect")
+                        .expect("failed to truncate write handle");
+                }
+                *shard_id
+            })
+            // Poll each future for each collection concurrently, maximum of 50 at a time.
+            .buffer_unordered(50)
+            // HERE BE DRAGONS: see warning on other uses of buffer_unordered
+            // before any changes to `collect`
+            .collect()
+            .await;
 
-        let truncated_shards = shards.iter().map(|(shard, _)| *shard).collect();
-        self.clear_from_shard_finalization_register(truncated_shards)
+        self.clear_from_shard_finalization_register(finalized_shards)
             .await;
     }
 }

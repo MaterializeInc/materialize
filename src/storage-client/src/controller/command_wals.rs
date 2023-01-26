@@ -147,7 +147,6 @@ where
         let shard_id_desc_to_truncate: Vec<_> = registered_shards
             .difference(&in_use_shards)
             .cloned()
-            .map(|shard_id| (shard_id, "finalizing unused shard".to_string()))
             .collect();
 
         self.finalize_shards(&shard_id_desc_to_truncate).await;
