@@ -590,8 +590,8 @@ impl<'a> Transaction<'a> {
             args.push(time);
             args.push(diff);
         }
-        let stmt = self.stmts.update(entries.len());
-        let insert_fut = self.client.execute(&*stmt, &args).map_err(|err| err.into());
+        let stmt = self.stmts.update(self.client, entries.len()).await?;
+        let insert_fut = self.client.execute(&stmt, &args).map_err(|err| err.into());
         try_join(upper_fut, insert_fut).await?;
         Ok(())
     }

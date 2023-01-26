@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write;
 use std::num::NonZeroI64;
@@ -24,7 +25,7 @@ use rand::Rng;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tokio_postgres::error::SqlState;
-use tokio_postgres::{Client, Statement, ToStatement};
+use tokio_postgres::{Client, Statement};
 use tracing::{error, event, info, warn, Level};
 
 use mz_ore::metric;
@@ -83,7 +84,7 @@ struct PreparedStatements {
     iter: Statement,
     seal: Statement,
     compact: Statement,
-    update_many: Statement,
+    update_many: Arc<tokio::sync::Mutex<HashMap<usize, Statement>>>,
 }
 
 impl PreparedStatements {
@@ -116,12 +117,6 @@ impl PreparedStatements {
         let compact = client
             .prepare("UPDATE sinces SET since = $1 WHERE collection_id = $2")
             .await?;
-        let update_many = client
-            .prepare(
-                "INSERT INTO data (collection_id, key, value, time, diff)
-             VALUES ($1, $2, $3, $4, $5)",
-            )
-            .await?;
         Ok(PreparedStatements {
             select_epoch,
             iter_key,
@@ -131,7 +126,7 @@ impl PreparedStatements {
             iter,
             seal,
             compact,
-            update_many,
+            update_many: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         })
     }
 }
@@ -200,33 +195,33 @@ impl<'a> CountedStatements<'a> {
     /// Returns a ToStatement to INSERT a specified number of rows. First
     /// statement parameter is collection_id. Then key, value, time, diff as
     /// sets of 4 for each row.
-    pub fn update(&self, rows: usize) -> Box<(dyn ToStatement + Sync + Send)> {
+    pub async fn update(&self, client: &Client, rows: usize) -> Result<Statement, StashError> {
         self.inc(format!("update[{rows}]"));
-        if rows == 1 {
-            return Box::new(self.stmts.update_many.clone());
-        }
 
-        // TODO: We could prepare and save this for future re-use, but we don't
-        // currently have mutable access to self.stmts.
-
-        let mut stmt =
-            String::from("INSERT INTO data (collection_id, key, value, time, diff) VALUES");
-        let mut sep = ' ';
-        for i in 0..rows {
-            let idx = 1 + i * 4;
-            write!(
-                &mut stmt,
-                "{}($1, ${}, ${}, ${}, ${})",
-                sep,
-                idx + 1,
-                idx + 2,
-                idx + 3,
-                idx + 4
-            )
-            .unwrap();
-            sep = ',';
+        match self.stmts.update_many.lock().await.entry(rows) {
+            Entry::Occupied(entry) => Ok(entry.get().clone()),
+            Entry::Vacant(entry) => {
+                let mut stmt =
+                    String::from("INSERT INTO data (collection_id, key, value, time, diff) VALUES");
+                let mut sep = ' ';
+                for i in 0..rows {
+                    let idx = 1 + i * 4;
+                    write!(
+                        &mut stmt,
+                        "{}($1, ${}, ${}, ${}, ${})",
+                        sep,
+                        idx + 1,
+                        idx + 2,
+                        idx + 3,
+                        idx + 4
+                    )
+                    .unwrap();
+                    sep = ',';
+                }
+                let stmt = client.prepare(&stmt).await?;
+                Ok(entry.insert(stmt).clone())
+            }
         }
-        Box::new(stmt)
     }
 }
 
