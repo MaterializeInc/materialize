@@ -992,14 +992,13 @@ impl CatalogState {
         id == self.get_mz_catalog_schema_id()
             || id == self.get_pg_catalog_schema_id()
             || id == self.get_information_schema_id()
-        || id == self.get_mz_internal_schema_id()
-        
+            || id == self.get_mz_internal_schema_id()
     }
 
     pub fn is_system_schema_specifier(&self, spec: &SchemaSpecifier) -> bool {
         match spec {
             SchemaSpecifier::Temporary => false,
-            SchemaSpecifier::Id(id) => self.is_system_schema_id(id)
+            SchemaSpecifier::Id(id) => self.is_system_schema_id(id),
         }
     }
 
