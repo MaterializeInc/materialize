@@ -11,6 +11,8 @@
 
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow2::array::{Array, PrimitiveArray, StructArray};
@@ -20,7 +22,7 @@ use arrow2::datatypes::{DataType as ArrowLogicalType, Field};
 use arrow2::io::parquet::write::Encoding;
 
 use crate::columnar::sealed::ColumnRef;
-use crate::columnar::{ColumnFormat, Data, DataType, Schema};
+use crate::columnar::{ColumnFormat, ColumnGet, ColumnPush, Data, DataType, Schema};
 use crate::ord::{ColOrd, ColsOrd};
 
 /// A columnar representation of one blob's worth of data.
@@ -271,7 +273,37 @@ impl Part {
                 .map(|(k, v, t)| (k.idx, v.idx, t.idx))
                 .collect::<Vec<_>>()
         );
-        todo!("WIP");
+        // WIP this probably wants to be a new method
+        let mut sorted = {
+            let key = self
+                .key
+                .iter()
+                .map(|(name, col)| (name.to_owned(), DynColumnMut::new_untyped(&col.0)))
+                .collect();
+            let val = self
+                .val
+                .iter()
+                .map(|(name, col)| (name.to_owned(), DynColumnMut::new_untyped(&col.0)))
+                .collect();
+            let ts = Vec::new();
+            let diff = Vec::new();
+            PartBuilder { key, val, ts, diff }
+        };
+        for (key_idx, val_idx, ts_idx) in indexes {
+            let idx = key_idx.idx;
+            // WIP figure out how to have just one idx: usize
+            assert_eq!(idx, val_idx.idx);
+            assert_eq!(idx, ts_idx.idx);
+            for ((_, src), (_, dst)) in self.key.iter().zip(sorted.key.iter_mut()) {
+                dst.push_from(src, idx).expect("WIP");
+            }
+            for ((_, src), (_, dst)) in self.val.iter().zip(sorted.val.iter_mut()) {
+                dst.push_from(src, idx).expect("WIP");
+            }
+            sorted.ts.push(self.ts[idx]);
+            sorted.diff.push(self.diff[idx]);
+        }
+        sorted.finish().expect("WIP")
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -311,6 +343,33 @@ impl Part {
         }
         // TODO: Also validate the col types match schema.
         Ok(())
+    }
+}
+
+// WIP I couldn't figure out how to reuse the Formatter helpers here, so this
+// doesn't e.g. respect the pretty flag
+impl Debug for Part {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[")?;
+        for idx in 0..self.len() {
+            if idx > 0 {
+                f.write_str(",")?;
+            }
+            f.write_str("((")?;
+            for (_, col) in self.key.iter() {
+                col.fmt_debug(idx, f)?;
+            }
+            f.write_str("),(")?;
+            for (_, col) in self.val.iter() {
+                col.fmt_debug(idx, f)?;
+            }
+            f.write_str("),")?;
+            Debug::fmt(&self.ts[idx], f)?;
+            f.write_str(",")?;
+            Debug::fmt(&self.diff[idx], f)?;
+            f.write_str(")")?;
+        }
+        f.write_str("]")
     }
 }
 
@@ -440,6 +499,17 @@ impl DynColumnRef {
         }
     }
 
+    fn fmt_debug(&self, idx: usize, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct FmtDebugDataFn<'a, 'b, 'c>(&'a DynColumnRef, usize, &'b mut std::fmt::Formatter<'c>);
+        impl DataFn<std::fmt::Result> for FmtDebugDataFn<'_, '_, '_> {
+            fn call<T: Data>(self) -> std::fmt::Result {
+                let FmtDebugDataFn(col, idx, fmt) = self;
+                Debug::fmt(&col.expect_downcast::<T>().get(idx), fmt)
+            }
+        }
+        self.0.data_fn(FmtDebugDataFn(self, idx, fmt))
+    }
+
     #[allow(clippy::borrowed_box)]
     pub(crate) fn from_arrow(data_type: &DataType, array: &Box<dyn Array>) -> Result<Self, String> {
         struct FromArrowDataFn<'a>(&'a Box<dyn Array>);
@@ -518,6 +588,21 @@ impl DynColumnMut {
             .expect("DynColumnMut DataType should have internally consistent");
         assert_eq!(typ, col.0);
         col
+    }
+
+    fn push_from(&mut self, src: &DynColumnRef, idx: usize) -> Result<(), String> {
+        let typ = self.0.clone();
+        struct PushFromDataFn<'a>(&'a mut DynColumnMut, &'a DynColumnRef, usize);
+        impl<'a> DataFn<Result<(), String>> for PushFromDataFn<'a> {
+            fn call<T: Data>(self) -> Result<(), String> {
+                let PushFromDataFn(dst, src, idx) = self;
+                let dst = dst.downcast::<T>()?;
+                let src = src.downcast::<T>()?;
+                dst.push(src.get(idx));
+                Ok(())
+            }
+        }
+        typ.data_fn(PushFromDataFn(self, src, idx))
     }
 }
 
@@ -658,6 +743,7 @@ mod tests {
         part.push_ts_diff(1, 1);
         part.push_ts_diff(1, 1);
         let part = part.finish().unwrap();
-        let _sorted = part.sort();
+        let sorted = part.sort();
+        eprintln!("{:?}", sorted);
     }
 }

@@ -84,7 +84,7 @@ pub trait Data: Debug + Send + Sync + Sized + 'static {
     /// TODO: We may want to eventually separate this into In and Out types
     /// because one wants to be covariant and the other wants to be
     /// contravariant.
-    type Ref<'a>
+    type Ref<'a>: Debug
     where
         Self: 'a;
 
