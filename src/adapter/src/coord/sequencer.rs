@@ -929,11 +929,13 @@ impl Coordinator {
             )
             .expect("creating cluster must not fail");
 
-        let replica_ids: Vec<_> = cluster.replicas_by_id.keys().copied().collect();
-        for replica_id in replica_ids {
-            // lalal
-            self.create_cluster_replica(cluster_id, replica_id).await;
-        }
+        let replicas: Vec<_> = cluster
+            .replicas_by_id
+            .keys()
+            .copied()
+            .map(|r| (cluster_id, r))
+            .collect();
+        self.create_cluster_replicas(&replicas).await;
 
         if !arranged_introspection_source_ids.is_empty() {
             self.initialize_compute_read_policies(
@@ -1053,47 +1055,65 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), vec![op]).await?;
 
-        self.create_cluster_replica(cluster_id, id).await;
+        self.create_cluster_replicas(&[(cluster_id, id)]).await;
 
         Ok(ExecuteResponse::CreatedClusterReplica)
     }
 
-    async fn create_cluster_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
-        let cluster = self.catalog.get_cluster(cluster_id);
-        let replica_config = cluster.replicas_by_id[&replica_id].config.clone();
-        let role = cluster.role();
+    async fn create_cluster_replicas(&mut self, replicas: &[(ClusterId, ReplicaId)]) {
+        let mut log_source_ids: HashMap<_, Vec<_>> = HashMap::new();
+        let mut log_source_collections_to_create = Vec::new();
+        let mut replicas_to_start = Vec::new();
 
-        let log_source_ids: Vec<_> = replica_config.compute.logging.source_ids().collect();
-        let log_source_collections = replica_config
-            .compute
-            .logging
-            .sources
-            .iter()
-            .map(|(variant, id)| (*id, variant.desc().into()))
-            .collect();
+        for (cluster_id, replica_id) in replicas.iter().copied() {
+            let cluster = self.catalog.get_cluster(cluster_id);
+            let role = cluster.role();
+            let replica_config = cluster.replicas_by_id[&replica_id].config.clone();
+
+            log_source_ids.insert(
+                cluster.id,
+                replica_config.compute.logging.source_ids().collect(),
+            );
+            log_source_collections_to_create.extend(
+                replica_config
+                    .compute
+                    .logging
+                    .sources
+                    .iter()
+                    .map(|(variant, id)| (*id, variant.desc().into())),
+            );
+            replicas_to_start.push((cluster_id, replica_id, role, replica_config));
+        }
+
         self.controller
             .storage
-            .create_collections(log_source_collections)
+            .create_collections(log_source_collections_to_create)
             .await
-            .unwrap();
+            .expect("creating collections must not fail");
 
         self.controller
-            .create_replicas(vec![(cluster.id, replica_id, role, replica_config)])
+            .create_replicas(replicas_to_start)
             .await
-            .expect("creating replica must not fail");
+            .expect("creating replicas must not fail");
 
-        if !log_source_ids.is_empty() {
-            self.initialize_compute_read_policies(
-                log_source_ids.clone(),
-                cluster.id,
-                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-            )
-            .await;
-            self.initialize_storage_read_policies(
-                log_source_ids,
-                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-            )
-            .await;
+        // Both these `initialize_*` methods say that they should
+        // be called soon after the creation of the replicas/collections.
+        // While we wait for all replicas in the `replicas` list to start before
+        // doing so, we _are_ calling them right after, so we should be fine.
+        for (cluster_id, log_source_ids) in log_source_ids {
+            if !log_source_ids.is_empty() {
+                self.initialize_compute_read_policies(
+                    log_source_ids.clone(),
+                    cluster_id,
+                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                )
+                .await;
+                self.initialize_storage_read_policies(
+                    log_source_ids,
+                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                )
+                .await;
+            }
         }
     }
 
@@ -3996,10 +4016,13 @@ impl Coordinator {
             // controller. The new replicas will be in the catalog state, and
             // need to be recreated in the controller.
             let cluster_id = cluster.id;
-            let replica_ids: Vec<_> = cluster.replicas_by_id.keys().copied().collect();
-            for replica_id in replica_ids {
-                self.create_cluster_replica(cluster_id, replica_id).await;
-            }
+            let replicas: Vec<_> = cluster
+                .replicas_by_id
+                .keys()
+                .copied()
+                .map(|r| (cluster_id, r))
+                .collect();
+            self.create_cluster_replicas(&replicas).await;
         }
     }
 }
