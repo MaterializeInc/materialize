@@ -68,7 +68,7 @@ pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
     thinned_arity: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum FastPathPlan {
     /// The view evaluates to a constant result that can be returned.
     ///

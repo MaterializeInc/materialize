@@ -91,17 +91,17 @@ impl OptimizerTrace {
     ) -> Result<Vec<TraceEntry<String>>, ExplainError> {
         let mut results = vec![];
 
-        // Drain trace entries of types produced by local optimizer stages.
         let context = ExplainContext {
             config: &config,
             humanizer: &catalog,
             used_indexes: UsedIndexes::new(vec![]),
             finishing: row_set_finishing.clone(),
-            fast_path_plan: None,
         };
+
+        // Drain trace entries of types produced by local optimizer stages.
         results.extend(itertools::chain!(
-            self.drain_explainable_entries::<HirRelationExpr>(&format, &context)?,
-            self.drain_explainable_entries::<MirRelationExpr>(&format, &context)?,
+            self.drain_explainable_entries::<HirRelationExpr>(&format, &context, &None)?,
+            self.drain_explainable_entries::<MirRelationExpr>(&format, &context, &None)?,
         ));
 
         // Drain trace entries of types produced by global optimizer stages.
@@ -110,13 +110,24 @@ impl OptimizerTrace {
             humanizer: &catalog,
             used_indexes: UsedIndexes::new(used_indexes),
             finishing: row_set_finishing,
-            fast_path_plan,
+        };
+        let fast_path_plan = match fast_path_plan {
+            Some(mut plan) if !context.config.no_fast_path => {
+                Some(Explainable::new(&mut plan).explain(&format, context.config, &context)?)
+            }
+            _ => None,
         };
         results.extend(itertools::chain!(
             self.drain_explainable_entries::<DataflowDescription<OptimizedMirRelationExpr>>(
-                &format, &context
+                &format,
+                &context,
+                &fast_path_plan
             )?,
-            self.drain_explainable_entries::<DataflowDescription<Plan>>(&format, &context)?,
+            self.drain_explainable_entries::<DataflowDescription<Plan>>(
+                &format,
+                &context,
+                &fast_path_plan
+            )?,
         ));
 
         // Drain trace entries of type String, HirScalarExpr, MirScalarExpr
@@ -141,6 +152,7 @@ impl OptimizerTrace {
         &self,
         format: &ExplainFormat,
         context: &ExplainContext,
+        fast_path_plan: &Option<String>,
     ) -> Result<Vec<TraceEntry<String>>, ExplainError>
     where
         T: Clone + Debug + 'static,
@@ -150,8 +162,14 @@ impl OptimizerTrace {
             trace
                 .drain_as_vec()
                 .into_iter()
-                .map(|mut entry| {
-                    Ok(TraceEntry {
+                .map(|mut entry| match fast_path_plan {
+                    Some(fast_path_plan) if !context.config.no_fast_path => Ok(TraceEntry {
+                        instant: entry.instant,
+                        duration: entry.duration,
+                        path: entry.path,
+                        plan: fast_path_plan.clone(),
+                    }),
+                    _ => Ok(TraceEntry {
                         instant: entry.instant,
                         duration: entry.duration,
                         path: entry.path,
@@ -160,7 +178,7 @@ impl OptimizerTrace {
                             context.config,
                             context,
                         )?,
-                    })
+                    }),
                 })
                 .collect()
         } else {

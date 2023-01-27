@@ -25,10 +25,8 @@ use mz_repr::explain_new::{
     separated_text, DisplayJson, DisplayText, ExplainConfig, ExprHumanizer, Indices,
     RenderingContext,
 };
-use mz_repr::GlobalId;
 
-use crate::coord::peek::{self, FastPathPlan};
-
+pub(crate) mod fast_path;
 pub(crate) mod hir;
 pub(crate) mod lir;
 pub(crate) mod mir;
@@ -67,7 +65,6 @@ pub(crate) struct ExplainContext<'a> {
     pub(crate) humanizer: &'a dyn ExprHumanizer,
     pub(crate) used_indexes: UsedIndexes,
     pub(crate) finishing: Option<RowSetFinishing>,
-    pub(crate) fast_path_plan: Option<peek::FastPathPlan>,
 }
 
 /// A somewhat ad-hoc way to keep carry a plan with a set
@@ -165,26 +162,11 @@ where
             self.context.config,
         );
 
-        fn fmt_plan<'a, T>(
-            ctx: &mut PlanRenderingContext<'a, T>,
-            f: &mut fmt::Formatter<'_>,
-            fast_path_plan: &Option<FastPathPlan>,
-            plan: &'a T,
-        ) -> fmt::Result
-        where
-            Displayable<'a, T>: DisplayText<PlanRenderingContext<'a, T>>,
-        {
-            match fast_path_plan {
-                Some(fast_path_plan) if !ctx.config.no_fast_path => fast_path_plan.fmt_text(f, ctx),
-                _ => Displayable::from(plan).fmt_text(f, ctx),
-            }
-        }
-
         if let Some(finishing) = &self.context.finishing {
             finishing.fmt_text(f, &mut ctx.indent)?;
-            ctx.indented(|ctx| fmt_plan(ctx, f, &self.context.fast_path_plan, self.plan.plan))?;
+            ctx.indented(|ctx| Displayable::from(self.plan.plan).fmt_text(f, ctx))?;
         } else {
-            fmt_plan(&mut ctx, f, &self.context.fast_path_plan, self.plan.plan)?;
+            Displayable::from(self.plan.plan).fmt_text(f, &mut ctx)?;
         }
 
         if !self.context.used_indexes.is_empty() {
@@ -225,58 +207,38 @@ where
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
         let mut ctx = RenderingContext::new(Indent::default(), self.context.humanizer);
 
-        match &self.context.fast_path_plan {
-            Some(fast_path_plan) if !self.context.config.no_fast_path => {
-                writeln!(f, "{}{} (fast path):", ctx.indent, GlobalId::Explain)?;
-                ctx.indented(|ctx| {
-                    // if present, a RowSetFinishing is applied on top of the fast path plan
-                    match &self.context.finishing {
-                        Some(finishing) => {
-                            finishing.fmt_text(f, &mut ctx.indent)?;
-                            ctx.indented(|ctx| fast_path_plan.fmt_text(f, ctx))?;
-                        }
-                        _ => {
-                            fast_path_plan.fmt_text(f, ctx)?;
-                        }
-                    }
-                    Ok(())
-                })?;
-            }
-            _ => {
-                // render plans
-                for (no, (id, plan)) in self.plans.iter().enumerate() {
-                    let mut ctx = PlanRenderingContext::new(
-                        ctx.indent.clone(),
-                        ctx.humanizer,
-                        plan.annotations.clone(),
-                        self.context.config,
-                    );
+        // render plans
+        for (no, (id, plan)) in self.plans.iter().enumerate() {
+            let mut ctx = PlanRenderingContext::new(
+                ctx.indent.clone(),
+                ctx.humanizer,
+                plan.annotations.clone(),
+                self.context.config,
+            );
 
-                    writeln!(f, "{}{}:", ctx.indent, id)?;
-                    ctx.indented(|ctx| {
-                        match &self.context.finishing {
-                            // if present, a RowSetFinishing always applies to the first rendered plan
-                            Some(finishing) if no == 0 => {
-                                finishing.fmt_text(f, &mut ctx.indent)?;
-                                ctx.indented(|ctx| Displayable(plan.plan).fmt_text(f, ctx))?;
-                            }
-                            // all other plans are rendered without a RowSetFinishing
-                            _ => {
-                                Displayable(plan.plan).fmt_text(f, ctx)?;
-                            }
-                        }
-                        Ok(())
-                    })?;
-                }
-                if self.sources.iter().any(|(_, op)| !op.is_identity()) {
-                    // render one blank line between the plans and sources
-                    writeln!(f, "")?;
-                    // render sources
-                    for (id, op) in self.sources.iter().filter(|(_, op)| !op.is_identity()) {
-                        writeln!(f, "{}Source {}", ctx.indent, id)?;
-                        ctx.indented(|ctx| Displayable(*op).fmt_text(f, ctx))?;
+            writeln!(f, "{}{}:", ctx.indent, id)?;
+            ctx.indented(|ctx| {
+                match &self.context.finishing {
+                    // if present, a RowSetFinishing always applies to the first rendered plan
+                    Some(finishing) if no == 0 => {
+                        finishing.fmt_text(f, &mut ctx.indent)?;
+                        ctx.indented(|ctx| Displayable(plan.plan).fmt_text(f, ctx))?;
+                    }
+                    // all other plans are rendered without a RowSetFinishing
+                    _ => {
+                        Displayable(plan.plan).fmt_text(f, ctx)?;
                     }
                 }
+                Ok(())
+            })?;
+        }
+        if self.sources.iter().any(|(_, op)| !op.is_identity()) {
+            // render one blank line between the plans and sources
+            writeln!(f, "")?;
+            // render sources
+            for (id, op) in self.sources.iter().filter(|(_, op)| !op.is_identity()) {
+                writeln!(f, "{}Source {}", ctx.indent, id)?;
+                ctx.indented(|ctx| Displayable(*op).fmt_text(f, ctx))?;
             }
         }
 
