@@ -58,6 +58,7 @@ use crate::names::{
 };
 
 pub(crate) mod error;
+pub(crate) mod explain_new;
 pub(crate) mod expr;
 pub(crate) mod lowering;
 pub(crate) mod optimize;
@@ -74,6 +75,7 @@ pub use self::expr::{
     AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
 };
 pub use error::PlanError;
+pub use explain_new::normalize_subqueries;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 pub use optimize::OptimizerConfig;
 pub use query::{QueryContext, QueryLifetime};
