@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 use anyhow::{anyhow, bail, Context};
 
@@ -38,7 +38,7 @@ impl DecodedDescriptors {
                 message_name.quoted(),
             )
         })?;
-        let mut seen_messages = HashSet::new();
+        let mut seen_messages = BTreeSet::new();
         seen_messages.insert(message_descriptor.name().to_owned());
         let mut columns = vec![];
         for field in message_descriptor.fields() {
@@ -114,7 +114,7 @@ impl Decoder {
 }
 
 fn derive_column_type(
-    seen_messages: &mut HashSet<String>,
+    seen_messages: &mut BTreeSet<String>,
     field: &FieldDescriptor,
 ) -> Result<ColumnType, anyhow::Error> {
     if field.is_map() {
@@ -136,7 +136,7 @@ fn derive_column_type(
 }
 
 fn derive_inner_type(
-    seen_messages: &mut HashSet<String>,
+    seen_messages: &mut BTreeSet<String>,
     ty: Kind,
 ) -> Result<ColumnType, anyhow::Error> {
     match ty {

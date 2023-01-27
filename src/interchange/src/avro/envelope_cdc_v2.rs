@@ -228,7 +228,7 @@ impl mz_avro::AvroDecode for TimestampDecoder {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     use mz_avro::types::Value;
     use mz_avro::AvroDeserializer;
@@ -319,7 +319,7 @@ mod tests {
         let row_schema = build_row_schema_json(
             &crate::encode::column_names_and_types(desc),
             "data",
-            &HashMap::new(),
+            &BTreeMap::new(),
         )
         .unwrap();
         let schema = build_schema(row_schema);
