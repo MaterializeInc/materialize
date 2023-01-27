@@ -574,6 +574,41 @@ impl<'a> AsRef<&'a dyn ExprHumanizer> for RenderingContext<'a> {
         &self.humanizer
     }
 }
+#[allow(missing_debug_implementations)]
+pub struct PlanRenderingContext<'a, T> {
+    pub indent: Indent,
+    pub humanizer: &'a dyn ExprHumanizer,
+    pub annotations: BTreeMap<&'a T, Attributes>,
+    pub config: &'a ExplainConfig,
+}
+
+impl<'a, T> PlanRenderingContext<'a, T> {
+    pub fn new(
+        indent: Indent,
+        humanizer: &'a dyn ExprHumanizer,
+        annotations: BTreeMap<&'a T, Attributes>,
+        config: &'a ExplainConfig,
+    ) -> PlanRenderingContext<'a, T> {
+        PlanRenderingContext {
+            indent,
+            humanizer,
+            annotations,
+            config,
+        }
+    }
+}
+
+impl<'a, T> AsMut<Indent> for PlanRenderingContext<'a, T> {
+    fn as_mut(&mut self) -> &mut Indent {
+        &mut self.indent
+    }
+}
+
+impl<'a, T> AsRef<&'a dyn ExprHumanizer> for PlanRenderingContext<'a, T> {
+    fn as_ref(&self) -> &&'a dyn ExprHumanizer {
+        &self.humanizer
+    }
+}
 
 /// A trait for humanizing components of an expression.
 ///
@@ -703,6 +738,60 @@ impl<'a> fmt::Display for Indices<'a> {
         }
         Ok(())
     }
+}
+
+/// Pretty-prints a list of scalar expressions that may have runs of column
+/// indices as a comma-separated list interleaved with interval expressions.
+///
+/// Interval expressions are used only for runs of three or more elements.
+#[derive(Debug)]
+pub struct CompactScalarSeq<'a, T: ScalarOps>(pub &'a [T]);
+
+impl<'a, T> std::fmt::Display for CompactScalarSeq<'a, T>
+where
+    T: ScalarOps,
+    T: DisplayText,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let mut is_first = true;
+        let mut slice = self.0;
+        while !slice.is_empty() {
+            if !is_first {
+                write!(f, ", ")?;
+            }
+            is_first = false;
+            if let Some(lead) = slice[0].match_col_ref() {
+                if slice.len() > 2 && slice[1].references(lead + 1) && slice[2].references(lead + 2)
+                {
+                    let mut last = 3;
+                    while slice
+                        .get(last)
+                        .map(|expr| expr.references(lead + last))
+                        .unwrap_or(false)
+                    {
+                        last += 1;
+                    }
+                    slice[0].fmt_text(f, &mut ())?;
+                    write!(f, "..=")?;
+                    slice[last - 1].fmt_text(f, &mut ())?;
+                    slice = &slice[last..];
+                } else {
+                    slice[0].fmt_text(f, &mut ())?;
+                    slice = &slice[1..];
+                }
+            } else {
+                slice[0].fmt_text(f, &mut ())?;
+                slice = &slice[1..];
+            }
+        }
+        Ok(())
+    }
+}
+
+pub trait ScalarOps {
+    fn match_col_ref(&self) -> Option<usize>;
+
+    fn references(&self, col_ref: usize) -> bool;
 }
 
 /// A somewhat ad-hoc way to keep carry a plan with a set

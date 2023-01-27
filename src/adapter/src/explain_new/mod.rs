@@ -16,14 +16,13 @@
 //! the various IRs live, this is not possible. Consequencly, we
 //! currently resort to using a wrapper type.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 use mz_expr::{MapFilterProject, RowSetFinishing};
 use mz_ore::str::{Indent, IndentLike};
 use mz_repr::explain_new::{
     separated_text, AnnotatedPlan, Attributes, DisplayJson, DisplayText, ExplainConfig,
-    ExprHumanizer, Indices, RenderingContext, UsedIndexes,
+    ExprHumanizer, Indices, PlanRenderingContext, RenderingContext, UsedIndexes,
 };
 
 pub(crate) mod fast_path;
@@ -238,42 +237,6 @@ impl<'a> DisplayText<RenderingContext<'a>> for Displayable<'a, MapFilterProject>
         }
 
         Ok(())
-    }
-}
-
-#[allow(missing_debug_implementations)]
-pub(crate) struct PlanRenderingContext<'a, T> {
-    pub(crate) indent: Indent, // TODO: can this be a ref?
-    pub(crate) humanizer: &'a dyn ExprHumanizer,
-    pub(crate) annotations: BTreeMap<&'a T, Attributes>, // TODO: can this be a ref?
-    pub(crate) config: &'a ExplainConfig,
-}
-
-impl<'a, T> PlanRenderingContext<'a, T> {
-    pub fn new(
-        indent: Indent,
-        humanizer: &'a dyn ExprHumanizer,
-        annotations: BTreeMap<&'a T, Attributes>,
-        config: &'a ExplainConfig,
-    ) -> PlanRenderingContext<'a, T> {
-        PlanRenderingContext {
-            indent,
-            humanizer,
-            annotations,
-            config,
-        }
-    }
-}
-
-impl<'a, T> AsMut<Indent> for PlanRenderingContext<'a, T> {
-    fn as_mut(&mut self) -> &mut Indent {
-        &mut self.indent
-    }
-}
-
-impl<'a, T> AsRef<&'a dyn ExprHumanizer> for PlanRenderingContext<'a, T> {
-    fn as_ref(&self) -> &&'a dyn ExprHumanizer {
-        &self.humanizer
     }
 }
 
