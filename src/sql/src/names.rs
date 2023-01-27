@@ -1127,11 +1127,12 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     ResolvedObjectName::Object { id, .. } => {
                         let item = self.catalog.get_item(id);
                         if item.item_type() != CatalogItemType::Secret {
-                            self.status = Err(PlanError::InvalidSecret(object_name.clone()));
+                            self.status =
+                                Err(PlanError::InvalidSecret(Box::new(object_name.clone())));
                         }
                     }
                     ResolvedObjectName::Cte { .. } => {
-                        self.status = Err(PlanError::InvalidSecret(object_name.clone()));
+                        self.status = Err(PlanError::InvalidSecret(Box::new(object_name.clone())));
                     }
                     ResolvedObjectName::Error => {}
                 }
@@ -1142,7 +1143,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 match &object_name {
                     ResolvedObjectName::Object { .. } => {}
                     ResolvedObjectName::Cte { .. } => {
-                        self.status = Err(PlanError::InvalidObject(object_name.clone()));
+                        self.status = Err(PlanError::InvalidObject(Box::new(object_name.clone())));
                     }
                     ResolvedObjectName::Error => {}
                 }
@@ -1228,7 +1229,7 @@ impl Fold<Aug, Aug> for TransientResolver<'_> {
                             full_name: full_name.clone(),
                             print_id,
                         };
-                        self.status = Err(PlanError::InvalidObject(obj));
+                        self.status = Err(PlanError::InvalidObject(Box::new(obj)));
                         transient_id
                     }
                 };
