@@ -149,6 +149,7 @@ SID   import_id   2           text
 SID   worker_id   3           uint8
 SID   delay_ns    4           uint8
 SID   count       5           bigint
+SID   sum	  6	      uint8
 
 > SELECT mz_columns.id, mz_columns.name, position, mz_columns.type
   FROM mz_sources JOIN mz_columns USING (id)

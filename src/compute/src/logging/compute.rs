@@ -189,10 +189,16 @@ pub fn construct<A: Allocate>(
                                     if let Some(source_map) = storage_sources.remove(key) {
                                         for (source_id, (_, delay_map)) in source_map {
                                             for (delay_ns, delay_count) in delay_map {
+                                                let delay_pow = delay_ns.next_power_of_two();
+                                                let delay_ns: i128 =
+                                                    delay_ns.try_into().expect("delay too big");
                                                 frontier_delay_session.give((
-                                                    (id, source_id, worker, delay_ns),
+                                                    (id, source_id, worker, delay_pow),
                                                     time_ms,
-                                                    -delay_count,
+                                                    (
+                                                        -(delay_ns * i128::from(delay_count)),
+                                                        -delay_count,
+                                                    ),
                                                 ));
                                             }
                                         }
@@ -236,14 +242,18 @@ pub fn construct<A: Allocate>(
                                                 if logical >= source_logical {
                                                     let elapsed_ns =
                                                         time.as_nanos() - current_front.1;
-                                                    let delay_ns = elapsed_ns.next_power_of_two();
                                                     let delay_count =
-                                                        delay_map.entry(delay_ns).or_insert(0);
+                                                        delay_map.entry(elapsed_ns).or_insert(0);
                                                     *delay_count += 1;
+                                                    let elapsed_pow =
+                                                        elapsed_ns.next_power_of_two();
+                                                    let elapsed_ns: i128 = elapsed_ns
+                                                        .try_into()
+                                                        .expect("elapsed_ns too big");
                                                     frontier_delay_session.give((
-                                                        (name, *source_id, worker, delay_ns),
+                                                        (name, *source_id, worker, elapsed_pow),
                                                         time_ms,
-                                                        1,
+                                                        (elapsed_ns, 1),
                                                     ));
                                                 } else {
                                                     time_deque.push_front(current_front);
@@ -302,10 +312,13 @@ pub fn construct<A: Allocate>(
                                     peek_session.give(((peek, worker), time_ms, -1));
                                     if let Some(start) = peek_stash.remove(&key) {
                                         let elapsed_ns = time.as_nanos() - start;
+                                        let elapsed_pow = elapsed_ns.next_power_of_two();
+                                        let elapsed_ns: i128 =
+                                            elapsed_ns.try_into().expect("elapsed_ns too big");
                                         peek_duration_session.give((
-                                            (key.0, elapsed_ns.next_power_of_two()),
+                                            (key.0, elapsed_pow),
                                             time_ms,
-                                            1,
+                                            (elapsed_ns, 1u64),
                                         ));
                                     } else {
                                         error!(
@@ -350,13 +363,21 @@ pub fn construct<A: Allocate>(
             // TODO(#16549): Use explicit arrangement
             .count_total_core::<i64>()
             .map({
-                move |((dataflow, source_id, worker, delay_pow), count)| {
+                move |((dataflow, source_id, worker, delay_pow), (sum, count))| {
                     Row::pack_slice(&[
                         Datum::String(&dataflow.to_string()),
                         Datum::String(&source_id.to_string()),
                         Datum::UInt64(u64::cast_from(worker)),
                         Datum::UInt64(delay_pow.try_into().expect("pow too big")),
                         Datum::Int64(count.into()),
+                        // [btv] This is nullable so that we can fill
+                        // in `NULL` if it overflows. That would be a
+                        // bit far-fetched, but not impossible to
+                        // imagine. See discussion
+                        // [here](https://github.com/MaterializeInc/materialize/pull/17302#discussion_r1086373740)
+                        // for more details, and think about this
+                        // again if we ever decide to stabilize it.
+                        u64::try_from(sum).ok().into(),
                     ])
                 }
             });
@@ -377,14 +398,20 @@ pub fn construct<A: Allocate>(
             .as_collection()
             // TODO(#16549): Use explicit arrangement
             .count_total_core()
-            .map({
-                move |((worker, pow), count)| {
-                    Row::pack_slice(&[
-                        Datum::UInt64(u64::cast_from(worker)),
-                        Datum::UInt64(pow.try_into().expect("pow too big")),
-                        Datum::UInt64(count),
-                    ])
-                }
+            .map(|((worker, bucket), (sum, count))| {
+                Row::pack_slice(&[
+                    Datum::UInt64(u64::cast_from(worker)),
+                    Datum::UInt64(bucket.try_into().expect("pow too big")),
+                    Datum::UInt64(count),
+                    // [btv] This is nullable so that we can fill
+                    // in `NULL` if it overflows. That would be a
+                    // bit far-fetched, but not impossible to
+                    // imagine. See discussion
+                    // [here](https://github.com/MaterializeInc/materialize/pull/17302#discussion_r1086373740)
+                    // for more details, and think about this
+                    // again if we ever decide to stabilize it.
+                    u64::try_from(sum).ok().into(),
+                ])
             });
 
         let logs = vec![
