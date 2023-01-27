@@ -66,7 +66,7 @@ pub(crate) fn drive_offset_committer<S: OffsetCommitter + Send + Sync + 'static>
 ) -> OffsetCommitHandle {
     let (tx, mut rx): (_, watch::Receiver<HashMap<PartitionId, MzOffset>>) =
         watch::channel(Default::default());
-    let _ = task::spawn(
+    task::spawn(
         || format!("offset commiter({source_id}) {worker_id}/{worker_count}"),
         async move {
             let mut last_offsets: HashMap<PartitionId, MzOffset> = HashMap::new();
