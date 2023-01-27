@@ -154,7 +154,7 @@ fn install_desired_into_persist<G>(
     persist_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut crate::compute_state::ComputeState,
-    mut probes: Vec<probe::Handle<Timestamp>>,
+    probes: Vec<probe::Handle<Timestamp>>,
 ) -> Option<Rc<dyn Any>>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -216,9 +216,7 @@ where
 
     append_frontier_stream.connect_loop(persist_feedback_handle);
 
-    for handle in &mut probes {
-        append_frontier_stream.probe_notify_with(handle);
-    }
+    append_frontier_stream.probe_notify_with(probes);
 
     let token = Rc::new((mint_token, write_token, append_token));
 

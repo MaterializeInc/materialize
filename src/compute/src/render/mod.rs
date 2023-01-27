@@ -526,7 +526,7 @@ where
         import_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
-        mut probes: Vec<probe::Handle<mz_repr::Timestamp>>,
+        probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -541,21 +541,15 @@ where
                 Id::Global(idx_id)
             )
         });
-        let arrangement = bundle.arrangement(&idx.key);
 
-        // Set up probes to notify on index frontier advancement.
-        if let Some(arr) = &arrangement {
-            let (collection, _) = arr.as_collection();
-            let stream = collection.inner;
-            for handle in probes.iter_mut() {
-                stream.probe_notify_with(handle);
-            }
-        }
+        compute_state
+            .flow_control_probes
+            .insert(idx_id, probes.clone());
 
-        compute_state.flow_control_probes.insert(idx_id, probes);
-
-        match arrangement {
+        match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
+                // Set up probes to notify on index frontier advancement.
+                oks.stream.probe_notify_with(probes);
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
@@ -597,7 +591,7 @@ where
         import_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
-        mut probes: Vec<probe::Handle<mz_repr::Timestamp>>,
+        probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -612,26 +606,19 @@ where
                 Id::Global(idx_id)
             )
         });
-        let arrangement = bundle.arrangement(&idx.key);
 
-        // Set up probes to notify on index frontier advancement.
-        if let Some(arr) = &arrangement {
-            let (collection, _) = arr.as_collection();
-            let stream = collection.leave().inner;
-            for handle in probes.iter_mut() {
-                stream.probe_notify_with(handle);
-            }
-        }
+        compute_state
+            .flow_control_probes
+            .insert(idx_id, probes.clone());
 
-        compute_state.flow_control_probes.insert(idx_id, probes);
-
-        match arrangement {
+        match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 use differential_dataflow::operators::arrange::Arrange;
                 let oks = oks
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
                     .arrange();
+                oks.stream.probe_notify_with(probes);
                 let errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()

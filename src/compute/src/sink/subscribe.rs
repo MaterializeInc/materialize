@@ -85,7 +85,7 @@ fn subscribe<G>(
     as_of: SinkAsOf,
     up_to: Antichain<G::Timestamp>,
     subscribe_protocol_handle: Rc<RefCell<Option<SubscribeProtocol>>>,
-    mut probes: Vec<probe::Handle<Timestamp>>,
+    probes: Vec<probe::Handle<Timestamp>>,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -142,9 +142,7 @@ fn subscribe<G>(
         },
     );
 
-    for handle in &mut probes {
-        progress_stream.probe_notify_with(handle);
-    }
+    progress_stream.probe_notify_with(probes);
 }
 
 /// A type that guides the transmission of rows back to the coordinator.
