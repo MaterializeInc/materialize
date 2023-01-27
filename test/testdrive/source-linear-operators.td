@@ -44,7 +44,7 @@ $ set-regex match=u\d+ replacement=UID
 > CREATE DEFAULT INDEX ON v;
 
 ? EXPLAIN VIEW v;
-Explained Query:
+materialize.public.v:
   Filter (#0 = 1) AND (#3 = 3)
     Get materialize.public.data
 
@@ -62,7 +62,7 @@ Source materialize.public.data
 > CREATE DEFAULT INDEX ON v;
 
 ? EXPLAIN VIEW v;
-Explained Query:
+materialize.public.v:
   Project (#1)
     Filter (#1 = 1)
       Get materialize.public.data
@@ -86,7 +86,7 @@ Source materialize.public.data
 > CREATE DEFAULT INDEX ON v
 
 ? EXPLAIN VIEW v;
-Explained Query:
+materialize.public.v:
   Project (#1)
     Filter (#0 = 1) AND (#3 = 4)
       Get materialize.public.data
@@ -105,7 +105,7 @@ Source materialize.public.data
 > CREATE DEFAULT INDEX ON v;
 
 ? EXPLAIN VIEW v;
-Explained Query:
+materialize.public.v:
   Project (#3)
     Filter (#0 = 1) AND (#3 = 4)
       Get materialize.public.data
@@ -122,7 +122,7 @@ Source materialize.public.data
 > CREATE DEFAULT INDEX ON v;
 
 ? EXPLAIN VIEW v;
-Explained Query:
+materialize.public.v:
   Project (#0)
     Join on=(#0 = #1) type=differential
       ArrangeBy keys=[[#0]]
@@ -148,7 +148,7 @@ Explained Query:
 > CREATE DEFAULT INDEX ON v;
 
 ? EXPLAIN VIEW v;
-Explained Query:
+materialize.public.v:
   Project (#1)
     Join on=(#0 = #2) type=differential
       ArrangeBy keys=[[#0]]
@@ -173,7 +173,7 @@ Source materialize.public.data
 > CREATE DEFAULT INDEX ON v
 
 ? EXPLAIN VIEW v;
-Explained Query:
+materialize.public.v:
   Return
     Project (#2)
       Join on=(#0 = #1) type=differential
@@ -205,7 +205,7 @@ Source materialize.public.data
 > CREATE DEFAULT INDEX ON v;
 
 ? EXPLAIN VIEW v;
-Explained Query:
+materialize.public.v:
   Union
     Project (#1, #0)
       Map (1)
@@ -244,7 +244,7 @@ $ kafka-ingest format=avro topic=data2 schema=${schema}
 > CREATE DEFAULT INDEX ON v
 
 ? EXPLAIN VIEW v;
-Explained Query:
+materialize.public.v:
   Threshold
     Union
       Project (#0, #2)
