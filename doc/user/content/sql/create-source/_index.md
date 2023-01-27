@@ -68,7 +68,7 @@ Materialize supports all [Avro types](https://avro.apache.org/docs/current/spec.
 Support for the more ergonomic `FORMAT JSON` is in progress {{% gh 7186 %}}!
 {{</ note >}}
 
-Materialize cannot decode JSON directly from an external data source. Instead, you must create a source that reads the data as [raw bytes](#bytes), and then handle the conversion to [`jsonb`](/sql/types/jsonb) using view. We also recommend parsing that `jsonb` into primitive types using a materialized view so that subsequent queries optimize performance and avoid redundant parsing.
+Materialize cannot decode JSON directly from an external data source. Instead, you must create a source that reads the data as [raw bytes](#bytes), and handle the conversion to primitive types using [`jsonb`](/sql/types/jsonb) as an intermediate representation.
 
 ```sql
 -- create raw byte array source
