@@ -121,6 +121,7 @@ impl SourceConnectionBuilder for LoadGeneratorSourceConnection {
             LoadGeneratorSourceReader {
                 rows: Box::new(rows),
                 // Subtract tick so we immediately produce a row.
+                #[allow(clippy::unchecked_duration_subtraction)]
                 last: Instant::now() - tick,
                 tick,
                 offset,
