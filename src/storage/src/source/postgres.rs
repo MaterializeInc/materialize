@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::future;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -178,7 +178,7 @@ pub struct PostgresSourceReader {
 /// through a channel
 pub struct PgOffsetCommitter {
     logger: LogCommitter,
-    tx: Sender<HashMap<PartitionId, MzOffset>>,
+    tx: Sender<BTreeMap<PartitionId, MzOffset>>,
 }
 
 /// Information about an ingested upstream table
@@ -202,12 +202,12 @@ struct PostgresTaskInfo {
     lsn: PgLsn,
     metrics: PgSourceMetrics,
     /// A map of the table oid to its information
-    source_tables: HashMap<u32, SourceTable>,
+    source_tables: BTreeMap<u32, SourceTable>,
     row_sender: RowSender,
     sender: Sender<InternalMessage>,
     /// Channel to receive lsn's from the PgOffsetCommitter
     /// that are safe to send status updates for.
-    offset_rx: Receiver<HashMap<PartitionId, MzOffset>>,
+    offset_rx: Receiver<BTreeMap<PartitionId, MzOffset>>,
 }
 
 impl SourceConnectionBuilder for PostgresSourceConnection {
@@ -256,7 +256,7 @@ impl SourceConnectionBuilder for PostgresSourceConnection {
             .expect("Postgres connection unexpectedly missing secrets");
 
         if active_read_worker {
-            let mut source_tables = HashMap::new();
+            let mut source_tables = BTreeMap::new();
             let tables_iter = self.publication_details.tables.iter();
 
             for (i, desc) in tables_iter.enumerate() {
@@ -389,7 +389,7 @@ impl SourceReader for PostgresSourceReader {
 impl OffsetCommitter for PgOffsetCommitter {
     async fn commit_offsets(
         &self,
-        offsets: HashMap<PartitionId, MzOffset>,
+        offsets: BTreeMap<PartitionId, MzOffset>,
     ) -> Result<(), anyhow::Error> {
         self.tx.send(offsets.clone()).await?;
         self.logger.commit_offsets(offsets).await?;
@@ -611,7 +611,7 @@ impl RowSender {
 impl PostgresTaskInfo {
     /// Validates that all expected tables exist in the publication tables and they have the same schema
     fn validate_tables(&self, tables: Vec<PostgresTableDesc>) -> Result<(), anyhow::Error> {
-        let pub_tables: HashMap<u32, PostgresTableDesc> =
+        let pub_tables: BTreeMap<u32, PostgresTableDesc> =
             tables.into_iter().map(|t| (t.oid, t)).collect();
         for (id, info) in self.source_tables.iter() {
             match pub_tables.get(id) {

@@ -27,7 +27,7 @@
 //!        .  .  .  .
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::{From, TryInto};
 use std::default::Default;
 use std::ops::AddAssign;
@@ -163,10 +163,10 @@ async fn download_objects_task(
     let source_id = source_id.to_string();
 
     struct BucketInfo {
-        keys: HashSet<String>,
+        keys: BTreeSet<String>,
         metrics: BucketMetrics,
     }
-    let mut seen_buckets: HashMap<String, BucketInfo> = HashMap::new();
+    let mut seen_buckets: BTreeMap<String, BucketInfo> = BTreeMap::new();
 
     loop {
         let msg = tokio::select! {
@@ -201,7 +201,7 @@ async fn download_objects_task(
                     }
                 } else {
                     let bi = BucketInfo {
-                        keys: HashSet::new(),
+                        keys: BTreeSet::new(),
                         metrics: BucketMetrics::new(&metrics, &source_id, &msg.bucket),
                     };
                     seen_buckets.insert(msg.bucket.clone(), bi);
@@ -429,7 +429,7 @@ async fn read_sqs_task(
         }
     };
 
-    let mut metrics: HashMap<String, ScanBucketMetrics> = HashMap::new();
+    let mut metrics: BTreeMap<String, ScanBucketMetrics> = BTreeMap::new();
 
     let mut allowed_errors = 10;
     'outer: loop {
@@ -535,7 +535,7 @@ async fn process_message(
     message: SqsMessage,
     glob: Option<&GlobMatcher>,
     base_metrics: SourceBaseMetrics,
-    metrics: &mut HashMap<String, ScanBucketMetrics>,
+    metrics: &mut BTreeMap<String, ScanBucketMetrics>,
     source_id: &str,
     tx: &Sender<S3Result<KeyInfo>>,
     client: &SqsClient,

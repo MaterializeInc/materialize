@@ -9,7 +9,7 @@
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
 use std::future::Future;
 use std::rc::Rc;
@@ -379,7 +379,7 @@ struct KafkaSinkState {
     topic: String,
     metrics: Arc<SinkMetrics>,
     producer: KafkaTxProducer,
-    pending_rows: HashMap<Timestamp, Vec<EncodedRow>>,
+    pending_rows: BTreeMap<Timestamp, Vec<EncodedRow>>,
     ready_rows: VecDeque<(Timestamp, Vec<EncodedRow>)>,
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
 
@@ -523,7 +523,7 @@ impl KafkaSinkState {
             topic: connection.topic,
             metrics,
             producer,
-            pending_rows: HashMap::new(),
+            pending_rows: BTreeMap::new(),
             ready_rows: VecDeque::new(),
             retry_manager,
             progress_topic: connection.progress.topic,
@@ -1342,7 +1342,10 @@ where
         .scope()
         .activator_for(&builder.operator_info().address[..]);
 
-    let mut stash: HashMap<Capability<Timestamp>, Vec<_>> = HashMap::new();
+    // `Capability` does not implement `Ord`, so we cannot use a `BTreeMap`. We need to iterate
+    // through the map, so we cannot use the `mz_ore` wrapper either.
+    #[allow(clippy::disallowed_types)]
+    let mut stash = std::collections::HashMap::<Capability<Timestamp>, Vec<_>>::new();
     let mut vector = Vec::new();
     let mut encode_logic = move |input: &mut InputHandle<
         Timestamp,

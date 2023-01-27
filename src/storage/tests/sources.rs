@@ -76,7 +76,7 @@
 
 //! Basic unit tests for sources.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use mz_storage::source::testscript::ScriptCommand;
 use mz_storage_client::types::sources::{encoding::SourceDataEncoding, SourceEnvelope};
@@ -86,8 +86,10 @@ mod setup;
 #[test]
 fn test_datadriven() {
     datadriven::walk("tests/datadriven", |f| {
-        let mut sources: HashMap<String, (Vec<ScriptCommand>, SourceDataEncoding, SourceEnvelope)> =
-            HashMap::new();
+        let mut sources: BTreeMap<
+            String,
+            (Vec<ScriptCommand>, SourceDataEncoding, SourceEnvelope),
+        > = BTreeMap::new();
 
         // Note we unwrap and panic liberally here as we
         // expect tests to be properly written.

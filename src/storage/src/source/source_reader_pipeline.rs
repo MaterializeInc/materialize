@@ -24,8 +24,8 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, VecDeque};
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -119,7 +119,7 @@ pub struct RawSourceCreationConfig {
 /// current source upper, and any errors that occurred while reading that batch.
 #[derive(Clone)]
 struct SourceMessageBatch<Key, Value, Diff> {
-    messages: HashMap<
+    messages: BTreeMap<
         PartitionId,
         Vec<(
             (
@@ -252,7 +252,7 @@ where
 /// to other information it needs to communicate to various operators.
 struct SourceReaderOperatorOutput<K, V, D> {
     /// Messages and their offsets from the source reader.
-    messages: HashMap<
+    messages: BTreeMap<
         PartitionId,
         Vec<(
             (
@@ -316,7 +316,7 @@ where
         // messages after a restart, the reclock operator would be stuck and
         // not advance its downstream frontier.
         yield Some(SourceReaderOperatorOutput {
-            messages: HashMap::new(),
+            messages: BTreeMap::new(),
             status_update: None,
             unconsumed_partitions: Vec::new(),
             source_upper: initial_source_upper,
@@ -333,7 +333,7 @@ where
         let mut emission_interval = tokio::time::interval(timestamp_interval / 5);
         emission_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-        let mut untimestamped_messages = HashMap::<_, Vec<_>>::new();
+        let mut untimestamped_messages = BTreeMap::<_, Vec<_>>::new();
         let mut unconsumed_partitions = Vec::new();
         let mut status_update = None;
         loop {
@@ -1428,7 +1428,7 @@ where
             // Accumulate updates to bytes_read for Prometheus metrics collection
             let mut bytes_read = 0;
             // Accumulate updates to offsets for system table metrics collection
-            let mut metric_updates = HashMap::new();
+            let mut metric_updates = BTreeMap::new();
 
             trace!(
                 "reclock({id}) {worker_id}/{worker_count}: \
@@ -1620,7 +1620,7 @@ fn handle_message<K, V, D>(
         (usize, Result<SourceOutput<K, V, D>, SourceError>),
         Tee<Timestamp, (usize, Result<SourceOutput<K, V, D>, SourceError>)>,
     >,
-    metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp, Diff)>,
+    metric_updates: &mut BTreeMap<PartitionId, (MzOffset, Timestamp, Diff)>,
     ts: Timestamp,
     source_id: GlobalId,
 ) where

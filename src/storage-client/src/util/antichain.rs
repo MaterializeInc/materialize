@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use timely::order::PartialOrder;
 use timely::progress::frontier::{Antichain, MutableAntichain};
@@ -93,7 +93,7 @@ impl OffsetAntichain {
     /// careful.
     // TODO(guswynn): better document how source uppers flow through the
     // source reader pipeline.
-    pub fn as_data_offsets(&self) -> HashMap<PartitionId, MzOffset> {
+    pub fn as_data_offsets(&self) -> BTreeMap<PartitionId, MzOffset> {
         self.inner
             .iter()
             .filter_map(|(pid, offset)| {
