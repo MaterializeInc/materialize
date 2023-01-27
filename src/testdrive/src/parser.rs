@@ -8,8 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::ToOwned;
-use std::collections::hash_map;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{btree_map, BTreeMap};
 use std::error::Error;
 use std::str::FromStr;
 
@@ -120,7 +119,7 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, PosErro
             });
         }
     };
-    let mut args = HashMap::new();
+    let mut args = BTreeMap::new();
     for el in builtin_reader {
         let (pos, token) = el?;
         let pieces: Vec<_> = token.splitn(2, '=').collect();
@@ -574,10 +573,10 @@ impl<'a> Iterator for BuiltinReader<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct ArgMap(HashMap<String, String>);
+pub struct ArgMap(BTreeMap<String, String>);
 
 impl ArgMap {
-    pub fn values_mut(&mut self) -> hash_map::ValuesMut<String, String> {
+    pub fn values_mut(&mut self) -> btree_map::ValuesMut<String, String> {
         self.0.values_mut()
     }
 
@@ -642,7 +641,7 @@ impl ArgMap {
 
 impl IntoIterator for ArgMap {
     type Item = (String, String);
-    type IntoIter = hash_map::IntoIter<String, String>;
+    type IntoIter = btree_map::IntoIter<String, String>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
