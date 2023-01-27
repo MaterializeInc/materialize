@@ -541,6 +541,7 @@ impl Coordinator {
         policies_to_set.insert(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS, Default::default());
 
         info!("coordinator init: creating compute replicas");
+        let mut replicas_to_start = vec![];
         for instance in self.catalog.clusters() {
             self.controller.create_cluster(
                 instance.id,
@@ -585,11 +586,10 @@ impl Coordinator {
                     .extend(replica.config.compute.logging.source_ids());
 
                 let role = instance.role();
-                self.controller
-                    .create_replica(instance.id, replica_id, role, replica.config)
-                    .await?;
+                replicas_to_start.push((instance.id, replica_id, role, replica.config));
             }
         }
+        self.controller.create_replicas(replicas_to_start).await?;
 
         info!("coordinator init: migrating builtin objects");
         // Migrate builtin objects.
