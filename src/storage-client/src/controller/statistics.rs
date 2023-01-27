@@ -10,7 +10,7 @@
 //! A tokio task (and support machinery) for producing storage statistics.
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -28,7 +28,7 @@ use crate::controller::collection_mgmt::CollectionManager;
 pub(super) fn spawn_statistics_scraper<Stats: PackableStats + Send + 'static>(
     statistics_collection_id: GlobalId,
     collection_mgmt: CollectionManager,
-    shared_stats: Arc<Mutex<HashMap<GlobalId, HashMap<usize, Stats>>>>,
+    shared_stats: Arc<Mutex<BTreeMap<GlobalId, BTreeMap<usize, Stats>>>>,
 ) -> Box<dyn Any + Send + Sync> {
     // TODO(guswynn): Should this be configurable? Maybe via LaunchDarkly?
     const STATISTICS_INTERVAL: Duration = Duration::from_secs(30);

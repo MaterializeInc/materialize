@@ -10,7 +10,7 @@
 //! A tokio tasks (and support machinery) for dealing with the persist handles
 //! that the storage controller needs to hold.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
@@ -222,7 +222,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                         }
                                     }
                                     PersistWriteWorkerCmd::Append(updates, response) => {
-                                        let mut ids = HashSet::new();
+                                        let mut ids = BTreeSet::new();
                                         for (id, update, upper) in updates {
                                             ids.insert(id);
                                             let (old_span, updates, old_upper) =
