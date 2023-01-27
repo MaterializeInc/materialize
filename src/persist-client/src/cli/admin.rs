@@ -157,7 +157,7 @@ pub async fn force_compaction(
 ) -> Result<(), anyhow::Error> {
     let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
     let consensus = make_consensus(&cfg, consensus_uri, commit, Arc::clone(&metrics)).await?;
-    let blob = make_blob(blob_uri, commit, Arc::clone(&metrics)).await?;
+    let blob = make_blob(&cfg, blob_uri, commit, Arc::clone(&metrics)).await?;
 
     let mut machine = make_machine(
         &cfg,
@@ -348,11 +348,13 @@ pub(super) async fn make_consensus(
 }
 
 pub(super) async fn make_blob(
+    cfg: &PersistConfig,
     blob_uri: &str,
     commit: bool,
     metrics: Arc<Metrics>,
 ) -> anyhow::Result<Arc<dyn Blob + Send + Sync>> {
-    let blob = BlobConfig::try_from(blob_uri).await?;
+    let blob =
+        BlobConfig::try_from(blob_uri, Box::new(cfg.clone()), metrics.s3_blob.clone()).await?;
     let blob = blob.clone().open().await?;
     let blob = if commit {
         blob
@@ -435,7 +437,7 @@ async fn force_gc(
 ) -> anyhow::Result<Box<dyn Any>> {
     let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
     let consensus = make_consensus(&cfg, consensus_uri, commit, Arc::clone(&metrics)).await?;
-    let blob = make_blob(blob_uri, commit, Arc::clone(&metrics)).await?;
+    let blob = make_blob(&cfg, blob_uri, commit, Arc::clone(&metrics)).await?;
     let mut machine = make_machine(&cfg, consensus, blob, metrics, shard_id, commit).await?;
     let gc_req = GcReq {
         shard_id,
