@@ -9,7 +9,7 @@
 
 //! CLI introspection tools for persist
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -262,7 +262,7 @@ pub async fn fetch_state_rollups(args: &StateArgs) -> Result<impl serde::Seriali
     let shard_id = args.shard_id();
     let state_versions = args.open().await?;
 
-    let mut rollup_keys = HashSet::new();
+    let mut rollup_keys = BTreeSet::new();
     let mut state_iter = match state_versions
         .fetch_all_live_states::<K, V, u64, D>(&shard_id)
         .await
@@ -289,7 +289,7 @@ pub async fn fetch_state_rollups(args: &StateArgs) -> Result<impl serde::Seriali
         return Err(anyhow!("unknown shard"));
     }
 
-    let mut rollup_states = HashMap::with_capacity(rollup_keys.len());
+    let mut rollup_states = BTreeMap::new();
     for key in rollup_keys {
         let rollup_buf = state_versions
             .blob
@@ -522,9 +522,9 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
         }
     };
 
-    let mut known_parts = HashSet::new();
-    let mut known_rollups = HashSet::new();
-    let mut known_writers = HashSet::new();
+    let mut known_parts = BTreeSet::new();
+    let mut known_rollups = BTreeSet::new();
+    let mut known_writers = BTreeSet::new();
     while let Some(v) = state_iter.next() {
         for writer_id in v.collections.writers.keys() {
             known_writers.insert(writer_id.clone());
@@ -559,7 +559,7 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
     let shard_id = args.shard_id();
     let state_versions = args.open().await?;
 
-    let mut s3_contents_before = HashMap::new();
+    let mut s3_contents_before = BTreeMap::new();
     let () = state_versions
         .blob
         .list_keys_and_metadata(&BlobKeyPrefix::Shard(&shard_id).to_string(), &mut |b| {
@@ -583,8 +583,8 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
         }
     };
 
-    let mut referenced_parts = HashMap::new();
-    let mut referenced_rollups = HashSet::new();
+    let mut referenced_parts = BTreeMap::new();
+    let mut referenced_rollups = BTreeSet::new();
     while let Some(state) = state_iter.next() {
         state.collections.trace.map_batches(|b| {
             for part in b.parts.iter() {
@@ -599,8 +599,8 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
         }
     }
 
-    let mut current_parts = HashMap::new();
-    let mut current_rollups = HashSet::new();
+    let mut current_parts = BTreeMap::new();
+    let mut current_rollups = BTreeSet::new();
     state_iter.state().collections.trace.map_batches(|b| {
         for part in b.parts.iter() {
             current_parts.insert(

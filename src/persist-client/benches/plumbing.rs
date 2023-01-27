@@ -9,7 +9,7 @@
 
 //! Benchmarks for different persistent Write implementations.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -84,7 +84,7 @@ fn bench_consensus_compare_and_set_all_iters(
                 || format!("bench_compare_and_set-{}", idx),
                 async move {
                     // Keep track of the current SeqNo per shard ID.
-                    let mut current: HashMap<usize, Option<SeqNo>> = HashMap::new();
+                    let mut current: BTreeMap<usize, Option<SeqNo>> = BTreeMap::new();
 
                     for _iter in 0..iters {
                         let futs = FuturesUnordered::new();

@@ -589,8 +589,8 @@ mod types {
 }
 
 mod impls {
-    use std::collections::hash_map::Entry;
-    use std::collections::HashMap;
+    use std::collections::btree_map::Entry;
+    use std::collections::BTreeMap;
     use std::fmt::Debug;
     use std::hash::Hash;
     use std::time::Duration;
@@ -614,7 +614,7 @@ mod impls {
 
     #[derive(Clone)]
     pub struct SequentialSource {
-        offsets: HashMap<u64, u64>,
+        offsets: BTreeMap<u64, u64>,
         num_partitions: u64,
         current_partition: u64,
         wait_time: Duration,
@@ -630,7 +630,7 @@ mod impls {
             assert!(num_partitions > 0, "number of partitions must be > 0");
 
             Self {
-                offsets: HashMap::new(),
+                offsets: BTreeMap::new(),
                 num_partitions,
                 current_partition: 0,
                 wait_time,
@@ -706,7 +706,7 @@ mod impls {
     {
         now_fn: NowFn,
         timestamp_interval: Duration,
-        cache: HashMap<ST, (ST, Timestamp)>,
+        cache: BTreeMap<ST, (ST, Timestamp)>,
         current_ts: u64,
         consensus: C,
         // Current version (as far as we know) of the timestamp bindings in consensus. This is a
@@ -717,14 +717,14 @@ mod impls {
     impl<ST, C> ConsensusTimestamper<ST, C>
     where
         C: IteratedConsensus<ST, Timestamp, u64>,
-        ST: Eq + Hash + Clone,
+        ST: Ord + Clone,
     {
         #[allow(unused)]
         pub async fn new(now_fn: NowFn, timestamp_interval: Duration, mut consensus: C) -> Self
         where
             Self: Sized,
         {
-            let mut cache = HashMap::new();
+            let mut cache = BTreeMap::new();
 
             let current_ts = consensus.current_upper().await;
             // We know this time is one dimensional.

@@ -9,7 +9,7 @@
 
 //! Prometheus monitoring metrics.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
@@ -1004,12 +1004,12 @@ pub struct ShardsMetrics {
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
-    shards: Arc<Mutex<HashMap<ShardId, Weak<ShardMetrics>>>>,
+    shards: Arc<Mutex<BTreeMap<ShardId, Weak<ShardMetrics>>>>,
 }
 
 impl ShardsMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
-        let shards = Arc::new(Mutex::new(HashMap::new()));
+        let shards = Arc::new(Mutex::new(BTreeMap::new()));
         let shards_count = Arc::clone(&shards);
         ShardsMetrics {
             _count: registry.register_computed_gauge(
@@ -1114,7 +1114,7 @@ impl ShardsMetrics {
     }
 
     fn compute<F: FnMut(&ShardMetrics)>(
-        shards: &Arc<Mutex<HashMap<ShardId, Weak<ShardMetrics>>>>,
+        shards: &Arc<Mutex<BTreeMap<ShardId, Weak<ShardMetrics>>>>,
         mut f: F,
     ) {
         let mut shards = shards.lock().expect("mutex poisoned");
