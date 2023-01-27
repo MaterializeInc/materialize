@@ -90,10 +90,6 @@ pub enum PlanError {
     AlterViewOnMaterializedView(String),
     ShowCreateViewOnMaterializedView(String),
     ExplainViewOnMaterializedView(String),
-    CannotModifyLinkedCluster {
-        cluster_name: String,
-        linked_object_name: String,
-    },
     UnacceptableTimelineName(String),
     UnrecognizedTypeInPostgresSource {
         cols: Vec<(String, Oid)>,
@@ -178,9 +174,6 @@ impl PlanError {
             }
             Self::ExplainViewOnMaterializedView(_) => {
                 Some("Use EXPLAIN [...] MATERIALIZED VIEW to explain a materialized view.".into())
-            }
-            Self::CannotModifyLinkedCluster { linked_object_name, .. } => {
-                Some(format!("This cluster is linked to {}. Use ALTER or DROP on that object instead.", linked_object_name))
             }
             Self::UnacceptableTimelineName(_) => {
                 Some("The prefix \"mz_\" is reserved for system timelines.".into())
@@ -324,9 +317,6 @@ impl fmt::Display for PlanError {
             | Self::AlterViewOnMaterializedView(name)
             | Self::ShowCreateViewOnMaterializedView(name)
             | Self::ExplainViewOnMaterializedView(name) => write!(f, "{name} is not a view"),
-            Self::CannotModifyLinkedCluster { cluster_name, .. } => {
-                write!(f, "cannot modify linked cluster {}", cluster_name.quoted())
-            }
             Self::UnrecognizedTypeInPostgresSource { cols } => {
                 let mut cols = cols.to_owned();
                 cols.sort();

@@ -31,9 +31,9 @@ contains:only one of IN CLUSTER or SIZE can be set
 
 # Create indexes and materialized views in a storage cluster is banned.
 ! CREATE INDEX bad IN CLUSTER storage ON t (a)
-contains:cannot create index in cluster containing sources or sinks
+contains:cannot create this kind of item in a cluster that contains sources or sinks
 ! CREATE MATERIALIZED VIEW bad IN CLUSTER storage AS SELECT 1
-contains:cannot create materialized view in cluster containing sources or sinks
+contains:cannot create this kind of item in a cluster that contains sources or sinks
 
 # Executing queries on a storage cluster is banned.
 ! SELECT 1

@@ -97,6 +97,16 @@ pub enum AdapterError {
     },
     /// The selection value for a table mutation operation refers to an invalid object.
     InvalidTableMutationSelection,
+    /// An operation attempted to modify a linked cluster.
+    ModifyLinkedCluster {
+        cluster_name: String,
+        linked_object_name: String,
+    },
+    /// An operation attempted to create an illegal item in a
+    /// storage-only cluster
+    BadItemInStorageCluster {
+        cluster_name: String,
+    },
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
     /// Target cluster has no replicas to service query.
@@ -320,6 +330,9 @@ impl fmt::Display for AdapterError {
                     up_to, as_of
                 )
             }
+            AdapterError::ModifyLinkedCluster { cluster_name, .. } => {
+                write!(f, "cannot modify linked cluster {}", cluster_name.quoted())
+            }
             AdapterError::ChangedPlan => f.write_str("cached plan must not change result type"),
             AdapterError::Catalog(e) => e.fmt(f),
             AdapterError::ConstrainedParameter {
@@ -355,6 +368,9 @@ impl fmt::Display for AdapterError {
                 "parameter {} requires a {} value",
                 p.name().quoted(),
                 p.type_name().quoted()
+            ),
+            AdapterError::BadItemInStorageCluster { .. } => f.write_str(
+                "cannot create this kind of item in a cluster that contains sources or sinks",
             ),
             AdapterError::InvalidParameterValue {
                 parameter,

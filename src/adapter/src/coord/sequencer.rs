@@ -39,6 +39,7 @@ use mz_ore::task;
 use mz_repr::explain_new::{ExplainFormat, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
+use mz_sql::catalog::CatalogItem as SqlCatalogItem;
 use mz_sql::catalog::{CatalogCluster, CatalogError, CatalogItemType, CatalogTypeDetails};
 use mz_sql::names::QualifiedObjectName;
 use mz_sql::plan::{
@@ -956,6 +957,8 @@ impl Coordinator {
             config,
         }: CreateClusterReplicaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        self.ensure_cluster_is_not_linked(cluster_id)?;
+
         // Choose default AZ if necessary
         let (compute, location) = match config {
             mz_sql::plan::ReplicaConfig::Unmanaged {
@@ -1480,6 +1483,18 @@ impl Coordinator {
             if_not_exists,
         } = plan;
 
+        if !self
+            .catalog
+            .state()
+            .is_system_schema_specifier(&name.qualifiers.schema_spec)
+        {
+            self.ensure_cluster_is_not_linked(cluster_id)?;
+            if !self.is_compute_cluster(cluster_id) {
+                let cluster_name = self.catalog.get_cluster(cluster_id).name.clone();
+                return Err(AdapterError::BadItemInStorageCluster { cluster_name });
+            }
+        }
+
         self.validate_timeline_context(depends_on.clone())?;
 
         // Materialized views are not allowed to depend on log sources, as replicas
@@ -1599,6 +1614,18 @@ impl Coordinator {
 
         // An index must be created on a specific cluster.
         let cluster_id = index.cluster_id;
+
+        if !self
+            .catalog
+            .state()
+            .is_system_schema_specifier(&name.qualifiers.schema_spec)
+        {
+            self.ensure_cluster_is_not_linked(cluster_id)?;
+            if !self.is_compute_cluster(cluster_id) {
+                let cluster_name = self.catalog.get_cluster(cluster_id).name.clone();
+                return Err(AdapterError::BadItemInStorageCluster { cluster_name });
+            }
+        }
 
         let id = self.catalog.allocate_user_id().await?;
         let index = catalog::Index {
@@ -1727,6 +1754,10 @@ impl Coordinator {
             .active_cluster(session)
             .ok()
             .map(|cluster| cluster.id);
+        for id in &ids {
+            self.ensure_cluster_is_not_linked(*id)?;
+        }
+
         let ops = self.catalog.drop_cluster_ops(&ids, &mut HashSet::new());
 
         self.catalog_transact(Some(session), ops).await?;
@@ -1747,6 +1778,9 @@ impl Coordinator {
         session: &Session,
         DropClusterReplicasPlan { ids }: DropClusterReplicasPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        for (id, _) in &ids {
+            self.ensure_cluster_is_not_linked(*id)?;
+        }
         let ops = self
             .catalog
             .drop_cluster_replica_ops(&ids, &mut HashSet::new());
@@ -4024,6 +4058,32 @@ impl Coordinator {
                 .collect();
             self.create_cluster_replicas(&replicas).await;
         }
+    }
+    /// Returns an error if the given cluster is a linked cluster
+    fn ensure_cluster_is_not_linked(&self, cluster_id: ClusterId) -> Result<(), AdapterError> {
+        let cluster = self.catalog.get_cluster(cluster_id);
+        if let Some(linked_id) = cluster.linked_object_id {
+            let cluster_name = self.catalog.get_cluster(cluster_id).name.clone();
+            let linked_object_name = self.catalog.get_entry(&linked_id).name().to_string();
+            Err(AdapterError::ModifyLinkedCluster {
+                cluster_name,
+                linked_object_name,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Returns whether the given cluster exclusively maintains items
+    /// that were formerly maintained on `computed`.
+    fn is_compute_cluster(&self, id: ClusterId) -> bool {
+        let cluster = self.catalog.get_cluster(id);
+        cluster.bound_objects().iter().all(|id| {
+            matches!(
+                self.catalog.get_entry(id).item_type(),
+                CatalogItemType::Index | CatalogItemType::MaterializedView
+            )
+        })
     }
 }
 

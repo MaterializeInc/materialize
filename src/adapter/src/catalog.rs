@@ -991,6 +991,20 @@ impl CatalogState {
             || schema == MZ_INTERNAL_SCHEMA
     }
 
+    pub fn is_system_schema_id(&self, id: &SchemaId) -> bool {
+        id == self.get_mz_catalog_schema_id()
+            || id == self.get_pg_catalog_schema_id()
+            || id == self.get_information_schema_id()
+            || id == self.get_mz_internal_schema_id()
+    }
+
+    pub fn is_system_schema_specifier(&self, spec: &SchemaSpecifier) -> bool {
+        match spec {
+            SchemaSpecifier::Temporary => false,
+            SchemaSpecifier::Id(id) => self.is_system_schema_id(id),
+        }
+    }
+
     /// Optimized lookup for a builtin table
     ///
     /// Panics if the builtin table doesn't exist in the catalog

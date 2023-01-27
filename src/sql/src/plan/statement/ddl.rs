@@ -1704,11 +1704,6 @@ pub fn plan_create_materialized_view(
         None => scx.resolve_cluster(None)?.id(),
         Some(in_cluster) => in_cluster.id,
     };
-    let cluster = scx.catalog.get_cluster(cluster_id);
-    ensure_cluster_is_not_linked(scx, cluster)?;
-    if !is_compute_cluster(scx, cluster) {
-        sql_bail!("cannot create materialized view in cluster containing sources or sinks");
-    }
     stmt.in_cluster = Some(ResolvedClusterName {
         id: cluster_id,
         print_name: None,
@@ -2248,11 +2243,6 @@ pub fn plan_create_index(
         None => scx.resolve_cluster(None)?.id(),
         Some(in_cluster) => in_cluster.id,
     };
-    let cluster = scx.catalog.get_cluster(cluster_id);
-    ensure_cluster_is_not_linked(scx, cluster)?;
-    if !is_compute_cluster(scx, cluster) {
-        sql_bail!("cannot create index in cluster containing sources or sinks");
-    }
     *in_cluster = Some(ResolvedClusterName {
         id: cluster_id,
         print_name: None,
@@ -2606,7 +2596,6 @@ pub fn plan_create_cluster_replica(
     }: CreateClusterReplicaStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let cluster = scx.catalog.resolve_cluster(Some(&of_cluster.to_string()))?;
-    ensure_cluster_is_not_linked(scx, cluster)?;
     if is_storage_cluster(scx, cluster)
         && cluster.bound_objects().len() > 0
         && cluster.replicas().len() > 0
@@ -3329,7 +3318,6 @@ pub fn plan_drop_cluster(
         };
         match scx.catalog.resolve_cluster(Some(name.as_str())) {
             Ok(cluster) => {
-                ensure_cluster_is_not_linked(scx, cluster)?;
                 if !cascade && !cluster.bound_objects().is_empty() {
                     sql_bail!("cannot drop cluster with active objects");
                 }
@@ -3345,36 +3333,11 @@ pub fn plan_drop_cluster(
     Ok(Plan::DropClusters(DropClustersPlan { ids }))
 }
 
-fn ensure_cluster_is_not_linked(
-    scx: &StatementContext,
-    cluster: &dyn CatalogCluster,
-) -> Result<(), PlanError> {
-    if let Some(linked_object_id) = cluster.linked_object_id() {
-        let linked_item = scx.catalog.get_item(&linked_object_id);
-        let linked_item_name = scx.catalog.resolve_full_name(linked_item.name());
-        Err(PlanError::CannotModifyLinkedCluster {
-            cluster_name: cluster.name().into(),
-            linked_object_name: linked_item_name.to_string(),
-        })
-    } else {
-        Ok(())
-    }
-}
-
 fn is_storage_cluster(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
     cluster.bound_objects().iter().all(|id| {
         matches!(
             scx.catalog.get_item(id).item_type(),
             CatalogItemType::Source | CatalogItemType::Sink
-        )
-    })
-}
-
-fn is_compute_cluster(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
-    cluster.bound_objects().iter().all(|id| {
-        matches!(
-            scx.catalog.get_item(id).item_type(),
-            CatalogItemType::Index | CatalogItemType::MaterializedView
         )
     })
 }
@@ -3397,7 +3360,6 @@ pub fn plan_drop_cluster_replica(
             Err(_) if if_exists => continue,
             Err(e) => return Err(e.into()),
         };
-        ensure_cluster_is_not_linked(scx, cluster)?;
         let replica_name = replica.into_string();
         // Check to see if name exists
         if let Some(replica_id) = cluster.replicas().get(&replica_name) {
