@@ -21,7 +21,9 @@ use crate::file::{FileBlob, FileBlobConfig};
 use crate::location::{Blob, Consensus, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use crate::metrics::PostgresConsensusMetrics;
-use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
+use crate::postgres::{
+    PostgresBlob, PostgresBlobConfig, PostgresConsensus, PostgresConsensusConfig,
+};
 use crate::s3::{S3Blob, S3BlobConfig};
 
 /// Config for an implementation of [Blob].
@@ -31,6 +33,8 @@ pub enum BlobConfig {
     File(FileBlobConfig),
     /// Config for [S3Blob].
     S3(S3BlobConfig),
+    /// Config for [PostgresBlob].
+    Postgres(PostgresBlobConfig),
     /// Config for [MemBlob], only available in testing to prevent
     /// footguns.
     Mem,
@@ -42,6 +46,7 @@ impl BlobConfig {
         match self {
             BlobConfig::File(config) => Ok(Arc::new(FileBlob::open(config).await?)),
             BlobConfig::S3(config) => Ok(Arc::new(S3Blob::open(config).await?)),
+            BlobConfig::Postgres(config) => Ok(Arc::new(PostgresBlob::open(config).await?)),
             BlobConfig::Mem => Ok(Arc::new(MemBlob::open(MemBlobConfig::default()))),
         }
     }
@@ -88,6 +93,16 @@ impl BlobConfig {
                 }
                 query_params.clear();
                 Ok(BlobConfig::Mem)
+            }
+            "postgres" | "postgresql" => {
+                if !cfg!(debug_assertions) {
+                    warn!("persist unexpectedly using postgres blob in a release binary");
+                }
+                query_params.clear();
+                Ok(BlobConfig::Postgres(PostgresBlobConfig::new(
+                    value.to_owned(),
+                    "".to_owned(),
+                )?))
             }
             p => Err(anyhow!(
                 "unknown persist blob scheme {}: {}",

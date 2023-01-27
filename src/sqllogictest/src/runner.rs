@@ -826,7 +826,8 @@ impl RunnerInner {
                 clusterd_image: "clusterd".into(),
                 init_container_image: None,
                 persist_location: PersistLocation {
-                    blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
+                    // blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
+                    blob_uri: consensus_uri.clone(),
                     consensus_uri,
                 },
                 persist_clients,
