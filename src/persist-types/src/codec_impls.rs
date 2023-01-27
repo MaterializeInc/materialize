@@ -22,6 +22,7 @@ use arrow2::datatypes::DataType as ArrowLogicalType;
 use arrow2::io::parquet::write::Encoding;
 use arrow2::types::NativeType;
 use bytes::BufMut;
+use ordered_float::OrderedFloat;
 
 use crate::columnar::sealed::ColumnRef;
 use crate::columnar::{
@@ -325,8 +326,46 @@ data_primitive!(i8, ColumnFormat::I8);
 data_primitive!(i16, ColumnFormat::I16);
 data_primitive!(i32, ColumnFormat::I32);
 data_primitive!(i64, ColumnFormat::I64);
-data_primitive!(f32, ColumnFormat::F32);
-data_primitive!(f64, ColumnFormat::F64);
+
+impl Data for f32 {
+    const TYPE: DataType = DataType {
+        optional: false,
+        format: ColumnFormat::F32,
+    };
+    type Ref<'a> = OrderedFloat<f32>;
+    type Col = Buffer<f32>;
+    type Mut = Vec<f32>;
+}
+
+impl Data for Option<f32> {
+    const TYPE: DataType = DataType {
+        optional: true,
+        format: ColumnFormat::F32,
+    };
+    type Ref<'a> = Option<OrderedFloat<f32>>;
+    type Col = PrimitiveArray<f32>;
+    type Mut = MutablePrimitiveArray<f32>;
+}
+
+impl Data for f64 {
+    const TYPE: DataType = DataType {
+        optional: false,
+        format: ColumnFormat::F64,
+    };
+    type Ref<'a> = OrderedFloat<f64>;
+    type Col = Buffer<f64>;
+    type Mut = Vec<f64>;
+}
+
+impl Data for Option<f64> {
+    const TYPE: DataType = DataType {
+        optional: true,
+        format: ColumnFormat::F64,
+    };
+    type Ref<'a> = Option<OrderedFloat<f64>>;
+    type Col = PrimitiveArray<f64>;
+    type Mut = MutablePrimitiveArray<f64>;
+}
 
 impl Data for Vec<u8> {
     const TYPE: DataType = DataType {
@@ -525,8 +564,6 @@ arrowable_primitive!(i8, Encoding::Plain);
 arrowable_primitive!(i16, Encoding::Plain);
 arrowable_primitive!(i32, Encoding::Plain);
 arrowable_primitive!(i64, Encoding::Plain);
-arrowable_primitive!(f32, Encoding::Plain);
-arrowable_primitive!(f64, Encoding::Plain);
 
 impl ColumnRef for BinaryArray<i32> {
     fn len(&self) -> usize {
@@ -657,5 +694,159 @@ impl<T: Debug> Schema<T> for TodoSchema<T> {
 
     fn encoder<'a>(&self, _cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
         panic!("TODO")
+    }
+}
+
+impl ColumnRef for Buffer<f32> {
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
+        let array = PrimitiveArray::new(f32::PRIMITIVE.into(), self.clone(), None);
+        (Encoding::Plain, Box::new(array.clone()))
+    }
+    fn from_arrow(array: &Box<dyn Array>) -> Result<Self, String> {
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<f32>>()
+            .ok_or_else(|| {
+                format!(
+                    "expected PrimitiveArray<f32> but was {:?}",
+                    array.data_type()
+                )
+            })?;
+        if array.validity().is_some() {
+            return Err(format!(
+                "unexpected validity for non-optional {}",
+                std::any::type_name::<f32>()
+            ));
+        }
+        Ok(array.values().clone())
+    }
+}
+
+impl ColumnGet<f32> for Buffer<f32> {
+    fn get<'a>(&'a self, idx: usize) -> OrderedFloat<f32> {
+        OrderedFloat(self[idx])
+    }
+}
+
+impl ColumnPush<f32> for Vec<f32> {
+    fn push<'a>(&mut self, val: OrderedFloat<f32>) {
+        <Vec<f32>>::push(self, val.0)
+    }
+}
+
+impl ColumnRef for PrimitiveArray<f32> {
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
+        (Encoding::Plain, Box::new(self.clone()))
+    }
+    fn from_arrow(array: &Box<dyn Array>) -> Result<Self, String> {
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<f32>>()
+            .ok_or_else(|| {
+                format!(
+                    "expected PrimitiveArray<f32> but was {:?}",
+                    array.data_type()
+                )
+            })?;
+        Ok(array.clone())
+    }
+}
+
+impl ColumnGet<Option<f32>> for PrimitiveArray<f32> {
+    fn get<'a>(&'a self, idx: usize) -> Option<OrderedFloat<f32>> {
+        if self.validity().map_or(true, |x| x.get_bit(idx)) {
+            Some(OrderedFloat(self.value(idx)))
+        } else {
+            None
+        }
+    }
+}
+
+impl ColumnPush<Option<f32>> for MutablePrimitiveArray<f32> {
+    fn push<'a>(&mut self, val: Option<OrderedFloat<f32>>) {
+        <MutablePrimitiveArray<f32>>::push(self, val.map(|f| f.0))
+    }
+}
+
+impl ColumnRef for Buffer<f64> {
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
+        let array = PrimitiveArray::new(f64::PRIMITIVE.into(), self.clone(), None);
+        (Encoding::Plain, Box::new(array.clone()))
+    }
+    fn from_arrow(array: &Box<dyn Array>) -> Result<Self, String> {
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<f64>>()
+            .ok_or_else(|| {
+                format!(
+                    "expected PrimitiveArray<f64> but was {:?}",
+                    array.data_type()
+                )
+            })?;
+        if array.validity().is_some() {
+            return Err(format!(
+                "unexpected validity for non-optional {}",
+                std::any::type_name::<f64>()
+            ));
+        }
+        Ok(array.values().clone())
+    }
+}
+
+impl ColumnGet<f64> for Buffer<f64> {
+    fn get<'a>(&'a self, idx: usize) -> OrderedFloat<f64> {
+        OrderedFloat(self[idx])
+    }
+}
+
+impl ColumnPush<f64> for Vec<f64> {
+    fn push<'a>(&mut self, val: OrderedFloat<f64>) {
+        <Vec<f64>>::push(self, val.0)
+    }
+}
+
+impl ColumnRef for PrimitiveArray<f64> {
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
+        (Encoding::Plain, Box::new(self.clone()))
+    }
+    fn from_arrow(array: &Box<dyn Array>) -> Result<Self, String> {
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<f64>>()
+            .ok_or_else(|| {
+                format!(
+                    "expected PrimitiveArray<f64> but was {:?}",
+                    array.data_type()
+                )
+            })?;
+        Ok(array.clone())
+    }
+}
+
+impl ColumnGet<Option<f64>> for PrimitiveArray<f64> {
+    fn get<'a>(&'a self, idx: usize) -> Option<OrderedFloat<f64>> {
+        if self.validity().map_or(true, |x| x.get_bit(idx)) {
+            Some(OrderedFloat(self.value(idx)))
+        } else {
+            None
+        }
+    }
+}
+
+impl ColumnPush<Option<f64>> for MutablePrimitiveArray<f64> {
+    fn push<'a>(&mut self, val: Option<OrderedFloat<f64>>) {
+        <MutablePrimitiveArray<f64>>::push(self, val.map(|f| f.0))
     }
 }

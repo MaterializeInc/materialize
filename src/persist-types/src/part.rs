@@ -519,9 +519,36 @@ impl DynColumnRef {
 
     fn to_col_ord<'a>(&'a self) -> ColOrd<'a> {
         match (self.0.optional, self.0.format) {
+            (false, ColumnFormat::Bool) => ColOrd::Bool(self.expect_downcast::<bool>()),
+            (false, ColumnFormat::I8) => ColOrd::I8(self.expect_downcast::<i8>()),
+            (false, ColumnFormat::I16) => ColOrd::I16(self.expect_downcast::<i16>()),
+            (false, ColumnFormat::I32) => ColOrd::I32(self.expect_downcast::<i32>()),
             (false, ColumnFormat::I64) => ColOrd::I64(self.expect_downcast::<i64>()),
+            (false, ColumnFormat::U8) => ColOrd::U8(self.expect_downcast::<u8>()),
+            (false, ColumnFormat::U16) => ColOrd::U16(self.expect_downcast::<u16>()),
+            (false, ColumnFormat::U32) => ColOrd::U32(self.expect_downcast::<u32>()),
+            (false, ColumnFormat::U64) => ColOrd::U64(self.expect_downcast::<u64>()),
+            (false, ColumnFormat::F32) => ColOrd::F32(self.expect_downcast::<f32>()),
+            (false, ColumnFormat::F64) => ColOrd::F64(self.expect_downcast::<f64>()),
+            (false, ColumnFormat::Bytes) => ColOrd::Bytes(self.expect_downcast::<Vec<u8>>()),
             (false, ColumnFormat::String) => ColOrd::String(self.expect_downcast::<String>()),
-            _ => panic!("WIP"),
+            (true, ColumnFormat::Bool) => ColOrd::OptBool(self.expect_downcast::<Option<bool>>()),
+            (true, ColumnFormat::I8) => ColOrd::OptI8(self.expect_downcast::<Option<i8>>()),
+            (true, ColumnFormat::I16) => ColOrd::OptI16(self.expect_downcast::<Option<i16>>()),
+            (true, ColumnFormat::I32) => ColOrd::OptI32(self.expect_downcast::<Option<i32>>()),
+            (true, ColumnFormat::I64) => ColOrd::OptI64(self.expect_downcast::<Option<i64>>()),
+            (true, ColumnFormat::U8) => ColOrd::OptU8(self.expect_downcast::<Option<u8>>()),
+            (true, ColumnFormat::U16) => ColOrd::OptU16(self.expect_downcast::<Option<u16>>()),
+            (true, ColumnFormat::U32) => ColOrd::OptU32(self.expect_downcast::<Option<u32>>()),
+            (true, ColumnFormat::U64) => ColOrd::OptU64(self.expect_downcast::<Option<u64>>()),
+            (true, ColumnFormat::F32) => ColOrd::OptF32(self.expect_downcast::<Option<f32>>()),
+            (true, ColumnFormat::F64) => ColOrd::OptF64(self.expect_downcast::<Option<f64>>()),
+            (true, ColumnFormat::Bytes) => {
+                ColOrd::OptBytes(self.expect_downcast::<Option<Vec<u8>>>())
+            }
+            (true, ColumnFormat::String) => {
+                ColOrd::OptString(self.expect_downcast::<Option<String>>())
+            }
         }
     }
 
