@@ -27,10 +27,8 @@
 // https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
 #![allow(clippy::extra_unused_lifetimes)]
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
-use std::hash::BuildHasher;
-use std::u8;
 
 use chrono::NaiveDateTime;
 use enum_kinds::EnumKind;
@@ -99,7 +97,7 @@ impl From<Scalar> for Value {
 // This simple wrapper exists so we can Debug-print the values deterministically, i.e. in sorted order
 // by keys.
 #[derive(Clone, PartialEq)]
-pub struct AvroMap(pub HashMap<String, Value>);
+pub struct AvroMap(pub BTreeMap<String, Value>);
 
 impl fmt::Debug for AvroMap {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -233,7 +231,7 @@ impl<'a> ToAvro for &'a [u8] {
     }
 }
 
-impl<T, S: BuildHasher> ToAvro for HashMap<String, T, S>
+impl<T> ToAvro for BTreeMap<String, T>
 where
     T: ToAvro,
 {
@@ -246,7 +244,7 @@ where
     }
 }
 
-impl<'a, T, S: BuildHasher> ToAvro for HashMap<&'a str, T, S>
+impl<'a, T> ToAvro for BTreeMap<&'a str, T>
 where
     T: ToAvro,
 {
@@ -288,7 +286,7 @@ pub struct Record<'a> {
     /// Ordered according to the fields in the schema given to create this
     /// `Record` object. Any unset field defaults to `Value::Null`.
     pub fields: Vec<(String, Value)>,
-    schema_lookup: &'a HashMap<String, usize>,
+    schema_lookup: &'a BTreeMap<String, usize>,
     schema_fields: &'a Vec<RecordField>,
 }
 

@@ -40,7 +40,7 @@ use crate::util::{self};
 use crate::{Codec, SchemaResolutionError};
 
 use sha2::Sha256;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Header {
@@ -326,13 +326,13 @@ impl<R: AvroRead> Iterator for Reader<R> {
 
 pub struct SchemaResolver<'a> {
     pub named: Vec<Option<NamedSchemaPiece>>,
-    pub indices: HashMap<FullName, usize>,
+    pub indices: BTreeMap<FullName, usize>,
     pub human_readable_field_path: Vec<String>,
     pub current_human_readable_path_start: usize,
-    pub writer_to_reader_names: HashMap<usize, usize>,
-    pub reader_to_writer_names: HashMap<usize, usize>,
-    pub reader_to_resolved_names: HashMap<usize, usize>,
-    pub reader_fullnames: HashMap<usize, &'a FullName>,
+    pub writer_to_reader_names: BTreeMap<usize, usize>,
+    pub reader_to_writer_names: BTreeMap<usize, usize>,
+    pub reader_to_resolved_names: BTreeMap<usize, usize>,
+    pub reader_fullnames: BTreeMap<usize, &'a FullName>,
     pub reader_schema: &'a Schema,
 }
 
@@ -479,7 +479,7 @@ impl<'a> SchemaResolver<'a> {
                     .iter()
                     .enumerate()
                     .map(|(i, s)| (s, i))
-                    .collect::<HashMap<_, _>>();
+                    .collect::<BTreeMap<_, _>>();
                 let symbols = w_symbols
                     .iter()
                     .map(|s| {

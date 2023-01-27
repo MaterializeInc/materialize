@@ -23,7 +23,7 @@
 
 //! Logic handling writing in Avro format at user level.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{Seek, SeekFrom, Write};
 
@@ -302,7 +302,7 @@ impl<W: Write> Writer<W> {
     fn header(&self) -> Result<Vec<u8>, Error> {
         let schema_bytes = serde_json::to_string(&self.schema)?.into_bytes();
 
-        let mut metadata = HashMap::with_capacity(2);
+        let mut metadata = BTreeMap::new();
         metadata.insert("avro.schema", Value::Bytes(schema_bytes));
         if let Some(codec) = self.codec {
             metadata.insert("avro.codec", codec.avro());

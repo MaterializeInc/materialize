@@ -734,7 +734,7 @@ pub mod public_decoders {
     use crate::{
         AvroArrayAccess, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, ValueOrReader,
     };
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     macro_rules! define_simple_decoder {
         ($name:ident, $out:ty, $($scalar_branch:ident);*) => {
@@ -1196,7 +1196,7 @@ pub mod public_decoders {
             Ok(Value::Fixed(buf.len(), buf))
         }
         fn map<M: AvroMapAccess>(self, m: &mut M) -> Result<Value, AvroError> {
-            let mut entries = HashMap::new();
+            let mut entries = BTreeMap::new();
             while let Some((name, a)) = m.next_entry()? {
                 let d = ValueDecoder;
                 let val = a.decode_field(d)?;

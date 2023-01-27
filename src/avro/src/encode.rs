@@ -171,7 +171,7 @@ pub fn encode_to_vec(value: &Value, schema: &Schema) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_encode_empty_array() {
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn test_encode_empty_map() {
         let mut buf = Vec::new();
-        let empty: HashMap<String, Value> = HashMap::new();
+        let empty: BTreeMap<String, Value> = BTreeMap::new();
         encode(
             &Value::Map(AvroMap(empty)),
             &r#"{"type": "map", "values": "int"}"#.parse().unwrap(),
