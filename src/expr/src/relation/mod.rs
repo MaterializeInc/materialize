@@ -24,11 +24,9 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::{separated, Indent};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::explain_new::DisplayText;
-use mz_repr::explain_new::{DummyHumanizer, Indices};
+use mz_repr::explain_new::DummyHumanizer;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
 #[allow(deprecated)] // TODO(#17360): use new explain output format
@@ -2589,31 +2587,6 @@ pub struct RowSetFinishing {
     pub project: Vec<usize>,
 }
 
-impl DisplayText<Indent> for RowSetFinishing {
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut Indent) -> fmt::Result {
-        write!(f, "{}Finish", ctx)?;
-        // order by
-        if !self.order_by.is_empty() {
-            let order_by = separated(", ", &self.order_by);
-            write!(f, " order_by=[{}]", order_by)?;
-        }
-        // limit
-        if let Some(limit) = self.limit {
-            write!(f, " limit={}", limit)?;
-        }
-        // offset
-        if self.offset > 0 {
-            write!(f, " offset={}", self.offset)?;
-        }
-        // project
-        {
-            let project = Indices(&self.project);
-            write!(f, " output=[{}]", project)?;
-        }
-        writeln!(f, "")
-    }
-}
-
 impl RustType<ProtoRowSetFinishing> for RowSetFinishing {
     fn into_proto(&self) -> ProtoRowSetFinishing {
         ProtoRowSetFinishing {
@@ -3054,7 +3027,7 @@ mod tests {
             project: vec![1, 3, 4, 5],
         };
 
-        let act = text_string_at(&finishing, Indent::default);
+        let act = text_string_at(&finishing, mz_ore::str::Indent::default);
 
         let exp = {
             use mz_ore::fmt::FormatBuffer;
