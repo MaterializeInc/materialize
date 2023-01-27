@@ -20,20 +20,24 @@
 <meta property="og:url" content="{{ .Site.BaseURL }}{{ .Permalink }}" />
 <meta property="og:type" content="article" />
 <meta property="og:title" content="{{ $title }}" />
+{{/*
 <meta
   property="og:image"
   content="https://user-images.githubusercontent.com/11527560/159138593-09223308-ce91-4582-a47a-a03166fef26b.gif"
 />
+*/}} {{- $featured := partial "get-featured-image.html" . }} {{- with $featured
+-}}
+<meta property="og:image" content="{{ $featured.Permalink }}" />
+{{ end }}
 <meta property="og:description" content="{{ $description }}" />
 <meta property="og:site_name" content="Materialize" />
-<meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:site" content="@MaterializeInc" />
 <meta name="twitter:creator" content="@MaterializeInc" />
 <meta name="twitter:title" content="{{ $title }}" />
-<meta
-  name="twitter:image"
-  content="https://user-images.githubusercontent.com/11527560/159138593-09223308-ce91-4582-a47a-a03166fef26b.gif"
-/>
+{{- $featured := partial "get-featured-image.html" . }} {{- with $featured -}}
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:image" content="{{ $featured.Permalink }}" />
+{{ end }}
 <meta name="twitter:description" content="{{ $description }}" />
 <link
   rel="shortcut icon"
