@@ -16,7 +16,7 @@
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::ExchangeData;
+use differential_dataflow::Data;
 use timely::communication::Push;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::OutputHandle;
@@ -39,7 +39,7 @@ use timely::progress::Timestamp;
 ///
 /// The buffer retains a capability to send data on flush. It will flush all data once dropped, if
 /// time changes, or if the buffer capacity is reached.
-pub struct ConsolidateBuffer<'a, T, D: ExchangeData, R: Semigroup, P>
+pub struct ConsolidateBuffer<'a, 'b, T, D: Data, R: Semigroup, P>
 where
     P: Push<Bundle<T, (D, T, R)>> + 'a,
     T: Clone + Lattice + Ord + Timestamp + 'a,
@@ -48,12 +48,12 @@ where
     // a buffer for records, to send at self.cap
     // Invariant: Buffer only contains data if cap is Some.
     buffer: Vec<(D, T, R)>,
-    output_handle: OutputHandle<'a, T, (D, T, R), P>,
+    output_handle: &'b mut OutputHandle<'a, T, (D, T, R), P>,
     cap: Option<Capability<T>>,
     port: usize,
 }
 
-impl<'a, T, D: ExchangeData, R: Semigroup, P> ConsolidateBuffer<'a, T, D, R, P>
+impl<'a, 'b, T, D: Data, R: Semigroup, P> ConsolidateBuffer<'a, 'b, T, D, R, P>
 where
     T: Clone + Lattice + Ord + Timestamp + 'a,
     P: Push<Bundle<T, (D, T, R)>> + 'a,
@@ -62,7 +62,7 @@ where
     ///
     /// * `output_handle`: The output to send data to.
     /// * 'port': The output port to retain capabilities for.
-    pub fn new(output_handle: OutputHandle<'a, T, (D, T, R), P>, port: usize) -> Self {
+    pub fn new(output_handle: &'b mut OutputHandle<'a, T, (D, T, R), P>, port: usize) -> Self {
         Self {
             output_handle,
             port,
@@ -100,7 +100,7 @@ where
     }
 }
 
-impl<'a, T, D: ExchangeData, R: Semigroup, P> Drop for ConsolidateBuffer<'a, T, D, R, P>
+impl<'a, 'b, T, D: Data, R: Semigroup, P> Drop for ConsolidateBuffer<'a, 'b, T, D, R, P>
 where
     P: Push<Bundle<T, (D, T, R)>> + 'a,
     T: Clone + Lattice + Ord + Timestamp + 'a,

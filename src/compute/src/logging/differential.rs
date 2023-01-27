@@ -77,14 +77,14 @@ pub fn construct<A: Allocate>(
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
             move |_frontiers| {
-                let arrangement_batches = arrangement_batches_out.activate();
-                let arrangement_records = arrangement_records_out.activate();
-                let sharing = sharing_out.activate();
+                let mut arrangement_batches = arrangement_batches_out.activate();
+                let mut arrangement_records = arrangement_records_out.activate();
+                let mut sharing = sharing_out.activate();
                 let mut arrangement_batches_session =
-                    ConsolidateBuffer::new(arrangement_batches, 0);
+                    ConsolidateBuffer::new(&mut arrangement_batches, 0);
                 let mut arrangement_records_session =
-                    ConsolidateBuffer::new(arrangement_records, 1);
-                let mut sharing_session = ConsolidateBuffer::new(sharing, 2);
+                    ConsolidateBuffer::new(&mut arrangement_records, 1);
+                let mut sharing_session = ConsolidateBuffer::new(&mut sharing, 2);
 
                 input.for_each(|cap, data| {
                     data.swap(&mut demux_buffer);
