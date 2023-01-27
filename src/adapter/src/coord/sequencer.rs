@@ -472,32 +472,6 @@ impl Coordinator {
         }
     }
 
-    // Utilities used by `sequence` functions
-    // ---
-    fn ensure_cluster_is_not_linked(&self, cluster_id: ClusterId) -> Result<(), AdapterError> {
-        if let Some(linked_id) = self.catalog.get_linked_object(cluster_id) {
-            let cluster_name = self.catalog.get_cluster(cluster_id).name.clone();
-            let linked_object_name = self.catalog.get_entry(&linked_id).name().to_string();
-            Err(AdapterError::ModifyLinkedCluster {
-                cluster_name,
-                linked_object_name,
-            })
-        } else {
-            Ok(())
-        }
-    }
-
-    fn is_compute_cluster(&self, id: ClusterId) -> bool {
-        let cluster = self.catalog.get_cluster(id);
-        cluster.bound_objects().iter().all(|id| {
-            matches!(
-                self.catalog.get_entry(id).item_type(),
-                CatalogItemType::Index | CatalogItemType::MaterializedView
-            )
-        })
-    }
-    // ---
-
     pub(crate) async fn sequence_create_source(
         &mut self,
         session: &mut Session,
@@ -4047,6 +4021,32 @@ impl Coordinator {
                 self.create_cluster_replica(cluster_id, replica_id).await;
             }
         }
+    }
+    /// Returns an error if the given cluster is a linked cluster
+    fn ensure_cluster_is_not_linked(&self, cluster_id: ClusterId) -> Result<(), AdapterError> {
+        let cluster = self.catalog.get_cluster(cluster_id);
+        if let Some(linked_id) = cluster.linked_object_id {
+            let cluster_name = self.catalog.get_cluster(cluster_id).name.clone();
+            let linked_object_name = self.catalog.get_entry(&linked_id).name().to_string();
+            Err(AdapterError::ModifyLinkedCluster {
+                cluster_name,
+                linked_object_name,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Returns whether the given cluster exclusively maintains items
+    /// that were formerly maintained on `computed`.
+    fn is_compute_cluster(&self, id: ClusterId) -> bool {
+        let cluster = self.catalog.get_cluster(id);
+        cluster.bound_objects().iter().all(|id| {
+            matches!(
+                self.catalog.get_entry(id).item_type(),
+                CatalogItemType::Index | CatalogItemType::MaterializedView
+            )
+        })
     }
 }
 

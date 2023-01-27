@@ -424,10 +424,6 @@ impl CatalogState {
             .map(|id| &self.clusters_by_id[id])
     }
 
-    fn get_linked_object(&self, cluster_id: ClusterId) -> Option<GlobalId> {
-        self.clusters_by_id[&cluster_id].linked_object_id
-    }
-
     fn get_storage_object_size(&self, object_id: GlobalId) -> Option<&str> {
         let cluster = self.get_linked_cluster(object_id)?;
         let replica_id = cluster.replica_id_by_name[LINKED_CLUSTER_REPLICA_NAME];
@@ -3905,12 +3901,6 @@ impl Catalog {
     /// exists.
     pub fn get_linked_cluster(&self, object_id: GlobalId) -> Option<&Cluster> {
         self.state.get_linked_cluster(object_id)
-    }
-
-    /// Gets the linked object associated with the provided cluster ID, if it
-    /// exists. Panics if there is no such cluster.
-    pub fn get_linked_object(&self, cluster_id: ClusterId) -> Option<GlobalId> {
-        self.state.get_linked_object(cluster_id)
     }
 
     /// Gets the size associated with the provided source or sink ID, if a
