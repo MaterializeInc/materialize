@@ -83,7 +83,7 @@ CREATE VIEW my_jsonb_source AS
     CONVERT_FROM(data, 'utf8')::jsonb AS data
   FROM bytea_source;
 
--- parse jsonb into typed fields (subsequent queries should select from this)
+-- parse jsonb into typed columns
 CREATE MATERIALIZED VIEW my_typed_source AS
   SELECT
     (data->>'field1')::boolean AS field_1,
