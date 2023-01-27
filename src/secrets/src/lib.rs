@@ -76,7 +76,7 @@
 
 //! Abstractions for secure management of user secrets.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 
@@ -118,13 +118,13 @@ pub trait SecretsReader: Debug + Send + Sync {
 
 #[derive(Debug)]
 pub struct InMemorySecretsController {
-    data: Arc<Mutex<HashMap<GlobalId, Vec<u8>>>>,
+    data: Arc<Mutex<BTreeMap<GlobalId, Vec<u8>>>>,
 }
 
 impl InMemorySecretsController {
     pub fn new() -> Self {
         Self {
-            data: Arc::new(Mutex::new(HashMap::new())),
+            data: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 }
