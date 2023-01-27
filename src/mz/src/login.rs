@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::net::SocketAddr;
 
@@ -82,7 +82,7 @@ pub(crate) async fn generate_api_token(
     access_token_response: FronteggAuth,
     description: &String,
 ) -> Result<FronteggAPIToken, reqwest::Error> {
-    let mut body = HashMap::new();
+    let mut body = BTreeMap::new();
     body.insert("description", description);
 
     client
@@ -102,7 +102,7 @@ async fn authenticate_user(
     email: &str,
     password: &str,
 ) -> Result<FronteggAuth> {
-    let mut access_token_request_body = HashMap::new();
+    let mut access_token_request_body = BTreeMap::new();
     access_token_request_body.insert("email", email);
     access_token_request_body.insert("password", password);
 

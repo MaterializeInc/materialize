@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
@@ -84,7 +84,7 @@ struct PreparedStatements {
     iter: Statement,
     seal: Statement,
     compact: Statement,
-    update_many: Arc<tokio::sync::Mutex<HashMap<usize, Statement>>>,
+    update_many: Arc<tokio::sync::Mutex<BTreeMap<usize, Statement>>>,
 }
 
 impl PreparedStatements {
@@ -126,7 +126,7 @@ impl PreparedStatements {
             iter,
             seal,
             compact,
-            update_many: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            update_many: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
         })
     }
 }
@@ -306,7 +306,7 @@ impl StashFactory {
             nonce: rand::random(),
             sinces_tx,
             metrics: Arc::clone(&self.metrics),
-            collections: HashMap::new(),
+            collections: BTreeMap::new(),
         };
         // Do the initial connection once here so we don't get stuck in
         // transact's retry loop if the url is bad.
@@ -398,7 +398,7 @@ pub struct Stash {
     epoch: Option<NonZeroI64>,
     nonce: [u8; 16],
     pub(crate) sinces_tx: mpsc::UnboundedSender<(Id, Antichain<Timestamp>)>,
-    pub(crate) collections: HashMap<String, Id>,
+    pub(crate) collections: BTreeMap<String, Id>,
     metrics: Arc<Metrics>,
 }
 
@@ -613,7 +613,7 @@ impl Stash {
         F: for<'a> Fn(
             &'a CountedStatements<'a>,
             &'a Client,
-            &'a HashMap<String, Id>,
+            &'a BTreeMap<String, Id>,
         ) -> BoxFuture<'a, Result<T, StashError>>,
     {
         self.metrics.transactions.inc();
@@ -675,7 +675,7 @@ impl Stash {
         F: for<'a> Fn(
             &'a CountedStatements<'a>,
             &'a Client,
-            &'a HashMap<String, Id>,
+            &'a BTreeMap<String, Id>,
         ) -> BoxFuture<'a, Result<T, StashError>>,
     {
         let reconnect = match &self.client {
@@ -832,7 +832,7 @@ struct Consolidator {
     url: String,
     tls: MakeTlsConnector,
     sinces_rx: mpsc::UnboundedReceiver<(Id, Antichain<Timestamp>)>,
-    consolidations: HashMap<Id, Antichain<Timestamp>>,
+    consolidations: BTreeMap<Id, Antichain<Timestamp>>,
 
     client: Option<Client>,
     stmt_candidates: Option<Statement>,
@@ -854,7 +854,7 @@ impl Consolidator {
             stmt_candidates: None,
             stmt_insert: None,
             stmt_delete: None,
-            consolidations: HashMap::new(),
+            consolidations: BTreeMap::new(),
         };
         cons.spawn();
     }

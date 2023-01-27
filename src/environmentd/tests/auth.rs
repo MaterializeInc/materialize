@@ -76,7 +76,7 @@
 
 //! Integration tests for TLS encryption and authentication.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::error::Error;
 use std::fs::{self, File};
@@ -511,7 +511,7 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
 fn start_mzcloud(
     encoding_key: EncodingKey,
     tenant_id: Uuid,
-    users: HashMap<(String, String), String>,
+    users: BTreeMap<(String, String), String>,
     now: NowFn,
     expires_in_secs: i64,
 ) -> Result<MzCloudServer, anyhow::Error> {
@@ -521,11 +521,11 @@ fn start_mzcloud(
     struct Context {
         encoding_key: EncodingKey,
         tenant_id: Uuid,
-        users: HashMap<(String, String), String>,
+        users: BTreeMap<(String, String), String>,
         now: NowFn,
         expires_in_secs: i64,
         // Uuid -> email
-        refresh_tokens: Arc<Mutex<HashMap<String, String>>>,
+        refresh_tokens: Arc<Mutex<BTreeMap<String, String>>>,
         refreshes: Arc<Mutex<u64>>,
         enable_refresh: Arc<AtomicBool>,
     }
@@ -535,7 +535,7 @@ fn start_mzcloud(
         users,
         now,
         expires_in_secs,
-        refresh_tokens: Arc::new(Mutex::new(HashMap::new())),
+        refresh_tokens: Arc::new(Mutex::new(BTreeMap::new())),
         refreshes: Arc::clone(&refreshes),
         enable_refresh: Arc::clone(&enable_refresh),
     };
@@ -654,7 +654,7 @@ fn test_auth_expiry() {
     let tenant_id = Uuid::new_v4();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
-    let users = HashMap::from([(
+    let users = BTreeMap::from([(
         (client_id.to_string(), secret.to_string()),
         "user@_.com".to_string(),
     )]);
@@ -760,7 +760,7 @@ fn test_auth_base() {
     let secret = Uuid::new_v4();
     let system_client_id = Uuid::new_v4();
     let system_secret = Uuid::new_v4();
-    let users = HashMap::from([
+    let users = BTreeMap::from([
         (
             (client_id.to_string(), secret.to_string()),
             "user@_.com".to_string(),
