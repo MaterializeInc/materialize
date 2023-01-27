@@ -370,6 +370,13 @@ pub fn construct<A: Allocate>(
                         Datum::UInt64(u64::cast_from(worker)),
                         Datum::UInt64(delay_pow.try_into().expect("pow too big")),
                         Datum::Int64(count.into()),
+                        // [btv] This is nullable so that we can fill
+                        // in `NULL` if it overflows. That would be a
+                        // bit far-fetched, but not impossible to
+                        // imagine. See discussion
+                        // [here](https://github.com/MaterializeInc/materialize/pull/17302#discussion_r1086373740)
+                        // for more details, and think about this
+                        // again if we ever decide to stabilize it.
                         u64::try_from(sum).ok().into(),
                     ])
                 }
@@ -396,6 +403,13 @@ pub fn construct<A: Allocate>(
                     Datum::UInt64(u64::cast_from(worker)),
                     Datum::UInt64(bucket.try_into().expect("pow too big")),
                     Datum::UInt64(count),
+                    // [btv] This is nullable so that we can fill
+                    // in `NULL` if it overflows. That would be a
+                    // bit far-fetched, but not impossible to
+                    // imagine. See discussion
+                    // [here](https://github.com/MaterializeInc/materialize/pull/17302#discussion_r1086373740)
+                    // for more details, and think about this
+                    // again if we ever decide to stabilize it.
                     u64::try_from(sum).ok().into(),
                 ])
             });
