@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use itertools::Itertools;
 use postgres::error::SqlState;
@@ -55,7 +55,7 @@ pub enum FrontendStartupMessage {
     /// Begin a connection.
     Startup {
         version: i32,
-        params: HashMap<String, String>,
+        params: BTreeMap<String, String>,
     },
 
     /// Request SSL encryption for the connection.
