@@ -10,7 +10,7 @@
 //! A columnar representation of one blob's worth of data
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arrow2::array::{Array, PrimitiveArray, StructArray};
@@ -483,7 +483,7 @@ impl DynColumnMut {
 /// called to verify that all columns have been accounted for.
 #[derive(Debug)]
 pub struct ColumnsRef<'a> {
-    cols: HashMap<&'a str, &'a DynColumnRef>,
+    cols: BTreeMap<&'a str, &'a DynColumnRef>,
 }
 
 impl<'a> ColumnsRef<'a> {
@@ -514,7 +514,7 @@ impl<'a> ColumnsRef<'a> {
 /// called to verify that all columns have been accounted for.
 #[derive(Debug)]
 pub struct ColumnsMut<'a> {
-    cols: HashMap<&'a str, &'a mut DynColumnMut>,
+    cols: BTreeMap<&'a str, &'a mut DynColumnMut>,
 }
 
 impl<'a> ColumnsMut<'a> {

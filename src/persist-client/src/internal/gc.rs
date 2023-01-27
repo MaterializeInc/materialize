@@ -9,7 +9,7 @@
 
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::time::Instant;
@@ -85,10 +85,10 @@ impl<K, V, T, D> Clone for GarbageCollector<K, V, T, D> {
 /// - GarbageCollector works by `Consensus::scan`-ing for every live version of
 ///   state (ignoring what the request things the prev_state_seqno was for the
 ///   reasons mentioned immediately above). It then walks through them in a
-///   loop, accumulating a HashSet of every referenced blob key. When it finds
+///   loop, accumulating a BTreeSet of every referenced blob key. When it finds
 ///   the version corresponding to the new_seqno_since, it removes every blob in
-///   that version of the state from the HashSet and exits the loop. This
-///   results in the HashSet containing every blob eligible for deletion. It
+///   that version of the state from the BTreeSet and exits the loop. This
+///   results in the BTreeSet containing every blob eligible for deletion. It
 ///   deletes those blobs and then truncates the state to the new_seqno_since to
 ///   indicate that this work doesn't need to be done again.
 /// - Note that these requests are being processed concurrently, so it's always
@@ -232,10 +232,10 @@ where
             return;
         }
 
-        let mut deleteable_batch_blobs = HashSet::new();
+        let mut deleteable_batch_blobs = BTreeSet::new();
         let mut deleteable_rollup_blobs = Vec::new();
         let mut live_diffs = 0;
-        let mut seqno_held_parts = HashSet::new();
+        let mut seqno_held_parts = BTreeSet::new();
 
         let mut state_count = 0;
 

@@ -9,8 +9,8 @@
 
 //! A cache of [PersistClient]s indexed by [PersistLocation]s.
 
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -39,8 +39,8 @@ use crate::{PersistClient, PersistConfig, PersistLocation};
 pub struct PersistClientCache {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
-    blob_by_uri: HashMap<String, Arc<dyn Blob + Send + Sync>>,
-    consensus_by_uri: HashMap<String, Arc<dyn Consensus + Send + Sync>>,
+    blob_by_uri: BTreeMap<String, Arc<dyn Blob + Send + Sync>>,
+    consensus_by_uri: BTreeMap<String, Arc<dyn Consensus + Send + Sync>>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     rtt_latency_tasks: Vec<Arc<JoinHandle<()>>>,
 }
@@ -52,8 +52,8 @@ impl PersistClientCache {
         PersistClientCache {
             cfg,
             metrics: Arc::new(metrics),
-            blob_by_uri: HashMap::new(),
-            consensus_by_uri: HashMap::new(),
+            blob_by_uri: BTreeMap::new(),
+            consensus_by_uri: BTreeMap::new(),
             cpu_heavy_runtime: Arc::new(CpuHeavyRuntime::new()),
             rtt_latency_tasks: Vec::new(),
         }

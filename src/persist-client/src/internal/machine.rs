@@ -1184,7 +1184,7 @@ where
 
 #[cfg(test)]
 pub mod datadriven {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use anyhow::anyhow;
@@ -1213,8 +1213,8 @@ pub mod datadriven {
         pub state_versions: Arc<StateVersions>,
         pub machine: Machine<String, (), u64, i64>,
         pub gc: GarbageCollector<String, (), u64, i64>,
-        pub batches: HashMap<String, HollowBatch<u64>>,
-        pub listens: HashMap<String, Listen<String, (), u64, i64>>,
+        pub batches: BTreeMap<String, HollowBatch<u64>>,
+        pub listens: BTreeMap<String, Listen<String, (), u64, i64>>,
         pub routine: Vec<RoutineMaintenance>,
     }
 
@@ -1247,8 +1247,8 @@ pub mod datadriven {
                 state_versions,
                 machine,
                 gc,
-                batches: HashMap::default(),
-                listens: HashMap::default(),
+                batches: BTreeMap::default(),
+                listens: BTreeMap::default(),
                 routine: Vec::new(),
             }
         }

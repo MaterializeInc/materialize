@@ -9,7 +9,7 @@
 
 //! An implementation of the Maelstrom txn-list-append workload using persist
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -366,7 +366,7 @@ impl Transactor {
         }
     }
 
-    async fn read(&mut self) -> Result<HashMap<MaelstromKey, MaelstromVal>, MaelstromError> {
+    async fn read(&mut self) -> Result<BTreeMap<MaelstromKey, MaelstromVal>, MaelstromError> {
         let (updates, as_of) = self.read_short_lived().await?;
 
         let long_lived = self.read_long_lived(&as_of).await;
@@ -451,8 +451,8 @@ impl Transactor {
             u64,
             i64,
         )>,
-    ) -> Result<HashMap<MaelstromKey, MaelstromVal>, MaelstromError> {
-        let mut ret = HashMap::new();
+    ) -> Result<BTreeMap<MaelstromKey, MaelstromVal>, MaelstromError> {
+        let mut ret = BTreeMap::new();
         for ((k, v), _, d) in updates {
             if d != 1 {
                 return Err(MaelstromError {
@@ -480,12 +480,12 @@ impl Transactor {
     }
 
     fn eval_txn(
-        state: &HashMap<MaelstromKey, MaelstromVal>,
+        state: &BTreeMap<MaelstromKey, MaelstromVal>,
         req_ops: &[ReqTxnOp],
     ) -> (Vec<(MaelstromKey, MaelstromVal, i64)>, Vec<ResTxnOp>) {
         let mut res_ops = Vec::new();
         let mut updates = Vec::new();
-        let mut txn_state = HashMap::new();
+        let mut txn_state = BTreeMap::new();
 
         for req_op in req_ops.iter() {
             match req_op {

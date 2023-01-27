@@ -9,7 +9,7 @@
 
 //! In-memory implementations for testing and benchmarking.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
@@ -27,7 +27,7 @@ use crate::location::{
 #[cfg(test)]
 #[derive(Debug)]
 pub struct MemMultiRegistry {
-    blob_by_path: HashMap<String, Arc<tokio::sync::Mutex<MemBlobCore>>>,
+    blob_by_path: BTreeMap<String, Arc<tokio::sync::Mutex<MemBlobCore>>>,
 }
 
 #[cfg(test)]
@@ -35,7 +35,7 @@ impl MemMultiRegistry {
     /// Constructs a new, empty [MemMultiRegistry].
     pub fn new() -> Self {
         MemMultiRegistry {
-            blob_by_path: HashMap::new(),
+            blob_by_path: BTreeMap::new(),
         }
     }
 
@@ -59,7 +59,7 @@ impl MemMultiRegistry {
 
 #[derive(Debug, Default)]
 struct MemBlobCore {
-    dataz: HashMap<String, Bytes>,
+    dataz: BTreeMap<String, Bytes>,
 }
 
 impl MemBlobCore {
@@ -145,20 +145,20 @@ impl Blob for MemBlob {
 pub struct MemConsensus {
     // TODO: This was intended to be a tokio::sync::Mutex but that seems to
     // regularly deadlock in the `concurrency` test.
-    data: Arc<Mutex<HashMap<String, Vec<VersionedData>>>>,
+    data: Arc<Mutex<BTreeMap<String, Vec<VersionedData>>>>,
 }
 
 impl Default for MemConsensus {
     fn default() -> Self {
         Self {
-            data: Arc::new(Mutex::new(HashMap::new())),
+            data: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 }
 
 impl MemConsensus {
     fn scan_store(
-        store: &HashMap<String, Vec<VersionedData>>,
+        store: &BTreeMap<String, Vec<VersionedData>>,
         key: &str,
         from: SeqNo,
         limit: usize,

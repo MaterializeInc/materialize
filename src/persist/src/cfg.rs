@@ -9,7 +9,7 @@
 
 //! Configuration for [crate::location] implementations.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -66,7 +66,7 @@ impl BlobConfig {
     ) -> Result<Self, ExternalError> {
         let url = Url::parse(value)
             .map_err(|err| anyhow!("failed to parse blob location {} as a url: {}", &value, err))?;
-        let mut query_params = url.query_pairs().collect::<HashMap<_, _>>();
+        let mut query_params = url.query_pairs().collect::<BTreeMap<_, _>>();
 
         let config = match url.scheme() {
             "file" => {
