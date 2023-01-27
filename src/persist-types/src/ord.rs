@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use ordered_float::OrderedFloat;
 use std::cmp::Ordering;
 
 use crate::columnar::{ColumnGet, Data};
@@ -45,32 +46,62 @@ pub enum ColOrd<'a> {
 impl<'a> ColOrd<'a> {
     fn cmp(&self, idx0: usize, idx1: usize) -> Ordering {
         match *self {
-            ColOrd::Bool(x) => ColumnGet::<bool>::cmp(x, idx0, idx1),
-            ColOrd::I8(x) => ColumnGet::<i8>::cmp(x, idx0, idx1),
-            ColOrd::I16(x) => ColumnGet::<i16>::cmp(x, idx0, idx1),
-            ColOrd::I32(x) => ColumnGet::<i32>::cmp(x, idx0, idx1),
-            ColOrd::I64(x) => ColumnGet::<i64>::cmp(x, idx0, idx1),
-            ColOrd::U8(x) => ColumnGet::<u8>::cmp(x, idx0, idx1),
-            ColOrd::U16(x) => ColumnGet::<u16>::cmp(x, idx0, idx1),
-            ColOrd::U32(x) => ColumnGet::<u32>::cmp(x, idx0, idx1),
-            ColOrd::U64(x) => ColumnGet::<u64>::cmp(x, idx0, idx1),
-            ColOrd::F32(x) => ColumnGet::<f32>::cmp(x, idx0, idx1),
-            ColOrd::F64(x) => ColumnGet::<f64>::cmp(x, idx0, idx1),
-            ColOrd::Bytes(x) => ColumnGet::<Vec<u8>>::cmp(x, idx0, idx1),
-            ColOrd::String(x) => ColumnGet::<String>::cmp(x, idx0, idx1),
-            ColOrd::OptBool(x) => ColumnGet::<Option<bool>>::cmp(x, idx0, idx1),
-            ColOrd::OptI8(x) => ColumnGet::<Option<i8>>::cmp(x, idx0, idx1),
-            ColOrd::OptI16(x) => ColumnGet::<Option<i16>>::cmp(x, idx0, idx1),
-            ColOrd::OptI32(x) => ColumnGet::<Option<i32>>::cmp(x, idx0, idx1),
-            ColOrd::OptI64(x) => ColumnGet::<Option<i64>>::cmp(x, idx0, idx1),
-            ColOrd::OptU8(x) => ColumnGet::<Option<u8>>::cmp(x, idx0, idx1),
-            ColOrd::OptU16(x) => ColumnGet::<Option<u16>>::cmp(x, idx0, idx1),
-            ColOrd::OptU32(x) => ColumnGet::<Option<u32>>::cmp(x, idx0, idx1),
-            ColOrd::OptU64(x) => ColumnGet::<Option<u64>>::cmp(x, idx0, idx1),
-            ColOrd::OptF32(x) => ColumnGet::<Option<f32>>::cmp(x, idx0, idx1),
-            ColOrd::OptF64(x) => ColumnGet::<Option<f64>>::cmp(x, idx0, idx1),
-            ColOrd::OptBytes(x) => ColumnGet::<Option<Vec<u8>>>::cmp(x, idx0, idx1),
-            ColOrd::OptString(x) => ColumnGet::<Option<String>>::cmp(x, idx0, idx1),
+            ColOrd::Bool(x) => ColumnGet::<bool>::get(x, idx0).cmp(&ColumnGet::get(x, idx1)),
+            ColOrd::I8(x) => ColumnGet::<i8>::get(x, idx0).cmp(&ColumnGet::get(x, idx1)),
+            ColOrd::I16(x) => ColumnGet::<i16>::get(x, idx0).cmp(&ColumnGet::get(x, idx1)),
+            ColOrd::I32(x) => ColumnGet::<i32>::get(x, idx0).cmp(&ColumnGet::get(x, idx1)),
+            ColOrd::I64(x) => ColumnGet::<i64>::get(x, idx0).cmp(&ColumnGet::get(x, idx1)),
+            ColOrd::U8(x) => ColumnGet::<u8>::get(x, idx0).cmp(&ColumnGet::get(x, idx1)),
+            ColOrd::U16(x) => ColumnGet::<u16>::get(x, idx0).cmp(&ColumnGet::get(x, idx1)),
+            ColOrd::U32(x) => ColumnGet::<u32>::get(x, idx0).cmp(&ColumnGet::get(x, idx1)),
+            ColOrd::U64(x) => ColumnGet::<u64>::get(x, idx0).cmp(&ColumnGet::get(x, idx1)),
+            ColOrd::F32(x) => OrderedFloat(ColumnGet::<f32>::get(x, idx0))
+                .cmp(&OrderedFloat(ColumnGet::get(x, idx1))),
+            ColOrd::F64(x) => OrderedFloat(ColumnGet::<f64>::get(x, idx0))
+                .cmp(&OrderedFloat(ColumnGet::get(x, idx1))),
+            ColOrd::Bytes(x) => {
+                ColumnGet::<Vec<u8>>::get(x, idx0).cmp(&ColumnGet::<Vec<u8>>::get(x, idx1))
+            }
+            ColOrd::String(x) => {
+                ColumnGet::<String>::get(x, idx0).cmp(&ColumnGet::<String>::get(x, idx1))
+            }
+            ColOrd::OptBool(x) => {
+                ColumnGet::<Option<bool>>::get(x, idx0).cmp(&ColumnGet::get(x, idx1))
+            }
+            ColOrd::OptI8(x) => ColumnGet::<Option<i8>>::get(x, idx0).cmp(&ColumnGet::get(x, idx1)),
+            ColOrd::OptI16(x) => {
+                ColumnGet::<Option<i16>>::get(x, idx0).cmp(&ColumnGet::get(x, idx1))
+            }
+            ColOrd::OptI32(x) => {
+                ColumnGet::<Option<i32>>::get(x, idx0).cmp(&ColumnGet::get(x, idx1))
+            }
+            ColOrd::OptI64(x) => {
+                ColumnGet::<Option<i64>>::get(x, idx0).cmp(&ColumnGet::get(x, idx1))
+            }
+            ColOrd::OptU8(x) => ColumnGet::<Option<u8>>::get(x, idx0).cmp(&ColumnGet::get(x, idx1)),
+            ColOrd::OptU16(x) => {
+                ColumnGet::<Option<u16>>::get(x, idx0).cmp(&ColumnGet::get(x, idx1))
+            }
+            ColOrd::OptU32(x) => {
+                ColumnGet::<Option<u32>>::get(x, idx0).cmp(&ColumnGet::get(x, idx1))
+            }
+            ColOrd::OptU64(x) => {
+                ColumnGet::<Option<u64>>::get(x, idx0).cmp(&ColumnGet::get(x, idx1))
+            }
+            ColOrd::OptF32(x) => ColumnGet::<Option<f32>>::get(x, idx0)
+                .map(|x| OrderedFloat(x))
+                .cmp(&ColumnGet::get(x, idx1).map(|x| OrderedFloat(x))),
+            ColOrd::OptF64(x) => ColumnGet::<Option<f64>>::get(x, idx0)
+                .map(|x| OrderedFloat(x))
+                .cmp(&ColumnGet::get(x, idx1).map(|x| OrderedFloat(x))),
+            ColOrd::OptBytes(x) => {
+                ColumnGet::<Option<Vec<u8>>>::get(x, idx0)
+                    .cmp(&ColumnGet::<Option<Vec<u8>>>::get(x, idx1))
+            }
+            ColOrd::OptString(x) => {
+                ColumnGet::<Option<String>>::get(x, idx0)
+                    .cmp(&ColumnGet::<Option<String>>::get(x, idx1))
+            }
         }
     }
 }

@@ -48,7 +48,6 @@
 //! column structure. It also provides a [PartEncoder] and [PartDecoder] for
 //! amortizing any downcasting that does need to happen.
 
-use std::cmp::Ordering;
 use std::fmt::Debug;
 
 use crate::codec_impls::UnitSchema;
@@ -85,7 +84,7 @@ pub trait Data: Debug + Send + Sync + Sized + 'static {
     /// TODO: We may want to eventually separate this into In and Out types
     /// because one wants to be covariant and the other wants to be
     /// contravariant.
-    type Ref<'a>: Debug + Ord
+    type Ref<'a>: Debug
     where
         Self: 'a;
 
@@ -100,11 +99,6 @@ pub trait Data: Debug + Send + Sync + Sized + 'static {
 pub trait ColumnGet<T: Data>: ColumnRef {
     /// Retrieves the value at index.
     fn get<'a>(&'a self, idx: usize) -> T::Ref<'a>;
-
-    /// Compares values at given indices.
-    fn cmp<'a>(&'a self, idx0: usize, idx1: usize) -> Ordering {
-        self.get(idx0).cmp(&self.get(idx1))
-    }
 }
 
 /// A type that may be added into a column of `[T]`.
