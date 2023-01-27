@@ -73,7 +73,7 @@ impl<'a> Explainable<'a, MirRelationExpr> {
                 .map_err(|e| ExplainError::UnknownError(e.to_string()))?;
         }
 
-        let plan = AnnotatedPlan::try_from(context, self.0)?;
+        let plan = try_from(context, self.0)?;
         Ok(ExplainSinglePlan { context, plan })
     }
 }
@@ -133,7 +133,7 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
                     .humanizer
                     .humanize_id(build_desc.id)
                     .unwrap_or_else(|| build_desc.id.to_string());
-                let plan = AnnotatedPlan::try_from(context, build_desc.plan.as_inner())?;
+                let plan = try_from(context, build_desc.plan.as_inner())?;
                 Ok((id, plan))
             })
             .collect::<Result<Vec<_>, ExplainError>>()?;
@@ -161,82 +161,80 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
     }
 }
 
-impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
-    fn try_from(
-        context: &'a ExplainContext,
-        plan: &'a MirRelationExpr,
-    ) -> Result<Self, RecursionLimitError> {
-        let mut annotations = BTreeMap::<&MirRelationExpr, Attributes>::default();
-        let config = context.config;
+fn try_from<'a>(
+    context: &'a ExplainContext,
+    plan: &'a MirRelationExpr,
+) -> Result<AnnotatedPlan<'a, MirRelationExpr>, RecursionLimitError> {
+    let mut annotations = BTreeMap::<&MirRelationExpr, Attributes>::default();
+    let config = context.config;
 
-        if config.requires_attributes() {
-            // get the annotation keys
-            let subtree_refs = plan.post_order_vec();
-            // get the annotation values
-            let mut explain_attrs = DerivedAttributes::from(config);
-            plan.visit(&mut explain_attrs)?;
+    if config.requires_attributes() {
+        // get the annotation keys
+        let subtree_refs = plan.post_order_vec();
+        // get the annotation values
+        let mut explain_attrs = DerivedAttributes::from(config);
+        plan.visit(&mut explain_attrs)?;
 
-            if config.subtree_size {
-                for (expr, attr) in std::iter::zip(
-                    subtree_refs.iter(),
-                    explain_attrs.remove_results::<SubtreeSize>().into_iter(),
-                ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.subtree_size = Some(attr);
-                }
+        if config.subtree_size {
+            for (expr, attr) in std::iter::zip(
+                subtree_refs.iter(),
+                explain_attrs.remove_results::<SubtreeSize>().into_iter(),
+            ) {
+                let attrs = annotations.entry(expr).or_default();
+                attrs.subtree_size = Some(attr);
             }
-            if config.non_negative {
-                for (expr, attr) in std::iter::zip(
-                    subtree_refs.iter(),
-                    explain_attrs.remove_results::<NonNegative>().into_iter(),
-                ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.non_negative = Some(attr);
-                }
-            }
-
-            if config.arity {
-                for (expr, attr) in std::iter::zip(
-                    subtree_refs.iter(),
-                    explain_attrs.remove_results::<Arity>().into_iter(),
-                ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.arity = Some(attr);
-                }
-            }
-
-            if config.types {
-                for (expr, types) in std::iter::zip(
-                    subtree_refs.iter(),
-                    explain_attrs.remove_results::<RelationType>().into_iter(),
-                ) {
-                    let humanized_columns = types
-                        .into_iter()
-                        .map(|c| context.humanizer.humanize_column_type(&c))
-                        .collect::<Vec<_>>();
-                    let attr = bracketed("(", ")", separated(", ", humanized_columns)).to_string();
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.types = Some(attr);
-                }
-            }
-
-            if config.keys {
-                for (expr, keys) in std::iter::zip(
-                    subtree_refs.iter(),
-                    explain_attrs.remove_results::<UniqueKeys>().into_iter(),
-                ) {
-                    let formatted_keys = keys
-                        .into_iter()
-                        .map(|key_set| bracketed("[", "]", separated(", ", key_set)).to_string());
-                    let attr = bracketed("(", ")", separated(", ", formatted_keys)).to_string();
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.keys = Some(attr);
-                }
+        }
+        if config.non_negative {
+            for (expr, attr) in std::iter::zip(
+                subtree_refs.iter(),
+                explain_attrs.remove_results::<NonNegative>().into_iter(),
+            ) {
+                let attrs = annotations.entry(expr).or_default();
+                attrs.non_negative = Some(attr);
             }
         }
 
-        Ok(AnnotatedPlan { plan, annotations })
+        if config.arity {
+            for (expr, attr) in std::iter::zip(
+                subtree_refs.iter(),
+                explain_attrs.remove_results::<Arity>().into_iter(),
+            ) {
+                let attrs = annotations.entry(expr).or_default();
+                attrs.arity = Some(attr);
+            }
+        }
+
+        if config.types {
+            for (expr, types) in std::iter::zip(
+                subtree_refs.iter(),
+                explain_attrs.remove_results::<RelationType>().into_iter(),
+            ) {
+                let humanized_columns = types
+                    .into_iter()
+                    .map(|c| context.humanizer.humanize_column_type(&c))
+                    .collect::<Vec<_>>();
+                let attr = bracketed("(", ")", separated(", ", humanized_columns)).to_string();
+                let attrs = annotations.entry(expr).or_default();
+                attrs.types = Some(attr);
+            }
+        }
+
+        if config.keys {
+            for (expr, keys) in std::iter::zip(
+                subtree_refs.iter(),
+                explain_attrs.remove_results::<UniqueKeys>().into_iter(),
+            ) {
+                let formatted_keys = keys
+                    .into_iter()
+                    .map(|key_set| bracketed("[", "]", separated(", ", key_set)).to_string());
+                let attr = bracketed("(", ")", separated(", ", formatted_keys)).to_string();
+                let attrs = annotations.entry(expr).or_default();
+                attrs.keys = Some(attr);
+            }
+        }
     }
+
+    Ok(AnnotatedPlan { plan, annotations })
 }
 
 /// Normalize the way inputs of multi-input variants are rendered.

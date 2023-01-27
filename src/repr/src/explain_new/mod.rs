@@ -30,7 +30,7 @@
 //! constructor for [`Explain`] to indicate that the implementation does
 //! not support this `$format`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use mz_ore::{stack::RecursionLimitError, str::Indent, str::IndentLike};
@@ -68,6 +68,15 @@ where
     Self: Sized,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result;
+}
+
+impl<T> DisplayText for &T
+where
+    T: DisplayText,
+{
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut ()) -> fmt::Result {
+        (*self).fmt_text(f, ctx)
+    }
 }
 
 impl<A, C> DisplayText<C> for Box<A>
@@ -692,6 +701,79 @@ impl<'a> fmt::Display for Indices<'a> {
                 slice = &slice[1..];
             }
         }
+        Ok(())
+    }
+}
+
+/// A somewhat ad-hoc way to keep carry a plan with a set
+/// of attributes derived for each node in that plan.
+#[allow(missing_debug_implementations)]
+pub struct AnnotatedPlan<'a, T> {
+    pub plan: &'a T,
+    pub annotations: BTreeMap<&'a T, Attributes>,
+}
+
+/// A container for derived attributes.
+#[derive(Clone, Default, Debug)]
+pub struct Attributes {
+    pub non_negative: Option<bool>,
+    pub subtree_size: Option<usize>,
+    pub arity: Option<usize>,
+    pub types: Option<String>,
+    pub keys: Option<String>,
+}
+
+impl fmt::Display for Attributes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut builder = f.debug_struct("//");
+        if let Some(subtree_size) = &self.subtree_size {
+            builder.field("subtree_size", subtree_size);
+        }
+        if let Some(non_negative) = &self.non_negative {
+            builder.field("non_negative", non_negative);
+        }
+        if let Some(arity) = &self.arity {
+            builder.field("arity", arity);
+        }
+        if let Some(types) = &self.types {
+            builder.field("types", types);
+        }
+        if let Some(keys) = &self.keys {
+            builder.field("keys", keys);
+        }
+        builder.finish()
+    }
+}
+
+/// A set of indexes that are used in the explained plan.
+#[derive(Debug)]
+pub struct UsedIndexes(Vec<GlobalId>);
+
+impl UsedIndexes {
+    pub fn new(values: Vec<GlobalId>) -> UsedIndexes {
+        UsedIndexes(values)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl<'a, C> DisplayText<C> for UsedIndexes
+where
+    C: AsMut<Indent> + AsRef<&'a dyn ExprHumanizer>,
+{
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        writeln!(f, "{}Used Indexes:", ctx.as_mut())?;
+        *ctx.as_mut() += 1;
+        for id in &self.0 {
+            let index_name = ctx
+                .as_ref()
+                .humanize_id(*id)
+                .unwrap_or_else(|| id.to_string());
+            writeln!(f, "{}- {}", ctx.as_mut(), index_name)?;
+        }
+        *ctx.as_mut() -= 1;
         Ok(())
     }
 }

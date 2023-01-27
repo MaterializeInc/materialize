@@ -22,8 +22,8 @@ use std::fmt;
 use mz_expr::{MapFilterProject, RowSetFinishing};
 use mz_ore::str::{Indent, IndentLike};
 use mz_repr::explain_new::{
-    separated_text, DisplayJson, DisplayText, ExplainConfig, ExprHumanizer, Indices,
-    RenderingContext,
+    separated_text, AnnotatedPlan, Attributes, DisplayJson, DisplayText, ExplainConfig,
+    ExprHumanizer, Indices, RenderingContext, UsedIndexes,
 };
 
 pub(crate) mod fast_path;
@@ -65,80 +65,6 @@ pub(crate) struct ExplainContext<'a> {
     pub(crate) humanizer: &'a dyn ExprHumanizer,
     pub(crate) used_indexes: UsedIndexes,
     pub(crate) finishing: Option<RowSetFinishing>,
-}
-
-/// A somewhat ad-hoc way to keep carry a plan with a set
-/// of attributes derived for each node in that plan.
-pub(crate) struct AnnotatedPlan<'a, T> {
-    pub(crate) plan: &'a T,
-    pub(crate) annotations: BTreeMap<&'a T, Attributes>,
-}
-
-/// A container for derived attributes.
-#[derive(Clone, Default, Debug)]
-pub struct Attributes {
-    non_negative: Option<bool>,
-    subtree_size: Option<usize>,
-    arity: Option<usize>,
-    types: Option<String>,
-    keys: Option<String>,
-}
-
-impl fmt::Display for Attributes {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut builder = f.debug_struct("//");
-        if let Some(subtree_size) = &self.subtree_size {
-            builder.field("subtree_size", subtree_size);
-        }
-        if let Some(non_negative) = &self.non_negative {
-            builder.field("non_negative", non_negative);
-        }
-        if let Some(arity) = &self.arity {
-            builder.field("arity", arity);
-        }
-        if let Some(types) = &self.types {
-            builder.field("types", types);
-        }
-        if let Some(keys) = &self.keys {
-            builder.field("keys", keys);
-        }
-        builder.finish()
-    }
-}
-
-/// A set of indexes that are used in the physical plan
-/// derived  from a plan wrapped in an [`ExplainSinglePlan`]
-/// or an [`ExplainMultiPlan`].
-#[derive(Debug)]
-pub(crate) struct UsedIndexes(Vec<GlobalId>);
-
-impl UsedIndexes {
-    pub(crate) fn new(values: Vec<GlobalId>) -> UsedIndexes {
-        UsedIndexes(values)
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
-impl<'a, C> DisplayText<C> for UsedIndexes
-where
-    C: AsMut<Indent> + AsRef<&'a dyn ExprHumanizer>,
-{
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
-        writeln!(f, "{}Used Indexes:", ctx.as_mut())?;
-        *ctx.as_mut() += 1;
-        for id in &self.0 {
-            let index_name = ctx
-                .as_ref()
-                .humanize_id(*id)
-                .unwrap_or_else(|| id.to_string());
-            writeln!(f, "{}- {}", ctx.as_mut(), index_name)?;
-        }
-        *ctx.as_mut() -= 1;
-        Ok(())
-    }
 }
 
 /// A structure produced by the `explain_$format` methods in
