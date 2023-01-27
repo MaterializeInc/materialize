@@ -370,7 +370,7 @@ impl fmt::Display for AdapterError {
                 p.type_name().quoted()
             ),
             AdapterError::BadItemInStorageCluster { .. } => f.write_str(
-                "Cannot create this kind of item in a cluster that contains sources and sinks",
+                "cannot create this kind of item in a cluster that contains sources or sinks",
             ),
             AdapterError::InvalidParameterValue {
                 parameter,

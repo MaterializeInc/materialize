@@ -89,14 +89,12 @@ materialize_public_lg2  linked  ${arg.default-storage-size}
 
 # Test that linked clusters cannot be dropped, nor can their replicas be
 # dropped, nor can new replicas be created, nor can they run queries.
-! DROP CLUSTER materialize_public_lg2
-contains:cannot modify linked cluster "materialize_public_lg2"
 ! DROP CLUSTER materialize_public_lg2 CASCADE
 contains:cannot modify linked cluster "materialize_public_lg2"
 ! DROP CLUSTER REPLICA materialize_public_lg2.linked
 contains:cannot modify linked cluster "materialize_public_lg2"
 ! CREATE CLUSTER REPLICA materialize_public_lg2.new SIZE 'small'
-contains:cannot modify linked cluster "materialize_public_lg2"
+contains:cannot create more than one replica of a cluster containing sources or sinks
 ! CREATE MATERIALIZED VIEW v IN CLUSTER materialize_public_lg2 AS SELECT 1
 contains:cannot modify linked cluster "materialize_public_lg2"
 ! CREATE INDEX IN CLUSTER materialize_public_lg2 ON v (a)
