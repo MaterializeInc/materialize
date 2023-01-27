@@ -10,7 +10,7 @@ Percentiles are a useful statistic to understand and interpret data distribution
 
 A naive way to compute percentiles is to order all values and pick the value at the position of the corresponding percentile. This way of computing percentiles keeps all values around and therefore demands memory to grow linearly with the number of tracked values. Two better approaches to reduce the memory footprint are: histograms and High Dynamic Range (HDR) histograms.
 
-Histograms have a lower memory footprint, linear to the number of *unique* values, and computes precise percentiles. HDR histograms further reduce the memory footprint but at the expense of computing approximate percentiles. They are particularly interesting if there is a long tail of large values that you want to track, which is often the case for latency measurements.
+Histograms have a lower memory footprint, linear to the number of _unique_ values, and computes precise percentiles. HDR histograms further reduce the memory footprint but at the expense of computing approximate percentiles. They are particularly interesting if there is a long tail of large values that you want to track, which is often the case for latency measurements.
 
 ## Using histograms to compute percentiles
 
@@ -32,7 +32,7 @@ CREATE VIEW distribution AS
 SELECT
   h.bucket,
   h.frequency,
-  sum(g.frequency) AS cumulative_count,
+  sum(g.frequency) AS cumulative_frequency,
   sum(g.frequency) / (SELECT sum(frequency) FROM histogram) AS cumulative_distribution
 FROM histogram g, histogram h
 WHERE g.bucket <= h.bucket
@@ -94,15 +94,15 @@ CREATE VIEW hdr_distribution AS
 SELECT
   h.sign*(1.0+h.mantissa/pow(2.0, :precision))*pow(2.0,h.exponent) AS bucket,
   h.frequency,
-  sum(g.frequency) AS cumulative_count,
+  sum(g.frequency) AS cumulative_frequency,
   sum(g.frequency) / (SELECT sum(frequency) FROM hdr_histogram) AS cumulative_distribution
 FROM hdr_histogram g, hdr_histogram h
 WHERE (g.sign,g.exponent,g.mantissa) <= (h.sign,h.exponent,h.mantissa)
 GROUP BY h.sign, h.exponent, h.mantissa, h.frequency
-ORDER BY 1;
+ORDER BY cumulative_distribution;
 ```
 
-This view can then be used to query *approximate* percentiles. More precisely, the query returns the lower bound for the percentile (the next larger bucket represents the upper bound).
+This view can then be used to query _approximate_ percentiles. More precisely, the query returns the lower bound for the percentile (the next larger bucket represents the upper bound).
 
 ```sql
 SELECT bucket AS approximate_percentile
@@ -131,23 +131,23 @@ Let's add the values 1 to 10 into the `input` table.
 INSERT INTO input SELECT n FROM generate_series(1,10) AS n;
 ```
 
-For small numbers, `distribution` and `hdr_distribution` are identical. All numbers from 1 to 10 are stored in their own buckets.
+For small numbers, `distribution` and `hdr_distribution` are identical. Even in `hdr_distribution`, all numbers from 1 to 10 are stored in their own buckets.
 
 ```sql
 SELECT * FROM hdr_distribution;
 
- bucket | frequency | cumulative_count | cumulative_distribution
---------+-----------+------------------+-------------------------
-      1 |         1 |                1 |                     0.1
-      2 |         1 |                2 |                     0.2
-      3 |         1 |                3 |                     0.3
-      4 |         1 |                4 |                     0.4
-      5 |         1 |                5 |                     0.5
-      6 |         1 |                6 |                     0.6
-      7 |         1 |                7 |                     0.7
-      8 |         1 |                8 |                     0.8
-      9 |         1 |                9 |                     0.9
-     10 |         1 |               10 |                       1
+ bucket | frequency | cumulative_frequency | cumulative_distribution
+--------+-----------+----------------------+-------------------------
+      1 |         1 |                    1 |                     0.1
+      2 |         1 |                    2 |                     0.2
+      3 |         1 |                    3 |                     0.3
+      4 |         1 |                    4 |                     0.4
+      5 |         1 |                    5 |                     0.5
+      6 |         1 |                    6 |                     0.6
+      7 |         1 |                    7 |                     0.7
+      8 |         1 |                    8 |                     0.8
+      9 |         1 |                    9 |                     0.9
+     10 |         1 |                   10 |                       1
 (10 rows)
 ```
 
@@ -162,25 +162,25 @@ In the case of the `hdr_distribution`, a single bucket represents up to 512 dist
 ```sql
 SELECT * FROM hdr_distribution ORDER BY cumulative_distribution;
 
- bucket | frequency | cumulative_count |          cumulative_distribution
---------+-----------+------------------+-------------------------------------------
-      1 |         1 |                1 |     0.00000999990000099999000009999900001
-      2 |         1 |                2 |     0.00001999980000199998000019999800002
-      3 |         1 |                3 |     0.00002999970000299997000029999700003
-      4 |         1 |                4 |     0.00003999960000399996000039999600004
-      5 |         1 |                5 |     0.00004999950000499995000049999500005
+ bucket | frequency | cumulative_frequency |          cumulative_distribution
+--------+-----------+----------------------+-------------------------------------------
+      1 |         1 |                    1 |     0.00000999990000099999000009999900001
+      2 |         1 |                    2 |     0.00001999980000199998000019999800002
+      3 |         1 |                    3 |     0.00002999970000299997000029999700003
+      4 |         1 |                    4 |     0.00003999960000399996000039999600004
+      5 |         1 |                    5 |     0.00004999950000499995000049999500005
 ...skipping...
-   7424 |       256 |             7679 | 0.767823217678232176782321767823217678232
-   7680 |       256 |             7935 | 0.793420657934206579342065793420657934207
-   7936 |       256 |             8191 | 0.819018098190180981901809819018098190181
-   8192 |       512 |             8703 |  0.87021297870212978702129787021297870213
-   8704 |       512 |             9215 | 0.921407859214078592140785921407859214079
-   9216 |       512 |             9727 | 0.972602739726027397260273972602739726027
-   9728 |       274 |            10001 |                                         1
+   7424 |       256 |                 7679 | 0.767823217678232176782321767823217678232
+   7680 |       256 |                 7935 | 0.793420657934206579342065793420657934207
+   7936 |       256 |                 8191 | 0.819018098190180981901809819018098190181
+   8192 |       512 |                 8703 |  0.87021297870212978702129787021297870213
+   8704 |       512 |                 9215 | 0.921407859214078592140785921407859214079
+   9216 |       512 |                 9727 | 0.972602739726027397260273972602739726027
+   9728 |       274 |                10001 |                                         1
 (163 rows)
 ```
 
-Note that `hdr_distribution` only contains 163 rows as opposed to the 10001 rows of `distribution`, which is used in the histogram approach. However, when querying for the 90-th percentile, the query returns an approximate percentile of `8704` whereas the precise percentile is `9001`.
+Note that `hdr_distribution` only contains 163 rows as opposed to the 10001 rows of `distribution`, which is used in the histogram approach. However, when querying for the 90-th percentile, the query returns an approximate percentile of `8704` (or more precisely between `8704`and `9216`) whereas the precise percentile is `9001`.
 
 ```sql
 SELECT bucket AS approximate_percentile
@@ -195,4 +195,4 @@ LIMIT 1;
 (1 row)
 ```
 
-The precision of the approximation can be adapted by changing the `precision` in the definition of `hdr_histogram`. The higher the `precision` the closer is the value to the actual percentile. The lower the `precision`, the less memory is required.
+The precision of the approximation can be adapted by changing the `precision` in the definition of `hdr_histogram`. The higher the `precision`, the fewer items are kept in the same bucket and therefore the more precise the approximate percentile becomes. The lower the `precision`, the more items are kept in the same bucket and therefore the less memory is required.
