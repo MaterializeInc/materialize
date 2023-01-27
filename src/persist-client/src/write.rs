@@ -739,7 +739,7 @@ where
         //
         // Intentionally create the span outside the task to set the parent.
         let expire_span = debug_span!("drop::expire");
-        let _ = handle.spawn_named(
+        handle.spawn_named(
             || format!("WriteHandle::expire ({})", self.writer_id),
             async move {
                 machine.expire_writer(&writer_id).await;

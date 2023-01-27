@@ -149,7 +149,7 @@ where
                 let compact_span =
                     debug_span!(parent: None, "compact::apply", shard_id=%machine.shard_id());
                 compact_span.follows_from(&Span::current());
-                let _ = mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
+                mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
                     let res = Self::compact_and_apply(
                         cfg,
                         blob,
