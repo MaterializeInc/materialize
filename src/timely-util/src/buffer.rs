@@ -51,6 +51,7 @@ where
     output_handle: &'b mut OutputHandle<'a, T, (D, T, R), P>,
     cap: Option<Capability<T>>,
     port: usize,
+    previous_len: usize,
 }
 
 impl<'a, 'b, T, D: Data, R: Semigroup, P> ConsolidateBuffer<'a, 'b, T, D, R, P>
@@ -68,6 +69,7 @@ where
             port,
             cap: None,
             buffer: Vec::with_capacity(::timely::container::buffer::default_capacity::<(D, T, R)>()),
+            previous_len: 0,
         }
     }
 
@@ -81,11 +83,17 @@ where
             self.cap = Some(cap.delayed_for_output(cap.time(), self.port));
         }
         self.buffer.push(data);
-        if self.buffer.len() == self.buffer.capacity() {
+
+        // Limit, if possible, the lifetime of the allocations for data
+        // and consolidate smaller buffers if we're in the lucky case
+        // of a small domain for D
+        if self.buffer.len() >= 2 * self.previous_len {
             // Consolidate while the consolidation frees at least half the buffer
             consolidate_updates(&mut self.buffer);
             if self.buffer.len() > self.buffer.capacity() / 2 {
                 self.flush();
+            } else {
+                self.previous_len = self.buffer.len();
             }
         }
     }
@@ -96,6 +104,7 @@ where
             self.output_handle.session(cap).give_vec(&mut self.buffer);
             self.buffer
                 .reserve_exact(::timely::container::buffer::default_capacity::<(D, T, R)>());
+            self.previous_len = 0;
         }
     }
 }
