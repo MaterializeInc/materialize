@@ -16,7 +16,7 @@ use std::time::Duration;
 use mz_build_info::BuildInfo;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
-use mz_persist::cfg::ConsensusKnobs;
+use mz_persist::cfg::{BlobKnobs, ConsensusKnobs};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use semver::Version;
@@ -234,6 +234,25 @@ impl ConsensusKnobs for PersistConfig {
 
     fn connection_pool_ttl_stagger(&self) -> Duration {
         self.consensus_connection_pool_ttl_stagger
+    }
+}
+
+// TODO: Replace with dynamic values when PersistConfig is integrated with LD
+impl BlobKnobs for PersistConfig {
+    fn operation_timeout(&self) -> Duration {
+        Duration::from_secs(180)
+    }
+
+    fn operation_attempt_timeout(&self) -> Duration {
+        Duration::from_secs(90)
+    }
+
+    fn connect_timeout(&self) -> Duration {
+        Duration::from_secs(7)
+    }
+
+    fn read_timeout(&self) -> Duration {
+        Duration::from_secs(10)
     }
 }
 

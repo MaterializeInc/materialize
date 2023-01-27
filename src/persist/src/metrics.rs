@@ -12,6 +12,39 @@
 use mz_ore::metric;
 use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry, UIntGauge};
 
+/// Metrics specific to S3Blob's internal workings.
+#[derive(Debug, Clone)]
+pub struct S3BlobMetrics {
+    pub(crate) operation_timeouts: IntCounter,
+    pub(crate) operation_attempt_timeouts: IntCounter,
+    pub(crate) connect_timeouts: IntCounter,
+    pub(crate) read_timeouts: IntCounter,
+}
+
+impl S3BlobMetrics {
+    /// Returns a new [S3BlobMetrics] instance connected to the given registry.
+    pub fn new(registry: &MetricsRegistry) -> Self {
+        Self {
+            operation_timeouts: registry.register(metric!(
+                name: "mz_persist_s3_operation_timeouts",
+                help: "number of operation timeouts (including retries)",
+            )),
+            operation_attempt_timeouts: registry.register(metric!(
+                name: "mz_persist_s3_operation_attempt_timeouts",
+                help: "number of operation attempt timeouts (within a single retry)",
+            )),
+            connect_timeouts: registry.register(metric!(
+                name: "mz_persist_s3_connect_timeouts",
+                help: "number of timeouts establishing a connection to S3",
+            )),
+            read_timeouts: registry.register(metric!(
+                name: "mz_persist_s3_read_timeouts",
+                help: "number of timeouts waiting on first response byte from S3",
+            )),
+        }
+    }
+}
+
 /// Metrics specific to PostgresConsensus's internal workings.
 #[derive(Debug, Clone)]
 pub struct PostgresConsensusMetrics {

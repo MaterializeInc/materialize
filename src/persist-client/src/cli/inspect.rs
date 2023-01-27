@@ -396,7 +396,7 @@ pub async fn blob_batch_part(
 ) -> Result<impl serde::Serialize, anyhow::Error> {
     let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let blob = make_blob(blob_uri, NO_COMMIT, metrics).await?;
+    let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;
 
     let key = PartialBatchKey(partial_key).complete(&shard_id);
     let part = blob
@@ -451,7 +451,7 @@ struct BlobCounts {
 pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow::Error> {
     let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let blob = make_blob(blob_uri, NO_COMMIT, metrics).await?;
+    let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;
 
     let mut blob_counts = BTreeMap::new();
     let () = blob
@@ -756,7 +756,7 @@ impl StateArgs {
         let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
         let consensus =
             make_consensus(&cfg, &self.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
-        let blob = make_blob(&self.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
+        let blob = make_blob(&cfg, &self.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
         Ok(StateVersions::new(cfg, consensus, blob, metrics))
     }
 }
