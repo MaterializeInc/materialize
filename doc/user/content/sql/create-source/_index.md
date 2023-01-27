@@ -82,8 +82,15 @@ CREATE VIEW my_jsonb_source AS
   SELECT
     CONVERT_FROM(data, 'utf8')::jsonb AS data
   FROM bytea_source;
+```
+
+{{< note >}}
+Raw byte-formatted sources have one column, by default named `data`. For more details on handling JSON-encoded messages, check the [`jsonb` type](/sql/types/jsonb) documentation.
+{{</ note >}}
 
 To avoid redundant processing and ensure a typed representation of the source is available across clusters, you should create a [materialized view](/overview/key-concepts/#materialized-views).
+
+```sql
 -- parse jsonb into typed columns
 CREATE MATERIALIZED VIEW my_typed_source AS
   SELECT
@@ -92,8 +99,6 @@ CREATE MATERIALIZED VIEW my_typed_source AS
     (data->>'field3')::float AS field_3
   FROM my_jsonb_source;
 ```
-
-Raw byte-formatted sources have one column, by default named `data`. For more details on handling JSON-encoded messages, check the [`jsonb` type](/sql/types/jsonb) documentation.
 
 ##### Schema registry integration
 
