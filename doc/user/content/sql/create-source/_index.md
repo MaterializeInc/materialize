@@ -77,7 +77,7 @@ CREATE SOURCE my_bytea_source
   FORMAT BYTES
   WITH (SIZE='3xsmall');
 
--- convert from byte array to text to jsonb
+-- convert from byte array to jsonb
 CREATE VIEW my_jsonb_source AS
   SELECT
     CONVERT_FROM(data, 'utf8')::jsonb AS data
