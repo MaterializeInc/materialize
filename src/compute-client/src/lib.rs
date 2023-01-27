@@ -83,7 +83,6 @@
 mod metrics;
 
 pub mod controller;
-pub mod explain;
 pub mod logging;
 pub mod plan;
 pub mod protocol;

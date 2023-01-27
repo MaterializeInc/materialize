@@ -25,13 +25,14 @@ use uuid::Uuid;
 use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_client::types::dataflows::DataflowDescription;
-use mz_expr::explain::Indices;
 use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::cast::CastFrom;
 use mz_ore::str::Indent;
 use mz_ore::str::StrExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
+use mz_repr::explain_new::{
+    fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer, Indices,
+};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::ConnectionId;

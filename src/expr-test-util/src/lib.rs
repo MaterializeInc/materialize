@@ -83,6 +83,7 @@ use proc_macro2::TokenTree;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[allow(deprecated)] // TODO(#17360): use new explain output format
 use mz_expr::explain::ViewExplanation;
 use mz_expr::{EvalError, Id, LocalId, MirRelationExpr, MirScalarExpr};
 use mz_lowertest::*;
@@ -119,6 +120,7 @@ pub fn build_rel(s: &str, catalog: &TestCatalog) -> Result<MirRelationExpr, Stri
 ///
 /// If format contains "types", then add types to the pretty-printed
 /// [MirRelationExpr].
+#[allow(deprecated)] // TODO(#17360): use new explain output format
 pub fn generate_explanation(
     humanizer: &dyn ExprHumanizer,
     rel: &MirRelationExpr,

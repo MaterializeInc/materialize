@@ -19,11 +19,11 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use mz_expr::explain::Indices;
 use mz_expr::{MapFilterProject, RowSetFinishing};
 use mz_ore::str::{Indent, IndentLike};
 use mz_repr::explain_new::{
-    separated_text, DisplayJson, DisplayText, ExplainConfig, ExprHumanizer, RenderingContext,
+    separated_text, DisplayJson, DisplayText, ExplainConfig, ExprHumanizer, Indices,
+    RenderingContext,
 };
 use mz_repr::GlobalId;
 
