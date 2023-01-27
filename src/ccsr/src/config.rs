@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -30,7 +30,7 @@ pub struct ClientConfig {
     root_certs: Vec<Certificate>,
     identity: Option<Identity>,
     auth: Option<Auth>,
-    dns_overrides: HashMap<String, Vec<SocketAddr>>,
+    dns_overrides: BTreeMap<String, Vec<SocketAddr>>,
 }
 
 impl ClientConfig {
@@ -42,7 +42,7 @@ impl ClientConfig {
             root_certs: Vec::new(),
             identity: None,
             auth: None,
-            dns_overrides: HashMap::new(),
+            dns_overrides: BTreeMap::new(),
         }
     }
 

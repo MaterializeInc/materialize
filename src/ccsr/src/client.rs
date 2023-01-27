@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 
@@ -106,7 +106,7 @@ impl Client {
         version: String,
     ) -> Result<(Subject, Vec<Subject>), GetBySubjectError> {
         let mut subjects = vec![];
-        let mut seen = HashSet::new();
+        let mut seen = BTreeSet::new();
         let mut subjects_queue = vec![(subject.to_owned(), version)];
         while let Some((subject, version)) = subjects_queue.pop() {
             let req = self.make_request(Method::GET, &["subjects", &subject, "versions", &version]);

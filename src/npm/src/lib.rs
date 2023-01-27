@@ -126,7 +126,7 @@
 //! The "/js/vendor/PACKAGE.js" will automatically switch between the production
 //! and development assets based on the presence of the `dev-web` feature.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -326,7 +326,7 @@ expected: {}
     // Clean up any stray files. This is more important than it might seem,
     // since files in `CSS_VENDOR` and `JS_PROD_VENDOR` are blindly bundled into
     // the binary at build time by the `include_dir` macro.
-    let mut known_paths = HashSet::new();
+    let mut known_paths = BTreeSet::new();
     for pkg in NPM_PACKAGES {
         if pkg.css_file.is_some() {
             known_paths.insert(pkg.css_path());
