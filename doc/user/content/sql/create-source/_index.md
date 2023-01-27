@@ -83,6 +83,7 @@ CREATE VIEW my_jsonb_source AS
     CONVERT_FROM(data, 'utf8')::jsonb AS data
   FROM bytea_source;
 
+To avoid redundant processing and ensure a typed representation of the source is available across clusters, you should create a [materialized view](/overview/key-concepts/#materialized-views).
 -- parse jsonb into typed columns
 CREATE MATERIALIZED VIEW my_typed_source AS
   SELECT
