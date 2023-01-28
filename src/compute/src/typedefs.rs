@@ -12,7 +12,12 @@
 #![allow(missing_docs)]
 
 use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::implementations::ord::{ColKeySpine, ColValSpine, OrdKeySpine};
+use differential_dataflow::trace::implementations::ord::{
+    ColKeySpine, ColValSpine, OrdKeyBatch, OrdKeySpine, OrdValBatch,
+};
+use differential_dataflow::trace::implementations::spine_fueled::Spine;
+use std::rc::Rc;
+use timely::container::columnation::TimelyStack;
 
 use mz_repr::{Diff, Row, Timestamp};
 use mz_storage_client::types::errors::DataflowError;
@@ -20,6 +25,12 @@ use mz_storage_client::types::errors::DataflowError;
 pub type RowSpine<K, V, T, R, O = usize> = ColValSpine<K, V, T, R, O>;
 pub type RowKeySpine<K, T, R, O = usize> = ColKeySpine<K, T, R, O>;
 pub type ErrSpine<K, T, R, O = usize> = OrdKeySpine<K, T, R, O>;
+pub type ColRowSpine<K, V, T, R, O = usize> = Spine<
+    Rc<OrdValBatch<K, V, T, R, O, TimelyStack<((K, V), T, R)>, TimelyStack<K>, TimelyStack<V>>>,
+>;
+pub type ColRowKeySpine<K, T, R, O = usize> =
+    Spine<Rc<OrdKeyBatch<K, T, R, O, TimelyStack<((K, ()), T, R)>, TimelyStack<K>>>>;
+
 pub type TraceRowHandle<K, V, T, R> = TraceAgent<RowSpine<K, V, T, R>>;
 pub type TraceErrHandle<K, T, R> = TraceAgent<ErrSpine<K, T, R>>;
 pub type KeysValsHandle = TraceRowHandle<Row, Row, Timestamp, Diff>;
