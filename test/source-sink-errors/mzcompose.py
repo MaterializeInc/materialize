@@ -48,8 +48,7 @@ class KafkaDisruption:
 
         c.down(destroy_volumes=True)
         c.up("testdrive", persistent=True)
-        c.start_and_wait_for_tcp(services=["redpanda", "materialized", "clusterd"])
-        c.wait_for_materialized()
+        c.up("redpanda", "materialized", "clusterd")
 
         with c.override(
             Testdrive(
@@ -163,8 +162,7 @@ class PgDisruption:
 
         c.down(destroy_volumes=True)
         c.up("testdrive", persistent=True)
-        c.start_and_wait_for_tcp(services=["postgres", "materialized", "clusterd"])
-        c.wait_for_materialized()
+        c.up("postgres", "materialized", "clusterd")
 
         with c.override(
             Testdrive(
@@ -284,7 +282,7 @@ disruptions: List[Disruption] = [
         name="kill-postgres",
         breakage=lambda c, _: c.kill("postgres"),
         expected_error="error connecting to server",
-        fixage=lambda c, _: c.start_and_wait_for_tcp(["postgres"]),
+        fixage=lambda c, _: c.up("postgres"),
     ),
     PgDisruption(
         name="drop-publication-postgres",

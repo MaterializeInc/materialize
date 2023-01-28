@@ -31,8 +31,7 @@ SERVICES = [
 # shorter than the timeout.
 #
 def workflow_default(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=["localstack", "materialized", "toxiproxy"])
-    c.wait_for_materialized()
+    c.up("localstack", "materialized", "toxiproxy")
 
     # For different values of bytes_allowed, the following happens:
     # 0 - Connection is dropped immediately

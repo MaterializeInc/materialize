@@ -53,8 +53,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         consensus_uri = (
             "postgres://root@cockroach:26257?options=--search_path=consensus"
         )
-        c.start_and_wait_for_tcp(services=["cockroach"])
-        c.wait_for_cockroach()
+        c.up("cockroach")
     else:
         # empty consensus uri defaults to Maelstrom consensus implementation
         consensus_uri = ""

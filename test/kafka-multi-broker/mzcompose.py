@@ -37,16 +37,7 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    c.start_and_wait_for_tcp(
-        services=[
-            "zookeeper",
-            "kafka1",
-            "kafka2",
-            "kafka3",
-            "schema-registry",
-            "materialized",
-        ]
-    )
+    c.up("zookeeper", "kafka1", "kafka2", "kafka3", "schema-registry", "materialized")
     c.run("testdrive", "--kafka-addr=kafka2", "01-init.td")
     time.sleep(10)
     c.kill("kafka1")

@@ -26,7 +26,6 @@ def workflow_sqllogictest(c: Composition) -> None:
 
 def run_sqllogictest(c: Composition, command: str) -> None:
     c.up("cockroach")
-    c.wait_for_cockroach()
 
     try:
         junit_report = ci_util.junit_report_filename(c.name)

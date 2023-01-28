@@ -41,10 +41,7 @@ def workflow_default(c: Composition) -> None:
 # Test the kafka sink resumption logic in the presence of networking problems
 #
 def workflow_sink_networking(c: Composition) -> None:
-    c.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy"]
-    )
-    c.wait_for_materialized()
+    c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
 
     seed = random.getrandbits(16)
     for i, failure_mode in enumerate(
@@ -55,7 +52,7 @@ def workflow_sink_networking(c: Composition) -> None:
             "toxiproxy-timeout-hold.td",
         ]
     ):
-        c.start_and_wait_for_tcp(["toxiproxy"])
+        c.up("toxiproxy")
         c.run(
             "testdrive",
             "--no-reset",
@@ -79,9 +76,7 @@ def workflow_source_resumption(c: Composition) -> None:
     with c.override(
         Testdrive(no_reset=True, consistent_seed=True),
     ):
-        c.start_and_wait_for_tcp(
-            services=["materialized", "zookeeper", "kafka", "clusterd"]
-        )
+        c.up("materialized", "zookeeper", "kafka", "clusterd")
 
         c.run("testdrive", "source-resumption/setup.td")
         c.run("testdrive", "source-resumption/verify.td")

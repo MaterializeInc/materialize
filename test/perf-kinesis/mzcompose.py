@@ -42,5 +42,4 @@ def workflow_load_test(c: Composition) -> None:
 
 def run(c: Composition, args: List[str], detach: bool) -> None:
     c.up("materialized")
-    c.wait_for_materialized()
     c.run("perf-kinesis", *args, detach=detach)

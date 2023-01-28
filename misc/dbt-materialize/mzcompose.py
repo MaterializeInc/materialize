@@ -67,9 +67,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             with c.test_case(test_case.name):
                 with c.override(materialized):
                     c.down()
-                    c.start_and_wait_for_tcp(services=["redpanda"])
+                    c.up("redpanda")
                     c.up("materialized")
-                    c.wait_for_tcp(host="materialized", port=6875)
                     c.run(
                         "dbt-test",
                         "pytest",

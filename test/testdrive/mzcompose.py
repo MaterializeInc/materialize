@@ -85,8 +85,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     materialized = Materialized(default_size=args.default_size)
 
     with c.override(testdrive, materialized):
-        c.start_and_wait_for_tcp(services=dependencies)
-        c.wait_for_materialized("materialized")
+        c.up(*dependencies)
 
         if args.replicas > 1:
             c.sql("DROP CLUSTER default CASCADE")

@@ -24,5 +24,4 @@ SERVICES = [
 
 def workflow_default(c: Composition) -> None:
     c.up("materialized", "metabase")
-    c.wait_for_materialized()
     c.run("smoketest")

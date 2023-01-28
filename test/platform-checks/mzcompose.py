@@ -30,7 +30,7 @@ SERVICES = [
     Cockroach(setup_materialize=True),
     Postgres(),
     Redpanda(auto_create_topics=True),
-    Debezium(),
+    Debezium(redpanda=True),
     Clusterd(
         name="clusterd_compute_1"
     ),  # Started by some Scenarios, defined here only for the teardown
@@ -52,8 +52,7 @@ def setup(c: Composition) -> None:
     c.up("testdrive", persistent=True)
     c.up("cockroach")
 
-    c.start_and_wait_for_tcp(services=["redpanda", "postgres", "debezium"])
-    c.wait_for_postgres()
+    c.up("redpanda", "postgres", "debezium")
 
 
 def teardown(c: Composition) -> None:

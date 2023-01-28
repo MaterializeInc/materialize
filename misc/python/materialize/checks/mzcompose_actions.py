@@ -47,8 +47,6 @@ class StartMz(MzcomposeAction):
         with c.override(mz):
             c.up("materialized")
 
-        c.wait_for_materialized()
-
         for config_param in ["max_tables", "max_sources"]:
             c.sql(
                 f"ALTER SYSTEM SET {config_param} TO 1000",
@@ -115,7 +113,7 @@ class StartClusterdCompute(MzcomposeAction):
         print(f"Starting Compute using image {clusterd.config.get('image')}")
 
         with c.override(clusterd):
-            c.start_and_wait_for_tcp(services=["clusterd_compute_1"])
+            c.up("clusterd_compute_1")
 
 
 class RestartRedpandaDebezium(MzcomposeAction):
@@ -126,7 +124,7 @@ class RestartRedpandaDebezium(MzcomposeAction):
 
         for service in ["redpanda", "debezium"]:
             c.kill(service)
-            c.start_and_wait_for_tcp(services=[service])
+            c.up(service)
 
 
 class RestartCockroach(MzcomposeAction):
@@ -143,7 +141,6 @@ class RestartSourcePostgres(MzcomposeAction):
 
         c.kill("postgres")
         c.up("postgres")
-        c.wait_for_postgres(service="postgres")
 
 
 class KillClusterdStorage(MzcomposeAction):

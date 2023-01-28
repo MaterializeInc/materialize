@@ -53,14 +53,12 @@ def workflow_default(c: Composition) -> None:
 
 
 def workflow_start_confluents(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.up("zookeeper", "kafka", "schema-registry")
 
 
 def workflow_versioned_mz(c: Composition) -> None:
     for mz in versioned_mz:
         c.up(mz.name)
-
-        c.wait_for_materialized(mz.name)
 
         c.run("testdrive", "test*.td")
 
@@ -69,11 +67,9 @@ def workflow_versioned_mz(c: Composition) -> None:
 
 def workflow_mz_with_options(c: Composition) -> None:
     c.up("mz_2_workers")
-    c.wait_for_materialized("mz_2_workers")
     c.kill("mz_2_workers")
 
     c.up("mz_4_workers")
-    c.wait_for_materialized("mz_4_workers")
     c.kill("mz_4_workers")
 
 
@@ -82,4 +78,3 @@ def workflow_minio(c: Composition) -> None:
 
     with c.override(mz):
         c.up("materialized")
-        c.wait_for_materialized()

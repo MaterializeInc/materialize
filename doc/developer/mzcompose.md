@@ -65,8 +65,7 @@ SERVICES = [
 ]
 
 def workflow_test(c: Composition):
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry", "materialized"])
-    c.wait_for_materialized()
+    c.up("zookeeper", "kafka", "schema-registry", "materialized")
 
     c.run("testdrive", "*.td")
 ```
@@ -122,7 +121,6 @@ A Python workflow is a Python function that contains the steps to execute as par
 def workflow_simple_test(c: Composition):
     "Validate that materialized starts and can serve a simple SQL query"
     c.up("materialize")
-    c.wait_for_materialized("materialize")
     c.kill("materialize")
 ```
 
@@ -146,39 +144,28 @@ For example, here is how to bring up the `materialized` service:
 
 ```python
 def workflow_test(c: Composition):
-    w.up("materialized")
+    c.up("materialized")
 ```
 
 In the example above, we are calling the [`up`](https://dev.materialize.com/api/python/materialize/mzcompose/index.html#materialize.mzcompose.Composition.up) method, which maps directly to a call to `docker-compose up`.
 
 ## Starting services
 
-Starting the services for a workflow requires additional care because:
-- `w.up()` will not wait for a service to be fully up before moving on to start the next one which may depend on the previous one
-- for complex services such as third-party databases, even if `w.wait_for_tcp()` completes, the service may not be fully ready to accept SQL commands and may return errors on them
+In the past, starting a service with `Composition.up` did not wait for the
+service to become healthy. We had a variety of helper methods (e.g.,
+`Composition.start_and_wait_for_tcp`) that would perform additional health
+checks after starting the service.
 
-Therefore, a couple of convenience steps are provided:
+Since February 2023, we leverage Docker Compose healthchecks. The definition
+of each service specifies how to assess its readiness *and* declares what other
+service's health it depends on. A simple `Composition.up` call is now all that
+is required to bring up a service and wait for it to become ready:
 
-### `w.start_and_wait_for_tcp(services=[...])`
-
-Starts the services from the list one after another, waiting for the respective port of the service to become open.
-
-Note that unlike other steps that deal with services, this step does not take a list of service names, but rather `PythonService` objects.
-
-### `w.wait_for_materialized()`
-
-Waits until Materialize is capable of answering `SELECT 1` queries. A similar step is available for checking other Postgres-compatible services.
-
-### Example
-
-The fool-proof sequence for starting the complete Materialize stack would be something along the following lines:
-
-```python
-SERVICES = [Zookeeper(), Kafka(), SchemaRegistry(), Materialized()]
-
-def workflow_start_services(c: Composition):
-    w.start_and_wait_for_tcp(services=services)
-    w.wait_for_materialized()
+```py
+# Starts Zookeeper, waits for it to become healthy, then starts Kafka, waits
+# for it to become healthy, then finally starts the schema registry and waits
+# for it to become healthy before returning.
+c.up("schema-registry")
 ```
 
 ## Executing SQL

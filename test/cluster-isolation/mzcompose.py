@@ -91,7 +91,7 @@ def workflow_default(c: Composition) -> None:
     and then making sure that cluster2 continues to operate properly
     """
 
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.up("zookeeper", "kafka", "schema-registry")
     for id, disruption in enumerate(disruptions):
         run_test(c, disruption, id)
 
@@ -216,7 +216,6 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
 
     c.up("testdrive", persistent=True)
     c.up("materialized")
-    c.wait_for_materialized()
 
     nodes = [
         Clusterd(name="clusterd_1_1"),
