@@ -9,17 +9,16 @@
 
 //! `EXPLAIN` support for FastPathPlan structures.
 
-pub(crate) mod text;
-
 use std::collections::BTreeMap;
 
+use mz_expr::explain_new::ExplainMultiPlan;
 use mz_repr::explain_new::{
     AnnotatedPlan, Explain, ExplainConfig, ExplainError, UnsupportedFormat,
 };
 
 use crate::coord::peek::FastPathPlan;
 
-use super::{ExplainContext, ExplainMultiPlan, Explainable};
+use super::{ExplainContext, Explainable};
 
 impl<'a> Explain<'a> for Explainable<'a, FastPathPlan> {
     type Context = ExplainContext<'a>;
@@ -44,25 +43,6 @@ impl<'a> Explain<'a> for Explainable<'a, FastPathPlan> {
         context: &'a Self::Context,
     ) -> Result<Self::Text, ExplainError> {
         self.as_explain_multi_plan(context)
-    }
-
-    fn explain(
-        &'a mut self,
-        format: &'a mz_repr::explain_new::ExplainFormat,
-        config: &'a mz_repr::explain_new::ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<String, mz_repr::explain_new::ExplainError> {
-        match format {
-            mz_repr::explain_new::ExplainFormat::Text => self
-                .explain_text(config, context)
-                .map(|e| mz_repr::explain_new::text_string(&e)),
-            mz_repr::explain_new::ExplainFormat::Json => self
-                .explain_json(config, context)
-                .map(|e| mz_repr::explain_new::json_string(&e)),
-            mz_repr::explain_new::ExplainFormat::Dot => self
-                .explain_dot(config, context)
-                .map(|e| mz_repr::explain_new::dot_string(&e)),
-        }
     }
 }
 

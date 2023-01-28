@@ -9,24 +9,23 @@
 
 //! `EXPLAIN` support for MIR structures.
 
-pub(crate) mod text;
-
 use std::collections::BTreeMap;
 
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_expr::{
-    visit::Visit, Id, LocalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
+    explain_new::{enforce_linear_chains, ExplainContext, ExplainMultiPlan, ExplainSinglePlan},
+    visit::Visit,
+    MirRelationExpr, OptimizedMirRelationExpr,
 };
 use mz_ore::{stack::RecursionLimitError, str::bracketed, str::separated};
-use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
+use mz_repr::explain_new::{
+    AnnotatedPlan, Attributes, Explain, ExplainConfig, ExplainError, UnsupportedFormat,
+};
 use mz_transform::attribute::{
     Arity, DerivedAttributes, NonNegative, RelationType, SubtreeSize, UniqueKeys,
 };
 
-use super::{
-    AnnotatedPlan, Attributes, ExplainContext, ExplainMultiPlan, ExplainSinglePlan, Explainable,
-    ScalarOps,
-};
+use super::Explainable;
 
 impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
     type Context = ExplainContext<'a>;
@@ -235,93 +234,4 @@ fn try_from<'a>(
     }
 
     Ok(AnnotatedPlan { plan, annotations })
-}
-
-/// Normalize the way inputs of multi-input variants are rendered.
-///
-/// After the transform is applied, non-trival inputs `$input` of variants with
-/// more than one input are wrapped in a `let $x = $input in $x` blocks.
-///
-/// If these blocks are subsequently pulled up by `NormalizeLets`,
-/// the rendered version of the resulting tree will only have linear chains.
-fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), RecursionLimitError> {
-    use MirRelationExpr::{Constant, Get, Join, Union};
-
-    // helper struct: a generator of fresh local ids
-    let mut id_gen = id_gen(expr)?.peekable();
-
-    let mut wrap_in_let = |input: &mut MirRelationExpr| {
-        match input {
-            Constant { .. } | Get { .. } => (),
-            input => {
-                // generate fresh local id
-                // let id = id_cnt
-                //     .next()
-                //     .map(|id| LocalId::new(1000_u64 + u64::cast_from(id_map.len()) + id))
-                //     .unwrap();
-                let id = id_gen.next().unwrap();
-                let value = input.take_safely();
-                // generate a `let $fresh_id = $body in $fresh_id` to replace this input
-                let mut binding = MirRelationExpr::Let {
-                    id,
-                    value: Box::new(value),
-                    body: Box::new(Get {
-                        id: Id::Local(id.clone()),
-                        typ: input.typ(),
-                    }),
-                };
-                // swap the current body with the replacement
-                std::mem::swap(input, &mut binding);
-            }
-        }
-    };
-
-    expr.try_visit_mut_post(&mut |expr: &mut MirRelationExpr| {
-        match expr {
-            Join { inputs, .. } => {
-                for input in inputs {
-                    wrap_in_let(input);
-                }
-            }
-            Union { base, inputs } => {
-                wrap_in_let(base);
-                for input in inputs {
-                    wrap_in_let(input);
-                }
-            }
-            _ => (),
-        }
-        Ok(())
-    })
-}
-
-// Create an [`Iterator`] for [`LocalId`] values that are guaranteed to be
-// fresh within the scope of the given [`MirRelationExpr`].
-fn id_gen(expr: &MirRelationExpr) -> Result<impl Iterator<Item = LocalId>, RecursionLimitError> {
-    let mut max_id = 0_u64;
-
-    expr.visit_post(&mut |expr| {
-        match expr {
-            MirRelationExpr::Let { id, .. } => max_id = std::cmp::max(max_id, id.into()),
-            _ => (),
-        };
-    })?;
-
-    Ok((max_id + 1..).map(LocalId::new))
-}
-
-impl ScalarOps for MirScalarExpr {
-    fn match_col_ref(&self) -> Option<usize> {
-        match self {
-            MirScalarExpr::Column(c) => Some(*c),
-            _ => None,
-        }
-    }
-
-    fn references(&self, column: usize) -> bool {
-        match self {
-            MirScalarExpr::Column(c) => *c == column,
-            _ => false,
-        }
-    }
 }
