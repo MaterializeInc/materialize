@@ -1423,7 +1423,7 @@ where
         // Reborrow `&mut self` immutably, same reasoning as above.
         let this = &*self;
 
-        this.register_shard_mappings(to_create.iter().map(|(id, _)| *id))
+        this.append_shard_mappings(to_create.iter().map(|(id, _)| *id), 1)
             .await;
 
         // TODO(guswynn): perform the io in this final section concurrently.
@@ -2091,11 +2091,18 @@ where
                 let shards_to_finalize: Vec<_> = ids
                     .iter()
                     .filter_map(|id| {
-                        self.state.collections.get(id).map(
+                        // Drop all write handles. This is safe to do because there will be nno more
+                        // data passed to the write handle. n.b. we do not need to drop the read
+                        // handle because this code is only ever executed in response to dropping a
+                        // collection, which downgrades the write handle to the empty anitchain,
+                        // which in turn drops the read handle.
+                        self.state.persist_write_handles.drop_handle(*id);
+
+                        self.state.collections.remove(id).map(
                             |CollectionState {
                                  collection_metadata: CollectionMetadata { data_shard, .. },
                                  ..
-                             }| *data_shard,
+                             }| data_shard,
                         )
                     })
                     .collect();
@@ -2151,6 +2158,10 @@ where
             }
         }
 
+        // Delete all source->shard mappings
+        self.append_shard_mappings(self.state.pending_source_drops.iter().cloned(), -1)
+            .await;
+
         // Record the drop status for all pending source and sink drops.
         let source_status_history_id =
             self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
@@ -2160,6 +2171,7 @@ where
                 healthcheck::pack_status_row(id, "dropped", None, (self.state.now)(), None);
             updates.push((status_row, 1));
         }
+
         self.append_to_managed_collection(source_status_history_id, updates)
             .await;
 
@@ -2490,7 +2502,9 @@ where
         self.reconcile_managed_collection(id, updates).await;
     }
 
-    /// Writes a new global ID, shard ID pair to the appropriate collection.
+    /// Appends a new global ID, shard ID pair to the appropriate collection.
+    /// Use a `diff` of 1 to append a new entry; -1 to retract an existing
+    /// entry.
     ///
     /// However, data is written iff we know of the `GlobalId` of the
     /// `IntrospectionType::ShardMapping` collection; in other cases, data is
@@ -2501,10 +2515,13 @@ where
     /// - If `self.state.collections` does not have an entry for `global_id`.
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
-    async fn register_shard_mappings<I>(&self, global_ids: I)
+    /// - If diff is any value other than `1` or `-1`.
+    async fn append_shard_mappings<I>(&self, global_ids: I, diff: i64)
     where
         I: Iterator<Item = GlobalId>,
     {
+        mz_ore::soft_assert!(diff == -1 || diff == 1, "use 1 for insert or -1 for delete");
+
         let id = match self
             .state
             .introspection_ids
@@ -2526,7 +2543,7 @@ where
             let mut packer = row_buf.packer();
             packer.push(Datum::from(global_id.to_string().as_str()));
             packer.push(Datum::from(shard_id.to_string().as_str()));
-            updates.push((row_buf.clone(), 1));
+            updates.push((row_buf.clone(), diff));
         }
 
         self.append_to_managed_collection(id, updates).await;

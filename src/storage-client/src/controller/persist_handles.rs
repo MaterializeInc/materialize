@@ -180,6 +180,7 @@ where
 enum PersistWriteWorkerCmd<T: Timestamp + Lattice + Codec64> {
     Register(GlobalId, WriteHandle<SourceData, (), T, Diff>),
     Update(GlobalId, WriteHandle<SourceData, (), T, Diff>),
+    DropHandle(GlobalId),
     Append(
         Vec<(GlobalId, Vec<Update<T>>, T)>,
         tokio::sync::oneshot::Sender<Result<(), StorageError>>,
@@ -244,6 +245,15 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
                                     }
                                     PersistWriteWorkerCmd::Update(id, write_handle) => {
                                         write_handles.insert(id, write_handle).expect("PersistWriteWorkerCmd::Update only valid for updating extant write handles");
+                                    },
+                                    PersistWriteWorkerCmd::DropHandle(id) => {
+                                        // n.b. this should only remove the
+                                        // handle from the persist worker and
+                                        // not take any additional action such
+                                        // as closing the shard it's connected
+                                        // to because dataflows might still be
+                                        // using it.
+                                        write_handles.remove(&id);
                                     }
                                     PersistWriteWorkerCmd::Append(updates, response) => {
                                         let mut ids = BTreeSet::new();
@@ -483,6 +493,14 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistWriteWorke
             self.send(PersistWriteWorkerCmd::MonotonicAppend(updates, tx));
             rx
         }
+    }
+
+    /// Drops the handle associated with `id` from this worker.
+    ///
+    /// Note that this does not perform any other cleanup, such as finalizing
+    /// the handle's shard.
+    pub(crate) fn drop_handle(&self, id: GlobalId) {
+        self.send(PersistWriteWorkerCmd::DropHandle(id))
     }
 
     fn send(&self, cmd: PersistWriteWorkerCmd<T>) {
