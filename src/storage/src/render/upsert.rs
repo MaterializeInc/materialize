@@ -17,7 +17,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{Capability, CapabilityRef, Concat, OkErr, Operator};
+use timely::dataflow::operators::{Capability, Concat, InputCapability, OkErr, Operator};
 use timely::dataflow::{Scope, Stream};
 use timely::order::PartialOrder;
 use timely::progress::frontier::AntichainRef;
@@ -483,7 +483,7 @@ fn process_new_data(
             HashMap<Option<Result<Row, DecodeError>>, UpsertSourceData>,
         ),
     >,
-    cap: &CapabilityRef<Timestamp>,
+    cap: &InputCapability<Timestamp>,
     as_of_frontier: &Antichain<Timestamp>,
 ) {
     for DecodeResult {
