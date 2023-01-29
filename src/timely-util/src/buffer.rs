@@ -20,7 +20,7 @@ use differential_dataflow::ExchangeData;
 use timely::communication::Push;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::OutputHandle;
-use timely::dataflow::operators::{Capability, CapabilityRef};
+use timely::dataflow::operators::{Capability, InputCapability};
 use timely::progress::Timestamp;
 
 /// A buffer that consolidates updates
@@ -72,7 +72,7 @@ where
     }
 
     /// Give an element to the buffer
-    pub fn give(&mut self, cap: &CapabilityRef<T>, data: (D, T, R)) {
+    pub fn give(&mut self, cap: &InputCapability<T>, data: (D, T, R)) {
         // Retain a cap for the current time, which will be used on flush.
         if self.cap.as_ref().map_or(true, |t| t.time() != cap.time()) {
             // Flush on capability change

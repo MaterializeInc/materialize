@@ -27,7 +27,7 @@ use timely::dataflow::channels::pushers::TeeCore;
 use timely::dataflow::channels::BundleCore;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, OutputWrapper};
-use timely::dataflow::operators::{Capability, CapabilityRef};
+use timely::dataflow::operators::{Capability, InputCapability};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
@@ -112,7 +112,7 @@ struct NextFut<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 
 /// An event of an input stream
 pub enum Event<'a, T: Timestamp, D> {
     /// A data event
-    Data(CapabilityRef<'a, T>, RefOrMut<'a, D>),
+    Data(InputCapability<T>, RefOrMut<'a, D>),
     /// A progress event
     Progress(Antichain<T>),
 }
@@ -131,7 +131,7 @@ impl<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Future
         // implementing the `WithLifetime` trait for all lifetimes 'lt and setting the associated
         // type to the output type with all lifetimes set to 'lt.
         type NextHTB<T, D> =
-            dyn for<'lt> WithLifetime<'lt, T = (CapabilityRef<'lt, T>, RefOrMut<'lt, D>)>;
+            dyn for<'lt> WithLifetime<'lt, T = (InputCapability<T>, RefOrMut<'lt, D>)>;
 
         // The polonius function encodes a safe but rejected pattern by the current borrow checker.
         // Explaining is beyond the scope of this comment but the docs have a great explanation:
