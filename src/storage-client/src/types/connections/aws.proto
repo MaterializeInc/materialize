@@ -16,15 +16,11 @@ import "storage-client/src/types/connections.proto";
 
 package mz_storage_client.types.connections.aws;
 
-message ProtoSerdeUri {
-    string uri = 1;
-}
-
 message ProtoAwsConfig {
     ProtoAwsCredentials credentials = 1;
     optional string region = 2;
     ProtoAwsAssumeRole role = 3;
-    ProtoSerdeUri endpoint = 4;
+    optional string endpoint = 4;
 }
 
 message ProtoAwsCredentials {

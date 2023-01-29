@@ -82,11 +82,9 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Duration;
 
-use aws_smithy_http::endpoint::Endpoint;
+use aws_credential_types::Credentials;
 use aws_types::region::Region;
-use aws_types::Credentials;
 use globset::GlobBuilder;
-use http::Uri;
 use itertools::Itertools;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -266,7 +264,7 @@ struct Args {
         value_name = "URL",
         env = "AWS_ENDPOINT"
     )]
-    aws_endpoint: Option<Uri>,
+    aws_endpoint: Option<String>,
 
     #[clap(
         long,
@@ -331,7 +329,7 @@ async fn main() {
                     args.aws_secret_access_key,
                     None,
                 ))
-                .endpoint_resolver(Endpoint::immutable_uri(endpoint).unwrap())
+                .endpoint_url(endpoint)
                 .load()
                 .await;
             let account = "000000000000".into();

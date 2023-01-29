@@ -28,11 +28,6 @@ impl RustType<ProtoUrl> for Url {
     }
 }
 
-/// Pattern to generate a random `SerdeUri` based on an arbitrary URL
-/// It doesn't cover the full spectrum of valid URIs, but just a wide enough sample
-/// to test our Protobuf roundtripping logic.
-pub const URL_PATTERN: &str = r"(http|https)://[a-z][a-z0-9]{0,10}/?([a-z0-9]{0,5}/?){0,3}";
-
 pub fn any_url() -> impl Strategy<Value = Url> {
     r"(http|https)://[a-z][a-z0-9]{0,10}/?([a-z0-9]{0,5}/?){0,3}".prop_map(|s| s.parse().unwrap())
 }

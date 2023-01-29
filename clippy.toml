@@ -14,6 +14,8 @@ disallowed-methods = [
     { path = "tokio::runtime::Runtime::spawn_blocking", reason = "use the spawn wrappers in `mz_ore::task` instead" },
 
     { path = "rdkafka::config::ClientConfig::new", reason = "use the `client::create_new_client_config` wrapper in `kafka_util` instead" },
+
+    { path = "aws_sdk_s3::Client::new", reason = "use the `mz_aws_s3_util::new_client` function instead" },
 ]
 
 disallowed-macros = [

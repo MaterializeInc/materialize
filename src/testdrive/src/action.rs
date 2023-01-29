@@ -15,13 +15,12 @@ use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use ::http::Uri;
 use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
+use aws_credential_types::provider::ProvideCredentials;
 use aws_sdk_kinesis::Client as KinesisClient;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::Client as SqsClient;
-use aws_types::credentials::ProvideCredentials;
 use aws_types::SdkConfig;
 use futures::future::FutureExt;
 use itertools::Itertools;
@@ -223,75 +222,7 @@ impl State {
         self.cmd_vars
             .insert("testdrive.aws-region".into(), self.aws_region().into());
         self.cmd_vars
-            .insert("testdrive.aws-endpoint".into(), self.aws_endpoint());
-        self.cmd_vars
-            .insert("testdrive.aws-account".into(), self.aws_account.clone());
-        {
-            let aws_credentials = self
-                .aws_config
-                .credentials_provider()
-                .ok_or_else(|| anyhow!("no AWS credentials provider configured"))?
-                .provide_credentials()
-                .await
-                .context("fetching AWS credentials")?;
-            self.cmd_vars.insert(
-                "testdrive.aws-access-key-id".into(),
-                aws_credentials.access_key_id().to_owned(),
-            );
-            self.cmd_vars.insert(
-                "testdrive.aws-secret-access-key".into(),
-                aws_credentials.secret_access_key().to_owned(),
-            );
-            self.cmd_vars.insert(
-                "testdrive.aws-token".into(),
-                aws_credentials
-                    .session_token()
-                    .map(|token| token.to_owned())
-                    .unwrap_or_else(String::new),
-            );
-        }
-        self.cmd_vars.insert(
-            "testdrive.materialize-sql-addr".into(),
-            self.materialize_sql_addr.clone(),
-        );
-        self.cmd_vars.insert(
-            "testdrive.materialize-internal-sql-addr".into(),
-            self.materialize_internal_sql_addr.clone(),
-        );
-        self.cmd_vars.insert(
-            "testdrive.materialize-user".into(),
-            self.materialize_user.clone(),
-        );
-
-        for (key, value) in env::vars() {
-            self.cmd_vars.insert(format!("env.{}", key), value);
-        }
-
-        self.cmd_vars
-            .insert("testdrive.kafka-addr".into(), self.kafka_addr.clone());
-        self.cmd_vars.insert(
-            "testdrive.kafka-addr-resolved".into(),
-            self.kafka_addr
-                .to_socket_addrs()
-                .ok()
-                .and_then(|mut addrs| addrs.next())
-                .map(|addr| addr.to_string())
-                .unwrap_or_else(|| "#RESOLUTION-FAILURE#".into()),
-        );
-        self.cmd_vars.insert(
-            "testdrive.schema-registry-url".into(),
-            self.schema_registry_url.to_string(),
-        );
-        self.cmd_vars
-            .insert("testdrive.seed".into(), self.seed.to_string());
-        self.cmd_vars.insert(
-            "testdrive.temp-dir".into(),
-            self.temp_path.display().to_string(),
-        );
-        self.cmd_vars
-            .insert("testdrive.aws-region".into(), self.aws_region().into());
-        self.cmd_vars
-            .insert("testdrive.aws-endpoint".into(), self.aws_endpoint());
+            .insert("testdrive.aws-endpoint".into(), self.aws_endpoint().into());
         self.cmd_vars
             .insert("testdrive.aws-account".into(), self.aws_account.clone());
         {
@@ -363,22 +294,8 @@ impl State {
         }
     }
 
-    pub fn aws_endpoint(&self) -> String {
-        match (
-            self.aws_config.endpoint_resolver(),
-            self.aws_config.region(),
-        ) {
-            (Some(endpoint_resolver), Some(region)) => {
-                let endpoint = match endpoint_resolver.resolve_endpoint(region) {
-                    Ok(endpoint) => endpoint,
-                    Err(_) => return String::new(),
-                };
-                let mut uri = Uri::builder().build().unwrap();
-                endpoint.set_endpoint(&mut uri, None).unwrap();
-                uri.to_string()
-            }
-            _ => String::new(),
-        }
+    pub fn aws_endpoint(&self) -> &str {
+        self.aws_config.endpoint_url().unwrap_or("")
     }
 
     pub fn aws_region(&self) -> &str {
@@ -954,7 +871,7 @@ pub async fn create_state(
     };
 
     let kinesis_client = aws_sdk_kinesis::Client::new(&config.aws_config);
-    let s3_client = aws_sdk_s3::Client::new(&config.aws_config);
+    let s3_client = mz_aws_s3_util::new_client(&config.aws_config);
     let sqs_client = aws_sdk_sqs::Client::new(&config.aws_config);
 
     let mut state = State {

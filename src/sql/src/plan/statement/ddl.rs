@@ -14,7 +14,6 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
-use std::str::FromStr;
 
 use aws_arn::ResourceName as AmazonResourceName;
 use globset::GlobBuilder;
@@ -41,9 +40,7 @@ use mz_sql_parser::ast::{
     CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
     DeferredObjectName, SetVariableValue, SshConnectionOption, UnresolvedObjectName,
 };
-use mz_storage_client::types::connections::aws::{
-    AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri,
-};
+use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, Connection, CsrConnectionHttpAuth, KafkaConnection,
     KafkaSecurity, KafkaTlsConfig, SaslConfig, SshTunnel, StringOrSecret, TlsIdentity, Tunnel,
@@ -3028,11 +3025,7 @@ impl TryFrom<AwsConnectionOptionExtracted> for AwsConfig {
                 // equivalent to a `NULL` endpoint, but making that change now
                 // would break testdrive. AWS connections are all behind unsafe
                 // mode right now, so no particular urgency to correct this.
-                Some(endpoint) if !endpoint.is_empty() => {
-                    let endpoint = http::Uri::from_str(&endpoint)
-                        .map_err(|e| PlanError::Unstructured(e.to_string()))?;
-                    Some(SerdeUri(endpoint))
-                }
+                Some(endpoint) if !endpoint.is_empty() => Some(endpoint),
                 _ => None,
             },
             region: options.region,
