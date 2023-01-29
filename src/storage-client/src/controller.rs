@@ -2086,8 +2086,6 @@ where
                 self.update_write_frontiers(&updates);
             }
             Some(StorageResponse::DroppedIds(ids)) => {
-                // TODO(petrosagg): It looks like the storage controller never cleans up GlobalIds
-                // from its state. It should probably be done as a reaction to this response.
                 let shards_to_finalize: Vec<_> = ids
                     .iter()
                     .filter_map(|id| {
@@ -2111,6 +2109,11 @@ where
                 // finalize.
                 self.register_shards_for_finalization(shards_to_finalize)
                     .await;
+
+                METADATA_COLLECTION
+                    .delete_keys(&mut self.state.stash, ids)
+                    .await
+                    .expect("stash operation must succeed");
 
                 self.finalize_shards().await;
             }
