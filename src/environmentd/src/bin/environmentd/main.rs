@@ -99,9 +99,11 @@ use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
 use once_cell::sync::Lazy;
+use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
 use tokio::sync::Mutex;
 use tower_http::cors::{self, AllowOrigin};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use url::Url;
 use uuid::Uuid;
@@ -800,6 +802,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             .try_into()
             .expect("must fit"),
     );
+    let span = span.exit();
+    let id = span.context().span().span_context().trace_id();
     drop(span);
 
     println!(
@@ -816,6 +820,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         " Internal HTTP address: {}",
         server.internal_http_local_addr()
     );
+
+    println!(" Root trace ID: {id}");
 
     // Block forever.
     loop {
