@@ -158,7 +158,7 @@ async fn download_objects_task(
             &*secrets_reader,
         )
         .await;
-    let client = aws_sdk_s3::Client::new(&config);
+    let client = mz_aws_s3_util::new_client(&config);
 
     let source_id = source_id.to_string();
 
@@ -279,7 +279,7 @@ async fn scan_bucket_task(
             &*secrets_reader,
         )
         .await;
-    let client = aws_sdk_s3::Client::new(&config);
+    let client = mz_aws_s3_util::new_client(&config);
 
     let source_id = source_id.to_string();
 
