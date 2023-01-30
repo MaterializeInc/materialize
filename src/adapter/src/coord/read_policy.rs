@@ -34,6 +34,7 @@ use mz_storage_client::controller::ReadPolicy;
 
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::{TimelineContext, TimelineState};
+use crate::util::ResultExt;
 
 /// Information about the read capability requirements of a collection.
 ///
@@ -298,7 +299,7 @@ impl crate::coord::Coordinator {
             self.controller
                 .active_compute()
                 .set_read_policy(compute_instance, compute_policy_updates)
-                .unwrap();
+                .unwrap_or_terminate("cannot fail to set read policy");
         }
         self.controller
             .storage
@@ -345,7 +346,7 @@ impl crate::coord::Coordinator {
         self.controller
             .active_compute()
             .set_read_policy(compute_instance, vec![(id, capability.policy())])
-            .unwrap();
+            .unwrap_or_terminate("cannot fail to set read policy");
     }
 
     /// Drop read policy in STORAGE for `id`.
@@ -377,7 +378,11 @@ impl crate::coord::Coordinator {
         let time = Antichain::from_elem(time);
 
         for id in id_bundle.storage_ids.iter() {
-            let collection = self.controller.storage.collection(*id).unwrap();
+            let collection = self
+                .controller
+                .storage
+                .collection(*id)
+                .expect("collection does not exist");
             let read_frontier = collection.read_capabilities.frontier().to_owned();
             let time = time.join(&read_frontier);
             read_holds
@@ -390,7 +395,9 @@ impl crate::coord::Coordinator {
         for (compute_instance, compute_ids) in id_bundle.compute_ids.iter() {
             let compute = self.controller.active_compute();
             for id in compute_ids.iter() {
-                let collection = compute.collection(*compute_instance, *id).unwrap();
+                let collection = compute
+                    .collection(*compute_instance, *id)
+                    .expect("collection does not exist");
                 let read_frontier = collection.read_frontier().to_owned();
                 let time = time.join(&read_frontier);
                 read_holds
@@ -420,7 +427,10 @@ impl crate::coord::Coordinator {
         // Update STORAGE read policies.
         let mut policy_changes = Vec::new();
         for (time, id) in read_holds.storage_ids() {
-            let read_needs = self.storage_read_capabilities.get_mut(id).unwrap();
+            let read_needs = self
+                .storage_read_capabilities
+                .get_mut(id)
+                .expect("id does not exist");
             read_needs.holds.update_iter(time.iter().map(|t| (*t, 1)));
             policy_changes.push((*id, read_needs.policy()));
         }
@@ -430,13 +440,16 @@ impl crate::coord::Coordinator {
             let mut policy_changes = Vec::new();
             let mut compute = self.controller.active_compute();
             for (time, id) in compute_ids {
-                let read_needs = self.compute_read_capabilities.get_mut(id).unwrap();
+                let read_needs = self
+                    .compute_read_capabilities
+                    .get_mut(id)
+                    .expect("id does not exist");
                 read_needs.holds.update_iter(time.iter().map(|t| (*t, 1)));
                 policy_changes.push((*id, read_needs.policy()));
             }
             compute
                 .set_read_policy(*compute_instance, policy_changes)
-                .unwrap();
+                .unwrap_or_terminate("cannot fail to set read policy");
         }
 
         read_holds
@@ -470,7 +483,11 @@ impl crate::coord::Coordinator {
                     .or_default()
                     .extend(&id_bundle);
                 for id in id_bundle.storage_ids {
-                    let collection = self.controller.storage.collection(id).unwrap();
+                    let collection = self
+                        .controller
+                        .storage
+                        .collection(id)
+                        .expect("id does not exist");
                     assert!(collection.read_capabilities.frontier().le(&new_time.borrow()),
                             "Storage collection {:?} has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
                             id,
@@ -478,7 +495,10 @@ impl crate::coord::Coordinator {
                             new_time,
                             old_time,
                     );
-                    let read_needs = self.storage_read_capabilities.get_mut(&id).unwrap();
+                    let read_needs = self
+                        .storage_read_capabilities
+                        .get_mut(&id)
+                        .expect("id does not exist");
                     read_needs
                         .holds
                         .update_iter(new_time.iter().map(|t| (*t, 1)));
@@ -491,7 +511,9 @@ impl crate::coord::Coordinator {
                 for (compute_instance, compute_ids) in id_bundle.compute_ids {
                     let compute = self.controller.active_compute();
                     for id in compute_ids {
-                        let collection = compute.collection(compute_instance, id).unwrap();
+                        let collection = compute
+                            .collection(compute_instance, id)
+                            .expect("id does not exist");
                         assert!(collection.read_frontier().le(&new_time.borrow()),
                                 "Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
                                 id,
@@ -500,7 +522,10 @@ impl crate::coord::Coordinator {
                                 new_time,
                                 old_time,
                         );
-                        let read_needs = self.compute_read_capabilities.get_mut(&id).unwrap();
+                        let read_needs = self
+                            .compute_read_capabilities
+                            .get_mut(&id)
+                            .expect("id does not exist");
                         read_needs
                             .holds
                             .update_iter(new_time.iter().map(|t| (*t, 1)));
@@ -532,7 +557,7 @@ impl crate::coord::Coordinator {
         for (compute_instance, compute_policy_changes) in compute_policy_changes {
             compute
                 .set_read_policy(compute_instance, compute_policy_changes)
-                .unwrap();
+                .unwrap_or_terminate("cannot fail to set read policy");
         }
 
         new_read_holds
@@ -568,7 +593,7 @@ impl crate::coord::Coordinator {
             if compute.instance_exists(*compute_instance) {
                 compute
                     .set_read_policy(*compute_instance, policy_changes)
-                    .unwrap();
+                    .unwrap_or_terminate("cannot fail to set read policy");
             }
         }
     }

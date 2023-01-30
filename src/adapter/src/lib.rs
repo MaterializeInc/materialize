@@ -73,6 +73,8 @@
 #![warn(clippy::disallowed_macros)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
+// Disallow usage of `unwrap()`.
+#![warn(clippy::unwrap_used)]
 #![cfg_attr(nightly_doc_features, feature(doc_cfg))]
 // Without this, cargo clippy complains with:
 //     overflow evaluating the requirement `&str: std::marker::Send`

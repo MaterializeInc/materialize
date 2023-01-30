@@ -39,7 +39,7 @@ use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::ConnectionId;
 use crate::coord::timestamp_selection::TimestampContext;
-use crate::util::send_immediate_rows;
+use crate::util::{send_immediate_rows, ResultExt};
 use crate::{AdapterError, AdapterNotice};
 
 use super::id_bundle::CollectionIdBundle;
@@ -324,9 +324,13 @@ impl crate::coord::Coordinator {
                     )))?
                 };
                 if count > 0 {
-                    let count =
-                        usize::cast_from(u64::try_from(count).expect("known to be positive"));
-                    results.push((row, NonZeroUsize::new(count).unwrap()));
+                    let count = usize::cast_from(
+                        u64::try_from(count).expect("known to be positive from check above"),
+                    );
+                    results.push((
+                        row,
+                        NonZeroUsize::new(count).expect("known to be non-zero from check above"),
+                    ));
                 }
             }
             let results = finishing.finish(results, self.catalog.system_config().max_result_size());
@@ -369,7 +373,7 @@ impl crate::coord::Coordinator {
                 self.controller
                     .active_compute()
                     .create_dataflows(compute_instance, vec![dataflow])
-                    .unwrap();
+                    .unwrap_or_terminate("cannot fail to create dataflows");
                 self.initialize_compute_read_policies(
                     output_ids,
                     compute_instance,
@@ -444,7 +448,7 @@ impl crate::coord::Coordinator {
                 map_filter_project,
                 target_replica,
             )
-            .unwrap();
+            .unwrap_or_terminate("cannot fail to peek");
 
         // Prepare the receiver to return as a response.
         let max_result_size = self.catalog.system_config().max_result_size();
@@ -581,9 +585,9 @@ mod tests {
                 .map(Some(MirScalarExpr::column(0).or(MirScalarExpr::column(2))))
                 .project([1, 4])
                 .into_plan()
-                .unwrap()
+                .expect("invalid plan")
                 .into_nontemporal()
-                .unwrap(),
+                .expect("invalid nontemporal"),
         );
         let lookup = FastPathPlan::PeekExisting(
             GlobalId::User(11),
@@ -593,9 +597,9 @@ mod tests {
                     MirScalarExpr::column(0).call_unary(UnaryFunc::IsNull(IsNull)),
                 ))
                 .into_plan()
-                .unwrap()
+                .expect("invalid plan")
                 .into_nontemporal()
-                .unwrap(),
+                .expect("invalid nontemporal"),
         );
 
         let humanizer = DummyHumanizer;

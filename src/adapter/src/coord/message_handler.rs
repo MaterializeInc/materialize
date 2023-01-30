@@ -43,7 +43,12 @@ impl Coordinator {
         match msg {
             Message::Command(cmd) => self.message_command(cmd).await,
             Message::ControllerReady => {
-                if let Some(m) = self.controller.process().await.unwrap() {
+                if let Some(m) = self
+                    .controller
+                    .process()
+                    .await
+                    .expect("`process` never returns an error")
+                {
                     self.message_controller(m).await
                 }
             }

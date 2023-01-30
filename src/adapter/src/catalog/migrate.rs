@@ -106,7 +106,9 @@ fn deferred_object_name_rewrite(
     }) = stmt
     {
         for CreateSourceSubsource { subsource, .. } in create_source_subsources {
-            let object_name = subsource.as_mut().unwrap();
+            let object_name = subsource
+                .as_mut()
+                .expect("subsources must be named during purification");
             let name: UnresolvedObjectName = match object_name {
                 DeferredObjectName::Deferred(name) => name.clone(),
                 DeferredObjectName::Named(..) => continue,

@@ -108,7 +108,7 @@ async fn migrate(
                         MZ_INTERNAL_SCHEMA_ID,
                         INFORMATION_SCHEMA_ID,
                     ])
-                    .unwrap()
+                    .expect("known to be non-empty")
                         + 1,
                 },
             )?;

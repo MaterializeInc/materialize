@@ -483,7 +483,7 @@ impl CatalogState {
                     .iter()
                     .map(|broker| Datum::String(&broker.address)),
             )
-            .unwrap();
+            .expect("kafka.brokers is 1 dimensional, and it's length is used for the array length");
         let brokers = row.unpack_first();
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_KAFKA_CONNECTIONS),
@@ -640,7 +640,9 @@ impl CatalogState {
             .expect("create_sql cannot be invalid")
             .into_element()
         {
-            Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => key_parts.unwrap(),
+            Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => {
+                key_parts.expect("key_parts is filled in during planning")
+            }
             _ => unreachable!(),
         };
 
@@ -662,7 +664,7 @@ impl CatalogState {
                 .typ(
                     &on_entry
                         .desc(&self.resolve_full_name(on_entry.name(), on_entry.conn_id()))
-                        .unwrap()
+                        .expect("can only create indexes on items with a valid description")
                         .typ()
                         .column_types,
                 )
@@ -774,11 +776,13 @@ impl CatalogState {
                 .push_array(
                     &[ArrayDimension {
                         lower_bound: 1,
-                        length: func_impl_details.arg_typs.len(),
+                        length: arg_type_ids.len(),
                     }],
                     arg_type_ids.iter().map(|id| Datum::String(id)),
                 )
-                .unwrap();
+                .expect(
+                    "arg_type_ids is 1 dimensional, and it's length is used for the array length",
+                );
             let arg_type_ids = row.unpack_first();
 
             updates.push(BuiltinTableUpdate {
@@ -854,7 +858,10 @@ impl CatalogState {
                 )))
             })?
             .into_row();
-        let details = details.iter().next().unwrap();
+        let details = details
+            .iter()
+            .next()
+            .expect("details created above with a single jsonb column");
         let dt = mz_ore::now::to_datetime(occurred_at).naive_utc();
         let id = event.sortable_id();
         Ok(BuiltinTableUpdate {

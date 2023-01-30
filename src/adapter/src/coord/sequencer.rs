@@ -90,7 +90,7 @@ use crate::session::{
     WriteOp,
 };
 use crate::subscribe::PendingSubscribe;
-use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId};
+use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{guard_write_critical_section, session, PeekResponseUnary};
 
 use super::timestamp_selection::{TimestampExplanation, TimestampSource};
@@ -596,7 +596,7 @@ impl Coordinator {
                             },
                         )])
                         .await
-                        .unwrap();
+                        .unwrap_or_terminate("cannot fail to create collections");
 
                     self.initialize_storage_read_policies(
                         vec![source_id],
@@ -861,7 +861,9 @@ impl Coordinator {
                     let (availability_zone, user_specified) =
                         availability_zone.map(|az| (az, true)).unwrap_or_else(|| {
                             let az = Self::choose_az(&n_replicas_per_az);
-                            *n_replicas_per_az.get_mut(&az).unwrap() += 1;
+                            *n_replicas_per_az
+                                .get_mut(&az)
+                                .expect("availability zone does not exist") += 1;
                             (az, false)
                         });
                     let location = SerializedReplicaLocation::Managed {
@@ -1165,7 +1167,7 @@ impl Coordinator {
                     .storage
                     .create_collections(vec![(table_id, collection_desc)])
                     .await
-                    .unwrap();
+                    .unwrap_or_terminate("cannot fail to create collections");
 
                 let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
                 self.controller
@@ -1188,7 +1190,7 @@ impl Coordinator {
                     .expect("invalid table upper initialization")
                     .await
                     .expect("One-shot dropped while waiting synchronously")
-                    .unwrap();
+                    .unwrap_or_terminate("cannot fail to append");
                 Ok(ExecuteResponse::CreatedTable)
             }
             Err(AdapterError::Catalog(catalog::Error {
@@ -1573,7 +1575,7 @@ impl Coordinator {
                         },
                     )])
                     .await
-                    .unwrap();
+                    .unwrap_or_terminate("cannot fail to append");
 
                 self.initialize_storage_read_policies(
                     vec![id],
@@ -2604,7 +2606,7 @@ impl Coordinator {
                             .catalog
                             .resolve_full_name(from.name(), Some(session.conn_id())),
                     )
-                    .unwrap()
+                    .expect("subscribes can only be run on items with descs")
                     .into_owned();
                 let sink_id = self.catalog.allocate_user_id().await?;
                 let sink_desc = make_sink_desc(self, session, from_id, from_desc, &[from_id][..])?;
@@ -2631,7 +2633,11 @@ impl Coordinator {
             }
         };
 
-        let (&sink_id, sink_desc) = dataflow.sink_exports.iter().next().unwrap();
+        let (&sink_id, sink_desc) = dataflow
+            .sink_exports
+            .iter()
+            .next()
+            .expect("subscribes have a single sink export");
         self.active_conns
             .get_mut(&session.conn_id())
             .expect("must exist for active sessions")
@@ -2662,7 +2668,7 @@ impl Coordinator {
             self.controller
                 .compute
                 .set_subscribe_target_replica(cluster_id, sink_id, target)
-                .unwrap();
+                .unwrap_or_terminate("cannot fail to set subscribe target replica");
         }
 
         let resp = ExecuteResponse::Subscribing { rx };
@@ -2921,7 +2927,11 @@ impl Coordinator {
         let mut sources = Vec::new();
         {
             for id in id_bundle.storage_ids.iter() {
-                let state = self.controller.storage.collection(*id).unwrap();
+                let state = self
+                    .controller
+                    .storage
+                    .collection(*id)
+                    .expect("id does not exist");
                 let name = self
                     .catalog
                     .try_get_entry(id)
@@ -2942,7 +2952,11 @@ impl Coordinator {
         {
             if let Some(compute_ids) = id_bundle.compute_ids.get(&cluster_id) {
                 for id in compute_ids {
-                    let state = self.controller.compute.collection(cluster_id, *id).unwrap();
+                    let state = self
+                        .controller
+                        .compute
+                        .collection(cluster_id, *id)
+                        .expect("id does not exist");
                     let name = self
                         .catalog
                         .try_get_entry(id)
@@ -2966,7 +2980,7 @@ impl Coordinator {
             sources,
         };
         let s = if is_json {
-            serde_json::to_string_pretty(&explanation).unwrap()
+            serde_json::to_string_pretty(&explanation).expect("failed to serialize explanation")
         } else {
             explanation.to_string()
         };
@@ -3378,7 +3392,10 @@ impl Coordinator {
             let mut diff_err: Option<AdapterError> = None;
             if !returning.is_empty() && diffs.is_ok() {
                 let arena = RowArena::new();
-                for (row, diff) in diffs.as_ref().unwrap() {
+                for (row, diff) in diffs
+                    .as_ref()
+                    .expect("known to be `Ok` from `is_ok()` call above")
+                {
                     if diff < &1 {
                         continue;
                     }
@@ -4119,7 +4136,7 @@ where
 
     // Ensure that logging is initialized for the target replica, lest
     // we try to read from a non-existing arrangement.
-    let replica_id = target_replica.unwrap();
+    let replica_id = target_replica.expect("set to `Some` above");
     let replica = &cluster.replicas_by_id[&replica_id];
     if !replica.config.compute.logging.enabled() {
         return Err(AdapterError::IntrospectionDisabled { log_names });
