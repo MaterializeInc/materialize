@@ -1501,7 +1501,7 @@ where
                     read_capability_changes.insert(id, updates);
                 }
             } else {
-                tracing::error!("Reference to unregistered id: {:?}", id);
+                tracing::warn!("Reference to unregistered id: {:?}", id);
             }
         }
         if !read_capability_changes.is_empty() {
