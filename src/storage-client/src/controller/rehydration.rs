@@ -441,9 +441,8 @@ where
                 for ingestion in ingestions {
                     self.sources.insert(ingestion.id, ingestion.clone());
                     // Initialize the uppers we are tracking
-                    for &export_id in ingestion.description.source_exports.keys() {
-                        self.uppers
-                            .insert(export_id, Antichain::from_elem(T::minimum()));
+                    for id in ingestion.description.subsource_ids() {
+                        self.uppers.insert(id, Antichain::from_elem(T::minimum()));
                     }
                 }
             }

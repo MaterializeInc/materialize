@@ -79,6 +79,23 @@ pub struct IngestionDescription<S = (), C = GenericSourceConnection> {
     pub instance_id: StorageInstanceId,
 }
 
+impl<S> IngestionDescription<S> {
+    /// Return an iterator over the `GlobalId`s of `self`'s subsources.
+    pub fn subsource_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        // Expand self so that any new fields added generate a compiler error to
+        // increase the likelihood of developers seeing this function.
+        let IngestionDescription {
+            desc: _,
+            source_imports: _,
+            ingestion_metadata: _,
+            source_exports,
+            instance_id: _,
+        } = &self;
+
+        source_exports.keys().copied()
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SourceExport<S = ()> {
     /// The index of the exported output stream
