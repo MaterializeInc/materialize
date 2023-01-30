@@ -5545,20 +5545,25 @@ impl Catalog {
                 ..
             }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
-                data_source: match source.ingestion {
-                    Some(ingestion) => DataSourceDesc::Ingestion(Ingestion {
-                        desc: ingestion.desc,
-                        source_imports: ingestion.source_imports,
-                        subsource_exports: ingestion.subsource_exports,
-                        cluster_id: match cluster_config {
-                            plan::SourceSinkClusterConfig::Existing { id } => id,
-                            plan::SourceSinkClusterConfig::Linked { .. }
-                            | plan::SourceSinkClusterConfig::Undefined => {
-                                self.state.clusters_by_linked_object_id[&id]
-                            }
-                        },
-                    }),
-                    None => DataSourceDesc::Source,
+                data_source: match source.data_source {
+                    mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => {
+                        DataSourceDesc::Ingestion(Ingestion {
+                            desc: ingestion.desc,
+                            source_imports: ingestion.source_imports,
+                            subsource_exports: ingestion.subsource_exports,
+                            cluster_id: match cluster_config {
+                                plan::SourceSinkClusterConfig::Existing { id } => id,
+                                plan::SourceSinkClusterConfig::Linked { .. }
+                                | plan::SourceSinkClusterConfig::Undefined => {
+                                    self.state.clusters_by_linked_object_id[&id]
+                                }
+                            },
+                        })
+                    }
+                    mz_sql::plan::DataSourceDesc::Progress => {
+                        unreachable!("progress subsources error in purification")
+                    }
+                    mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
                 },
                 desc: source.desc,
                 timeline,

@@ -109,10 +109,11 @@ use crate::plan::{
     ComputeReplicaIntrospectionConfig, CreateClusterPlan, CreateClusterReplicaPlan,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DropClusterReplicasPlan, DropClustersPlan,
-    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, FullObjectName, HirScalarExpr,
-    Index, Ingestion, MaterializedView, Params, Plan, QueryContext, ReplicaConfig, RotateKeysPlan,
-    Secret, Sink, Source, SourceSinkClusterConfig, Table, Type, View,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropClusterReplicasPlan,
+    DropClustersPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    FullObjectName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan, QueryContext,
+    ReplicaConfig, RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig, Table, Type,
+    View,
 };
 
 pub fn describe_create_database(
@@ -1069,7 +1070,7 @@ pub fn plan_create_source(
 
     let source = Source {
         create_sql,
-        ingestion: Some(Ingestion {
+        data_source: DataSourceDesc::Ingestion(Ingestion {
             desc: source_desc,
             // Currently no source reads from another source
             source_imports: BTreeSet::new(),
@@ -1179,7 +1180,7 @@ pub fn plan_create_subsource(
 
     let source = Source {
         create_sql,
-        ingestion: None,
+        data_source: DataSourceDesc::Source,
         desc,
     };
 

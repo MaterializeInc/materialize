@@ -494,8 +494,8 @@ impl Coordinator {
             let source_oid = self.catalog.allocate_oid()?;
             let source = catalog::Source {
                 create_sql: plan.source.create_sql,
-                data_source: match plan.source.ingestion {
-                    Some(ingestion) => {
+                data_source: match plan.source.data_source {
+                    mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => {
                         let cluster_id = self
                             .create_linked_cluster_ops(
                                 source_id,
@@ -511,7 +511,10 @@ impl Coordinator {
                             cluster_id,
                         })
                     }
-                    None => {
+                    mz_sql::plan::DataSourceDesc::Progress => {
+                        unreachable!("PROGRESS subsources error in purification");
+                    }
+                    mz_sql::plan::DataSourceDesc::Source => {
                         assert!(
                             matches!(
                                 plan.cluster_config,
