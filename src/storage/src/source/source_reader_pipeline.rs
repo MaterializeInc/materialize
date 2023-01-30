@@ -56,9 +56,9 @@ use tracing::{debug, info, trace, warn};
 
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
-use mz_ore::collections::CollectionExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_storage_client::client::SourceStatisticsUpdate;
@@ -205,8 +205,13 @@ where
         })
     };
 
-    let (remap_stream, remap_token) =
-        remap_operator(scope, config.clone(), source_upper_rx, &resume_stream, C::REMAP_RELATION_DESC.clone());
+    let (remap_stream, remap_token) = remap_operator(
+        scope,
+        config.clone(),
+        source_upper_rx,
+        &resume_stream,
+        C::REMAP_RELATION_DESC.clone(),
+    );
 
     let ((reclocked_stream, reclocked_err_stream), _reclock_token) =
         reclock_operator(scope, config, reclock_follower, source_rx, remap_stream);
@@ -315,7 +320,11 @@ where
         };
         // Drop the reclock follower to release the read hold of the trace
         drop(reclock_follower);
-        info!("timely-{worker_id} source({id}) initial resume upper: into_upper={} source_upper={}", resume_upper.pretty(), source_upper.pretty());
+        info!(
+            "timely-{worker_id} source({id}) initial resume upper: into_upper={} source_upper={}",
+            resume_upper.pretty(),
+            source_upper.pretty()
+        );
 
         for ts in source_upper.iter() {
             //TODO(petrosagg): rework metrics to be generic over the source timestamp
@@ -369,7 +378,9 @@ where
                     Some(SourceMessageType::Message(message, cap, diff)) => {
                         let new_status = match message {
                             Ok(_) => HealthStatus::Running,
-                            Err(ref error) => HealthStatus::StalledWithError(error.inner.to_string()),
+                            Err(ref error) => {
+                                HealthStatus::StalledWithError(error.inner.to_string())
+                            }
                         };
 
                         let new_status_update = HealthStatusUpdate {
@@ -409,17 +420,21 @@ where
                         health_output.activate().session(&health_cap).give((worker_id, new_status));
                     }
                     None => {
-                        trace!("source_reader({id}) {worker_id}/{worker_count}: source ended, dropping capabilities");
+                        trace!("timely-{worker_id} source({id}): source ended, dropping capabilities");
                         return;
                     }
                 },
                 Some(frontier) = resume_uppers.next() => {
-                    trace!("timely-{worker_id} source({id}) committing offsets: resume_upper={}", frontier.pretty());
+                    trace!(
+                        "timely-{worker_id} source({id}) committing offsets: resume_upper={}",
+                        frontier.pretty()
+                    );
                     if let Err(e) = offset_committer.commit_offsets(frontier.clone()).await {
                         // TODO(guswynn): stats for this error
                         tracing::error!(
                             %e,
-                            "timely-{worker_id} source({id}) failed to commit offsets: resume_upper={}", frontier.pretty()
+                            "timely-{worker_id} source({id}) failed to commit offsets: resume_upper={}",
+                            frontier.pretty()
                         );
                     }
                 }
@@ -501,10 +516,16 @@ fn health_operator<G: Scope>(
                 let mut halt_with = None;
                 for (worker_id, health_event) in buffer.drain(..) {
                     if !is_active_worker {
-                        warn!("Health messages for source {source_id} passed to an unexpected worker id: {healthcheck_worker_id}")
+                        warn!(
+                            "Health messages for source {source_id} passed to \
+                              an unexpected worker id: {healthcheck_worker_id}"
+                        )
                     }
 
-                    let HealthStatusUpdate { update, should_halt } = health_event;
+                    let HealthStatusUpdate {
+                        update,
+                        should_halt,
+                    } = health_event;
                     if should_halt {
                         halt_with = Some(update.clone());
                     }
@@ -513,9 +534,21 @@ fn health_operator<G: Scope>(
 
                 if let Some(new_status) = overall_status(&healths) {
                     if last_reported_status.as_ref() != Some(&new_status) {
-                        info!("Health transition for source {source_id}: {last_reported_status:?} -> {new_status:?}");
+                        info!(
+                            "Health transition for source {source_id}: \
+                              {last_reported_status:?} -> {new_status:?}"
+                        );
                         if let Some(status_shard) = storage_metadata.status_shard {
-                            write_to_persist(source_id, new_status.name(), new_status.error(), now.clone(), &persist_client, status_shard, &*MZ_SOURCE_STATUS_HISTORY_DESC).await;
+                            write_to_persist(
+                                source_id,
+                                new_status.name(),
+                                new_status.error(),
+                                now.clone(),
+                                &persist_client,
+                                status_shard,
+                                &*MZ_SOURCE_STATUS_HISTORY_DESC,
+                            )
+                            .await;
                         }
 
                         last_reported_status = Some(new_status.clone());
@@ -526,8 +559,16 @@ fn health_operator<G: Scope>(
                 // directly to the places where `should_halt = true` originates.
                 // We should definitely do that, but this is okay for a PoC.
                 if let Some(halt_with) = halt_with {
-                    info!("Broadcasting suspend-and-restart command because of {:?}", halt_with);
-                    internal_cmd_tx.borrow_mut().broadcast(InternalStorageCommand::SuspendAndRestart{id: source_id, reason: format!("{:?}", halt_with)});
+                    info!(
+                        "Broadcasting suspend-and-restart command because of {:?}",
+                        halt_with
+                    );
+                    internal_cmd_tx.borrow_mut().broadcast(
+                        InternalStorageCommand::SuspendAndRestart {
+                            id: source_id,
+                            reason: format!("{:?}", halt_with),
+                        },
+                    );
                 }
             }
         }
@@ -858,7 +899,12 @@ where
                                 .collect(),
                             upper: remap_upper.to_owned(),
                         };
-                        trace!("timely-{worker_id} reclock({id}) received remap batch: updates={:?} upper={}", &remap_trace_batch.updates, remap_upper.pretty());
+                        trace!(
+                            "timely-{worker_id} reclock({id}) \
+                            received remap batch: updates={:?} upper={}",
+                            &remap_trace_batch.updates,
+                            remap_upper.pretty()
+                        );
                         timestamper.push_trace_batch(remap_trace_batch);
                         work_to_do.notify_one();
                     }
@@ -866,7 +912,11 @@ where
                 Some(event) = source_rx.recv() => match event {
                     EventCore::Progress(changes) => {
                         source_upper.update_iter(changes);
-                        trace!("timely-{worker_id} reclock({id}) received source progress: source_upper={}", source_upper.pretty());
+                        trace!(
+                            "timely-{worker_id} reclock({id}) \
+                            received source progress: source_upper={}",
+                            source_upper.pretty()
+                        );
                         work_to_do.notify_one();
                     }
                     EventCore::Messages(_time, batch) => {
@@ -883,7 +933,9 @@ where
                     let total_buffered: usize = untimestamped_batches.iter().map(|b| b.len()).sum();
                     let msgs = untimestamped_batches
                         .iter_mut()
-                        .flat_map(|batch| batch.drain_filter_swapping(|(_, ts, _)| !ready_upper.less_equal(ts)))
+                        .flat_map(|batch| batch.drain_filter_swapping(|(_, ts, _)| {
+                            !ready_upper.less_equal(ts)
+                        }))
                         .map(|(data, time, diff)| ((data, time.clone(), diff), time));
 
                     // Accumulate updates to bytes_read for Prometheus metrics collection
@@ -910,7 +962,11 @@ where
                     }
 
                     let total_skipped = total_buffered - total_processed;
-                    trace!("timely-{worker_id} reclock({id}) processed {}, skipped {} messages", total_processed, total_skipped);
+                    trace!(
+                        "timely-{worker_id} reclock({id}): processed {}, skipped {} messages",
+                        total_processed,
+                        total_skipped
+                    );
 
                     bytes_read_counter.inc_by(u64::cast_from(bytes_read));
                     source_metrics.record_partition_offsets(metric_updates);
