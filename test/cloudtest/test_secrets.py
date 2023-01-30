@@ -9,6 +9,8 @@
 
 from textwrap import dedent
 
+from pg8000.exceptions import InterfaceError
+
 from materialize.cloudtest.application import MaterializeApplication
 from materialize.cloudtest.wait import wait
 
@@ -55,4 +57,38 @@ def test_secrets(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql("DROP SECRET username CASCADE")
 
+    wait(condition="delete", resource=f"secret/{secret}")
+
+
+# Tests that secrets deleted from the catalog but not from k8s are cleaned up on
+# envd startup.
+def test_orphaned_secrets(mz: MaterializeApplication) -> None:
+    # Use two separate failpoints. One that crashes after modifying the catalog
+    # (drop_secrets), and one that fails during bootstrap (orphan_secrets) so
+    # that we can prevent a racy startup from cleaning up the secret before we
+    # observed it.
+    mz.set_environmentd_failpoints("orphan_secrets=panic")
+    mz.environmentd.sql("SET failpoints = 'drop_secrets=panic'")
+    mz.environmentd.sql("CREATE SECRET orphan AS '123'")
+
+    id = mz.environmentd.sql_query("SELECT id FROM mz_secrets WHERE name = 'orphan'")[
+        0
+    ][0]
+    assert id is not None
+    secret = f"user-managed-{id}"
+
+    # The failpoint should cause this to fail.
+    try:
+        mz.environmentd.sql("DROP SECRET orphan")
+        raise Exception("Unexpected success")
+    except InterfaceError:
+        pass
+
+    describe = mz.kubectl("describe", "secret", secret)
+    assert "contents:  3 bytes" in describe
+
+    # We saw the secret, allow orphan cleanup.
+    mz.set_environmentd_failpoints("")
+
+    mz.wait_for_sql()
     wait(condition="delete", resource=f"secret/{secret}")

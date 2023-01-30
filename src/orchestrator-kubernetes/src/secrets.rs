@@ -16,7 +16,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
-use kube::api::{DeleteParams, ObjectMeta, Patch, PatchParams};
+use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::Api;
 
 use mz_repr::GlobalId;
@@ -64,6 +64,23 @@ impl SecretsController for KubernetesOrchestrator {
         }
     }
 
+    async fn list(&self) -> Result<Vec<GlobalId>, anyhow::Error> {
+        let objs = self.secret_api.list(&ListParams::default()).await?;
+        let mut ids = Vec::new();
+        for item in objs.items {
+            // Ignore unnamed objects.
+            let Some(name) = item.metadata.name else {
+                continue;
+            };
+            // Ignore invalidly named objects.
+            let Some(id) = from_secret_name(&name) else {
+                continue;
+            };
+            ids.push(id);
+        }
+        Ok(ids)
+    }
+
     fn reader(&self) -> Arc<dyn SecretsReader> {
         Arc::new(KubernetesSecretsReader {
             secret_api: self.secret_api.clone(),
@@ -103,6 +120,13 @@ impl SecretsReader for KubernetesSecretsReader {
     }
 }
 
+const SECRET_NAME_PREFIX: &str = "user-managed-";
+
 fn secret_name(id: GlobalId) -> String {
-    format!("user-managed-{id}")
+    format!("{SECRET_NAME_PREFIX}{id}")
+}
+
+fn from_secret_name(name: &str) -> Option<GlobalId> {
+    name.strip_prefix(SECRET_NAME_PREFIX)
+        .and_then(|id| id.parse().ok())
 }

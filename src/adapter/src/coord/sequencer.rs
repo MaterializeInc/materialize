@@ -634,8 +634,6 @@ impl Coordinator {
         let mut connection = plan.connection.connection;
 
         match connection {
-            // TODO(jkosh44) if catalog_transact fails after this or we crash, then we will leak
-            //  the secret.
             mz_storage_client::types::connections::Connection::Ssh(ref mut ssh) => {
                 let key_set = SshKeyPairSet::new()?;
                 self.secrets_controller
