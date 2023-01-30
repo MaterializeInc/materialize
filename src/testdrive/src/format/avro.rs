@@ -17,7 +17,7 @@
 // The original source code is subject to the terms of the MIT license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Debug;
 
@@ -31,7 +31,7 @@ use serde_json::Value as JsonValue;
 // testdrive modules can import just this one.
 
 pub use mz_avro::schema::{Schema, SchemaKind, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
-pub use mz_avro::types::{AvroMap, DecimalValue, ToAvro, Value};
+pub use mz_avro::types::{DecimalValue, ToAvro, Value};
 pub use mz_avro::{from_avro_datum, to_avro_datum, Codec, Reader, Writer};
 pub use mz_interchange::avro::parse_schema;
 
@@ -148,7 +148,7 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
             Ok(builder.avro())
         }
         (JsonValue::Object(items), SchemaPiece::Map(m)) => {
-            let mut map = HashMap::new();
+            let mut map = BTreeMap::new();
             for (k, v) in items {
                 let (inner, name) = m.get_piece_and_name(schema.root);
                 map.insert(
@@ -163,7 +163,7 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
                     )?,
                 );
             }
-            Ok(Value::Map(AvroMap(map)))
+            Ok(Value::Map(map))
         }
         (val, SchemaPiece::Union(us)) => {
             let variants = us.variants();

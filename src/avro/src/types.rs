@@ -27,10 +27,8 @@
 // https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
 #![allow(clippy::extra_unused_lifetimes)]
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
-use std::hash::BuildHasher;
-use std::u8;
 
 use chrono::NaiveDateTime;
 use enum_kinds::EnumKind;
@@ -95,20 +93,6 @@ impl From<Scalar> for Value {
     }
 }
 
-/// The values stored in an Avro map.
-// This simple wrapper exists so we can Debug-print the values deterministically, i.e. in sorted order
-// by keys.
-#[derive(Clone, PartialEq)]
-pub struct AvroMap(pub HashMap<String, Value>);
-
-impl fmt::Debug for AvroMap {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut entries = self.0.clone().into_iter().collect::<Vec<_>>();
-        entries.sort_by_key(|(k, _)| k.clone());
-        f.debug_map().entries(entries).finish()
-    }
-}
-
 /// Represents any valid Avro value
 /// More information about Avro values can be found in the
 /// [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas)
@@ -168,7 +152,7 @@ pub enum Value {
     /// An `array` Avro value.
     Array(Vec<Value>),
     /// A `map` Avro value.
-    Map(AvroMap),
+    Map(BTreeMap<String, Value>),
     /// A `record` Avro value.
     ///
     /// A Record is represented by a vector of (`<field name>`, `value`).
@@ -233,29 +217,29 @@ impl<'a> ToAvro for &'a [u8] {
     }
 }
 
-impl<T, S: BuildHasher> ToAvro for HashMap<String, T, S>
+impl<T> ToAvro for BTreeMap<String, T>
 where
     T: ToAvro,
 {
     fn avro(self) -> Value {
-        Value::Map(AvroMap(
+        Value::Map(
             self.into_iter()
                 .map(|(key, value)| (key, value.avro()))
                 .collect::<_>(),
-        ))
+        )
     }
 }
 
-impl<'a, T, S: BuildHasher> ToAvro for HashMap<&'a str, T, S>
+impl<'a, T> ToAvro for BTreeMap<&'a str, T>
 where
     T: ToAvro,
 {
     fn avro(self) -> Value {
-        Value::Map(AvroMap(
+        Value::Map(
             self.into_iter()
                 .map(|(key, value)| (key.to_owned(), value.avro()))
                 .collect::<_>(),
-        ))
+        )
     }
 }
 
@@ -288,7 +272,7 @@ pub struct Record<'a> {
     /// Ordered according to the fields in the schema given to create this
     /// `Record` object. Any unset field defaults to `Value::Null`.
     pub fields: Vec<(String, Value)>,
-    schema_lookup: &'a HashMap<String, usize>,
+    schema_lookup: &'a BTreeMap<String, usize>,
     schema_fields: &'a Vec<RecordField>,
 }
 
@@ -359,12 +343,12 @@ impl ToAvro for JsonValue {
             JsonValue::Array(items) => {
                 Value::Array(items.into_iter().map(|item| item.avro()).collect::<_>())
             }
-            JsonValue::Object(items) => Value::Map(AvroMap(
+            JsonValue::Object(items) => Value::Map(
                 items
                     .into_iter()
                     .map(|(key, value)| (key, value.avro()))
                     .collect::<_>(),
-            )),
+            ),
         }
     }
 }
@@ -431,7 +415,7 @@ impl Value {
                 let node = schema.step(&**inner);
                 items.iter().all(|item| item.validate(node))
             }
-            (&Value::Map(AvroMap(ref items)), SchemaPiece::Map(inner)) => {
+            (&Value::Map(ref items), SchemaPiece::Map(inner)) => {
                 let node = schema.step(&**inner);
                 items.iter().all(|(_, value)| value.validate(node))
             }

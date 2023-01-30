@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::future::Future;
@@ -147,7 +147,7 @@ pub struct Config {
 pub struct State {
     // === Testdrive state. ===
     arg_vars: BTreeMap<String, String>,
-    cmd_vars: HashMap<String, String>,
+    cmd_vars: BTreeMap<String, String>,
     seed: u32,
     temp_path: PathBuf,
     _tempfile: Option<tempfile::TempDir>,
@@ -177,7 +177,7 @@ pub struct State {
     kafka_config: ClientConfig,
     kafka_default_partitions: usize,
     kafka_producer: rdkafka::producer::FutureProducer<MzClientContext>,
-    kafka_topics: HashMap<String, usize>,
+    kafka_topics: BTreeMap<String, usize>,
 
     // === AWS state. ===
     aws_account: String,
@@ -190,10 +190,10 @@ pub struct State {
     sqs_queues_created: BTreeSet<String>,
 
     // === Database driver state. ===
-    mysql_clients: HashMap<String, mysql_async::Conn>,
-    postgres_clients: HashMap<String, tokio_postgres::Client>,
+    mysql_clients: BTreeMap<String, mysql_async::Conn>,
+    postgres_clients: BTreeMap<String, tokio_postgres::Client>,
     sql_server_clients:
-        HashMap<String, tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>>,
+        BTreeMap<String, tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>>,
 }
 
 impl State {
@@ -576,10 +576,10 @@ impl Run for PosCommand {
             Command::Builtin(builtin) => Some(builtin.name.clone()),
             _ => None,
         };
-        let subst = |msg: &str, vars: &HashMap<String, String>| {
+        let subst = |msg: &str, vars: &BTreeMap<String, String>| {
             substitute_vars(msg, vars, &ignore_prefix, false).map_err(wrap_err)
         };
-        let subst_re = |msg: &str, vars: &HashMap<String, String>| {
+        let subst_re = |msg: &str, vars: &BTreeMap<String, String>| {
             substitute_vars(msg, vars, &ignore_prefix, true).map_err(wrap_err)
         };
 
@@ -683,7 +683,7 @@ impl Run for PosCommand {
 /// Substituted `${}`-delimited variables from `vars` into `msg`
 fn substitute_vars(
     msg: &str,
-    vars: &HashMap<String, String>,
+    vars: &BTreeMap<String, String>,
     ignore_prefix: &Option<String>,
     regex_escape: bool,
 ) -> Result<String, anyhow::Error> {
@@ -858,7 +858,7 @@ pub async fn create_state(
             .create_with_context(MzClientContext)
             .with_context(|| format!("opening Kafka producer connection: {}", config.kafka_addr))?;
 
-        let topics = HashMap::new();
+        let topics = BTreeMap::new();
 
         (
             config.kafka_addr.to_owned(),
@@ -877,7 +877,7 @@ pub async fn create_state(
     let mut state = State {
         // === Testdrive state. ===
         arg_vars: config.arg_vars.clone(),
-        cmd_vars: HashMap::new(),
+        cmd_vars: BTreeMap::new(),
         seed,
         temp_path,
         _tempfile,
@@ -920,9 +920,9 @@ pub async fn create_state(
         sqs_queues_created: BTreeSet::new(),
 
         // === Database driver state. ===
-        mysql_clients: HashMap::new(),
-        postgres_clients: HashMap::new(),
-        sql_server_clients: HashMap::new(),
+        mysql_clients: BTreeMap::new(),
+        postgres_clients: BTreeMap::new(),
+        sql_server_clients: BTreeMap::new(),
     };
     state.initialize_cmd_vars().await?;
     Ok((state, pgconn_task))

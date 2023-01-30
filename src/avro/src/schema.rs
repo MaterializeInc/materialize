@@ -25,8 +25,8 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 use std::str::FromStr;
@@ -46,7 +46,6 @@ use types::{DecimalValue, Value as AvroValue};
 use crate::error::Error as AvroError;
 use crate::reader::SchemaResolver;
 use crate::types;
-use crate::types::AvroMap;
 use crate::util::MapHelper;
 
 pub fn resolve_schemas(
@@ -54,7 +53,7 @@ pub fn resolve_schemas(
     reader_schema: &Schema,
 ) -> Result<Schema, AvroError> {
     let r_indices = reader_schema.indices.clone();
-    let (reader_to_writer_names, writer_to_reader_names): (HashMap<_, _>, HashMap<_, _>) =
+    let (reader_to_writer_names, writer_to_reader_names): (BTreeMap<_, _>, BTreeMap<_, _>) =
         writer_schema
             .indices
             .iter()
@@ -68,7 +67,7 @@ pub fn resolve_schemas(
         .indices
         .iter()
         .map(|(f, i)| (*i, f))
-        .collect::<HashMap<_, _>>();
+        .collect::<BTreeMap<_, _>>();
     let mut resolver = SchemaResolver {
         named: Default::default(),
         indices: Default::default(),
@@ -278,7 +277,7 @@ pub enum SchemaPiece {
     Record {
         doc: Documentation,
         fields: Vec<RecordField>,
-        lookup: HashMap<String, usize>,
+        lookup: BTreeMap<String, usize>,
     },
     /// An `enum` Avro schema.
     Enum {
@@ -338,7 +337,7 @@ impl SchemaPiece {
 #[derive(Clone, PartialEq)]
 pub struct Schema {
     pub(crate) named: Vec<NamedSchemaPiece>,
-    pub(crate) indices: HashMap<FullName, usize>,
+    pub(crate) indices: BTreeMap<FullName, usize>,
     pub top: SchemaPieceOrNamed,
 }
 
@@ -395,7 +394,7 @@ impl Schema {
 /// function that maps from `Discriminant<Schema> -> Discriminant<Value>`. Conversion into this
 /// intermediate type should be especially fast, as the number of enum variants is small, which
 /// _should_ compile into a jump-table for the conversion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SchemaKind {
     // Fixed-length types
     Null,
@@ -519,7 +518,7 @@ pub struct Name {
     pub aliases: Option<Vec<String>>,
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FullName {
     name: String,
     namespace: String,
@@ -750,16 +749,16 @@ pub struct UnionSchema {
 
     // Used to ensure uniqueness of anonymous schema inputs, and provide constant time finding of the
     // schema index given a value.
-    anon_variant_index: HashMap<SchemaKind, usize>,
+    anon_variant_index: BTreeMap<SchemaKind, usize>,
 
     // Same as above, for named input references
-    named_variant_index: HashMap<usize, usize>,
+    named_variant_index: BTreeMap<usize, usize>,
 }
 
 impl UnionSchema {
     pub(crate) fn new(schemas: Vec<SchemaPieceOrNamed>) -> Result<Self, AvroError> {
-        let mut avindex = HashMap::new();
-        let mut nvindex = HashMap::new();
+        let mut avindex = BTreeMap::new();
+        let mut nvindex = BTreeMap::new();
         for (i, schema) in schemas.iter().enumerate() {
             match schema {
                 SchemaPieceOrNamed::Piece(sp) => {
@@ -811,7 +810,7 @@ impl UnionSchema {
     pub fn match_ref(
         &self,
         other: SchemaPieceRefOrNamed,
-        names_map: &HashMap<usize, usize>,
+        names_map: &BTreeMap<usize, usize>,
     ) -> Option<(usize, &SchemaPieceOrNamed)> {
         match other {
             SchemaPieceRefOrNamed::Piece(sp) => self.match_piece(sp),
@@ -826,7 +825,7 @@ impl UnionSchema {
     pub fn match_(
         &self,
         other: &SchemaPieceOrNamed,
-        names_map: &HashMap<usize, usize>,
+        names_map: &BTreeMap<usize, usize>,
     ) -> Option<(usize, &SchemaPieceOrNamed)> {
         self.match_ref(other.as_ref(), names_map)
     }
@@ -842,7 +841,7 @@ impl PartialEq for UnionSchema {
 #[derive(Default)]
 struct SchemaParser {
     named: Vec<Option<NamedSchemaPiece>>,
-    indices: HashMap<FullName, usize>,
+    indices: BTreeMap<FullName, usize>,
 }
 
 impl SchemaParser {
@@ -990,7 +989,7 @@ impl SchemaParser {
         default_namespace: &str,
         complex: &Map<String, Value>,
     ) -> Result<SchemaPiece, AvroError> {
-        let mut lookup = HashMap::new();
+        let mut lookup = BTreeMap::new();
 
         let fields: Vec<RecordField> = complex
             .get("fields")
@@ -1074,7 +1073,7 @@ impl SchemaParser {
                     .ok_or_else(|| ParseSchemaError::new("Unable to parse `symbols` in enum"))
             })?;
 
-        let mut unique_symbols: HashSet<&String> = HashSet::new();
+        let mut unique_symbols: BTreeSet<&String> = BTreeSet::new();
         for symbol in symbols.iter() {
             if unique_symbols.contains(symbol) {
                 return Err(ParseSchemaError::new(format!(
@@ -1487,7 +1486,7 @@ impl<'a> SchemaNodeOrNamed<'a> {
         };
         let piece = cloner.clone_piece_or_named(self.inner);
         let named: Vec<NamedSchemaPiece> = cloner.named.into_iter().map(Option::unwrap).collect();
-        let indices: HashMap<FullName, usize> = named
+        let indices: BTreeMap<FullName, usize> = named
             .iter()
             .enumerate()
             .map(|(i, nsp)| (nsp.name.clone(), i))
@@ -1507,7 +1506,7 @@ impl<'a> SchemaNodeOrNamed<'a> {
 
 struct SchemaSubtreeDeepCloner<'a> {
     old_root: &'a Schema,
-    old_to_new_names: HashMap<usize, usize>,
+    old_to_new_names: BTreeMap<usize, usize>,
     named: Vec<Option<NamedSchemaPiece>>,
 }
 
@@ -1822,8 +1821,8 @@ impl<'a> SchemaNode<'a> {
                 let map = map
                     .iter()
                     .map(|(k, v)| node.json_to_value(v).map(|v| (k.clone(), v)))
-                    .collect::<Result<HashMap<_, _>, ParseSchemaError>>()?;
-                AvroValue::Map(AvroMap(map))
+                    .collect::<Result<BTreeMap<_, _>, ParseSchemaError>>()?;
+                AvroValue::Map(map)
             }
             (String(s), SchemaPiece::Fixed { size }) if s.len() == *size => {
                 AvroValue::Fixed(*size, s.clone().into_bytes())
@@ -1846,7 +1845,7 @@ struct SchemaSerContext<'a> {
     // it is only ever mutated in one stack frame at a time.
     // But AFAICT serde doesn't expose a way to
     // provide some mutable context to every node in the tree...
-    seen_named: Rc<RefCell<HashMap<usize, FullName>>>,
+    seen_named: Rc<RefCell<BTreeMap<usize, FullName>>>,
     /// The namespace of this node's parent, or "" by default
     enclosing_ns: &'a str,
 }
@@ -2359,7 +2358,7 @@ mod tests {
                 }
             "#;
 
-        let mut lookup = HashMap::new();
+        let mut lookup = BTreeMap::new();
         lookup.insert("a".to_owned(), 0);
         lookup.insert("b".to_owned(), 1);
 

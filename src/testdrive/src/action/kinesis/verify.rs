@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeSet, VecDeque};
 use std::str;
 use std::time::Instant;
 
@@ -30,7 +30,7 @@ pub async fn run_verify(
 
     let mut shard_iterators = get_shard_iterators(&state.kinesis_client, &stream_name).await?;
     let timer = Instant::now();
-    let mut records: HashSet<String> = HashSet::new();
+    let mut records: BTreeSet<String> = BTreeSet::new();
     while let Some(iterator) = shard_iterators.pop_front() {
         if let Some(iterator) = &iterator {
             let output = state

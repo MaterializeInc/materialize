@@ -74,7 +74,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs::File;
 use std::io;
@@ -455,7 +455,7 @@ async fn main() {
     }
 
     let mut error_count = 0;
-    let mut error_files = HashSet::new();
+    let mut error_files = BTreeSet::new();
     let mut junit = match args.junit_report {
         Some(filename) => match File::create(&filename) {
             Ok(file) => Some((file, junit_report::TestSuite::new("testdrive"))),
