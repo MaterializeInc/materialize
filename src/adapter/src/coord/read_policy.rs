@@ -253,7 +253,7 @@ impl crate::coord::Coordinator {
                         id_bundles
                             .entry(Some(time.clone()))
                             .or_default()
-                            .extend(&id_bundle);
+                            .extend(id_bundle);
                     }
                     read_holds.extend(new_read_holds);
                 }
