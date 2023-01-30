@@ -1631,3 +1631,10 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') WI
 error: Expected end of statement, found FOR
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') WITH (SIZE = 'small') FOR ALL TABLES;
                                                                                                     ^
+
+parse-statement
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES EXPOSE PROGRESS AS foo.bar WITH (SIZE = 'small');
+----
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR ALL TABLES EXPOSE PROGRESS AS foo.bar WITH (SIZE = 'small')
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedObjectName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(All), progress_subsource: Some(Deferred(UnresolvedObjectName([Ident("foo"), Ident("bar")]))) })

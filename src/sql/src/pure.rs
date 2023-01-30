@@ -111,8 +111,13 @@ pub async fn purify_create_source(
         envelope,
         include_metadata: _,
         referenced_subsources: requested_subsources,
+        progress_subsource,
         ..
     } = &mut stmt;
+
+    if progress_subsource.is_some() {
+        bail_unsupported!("PROGRESS subsources not yet supported");
+    }
 
     // Disallow manually targetting subsources, this syntax is reserved for purification only
     if let Some(ReferencedSubsources::Subset(subsources)) = requested_subsources {
