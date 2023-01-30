@@ -860,7 +860,7 @@ fn parse_single_row<T: FromStr>(
 fn produce_snapshot<'a>(
     client: &'a Client,
     metrics: &'a PgSourceMetrics,
-    source_tables: &'a HashMap<u32, SourceTable>,
+    source_tables: &'a BTreeMap<u32, SourceTable>,
 ) -> impl Stream<Item = Result<(usize, Row), ReplicationError>> + 'a {
     async_stream::try_stream! {
         // Scratch space to use while evaluating casts
@@ -959,7 +959,7 @@ async fn produce_replication<'a>(
     as_of: PgLsn,
     committed_lsn: Arc<AtomicU64>,
     metrics: &'a PgSourceMetrics,
-    source_tables: &'a HashMap<u32, SourceTable>,
+    source_tables: &'a BTreeMap<u32, SourceTable>,
 ) -> impl Stream<Item = Result<Event<[PgLsn; 1], (usize, Row, Diff)>, ReplicationError>> + 'a {
     use ReplicationError::*;
     use ReplicationMessage::*;
