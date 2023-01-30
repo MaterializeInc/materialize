@@ -73,9 +73,10 @@
 #![warn(clippy::disallowed_macros)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
-#![warn(missing_docs)]
 
 //! Materialize's storage layer.
+
+#![warn(missing_docs)]
 
 pub mod decode;
 pub mod internal_control;

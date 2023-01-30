@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 
 use byteorder::{NetworkEndian, WriteBytesExt};
@@ -143,7 +143,7 @@ impl AvroSchemaGenerator {
                 let row_schema = build_row_schema_json(
                     &columns,
                     key_fullname.unwrap_or("row"),
-                    &HashMap::new(),
+                    &BTreeMap::new(),
                 )?;
                 Some(KeyInfo {
                     schema: Schema::parse(&row_schema).expect("valid schema constructed"),

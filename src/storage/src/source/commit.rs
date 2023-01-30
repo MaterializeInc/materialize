@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 //! Drivers for upstream commit
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -31,7 +31,7 @@ pub struct LogCommitter {
 impl OffsetCommitter for LogCommitter {
     async fn commit_offsets(
         &self,
-        offsets: HashMap<PartitionId, MzOffset>,
+        offsets: BTreeMap<PartitionId, MzOffset>,
     ) -> Result<(), anyhow::Error> {
         tracing::trace!(
             ?offsets,
@@ -46,11 +46,11 @@ impl OffsetCommitter for LogCommitter {
 }
 
 pub(crate) struct OffsetCommitHandle {
-    sender: watch::Sender<HashMap<PartitionId, MzOffset>>,
+    sender: watch::Sender<BTreeMap<PartitionId, MzOffset>>,
 }
 
 impl OffsetCommitHandle {
-    pub(crate) fn commit_offsets(&self, offsets: HashMap<PartitionId, MzOffset>) {
+    pub(crate) fn commit_offsets(&self, offsets: BTreeMap<PartitionId, MzOffset>) {
         self.sender
             .send(offsets)
             .expect("the receiver to drop first")
@@ -64,19 +64,19 @@ pub(crate) fn drive_offset_committer<S: OffsetCommitter + Send + Sync + 'static>
     worker_count: usize,
     metrics: OffsetCommitMetrics,
 ) -> OffsetCommitHandle {
-    let (tx, mut rx): (_, watch::Receiver<HashMap<PartitionId, MzOffset>>) =
+    let (tx, mut rx): (_, watch::Receiver<BTreeMap<PartitionId, MzOffset>>) =
         watch::channel(Default::default());
     task::spawn(
         || format!("offset commiter({source_id}) {worker_id}/{worker_count}"),
         async move {
-            let mut last_offsets: HashMap<PartitionId, MzOffset> = HashMap::new();
+            let mut last_offsets: BTreeMap<PartitionId, MzOffset> = BTreeMap::new();
             // loop waiting on changes. Note we could miss updates,
             // but this is fine: we work on committing of offsets
             // as fast as the `OffsetCommitter` allows us.
             while let Ok(()) = rx.changed().await {
                 // Clone out of the watch to avoid holding the read lock
                 // for longer that necessary.
-                let new_offsets: HashMap<PartitionId, MzOffset> = {
+                let new_offsets: BTreeMap<PartitionId, MzOffset> = {
                     let new_offsets = rx.borrow();
                     new_offsets.clone()
                 };

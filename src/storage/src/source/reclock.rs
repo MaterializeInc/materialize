@@ -606,7 +606,7 @@ where
 mod tests {
     use super::*;
 
-    use std::collections::HashSet;
+    use std::collections::BTreeSet;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -793,11 +793,11 @@ mod tests {
                 .await,
         );
 
-        let mut remap_trace = HashSet::new();
+        let mut remap_trace = BTreeSet::new();
         remap_trace.extend(follower.inner.borrow().remap_trace.clone());
         assert_eq!(
             remap_trace,
-            HashSet::from_iter([
+            BTreeSet::from_iter([
                 // Initial state
                 (
                     Partitioned::with_range(None, None, MzOffset::from(0)),

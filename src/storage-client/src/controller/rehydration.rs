@@ -15,7 +15,7 @@
 //! with the underlying client, it will reconnect the client and replay the
 //! command stream.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -80,7 +80,7 @@ where
             response_tx,
             sources: BTreeMap::new(),
             sinks: BTreeMap::new(),
-            uppers: HashMap::new(),
+            uppers: BTreeMap::new(),
             initialized: false,
             config: Default::default(),
             persist,
@@ -139,7 +139,7 @@ struct RehydrationTask<T> {
     /// The exports that have been observed.
     sinks: BTreeMap<GlobalId, CreateSinkCommand<T>>,
     /// The upper frontier information received.
-    uppers: HashMap<GlobalId, Antichain<T>>,
+    uppers: BTreeMap<GlobalId, Antichain<T>>,
     /// Set to `true` once [`StorageCommand::InitializationComplete`] has been
     /// observed.
     initialized: bool,

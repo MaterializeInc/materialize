@@ -10,7 +10,7 @@
 //! Reclocking compatibility code until the whole ingestion pipeline is transformed to native
 //! timestamps
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::sync::Arc;
 
@@ -49,9 +49,9 @@ where
 {
     pub fn reclock_compat<'a, M>(
         &'a self,
-        batch: &'a mut HashMap<PartitionId, Vec<(M, MzOffset)>>,
+        batch: &'a mut BTreeMap<PartitionId, Vec<(M, MzOffset)>>,
     ) -> Result<impl Iterator<Item = (M, IntoTime)> + 'a, ReclockError<FromTime>> {
-        let mut reclock_results = HashMap::with_capacity(batch.len());
+        let mut reclock_results = BTreeMap::new();
         // Eagerly compute all the reclocked times to check if we need to report an error
         for (pid, updates) in batch.iter() {
             let mut pid_results = Vec::with_capacity(updates.len());

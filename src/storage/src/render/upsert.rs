@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::any::Any;
-use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use differential_dataflow::hashable::Hashable;
@@ -334,7 +334,8 @@ where
             // 5) and (key1, value2, time 7) that we send (key1, value1, time 5) before (key1,
             // value2, time 7)
             let mut pending_values =
-                BTreeMap::<Timestamp, (Capability<Timestamp>, HashMap<_, UpsertSourceData>)>::new();
+                BTreeMap::<Timestamp, (Capability<Timestamp>, BTreeMap<_, UpsertSourceData>)>::new(
+                );
             // Intermediate structures re-used to limit allocations
             let mut scratch_vector = Vec::new();
             let mut repop_scratch_vector = Vec::new();
@@ -357,7 +358,7 @@ where
             let mut current_values = if previous_token.is_some() {
                 None
             } else {
-                Some(HashMap::default())
+                Some(BTreeMap::default())
             };
 
             let mut initial_values_multiset = ChangeBatch::default();
@@ -396,8 +397,7 @@ where
                         // Without this, we will re-download everything we upload, wasting tons of bandwidth.
                         previous_token = None;
 
-                        let mut new_current_values =
-                            HashMap::with_capacity(initial_values_multiset.len());
+                        let mut new_current_values = BTreeMap::new();
                         for ((k, v), r) in initial_values_multiset.drain() {
                             assert!(
                                 r == 1,
@@ -480,7 +480,7 @@ fn process_new_data(
         Timestamp,
         (
             Capability<Timestamp>,
-            HashMap<Option<Result<Row, DecodeError>>, UpsertSourceData>,
+            BTreeMap<Option<Result<Row, DecodeError>>, UpsertSourceData>,
         ),
     >,
     cap: &InputCapability<Timestamp>,
@@ -504,7 +504,7 @@ fn process_new_data(
 
         let entry = pending_values
             .entry(time)
-            .or_insert_with(|| (cap.delayed(&time), HashMap::new()))
+            .or_insert_with(|| (cap.delayed(&time), BTreeMap::new()))
             .1
             .entry(key);
 
@@ -527,14 +527,14 @@ fn process_new_data(
         };
 
         match entry {
-            std::collections::hash_map::Entry::Occupied(mut e) => {
+            Entry::Occupied(mut e) => {
                 // If the time is equal, toss out the row with the
                 // lower offset
                 if e.get().position < new_position {
                     e.insert(new_entry);
                 }
             }
-            std::collections::hash_map::Entry::Vacant(e) => {
+            Entry::Vacant(e) => {
                 e.insert(new_entry);
             }
         }
@@ -550,9 +550,9 @@ fn process_pending_values_batch(
     // are processing in this call.
     time: &Timestamp,
     cap: &mut Capability<Timestamp>,
-    map: &mut HashMap<Option<Result<Row, DecodeError>>, UpsertSourceData>,
+    map: &mut BTreeMap<Option<Result<Row, DecodeError>>, UpsertSourceData>,
     // The current map of values we use to perform the upsert comparision
-    current_values: &mut HashMap<Result<Row, DecodeError>, Result<Row, DataflowError>>,
+    current_values: &mut BTreeMap<Result<Row, DecodeError>, Result<Row, DataflowError>>,
     // A shared row used to pack new rows for evaluation and output
     row_packer: &mut Row,
     // A shared row used to build a Vec<Datum<'_>> for evaluation
@@ -586,7 +586,7 @@ fn process_pending_values_batch(
 ) {
     let mut session = output.session(cap);
     removed_times.push(time.clone());
-    for (key, data) in map.drain() {
+    for (key, data) in std::mem::take(map) {
         // decode key and value, and apply predicates/projections to they combined key/value
         if let Some(decoded_key) = key {
             let (decoded_key, decoded_value): (_, Result<_, DataflowError>) =

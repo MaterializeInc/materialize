@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::Context;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -67,9 +67,9 @@ pub struct KafkaSourceReader {
     /// The most recently read offset for each partition known to this source
     /// reader. An offset of -1 indicates that no prior message has been read
     /// for the given partition.
-    last_offsets: HashMap<i32, i64>,
+    last_offsets: BTreeMap<i32, i64>,
     /// The offset to start reading from for each partition.
-    start_offsets: HashMap<i32, i64>,
+    start_offsets: BTreeMap<i32, i64>,
     /// Channel to receive Kafka statistics JSON blobs from the stats callback.
     stats_rx: crossbeam_channel::Receiver<Jsonb>,
     /// The last partition we received
@@ -176,7 +176,7 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
 
         // Start offsets is a map from partition to the next offset to read
         // from.
-        let mut start_offsets: HashMap<_, i64> = self
+        let mut start_offsets: BTreeMap<_, i64> = self
             .start_offsets
             .into_iter()
             .filter(|(pid, _offset)| {
@@ -292,7 +292,7 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
                 consumer: Arc::clone(&consumer),
                 worker_id,
                 worker_count,
-                last_offsets: HashMap::new(),
+                last_offsets: BTreeMap::new(),
                 start_offsets,
                 stats_rx,
                 partition_info,
@@ -433,7 +433,7 @@ impl SourceReader for KafkaSourceReader {
 impl OffsetCommitter for KafkaOffsetCommiter {
     async fn commit_offsets(
         &self,
-        offsets: HashMap<PartitionId, MzOffset>,
+        offsets: BTreeMap<PartitionId, MzOffset>,
     ) -> Result<(), anyhow::Error> {
         use rdkafka::consumer::CommitMode;
         use rdkafka::topic_partition_list::Offset;

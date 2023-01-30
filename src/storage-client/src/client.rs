@@ -14,7 +14,7 @@
 
 //! The public API of the storage layer.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::iter;
 
@@ -471,7 +471,7 @@ pub struct PartitionedStorageState<T> {
     parts: u32,
     /// Upper frontiers for sources and sinks, both unioned across all partitions and from each
     /// individual partition.
-    uppers: HashMap<GlobalId, (MutableAntichain<T>, Vec<Option<Antichain<T>>>)>,
+    uppers: BTreeMap<GlobalId, (MutableAntichain<T>, Vec<Option<Antichain<T>>>)>,
 }
 
 impl<T> Partitionable<StorageCommand<T>, StorageResponse<T>>
@@ -484,7 +484,7 @@ where
     fn new(parts: usize) -> PartitionedStorageState<T> {
         PartitionedStorageState {
             parts: parts.try_into().expect("more than 4 billion partitions"),
-            uppers: HashMap::new(),
+            uppers: BTreeMap::new(),
         }
     }
 }

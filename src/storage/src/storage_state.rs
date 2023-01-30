@@ -68,7 +68,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
@@ -180,12 +180,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let async_worker = Rc::new(RefCell::new(async_worker));
 
         let storage_state = StorageState {
-            source_uppers: HashMap::new(),
-            source_tokens: HashMap::new(),
+            source_uppers: BTreeMap::new(),
+            source_tokens: BTreeMap::new(),
             decode_metrics,
-            reported_frontiers: HashMap::new(),
-            ingestions: HashMap::new(),
-            exports: HashMap::new(),
+            reported_frontiers: BTreeMap::new(),
+            ingestions: BTreeMap::new(),
+            exports: BTreeMap::new(),
             now,
             source_metrics,
             sink_metrics,
@@ -193,12 +193,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
             timely_worker_peers: timely_worker.peers(),
             connection_context,
             persist_clients,
-            sink_tokens: HashMap::new(),
-            sink_write_frontiers: HashMap::new(),
-            sink_handles: HashMap::new(),
+            sink_tokens: BTreeMap::new(),
+            sink_write_frontiers: BTreeMap::new(),
+            sink_handles: BTreeMap::new(),
             dropped_ids: Vec::new(),
-            source_statistics: HashMap::new(),
-            sink_statistics: HashMap::new(),
+            source_statistics: BTreeMap::new(),
+            sink_statistics: BTreeMap::new(),
             internal_cmd_tx: command_sequencer,
             async_worker,
         };
@@ -225,17 +225,17 @@ pub struct StorageState {
     /// frontier even as other instances are created and dropped. Ideally, the Storage
     /// module would eventually provide one source of truth on this rather than multiple,
     /// and we should aim for that but are not there yet.
-    pub source_uppers: HashMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
+    pub source_uppers: BTreeMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
     /// Handles to created sources, keyed by ID
-    pub source_tokens: HashMap<GlobalId, Rc<dyn Any>>,
+    pub source_tokens: BTreeMap<GlobalId, Rc<dyn Any>>,
     /// Decoding metrics reported by all dataflows.
     pub decode_metrics: DecodeMetrics,
     /// Tracks the conditional write frontiers we have reported.
-    pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    pub reported_frontiers: BTreeMap<GlobalId, Antichain<Timestamp>>,
     /// Descriptions of each installed ingestion.
-    pub ingestions: HashMap<GlobalId, IngestionDescription<CollectionMetadata>>,
+    pub ingestions: BTreeMap<GlobalId, IngestionDescription<CollectionMetadata>>,
     /// Descriptions of each installed export.
-    pub exports: HashMap<GlobalId, StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>,
+    pub exports: BTreeMap<GlobalId, StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>,
     /// Undocumented
     pub now: NowFn,
     /// Metrics for the source-specific side of dataflows.
@@ -253,22 +253,22 @@ pub struct StorageState {
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
-    pub sink_tokens: HashMap<GlobalId, SinkToken>,
+    pub sink_tokens: BTreeMap<GlobalId, SinkToken>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
-    pub sink_write_frontiers: HashMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
+    pub sink_write_frontiers: BTreeMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
     /// See: [SinkHandle]
-    pub sink_handles: HashMap<GlobalId, SinkHandle>,
+    pub sink_handles: BTreeMap<GlobalId, SinkHandle>,
     /// Collection ids that have been dropped but not yet reported as dropped
     pub dropped_ids: Vec<GlobalId>,
 
     /// Stats objects shared with operators to allow them to update the metrics
     /// we report in `StatisticsUpdates` responses.
     pub source_statistics:
-        HashMap<GlobalId, StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>>,
+        BTreeMap<GlobalId, StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>>,
     /// The same as `source_statistics`, but for sinks.
     pub sink_statistics:
-        HashMap<GlobalId, StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>>,
+        BTreeMap<GlobalId, StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>>,
 
     /// Sender for cluster-internal storage commands. These can be sent from
     /// within workers/operators and will be distributed to all workers. For
@@ -855,8 +855,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
         // Elide any ingestions we're already aware of while determining what
         // ingestions no longer exist.
-        let mut stale_ingestions = self.storage_state.ingestions.keys().collect::<HashSet<_>>();
-        let mut stale_exports = self.storage_state.exports.keys().collect::<HashSet<_>>();
+        let mut stale_ingestions = self
+            .storage_state
+            .ingestions
+            .keys()
+            .collect::<BTreeSet<_>>();
+        let mut stale_exports = self.storage_state.exports.keys().collect::<BTreeSet<_>>();
         for command in &mut commands {
             match command {
                 StorageCommand::CreateSources(ingestions) => {

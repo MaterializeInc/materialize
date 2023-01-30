@@ -74,7 +74,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -129,17 +129,17 @@ struct RandomAvroGenerator<'a> {
     // Generator functions for each piece of the schema. These map keys are
     // morally `*const SchemaPiece`s, but represented as `usize`s so that they
     // implement `Send`.
-    ints: HashMap<usize, Box<dyn Generator<i32>>>,
-    longs: HashMap<usize, Box<dyn Generator<i64>>>,
-    strings: HashMap<usize, Box<dyn Generator<Vec<u8>>>>,
-    bytes: HashMap<usize, Box<dyn Generator<Vec<u8>>>>,
-    unions: HashMap<usize, Box<dyn Generator<usize>>>,
-    enums: HashMap<usize, Box<dyn Generator<usize>>>,
-    bools: HashMap<usize, Box<dyn Generator<bool>>>,
-    floats: HashMap<usize, Box<dyn Generator<f32>>>,
-    doubles: HashMap<usize, Box<dyn Generator<f64>>>,
-    decimals: HashMap<usize, Box<dyn Generator<Vec<u8>>>>,
-    array_lens: HashMap<usize, Box<dyn Generator<usize>>>,
+    ints: BTreeMap<usize, Box<dyn Generator<i32>>>,
+    longs: BTreeMap<usize, Box<dyn Generator<i64>>>,
+    strings: BTreeMap<usize, Box<dyn Generator<Vec<u8>>>>,
+    bytes: BTreeMap<usize, Box<dyn Generator<Vec<u8>>>>,
+    unions: BTreeMap<usize, Box<dyn Generator<usize>>>,
+    enums: BTreeMap<usize, Box<dyn Generator<usize>>>,
+    bools: BTreeMap<usize, Box<dyn Generator<bool>>>,
+    floats: BTreeMap<usize, Box<dyn Generator<f32>>>,
+    doubles: BTreeMap<usize, Box<dyn Generator<f64>>>,
+    decimals: BTreeMap<usize, Box<dyn Generator<Vec<u8>>>>,
+    array_lens: BTreeMap<usize, Box<dyn Generator<usize>>>,
 
     schema: SchemaNode<'a>,
 }

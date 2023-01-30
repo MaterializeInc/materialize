@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, VecDeque};
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, VecDeque};
 use std::str::FromStr;
 
 use differential_dataflow::{Collection, Hashable};
@@ -41,7 +41,7 @@ where
     // TODO(guswynn): !!! Correctly deduplicate even in the upsert case
     input
         .unary(Pipeline, "envelope-debezium", move |_, _| {
-            let mut dedup_state = HashMap::new();
+            let mut dedup_state = BTreeMap::new();
             let envelope = envelope.clone();
             let mut data = vec![];
             move |input, output| {
@@ -193,7 +193,7 @@ where
                 let mut tx_data = vec![];
                 let mut data = vec![];
                 let mut data_buffer = VecDeque::new();
-                let mut dedup_state = HashMap::new();
+                let mut dedup_state = BTreeMap::new();
 
                 // Keep mapping of `transaction_id`s to the timestamp at which that transaction END record was read from
                 // the transaction metadata stream.  That stored timestamp will be the timestamp for all data records
@@ -201,10 +201,10 @@ where
                 // number of data rows so that we're able to process duplicates.  Otherwise, we're not able to tell the
                 // difference between "we've recieved the tx metadata and processed everything" and "we're still waiting
                 // on the tx metadata".
-                let mut tx_mapping: HashMap<String, Timestamp> = HashMap::new();
+                let mut tx_mapping: BTreeMap<String, Timestamp> = BTreeMap::new();
                 // Hold onto a capability for each `transaction_id`.  This represents the time at which we'll emit
                 // matched data rows.  This will be dropped when we've matched the indicated number of events.
-                let mut tx_cap_event_count: HashMap<String, (Capability<_>, i64)> = HashMap::new();
+                let mut tx_cap_event_count: BTreeMap<String, (Capability<_>, i64)> = BTreeMap::new();
                 move |_, _| {
                     // TODO(#11669) Revisit error handling strategy to do something optimized than just emitting
                     // everything we can and holding back the frontier to the first data error.
@@ -421,7 +421,7 @@ struct DebeziumDeduplicationState {
     // TODO(petrosagg): This is only used when unpacking MySQL row coordinates. The logic was
     // transferred as-is from the previous avro-debezium code. Find a better place to put this or
     // avoid it completely.
-    filenames_to_indices: HashMap<String, u64>,
+    filenames_to_indices: BTreeMap<String, u64>,
     projection: DebeziumDedupProjection,
 }
 
@@ -499,7 +499,7 @@ impl DebeziumDeduplicationState {
         Some(DebeziumDeduplicationState {
             last_position: None,
             messages_processed: 0.into(),
-            filenames_to_indices: HashMap::new(),
+            filenames_to_indices: BTreeMap::new(),
             projection: envelope.dedup,
         })
     }

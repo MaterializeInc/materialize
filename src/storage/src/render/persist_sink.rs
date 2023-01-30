@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -103,7 +103,7 @@ where
     let persist_clients = Arc::clone(&storage_state.persist_clients);
     let button = persist_op.build(move |_capabilities| async move {
         let mut buffer = Vec::new();
-        let mut stashed_batches = HashMap::new();
+        let mut stashed_batches = BTreeMap::new();
 
         let mut write = persist_clients
             .lock()

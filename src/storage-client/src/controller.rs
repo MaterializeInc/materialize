@@ -19,7 +19,7 @@
 //! empty frontier.
 
 use std::any::Any;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{self, Debug};
 use std::num::NonZeroI64;
@@ -661,23 +661,24 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     /// Interface for managed collections
     pub(super) collection_manager: collection_mgmt::CollectionManager,
     /// Tracks which collection is responsible for which [`IntrospectionType`].
-    pub(super) introspection_ids: HashMap<IntrospectionType, GlobalId>,
+    pub(super) introspection_ids: BTreeMap<IntrospectionType, GlobalId>,
     /// Tokens for tasks that drive updating introspection collections. Dropping
     /// this will make sure that any tasks (or other resources) will stop when
     /// needed.
     // TODO(aljoscha): Should these live somewhere else?
-    introspection_tokens: HashMap<GlobalId, Box<dyn Any + Send + Sync>>,
+    introspection_tokens: BTreeMap<GlobalId, Box<dyn Any + Send + Sync>>,
 
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
     source_statistics:
-        Arc<std::sync::Mutex<HashMap<GlobalId, HashMap<usize, SourceStatisticsUpdate>>>>,
+        Arc<std::sync::Mutex<BTreeMap<GlobalId, BTreeMap<usize, SourceStatisticsUpdate>>>>,
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
-    sink_statistics: Arc<std::sync::Mutex<HashMap<GlobalId, HashMap<usize, SinkStatisticsUpdate>>>>,
+    sink_statistics:
+        Arc<std::sync::Mutex<BTreeMap<GlobalId, BTreeMap<usize, SinkStatisticsUpdate>>>>,
 
     /// Clients for all known storage instances.
-    clients: HashMap<StorageInstanceId, RehydratingStorageClient<T>>,
+    clients: BTreeMap<StorageInstanceId, RehydratingStorageClient<T>>,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
     /// Storage configuration to apply to newly provisioned instances.
@@ -878,13 +879,13 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             pending_sink_drops: vec![],
             pending_compaction_commands: vec![],
             collection_manager,
-            introspection_ids: HashMap::new(),
-            introspection_tokens: HashMap::new(),
+            introspection_ids: BTreeMap::new(),
+            introspection_tokens: BTreeMap::new(),
             now,
             envd_epoch,
-            source_statistics: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            sink_statistics: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            clients: HashMap::new(),
+            source_statistics: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            sink_statistics: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            clients: BTreeMap::new(),
             initialized: false,
             config: StorageParameters::default(),
         }
@@ -1289,7 +1290,7 @@ where
         exports: Vec<(CreateExportToken, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
-        let mut dedup_hashmap = HashMap::<&_, &_>::new();
+        let mut dedup_hashmap = BTreeMap::<&_, &_>::new();
         for (CreateExportToken { id, from_id }, desc) in exports.iter() {
             if dedup_hashmap.insert(id, desc).is_some() {
                 return Err(StorageError::SourceIdReused(*id));
@@ -1557,7 +1558,7 @@ where
         updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
     ) {
         // Location to record consequences that we need to act on.
-        let mut storage_net = HashMap::new();
+        let mut storage_net = BTreeMap::new();
         // Repeatedly extract the maximum id, and updates for it.
         while let Some(key) = updates.keys().rev().next().cloned() {
             let mut update = updates.remove(&key).unwrap();
@@ -1918,7 +1919,7 @@ where
     /// - If `id` does not belong to a collection or is not registered as a
     ///   managed collection.
     async fn reconcile_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
-        let mut reconciled_updates = HashMap::<Row, Diff>::with_capacity(updates.len());
+        let mut reconciled_updates = BTreeMap::<Row, Diff>::new();
 
         for (row, diff) in updates.into_iter() {
             *reconciled_updates.entry(row).or_default() += diff;

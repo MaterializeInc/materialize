@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 use mz_repr::{ColumnName, ColumnType, Datum, RelationDesc, Row};
 
@@ -39,7 +39,7 @@ pub fn column_names_and_types(desc: RelationDesc) -> Vec<(ColumnName, ColumnType
     let mut columns: Vec<_> = desc.into_iter().collect();
 
     // Deduplicate names.
-    let mut seen = HashSet::new();
+    let mut seen = BTreeSet::new();
     for (name, _ty) in &mut columns {
         let stem_len = name.as_str().len();
         let mut i = 1;

@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use timely::order::PartialOrder;
 use timely::progress::frontier::{Antichain, MutableAntichain};
@@ -22,7 +22,7 @@ use crate::types::sources::MzOffset;
 /// OffsetAntichain is similar to a timely `Antichain<(PartitionId, T: TotalOrder)>`,
 /// but additionally:
 ///
-/// - Uses a HashMap as the implementation to allow absence of a `PartitionId` to mean
+/// - Uses a BTreeMap as the implementation to allow absence of a `PartitionId` to mean
 /// that `PartitionId` is at `T::minimum`. This helps avoid needing to hold onto a HUGE
 /// `Antichain` for all possible `PartitionId`s
 ///     - Note this means that a partition being "finished" (like a normal "empty"
@@ -48,15 +48,15 @@ use crate::types::sources::MzOffset;
 ///     - `insert_data_up_to` updates the frontier based on a given offset
 ///     that is associated with actual data.
 ///     - `as_data_offsets` inverts the behavior of `insert_data_up_to`
-///     and returns a `HashMap<PartitionId, MzOffset>` of offets
+///     and returns a `BTreeMap<PartitionId, MzOffset>` of offets
 ///     of real committed data.
 #[derive(Debug, PartialEq, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OffsetAntichain {
-    inner: HashMap<PartitionId, MzOffset>,
+    inner: BTreeMap<PartitionId, MzOffset>,
 }
 
-impl PartialEq<HashMap<PartitionId, MzOffset>> for OffsetAntichain {
-    fn eq(&self, other: &HashMap<PartitionId, MzOffset>) -> bool {
+impl PartialEq<BTreeMap<PartitionId, MzOffset>> for OffsetAntichain {
+    fn eq(&self, other: &BTreeMap<PartitionId, MzOffset>) -> bool {
         other == &self.inner
     }
 }
@@ -65,15 +65,7 @@ impl OffsetAntichain {
     /// Initialize an Antichain where all partitions have made no progress.
     pub fn new() -> Self {
         Self {
-            inner: HashMap::new(),
-        }
-    }
-
-    /// Initialize an Antichain where all partitions have made no progress,
-    /// but with `cap` capacity in the underlying data structure.
-    pub fn with_capacity(cap: usize) -> Self {
-        Self {
-            inner: HashMap::with_capacity(cap),
+            inner: BTreeMap::new(),
         }
     }
 
@@ -93,7 +85,7 @@ impl OffsetAntichain {
     /// careful.
     // TODO(guswynn): better document how source uppers flow through the
     // source reader pipeline.
-    pub fn as_data_offsets(&self) -> HashMap<PartitionId, MzOffset> {
+    pub fn as_data_offsets(&self) -> BTreeMap<PartitionId, MzOffset> {
         self.inner
             .iter()
             .filter_map(|(pid, offset)| {
@@ -215,7 +207,7 @@ impl OffsetAntichain {
     #[cfg(test)]
     pub fn from_iter<T: IntoIterator<Item = (PartitionId, MzOffset)>>(iter: T) -> Self {
         Self {
-            inner: HashMap::from_iter(iter),
+            inner: BTreeMap::from_iter(iter),
         }
     }
 }

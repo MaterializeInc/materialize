@@ -12,7 +12,7 @@
 // https://github.com/tokio-rs/prost/issues/237
 // #![allow(missing_docs)]
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
 use std::time::Duration;
@@ -159,7 +159,7 @@ pub trait OffsetCommitter {
     /// they are owners for.
     async fn commit_offsets(
         &self,
-        offsets: HashMap<PartitionId, MzOffset>,
+        offsets: BTreeMap<PartitionId, MzOffset>,
     ) -> Result<(), anyhow::Error>;
 }
 
@@ -422,7 +422,7 @@ pub struct SourceMetrics {
     /// The resume_upper for a source.
     pub(crate) resume_upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     /// Per-partition Prometheus metrics.
-    pub(crate) partition_metrics: HashMap<PartitionId, PartitionMetrics>,
+    pub(crate) partition_metrics: BTreeMap<PartitionId, PartitionMetrics>,
     source_name: String,
     source_id: GlobalId,
     base_metrics: SourceBaseMetrics,
@@ -460,7 +460,7 @@ impl SourceMetrics {
     /// Log updates to which offsets / timestamps read up to.
     pub fn record_partition_offsets(
         &mut self,
-        offsets: HashMap<PartitionId, (MzOffset, Timestamp, i64)>,
+        offsets: BTreeMap<PartitionId, (MzOffset, Timestamp, i64)>,
     ) {
         for (partition, (offset, timestamp, count)) in offsets {
             let metric = self
@@ -551,7 +551,7 @@ impl PartitionMetrics {
 /// Source reader operator specific Prometheus metrics
 pub struct SourceReaderMetrics {
     /// Per-partition Prometheus metrics.
-    pub(crate) partition_metrics: HashMap<PartitionId, SourceReaderPartitionMetrics>,
+    pub(crate) partition_metrics: BTreeMap<PartitionId, SourceReaderPartitionMetrics>,
     source_id: GlobalId,
     base_metrics: SourceBaseMetrics,
 }

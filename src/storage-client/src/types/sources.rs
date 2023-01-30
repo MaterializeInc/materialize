@@ -9,7 +9,7 @@
 
 //! Types and traits related to the introduction of changing collections into `dataflow`.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::rc::Rc;
 use std::str::FromStr;
@@ -2063,7 +2063,7 @@ impl LoadGenerator {
                 let mut desc =
                     RelationDesc::empty().with_column("rowid", ScalarType::Int64.nullable(false));
                 let typs = ScalarType::enumerate();
-                let mut names = HashSet::new();
+                let mut names = BTreeSet::new();
                 for typ in typs {
                     // Cut out variant information from the debug print.
                     let mut name = format!("_{:?}", typ)

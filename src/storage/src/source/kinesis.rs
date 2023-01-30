@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -54,7 +54,7 @@ pub struct KinesisSourceReader {
     /// The name of the stream
     stream_name: String,
     /// The set of active shards
-    shard_set: HashMap<String, ShardMetrics>,
+    shard_set: BTreeMap<String, ShardMetrics>,
     /// A queue representing the next shard to read from. This is necessary
     /// to ensure that all shards are read from uniformly
     shard_queue: VecDeque<(String, Option<String>)>,
@@ -93,11 +93,11 @@ impl ShardMetrics {
 
 impl KinesisSourceReader {
     async fn update_shard_information(&mut self) -> Result<(), anyhow::Error> {
-        let current_shards: HashSet<_> =
+        let current_shards: BTreeSet<_> =
             mz_kinesis_util::get_shard_ids(&self.kinesis_client, &self.stream_name)
                 .await?
                 .collect();
-        let known_shards: HashSet<_> = self.shard_set.keys().cloned().collect();
+        let known_shards: BTreeSet<_> = self.shard_set.keys().cloned().collect();
         let new_shards = current_shards
             .difference(&known_shards)
             .map(|shard_id| shard_id.to_owned());
@@ -351,7 +351,7 @@ async fn create_state(
     (
         KinesisClient,
         String,
-        HashMap<String, ShardMetrics>,
+        BTreeMap<String, ShardMetrics>,
         VecDeque<(String, Option<String>)>,
     ),
     anyhow::Error,
@@ -365,7 +365,7 @@ async fn create_state(
 
     let shard_set = mz_kinesis_util::get_shard_ids(&kinesis_client, &c.stream_name).await?;
     let mut shard_queue: VecDeque<(String, Option<String>)> = VecDeque::new();
-    let mut shard_map = HashMap::new();
+    let mut shard_map = BTreeMap::new();
     for shard_id in shard_set {
         shard_queue.push_back((
             shard_id.clone(),
