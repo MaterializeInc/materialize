@@ -560,6 +560,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub key_constraint: Option<KeyConstraint>,
     pub with_options: Vec<CreateSourceOption<T>>,
     pub referenced_subsources: Option<ReferencedSubsources<T>>,
+    pub progress_subsource: Option<DeferredObjectName<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
@@ -602,6 +603,11 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
         if let Some(subsources) = &self.referenced_subsources {
             f.write_str(" ");
             f.write_node(subsources);
+        }
+
+        if let Some(progress) = &self.progress_subsource {
+            f.write_str(" EXPOSE PROGRESS AS ");
+            f.write_node(progress);
         }
 
         if !self.with_options.is_empty() {

@@ -347,7 +347,13 @@ pub fn plan_create_source(
         include_metadata,
         with_options,
         referenced_subsources,
+        progress_subsource,
     } = &stmt;
+
+    // TODO: enable progress subsources.
+    if progress_subsource.is_some() {
+        sql_bail!("[internal error] should have errored in purification");
+    }
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
