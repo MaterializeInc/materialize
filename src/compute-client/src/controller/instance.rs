@@ -21,6 +21,7 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
+use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
@@ -28,7 +29,7 @@ use mz_storage_client::controller::{ReadPolicy, StorageController};
 
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
-use crate::protocol::command::{ComputeCommand, ComputeParameters, ComputeStartupEpoch, Peek};
+use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -246,7 +247,7 @@ where
 
         instance.send(ComputeCommand::CreateTimely {
             config: Default::default(),
-            epoch: ComputeStartupEpoch::new(envd_epoch, 0),
+            epoch: ClusterStartupEpoch::new(envd_epoch, 0),
         });
 
         let dummy_logging_config = Default::default();
@@ -414,7 +415,7 @@ where
             id,
             self.compute.build_info,
             config,
-            ComputeStartupEpoch::new(self.compute.envd_epoch, *replica_epoch),
+            ClusterStartupEpoch::new(self.compute.envd_epoch, *replica_epoch),
             self.compute.metrics.for_replica(id),
         );
 

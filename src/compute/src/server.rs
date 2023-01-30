@@ -32,7 +32,8 @@ use timely::WorkerConfig;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
-use mz_compute_client::protocol::command::{ComputeCommand, ComputeStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
@@ -144,7 +145,7 @@ impl ClusterClient<PartitionedClient> {
 
     async fn build_timely(
         config: TimelyConfig,
-        epoch: ComputeStartupEpoch,
+        epoch: ClusterStartupEpoch,
         trace_metrics: TraceMetrics,
         compute_metrics: ComputeMetrics,
         persist_clients: Arc<PersistClientCache>,
@@ -203,7 +204,7 @@ impl ClusterClient<PartitionedClient> {
     async fn build(
         &mut self,
         config: TimelyConfig,
-        epoch: ComputeStartupEpoch,
+        epoch: ClusterStartupEpoch,
     ) -> Result<(), Error> {
         let workers = config.workers;
 

@@ -46,7 +46,7 @@ use timely::communication::allocator::zero_copy::initialize::initialize_networki
 use timely::communication::allocator::GenericBuilder;
 use tracing::{debug, info, warn};
 
-use mz_compute_client::protocol::command::ComputeStartupEpoch;
+use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
 
@@ -55,7 +55,7 @@ pub async fn initialize_networking(
     workers: usize,
     process: usize,
     addresses: Vec<String>,
-    epoch: ComputeStartupEpoch,
+    epoch: ClusterStartupEpoch,
 ) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error> {
     info!(
         process = process,
@@ -132,7 +132,7 @@ where
 async fn create_sockets(
     addresses: Vec<String>,
     my_index: u64,
-    my_epoch: ComputeStartupEpoch,
+    my_epoch: ClusterStartupEpoch,
 ) -> Result<Vec<Option<Stream>>, anyhow::Error> {
     let my_index_uz = usize::cast_from(my_index);
     assert!(my_index_uz < addresses.len());
@@ -224,9 +224,9 @@ async fn create_sockets(
 /// a peer has seen a higher epoch from `environmentd`.
 pub struct EpochMismatch {
     /// The epoch we know about
-    mine: ComputeStartupEpoch,
+    mine: ClusterStartupEpoch,
     /// The higher epoch from our peer
-    peer: ComputeStartupEpoch,
+    peer: ClusterStartupEpoch,
 }
 
 impl Display for EpochMismatch {
@@ -241,7 +241,7 @@ impl std::error::Error for EpochMismatch {}
 async fn start_connection(
     address: String,
     my_index: u64,
-    my_epoch: ComputeStartupEpoch,
+    my_epoch: ClusterStartupEpoch,
 ) -> Result<Stream, anyhow::Error> {
     loop {
         info!(
@@ -263,7 +263,7 @@ async fn start_connection(
                 let mut buffer = [0u8; 16];
                 use tokio::io::AsyncReadExt;
                 s.read_exact(&mut buffer).await?;
-                let peer_epoch = ComputeStartupEpoch::from_bytes(buffer);
+                let peer_epoch = ClusterStartupEpoch::from_bytes(buffer);
                 debug!("start: received peer epoch {peer_epoch}");
 
                 match my_epoch.cmp(&peer_epoch) {
@@ -297,7 +297,7 @@ async fn start_connection(
 async fn await_connection(
     listener: &Listener,
     my_index: u64, // only for logging
-    my_epoch: ComputeStartupEpoch,
+    my_epoch: ClusterStartupEpoch,
 ) -> Result<(Stream, u64), anyhow::Error> {
     loop {
         info!(process = my_index, "awaiting connection from peer");
@@ -315,7 +315,7 @@ async fn await_connection(
         debug!("await: received peer index {peer_index}");
 
         s.read_exact(&mut buffer).await?;
-        let peer_epoch = ComputeStartupEpoch::from_bytes(buffer);
+        let peer_epoch = ClusterStartupEpoch::from_bytes(buffer);
         debug!("await: received peer epoch {peer_epoch}");
 
         use tokio::io::AsyncWriteExt;
