@@ -238,7 +238,7 @@ impl crate::coord::Coordinator {
     ) {
         let mut compute_policy_updates: BTreeMap<ComputeInstanceId, Vec<_>> = BTreeMap::new();
         let mut storage_policy_updates = Vec::new();
-        let mut id_bundles = HashMap::new();
+        let mut id_bundles: HashMap<_, CollectionIdBundle> = HashMap::new();
 
         // Update the Coordinator's timeline read hold state and organize all id bundles by time.
         for (timeline_context, id_bundle) in self.partition_ids_by_timeline_context(id_bundle) {
@@ -250,12 +250,15 @@ impl crate::coord::Coordinator {
                     let TimelineState { read_holds, .. } =
                         self.ensure_timeline_state(&timeline).await;
                     for (time, id_bundle) in &new_read_holds.holds {
-                        id_bundles.insert(Some(time.clone()), id_bundle.clone());
+                        id_bundles
+                            .entry(Some(time.clone()))
+                            .or_default()
+                            .extend(id_bundle);
                     }
                     read_holds.extend(new_read_holds);
                 }
                 TimelineContext::TimestampIndependent | TimelineContext::TimestampDependent => {
-                    id_bundles.insert(None, id_bundle);
+                    id_bundles.entry(None).or_default().extend(&id_bundle);
                 }
             }
         }
