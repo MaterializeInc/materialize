@@ -68,24 +68,37 @@ Materialize supports all [Avro types](https://avro.apache.org/docs/current/spec.
 Support for the more ergonomic `FORMAT JSON` is in progress {{% gh 7186 %}}!
 {{</ note >}}
 
-Materialize cannot decode JSON directly from an external data source. Instead, you must
-create a source that reads the data as [raw bytes](#bytes), and then handle the conversion to [`jsonb`](/sql/types/jsonb) using an intermediate view:
+Materialize cannot decode JSON directly from an external data source. Instead, you must create a source that reads the data as [raw bytes](#bytes), and handle the conversion to primitive types using [`jsonb`](/sql/types/jsonb) as an intermediate representation.
 
 ```sql
-CREATE SOURCE bytea_source
+-- create raw byte array source
+CREATE SOURCE my_bytea_source
   FROM ...
   FORMAT BYTES
   WITH (SIZE='3xsmall');
 
-CREATE VIEW jsonified_source AS
+-- convert from byte array to jsonb
+CREATE VIEW my_jsonb_source AS
   SELECT
-    data->>'field1' AS field_1,
-    data->>'field2' AS field_2,
-    data->>'field3' AS field_3
-  FROM (SELECT CONVERT_FROM(data, 'utf8')::jsonb AS data FROM bytea_source);
+    CONVERT_FROM(data, 'utf8')::jsonb AS data
+  FROM bytea_source;
 ```
 
-Raw byte-formatted sources have one column, by default named `data`. For more details on handling JSON-encoded messages, check the [`jsonb`](/sql/types/jsonb) documentation.
+{{< note >}}
+Raw byte-formatted sources have one column, by default named `data`. For more details on handling JSON-encoded messages, check the [`jsonb` type](/sql/types/jsonb) documentation.
+{{</ note >}}
+
+To avoid redundant processing and ensure a typed representation of the source is available across clusters, you should create a [materialized view](/overview/key-concepts/#materialized-views).
+
+```sql
+-- parse jsonb into typed columns
+CREATE MATERIALIZED VIEW my_typed_source AS
+  SELECT
+    (data->>'field1')::boolean AS field_1,
+    (data->>'field2')::int AS field_2,
+    (data->>'field3')::float AS field_3
+  FROM my_jsonb_source;
+```
 
 ##### Schema registry integration
 
