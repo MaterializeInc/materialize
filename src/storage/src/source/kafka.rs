@@ -23,12 +23,14 @@ use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::types::RDKafkaRespErr;
 use rdkafka::{ClientContext, Message, TopicPartitionList};
+use timely::dataflow::operators::Capability;
+use timely::progress::Antichain;
 use timely::scheduling::activate::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 use tracing::{error, info, trace, warn};
 
-use mz_expr::PartitionId;
 use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
+use mz_ore::collections::HashMap;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId, RelationDesc};
 use mz_storage_client::types::connections::{ConnectionContext, StringOrSecret};
@@ -47,6 +49,8 @@ use crate::source::{
 use self::metrics::KafkaPartitionMetrics;
 
 mod metrics;
+
+type PartitionId = i32;
 
 /// Contains all information necessary to ingest data from Kafka
 pub struct KafkaSourceReader {
@@ -67,13 +71,13 @@ pub struct KafkaSourceReader {
     /// The most recently read offset for each partition known to this source
     /// reader. An offset of -1 indicates that no prior message has been read
     /// for the given partition.
-    last_offsets: BTreeMap<i32, i64>,
+    last_offsets: BTreeMap<PartitionId, i64>,
     /// The offset to start reading from for each partition.
-    start_offsets: BTreeMap<i32, i64>,
+    start_offsets: BTreeMap<PartitionId, i64>,
     /// Channel to receive Kafka statistics JSON blobs from the stats callback.
     stats_rx: crossbeam_channel::Receiver<Jsonb>,
     /// The last partition we received
-    partition_info: Arc<Mutex<Option<Vec<i32>>>>,
+    partition_info: Arc<Mutex<Option<Vec<PartitionId>>>>,
     /// A handle to the spawned metadata thread
     // Drop order is important here, we want the thread to be unparked after the `partition_info`
     // Arc has been dropped, so that the unpacked thread notices it and exits immediately
@@ -84,10 +88,22 @@ pub struct KafkaSourceReader {
     include_headers: bool,
     /// The latest status detected by the metadata refresh thread.
     health_status: Arc<Mutex<Option<HealthStatus>>>,
+    /// Per partition uapabilities used to produce messages
+    partition_data_capabilities:
+        HashMap<PartitionId, Capability<Partitioned<PartitionId, MzOffset>>>,
+    partition_upper_capabilities:
+        HashMap<PartitionId, Capability<Partitioned<PartitionId, MzOffset>>>,
+    /// A capability representing the range partitions not yet seen _by this worker_.
+    data_capability: Capability<Partitioned<PartitionId, MzOffset>>,
+    upper_capability: Capability<Partitioned<PartitionId, MzOffset>>,
 }
 
 pub struct KafkaOffsetCommiter {
     source_id: GlobalId,
+    /// Worker ID
+    worker_id: usize,
+    /// Total count of workers
+    worker_count: usize,
     topic_name: String,
     logger: LogCommitter,
     consumer: Arc<BaseConsumer<BrokerRewritingClientContext<GlueConsumerContext>>>,
@@ -106,7 +122,9 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        mut data_capability: Capability<Partitioned<PartitionId, MzOffset>>,
+        mut upper_capability: Capability<Partitioned<PartitionId, MzOffset>>,
+        resume_upper: Antichain<<Self::Reader as SourceReader>::Time>,
         _: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
@@ -180,27 +198,35 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
             .start_offsets
             .into_iter()
             .filter(|(pid, _offset)| {
-                let pid = PartitionId::Kafka(*pid);
-                crate::source::responsible_for(&source_id, worker_id, worker_count, &pid)
+                crate::source::responsible_for(&source_id, worker_id, worker_count, pid)
             })
             .map(|(k, v)| (k, v))
             .collect();
 
-        for (pid, restored_offset) in restored_offsets {
-            let pid = match pid {
-                PartitionId::Kafka(id) => id,
-                _ => panic!("unexpected partition id type"),
-            };
-            if let Some(restored_offset) = restored_offset {
-                let restored_offset = i64::try_from(restored_offset.offset)
-                    .expect("restored kafka offsets must fit into i64");
-                if let Some(start_offset) = start_offsets.get_mut(&pid) {
-                    *start_offset = std::cmp::max(restored_offset, *start_offset);
-                } else {
-                    start_offsets.insert(pid, restored_offset);
+        let mut partition_data_capabilities = HashMap::new();
+        let mut partition_upper_capabilities = HashMap::new();
+        let mut max_pid = None;
+        for ts in resume_upper.elements() {
+            if let Some(pid) = ts.partition() {
+                max_pid = std::cmp::max(max_pid, Some(*pid));
+                if crate::source::responsible_for(&source_id, worker_id, worker_count, pid) {
+                    let restored_offset = i64::try_from(ts.timestamp().offset)
+                        .expect("restored kafka offsets must fit into i64");
+                    if let Some(start_offset) = start_offsets.get_mut(pid) {
+                        *start_offset = std::cmp::max(restored_offset, *start_offset);
+                    } else {
+                        start_offsets.insert(*pid, restored_offset);
+                    }
+
+                    let part_ts = Partitioned::with_partition(*pid, ts.timestamp().clone());
+                    partition_data_capabilities.insert(*pid, data_capability.delayed(&part_ts));
+                    partition_upper_capabilities.insert(*pid, upper_capability.delayed(&part_ts));
                 }
             }
         }
+        let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
+        data_capability.downgrade(&future_ts);
+        upper_capability.downgrade(&future_ts);
 
         info!(
             source_id = source_id.to_string(),
@@ -305,9 +331,15 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
                     source_id,
                 ),
                 health_status,
+                partition_data_capabilities,
+                partition_upper_capabilities,
+                data_capability,
+                upper_capability,
             },
             KafkaOffsetCommiter {
                 source_id,
+                worker_id,
+                worker_count,
                 topic_name: topic,
                 logger: LogCommitter {
                     source_id,
@@ -323,7 +355,7 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
 impl SourceReader for KafkaSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
-    type Time = Partitioned<i32, MzOffset>;
+    type Time = Partitioned<PartitionId, MzOffset>;
     type Diff = ();
 
     /// This function polls from the next consumer for which a message is available. This function
@@ -332,27 +364,32 @@ impl SourceReader for KafkaSourceReader {
     ///
     /// If a message has an offset that is smaller than the next expected offset for this consumer
     /// (and this partition) we skip this message, and seek to the appropriate offset
-    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {
+    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Time, Self::Diff> {
         let partition_info = self.partition_info.lock().unwrap().take();
         if let Some(partitions) = partition_info {
-            // NOTE: We're somewhat inefficient with Vec allocations and the
-            // like. Shouldn't be a problem though, because we rarely hear about
-            // new partitions.
-            let mut unconsumed_partitions = Vec::new();
+            let mut max_pid = None;
             for pid in partitions {
-                let pid = PartitionId::Kafka(pid);
-                if crate::source::responsible_for(&self.id, self.worker_id, self.worker_count, &pid)
-                {
+                max_pid = std::cmp::max(max_pid, Some(pid));
+                let is_responsible = crate::source::responsible_for(
+                    &self.id,
+                    self.worker_id,
+                    self.worker_count,
+                    pid,
+                );
+                if is_responsible {
                     self.ensure_partition(pid);
-                } else {
-                    unconsumed_partitions.push(pid);
+                    let part_min_ts = Partitioned::with_partition(pid, MzOffset::from(0));
+                    self.partition_data_capabilities
+                        .entry(pid)
+                        .or_insert_with(|| self.data_capability.delayed(&part_min_ts));
+                    self.partition_upper_capabilities
+                        .entry(pid)
+                        .or_insert_with(|| self.upper_capability.delayed(&part_min_ts));
                 }
             }
-            if !unconsumed_partitions.is_empty() {
-                return NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(
-                    unconsumed_partitions,
-                ));
-            }
+            let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
+            self.data_capability.downgrade(&future_ts);
+            self.upper_capability.downgrade(&future_ts);
         }
         let mut next_message = NextMessage::Pending;
 
@@ -430,34 +467,33 @@ impl SourceReader for KafkaSourceReader {
 }
 
 #[async_trait::async_trait]
-impl OffsetCommitter for KafkaOffsetCommiter {
+impl OffsetCommitter<Partitioned<PartitionId, MzOffset>> for KafkaOffsetCommiter {
     async fn commit_offsets(
         &self,
-        offsets: BTreeMap<PartitionId, MzOffset>,
+        frontier: Antichain<Partitioned<PartitionId, MzOffset>>,
     ) -> Result<(), anyhow::Error> {
         use rdkafka::consumer::CommitMode;
         use rdkafka::topic_partition_list::Offset;
 
+        // Generate a list of partitions that this worker is responsible for
+        let mut offsets = vec![];
+        for ts in frontier.iter() {
+            if let Some(pid) = ts.partition() {
+                if crate::source::responsible_for(
+                    &self.source_id,
+                    self.worker_id,
+                    self.worker_count,
+                    pid,
+                ) {
+                    offsets.push((pid.clone(), *ts.timestamp()));
+                }
+            }
+        }
+
         let mut tpl = TopicPartitionList::new();
         for (pid, offset) in offsets.clone() {
-            // Note that we expect the above layers to pre-filter
-            // by partition for us. This is part of the
-            // `OffsetCommitter` contract.
-            let pid = match pid {
-                PartitionId::Kafka(id) => id,
-                _ => panic!("unexpected partition id type"),
-            };
-
-            // This matches the behavior of auto-commit, where we commit a
-            // pseudo-_frontier_. Additionally, overflow will be caught
-            // in the converstion to i64;
-            let offset_to_commit = offset + MzOffset::from(1);
-            let offset_to_commit = Offset::Offset(
-                offset_to_commit
-                    .offset
-                    .try_into()
-                    .expect("offset to be vald i64"),
-            );
+            let offset_to_commit =
+                Offset::Offset(offset.offset.try_into().expect("offset to be vald i64"));
             tpl.add_partition_offset(&self.topic_name, pid, offset_to_commit)
                 .expect("offset known to be valid");
         }
@@ -469,7 +505,7 @@ impl OffsetCommitter for KafkaOffsetCommiter {
         )
         .await??;
 
-        self.logger.commit_offsets(offsets).await?;
+        self.logger.commit_offsets(frontier).await?;
         Ok(())
     }
 }
@@ -477,10 +513,6 @@ impl OffsetCommitter for KafkaOffsetCommiter {
 impl KafkaSourceReader {
     /// Ensures that a partition queue for `pid` exists.
     fn ensure_partition(&mut self, pid: PartitionId) {
-        let pid = match pid {
-            PartitionId::Kafka(p) => p,
-            _ => unreachable!(),
-        };
         if self.last_offsets.contains_key(&pid) {
             return;
         }
@@ -501,7 +533,7 @@ impl KafkaSourceReader {
     }
 
     /// Creates a new partition queue for `partition_id`.
-    fn create_partition_queue(&mut self, partition_id: i32, initial_offset: Offset) {
+    fn create_partition_queue(&mut self, partition_id: PartitionId, initial_offset: Offset) {
         info!(
             source_id = self.id.to_string(),
             worker_id = self.worker_id,
@@ -565,7 +597,7 @@ impl KafkaSourceReader {
     /// Fast-forward consumer to specified Kafka Offset. Prints a warning if failed to do so
     /// Assumption: if offset does not exist (for instance, because of compaction), will seek
     /// to the next available offset
-    fn fast_forward_consumer(&self, pid: i32, next_offset: i64) {
+    fn fast_forward_consumer(&self, pid: PartitionId, next_offset: i64) {
         let res = self.consumer.seek(
             &self.topic_name,
             pid,
@@ -695,13 +727,8 @@ impl KafkaSourceReader {
     fn handle_message(
         &mut self,
         message: Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, SourceReaderError>,
-        time: (PartitionId, MzOffset),
-    ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()> {
-        let partition = match time.0 {
-            PartitionId::Kafka(pid) => pid,
-            _ => unreachable!(),
-        };
-
+        (partition, offset): (PartitionId, MzOffset),
+    ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>, Partitioned<PartitionId, MzOffset>, ()> {
         // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
         // a network issue or a new partition added, at which point the consumer may
         // start processing the topic from the beginning, or we may see duplicate offsets
@@ -721,7 +748,7 @@ impl KafkaSourceReader {
             .expect("partition known to be installed");
 
         let last_offset = *last_offset_ref;
-        let offset_as_i64: i64 = time.1.offset.try_into().expect("offset to be < i64::MAX");
+        let offset_as_i64: i64 = offset.offset.try_into().expect("offset to be < i64::MAX");
         if offset_as_i64 <= last_offset {
             info!(
                 source_id = self.id.to_string(),
@@ -733,7 +760,7 @@ impl KafkaSourceReader {
                 self.source_name,
                 self.topic_name,
                 partition,
-                time.1.offset,
+                offset.offset,
                 last_offset + 1,
             );
             // Seek to the *next* offset that we have not yet processed
@@ -744,7 +771,21 @@ impl KafkaSourceReader {
             NextMessage::TransientDelay
         } else {
             *last_offset_ref = offset_as_i64;
-            NextMessage::Ready(SourceMessageType::Finalized(message, time, ()))
+            let part_data_cap = self
+                .partition_data_capabilities
+                .get_mut(&partition)
+                .expect("attempted to emit data for dropped or unknown partition");
+            let part_upper_cap = self
+                .partition_upper_capabilities
+                .get_mut(&partition)
+                .expect("attempted to emit data for dropped or unknown partition");
+
+            let ts = Partitioned::with_partition(partition, offset);
+            let cap = part_data_cap.delayed(&ts);
+            let next_ts = Partitioned::with_partition(partition, offset + 1);
+            part_data_cap.downgrade(&next_ts);
+            part_upper_cap.downgrade(&next_ts);
+            NextMessage::Ready(SourceMessageType::Message(message, cap, ()))
         }
     }
 }
@@ -765,7 +806,7 @@ fn construct_source_message(
         ),
         _ => None,
     };
-    let pid = PartitionId::Kafka(msg.partition());
+    let pid = msg.partition();
     let Ok(offset) = u64::try_from(msg.offset()) else {
         panic!("got negative offset ({}) from otherwise non-error'd kafka message", msg.offset());
     };
@@ -782,7 +823,7 @@ fn construct_source_message(
 /// Wrapper around a partition containing the underlying consumer
 struct PartitionConsumer {
     /// the partition id with which this consumer is associated
-    pid: i32,
+    pid: PartitionId,
     /// The underlying Kafka partition queue
     partition_queue: PartitionQueue<BrokerRewritingClientContext<GlueConsumerContext>>,
     /// Whether or not to unpack and allocate headers and pass them through in the `SourceMessage`
@@ -792,7 +833,7 @@ struct PartitionConsumer {
 impl PartitionConsumer {
     /// Creates a new partition consumer from underlying Kafka consumer
     fn new(
-        pid: i32,
+        pid: PartitionId,
         partition_queue: PartitionQueue<BrokerRewritingClientContext<GlueConsumerContext>>,
         include_headers: bool,
     ) -> Self {
@@ -821,7 +862,7 @@ impl PartitionConsumer {
         match self.partition_queue.poll(Duration::from_millis(0)) {
             Some(Ok(msg)) => {
                 let (msg, ts) = construct_source_message(&msg, self.include_headers);
-                assert_eq!(ts.0, PartitionId::Kafka(self.pid));
+                assert_eq!(ts.0, self.pid);
                 Ok(Some((msg, ts)))
             }
             Some(Err(err)) => Err(err),
@@ -830,7 +871,7 @@ impl PartitionConsumer {
     }
 
     /// Return the partition id for this PartitionConsumer
-    fn pid(&self) -> i32 {
+    fn pid(&self) -> PartitionId {
         self.pid
     }
 }
@@ -880,7 +921,7 @@ fn get_kafka_partitions<C>(
     consumer: &BaseConsumer<C>,
     topic: &str,
     timeout: Duration,
-) -> Result<Vec<i32>, anyhow::Error>
+) -> Result<Vec<PartitionId>, anyhow::Error>
 where
     C: ConsumerContext,
 {

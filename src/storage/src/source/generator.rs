@@ -10,9 +10,10 @@
 use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
+use timely::dataflow::operators::Capability;
+use timely::progress::Antichain;
 use timely::scheduling::SyncActivator;
 
-use mz_expr::PartitionId;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::GeneratorMessageType;
@@ -69,11 +70,9 @@ pub struct LoadGeneratorSourceReader {
     // Load-generator sources support single-threaded ingestion only, so only
     // one of the `LoadGeneratorSourceReader`s will actually produce data.
     active_read_worker: bool,
-    // The non-active reader (see above `active_read_worker`) has to report back
-    // that is is not consuming from the one [`PartitionId:None`] partition.
-    // Before it can return a [`NextMessage::Finished`]. This is keeping track
-    // of that.
-    reported_unconsumed_partitions: bool,
+    /// Capabilities used to produce messages
+    data_capability: Capability<MzOffset>,
+    upper_capability: Capability<MzOffset>,
 }
 
 impl SourceConnectionBuilder for LoadGeneratorSourceConnection {
@@ -89,24 +88,21 @@ impl SourceConnectionBuilder for LoadGeneratorSourceConnection {
         worker_id: usize,
         worker_count: usize,
         _consumer_activator: SyncActivator,
-        start_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        mut data_capability: Capability<MzOffset>,
+        mut upper_capability: Capability<MzOffset>,
+        resume_upper: Antichain<MzOffset>,
         _encoding: SourceDataEncoding,
         _metrics: SourceBaseMetrics,
         _connection_context: ConnectionContext,
     ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error> {
         let active_read_worker =
-            crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
+            crate::source::responsible_for(&source_id, worker_id, worker_count, ());
 
-        let offset = start_offsets
-            .into_iter()
-            .find_map(|(pid, offset)| {
-                if pid == PartitionId::None {
-                    offset
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_default();
+        // TODO(petrosagg): handle the empty frontier correctly. Currenty the framework code never
+        // constructs a reader when the resumption frontier is the empty antichain
+        let offset = resume_upper.into_option().unwrap();
+        data_capability.downgrade(&offset);
+        upper_capability.downgrade(&offset);
 
         let mut rows = as_generator(&self.load_generator, self.tick_micros)
             .by_seed(mz_ore::now::SYSTEM_TIME.clone(), None);
@@ -126,7 +122,8 @@ impl SourceConnectionBuilder for LoadGeneratorSourceConnection {
                 tick,
                 offset,
                 active_read_worker,
-                reported_unconsumed_partitions: false,
+                data_capability,
+                upper_capability,
             },
             LogCommitter {
                 source_id,
@@ -140,18 +137,11 @@ impl SourceConnectionBuilder for LoadGeneratorSourceConnection {
 impl SourceReader for LoadGeneratorSourceReader {
     type Key = ();
     type Value = Row;
-    // LoadGenerator can produce deletes that cause retractions
     type Time = MzOffset;
     type Diff = Diff;
 
-    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {
+    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Time, Self::Diff> {
         if !self.active_read_worker {
-            if !self.reported_unconsumed_partitions {
-                self.reported_unconsumed_partitions = true;
-                return NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(vec![
-                    PartitionId::None,
-                ]));
-            }
             return NextMessage::Finished;
         }
 
@@ -171,17 +161,14 @@ impl SourceReader for LoadGeneratorSourceReader {
             value,
             headers: None,
         };
-        let ts = (PartitionId::None, self.offset);
-        let message = match typ {
-            GeneratorMessageType::Finalized => {
-                self.last += self.tick;
-                self.offset += 1;
-                SourceMessageType::Finalized(Ok(message), ts, specific_diff)
-            }
-            GeneratorMessageType::InProgress => {
-                SourceMessageType::InProgress(Ok(message), ts, specific_diff)
-            }
-        };
-        NextMessage::Ready(message)
+        let cap = self.data_capability.delayed(&self.offset);
+        let next_ts = self.offset + 1;
+        self.upper_capability.downgrade(&next_ts);
+        if matches!(typ, GeneratorMessageType::Finalized) {
+            self.last += self.tick;
+            self.offset += 1;
+            self.data_capability.downgrade(&next_ts);
+        }
+        NextMessage::Ready(SourceMessageType::Message(Ok(message), cap, specific_diff))
     }
 }
