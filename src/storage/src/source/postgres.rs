@@ -851,10 +851,12 @@ fn parse_single_row<T: FromStr>(
     }
 }
 
-/// Creates the replication slot and produces the initial snapshot of the data
+/// Produces the initial snapshot of the data by performing a `COPY` query for each of the provided
+/// `source_tables`.
 ///
-/// After the initial snapshot has been produced it returns the name of the created slot and
-/// the LSN at which we should start the replication stream at.
+/// The return stream of data returned is not annotated with LSN numbers. It is up to the caller to
+/// provide a client that is in a known LSN context in which the snapshot will be taken. For
+/// example by calling this method while being in a transaction for which the LSN is known.
 fn produce_snapshot<'a>(
     client: &'a Client,
     metrics: &'a PgSourceMetrics,
