@@ -636,8 +636,18 @@ pub struct Table {
 #[derive(Clone, Debug)]
 pub struct Source {
     pub create_sql: String,
-    pub ingestion: Option<Ingestion>,
+    pub data_source: DataSourceDesc,
     pub desc: RelationDesc,
+}
+
+#[derive(Debug, Clone)]
+pub enum DataSourceDesc {
+    /// Receives data from an external system
+    Ingestion(Ingestion),
+    /// Receives data from some other source
+    Source,
+    /// Receives data from the source's reclocking/remapping operations.
+    Progress,
 }
 
 #[derive(Clone, Debug)]
