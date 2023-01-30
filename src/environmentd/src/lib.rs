@@ -339,7 +339,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Initialize storage usage client.
     let storage_usage_client = StorageUsageClient::open(
         config.controller.persist_location.blob_uri.clone(),
-        &mut *config.controller.persist_clients.lock().await,
+        &config.controller.persist_clients,
     )
     .await
     .context("opening storage usage client")?;

@@ -19,6 +19,7 @@ use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
     Blob, Consensus, ExternalError, BLOB_GET_LIVENESS_KEY, CONSENSUS_HEAD_LIVENESS_KEY,
 };
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::instrument;
 
@@ -35,13 +36,22 @@ use crate::{PersistClient, PersistConfig, PersistLocation};
 /// This is because, in production, persist is heavily limited by the number of
 /// server-side Postgres/Aurora connections. This cache allows PersistClients to
 /// share, for example, these Postgres connections.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PersistClientCache {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
-    blob_by_uri: BTreeMap<String, (Arc<JoinHandle<()>>, Arc<dyn Blob + Send + Sync>)>,
-    consensus_by_uri: BTreeMap<String, (Arc<JoinHandle<()>>, Arc<dyn Consensus + Send + Sync>)>,
+    blob_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Blob + Send + Sync>)>>,
+    consensus_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Consensus + Send + Sync>)>>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
+}
+
+#[derive(Debug)]
+struct RttLatencyTask(JoinHandle<()>);
+
+impl Drop for RttLatencyTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 impl PersistClientCache {
@@ -51,8 +61,8 @@ impl PersistClientCache {
         PersistClientCache {
             cfg,
             metrics: Arc::new(metrics),
-            blob_by_uri: BTreeMap::new(),
-            consensus_by_uri: BTreeMap::new(),
+            blob_by_uri: Mutex::new(BTreeMap::new()),
+            consensus_by_uri: Mutex::new(BTreeMap::new()),
             cpu_heavy_runtime: Arc::new(CpuHeavyRuntime::new()),
         }
     }
@@ -64,15 +74,17 @@ impl PersistClientCache {
         Self::new(PersistConfig::new_for_tests(), &MetricsRegistry::new())
     }
 
+    /// Returns the [PersistConfig] being used by this cache.
+    pub fn cfg(&self) -> &PersistConfig {
+        &self.cfg
+    }
+
     /// Returns a new [PersistClient] for interfacing with persist shards made
     /// durable to the given [PersistLocation].
     ///
     /// The same `location` may be used concurrently from multiple processes.
     #[instrument(level = "debug", skip_all)]
-    pub async fn open(
-        &mut self,
-        location: PersistLocation,
-    ) -> Result<PersistClient, ExternalError> {
+    pub async fn open(&self, location: PersistLocation) -> Result<PersistClient, ExternalError> {
         let blob = self.open_blob(location.blob_uri).await?;
         let consensus = self.open_consensus(location.consensus_uri).await?;
         PersistClient::new(
@@ -88,10 +100,11 @@ impl PersistClientCache {
     const PROMETHEUS_SCRAPE_INTERVAL: Duration = Duration::from_secs(60);
 
     async fn open_consensus(
-        &mut self,
+        &self,
         consensus_uri: String,
     ) -> Result<Arc<dyn Consensus + Send + Sync>, ExternalError> {
-        let consensus = match self.consensus_by_uri.entry(consensus_uri) {
+        let mut consensus_by_uri = self.consensus_by_uri.lock().await;
+        let consensus = match consensus_by_uri.entry(consensus_uri) {
             Entry::Occupied(x) => Arc::clone(&x.get().1),
             Entry::Vacant(x) => {
                 // Intentionally hold the lock, so we don't double connect under
@@ -108,25 +121,24 @@ impl PersistClientCache {
                     .await;
                 let consensus =
                     Arc::new(MetricsConsensus::new(consensus, Arc::clone(&self.metrics)));
-                let task = Arc::new(
-                    consensus_rtt_latency_task(
-                        Arc::clone(&consensus),
-                        Arc::clone(&self.metrics),
-                        Self::PROMETHEUS_SCRAPE_INTERVAL,
-                    )
-                    .await,
-                );
-                Arc::clone(&x.insert((task, consensus)).1)
+                let task = consensus_rtt_latency_task(
+                    Arc::clone(&consensus),
+                    Arc::clone(&self.metrics),
+                    Self::PROMETHEUS_SCRAPE_INTERVAL,
+                )
+                .await;
+                Arc::clone(&x.insert((RttLatencyTask(task), consensus)).1)
             }
         };
         Ok(consensus)
     }
 
     pub(crate) async fn open_blob(
-        &mut self,
+        &self,
         blob_uri: String,
     ) -> Result<Arc<dyn Blob + Send + Sync>, ExternalError> {
-        let blob = match self.blob_by_uri.entry(blob_uri) {
+        let mut blob_by_uri = self.blob_by_uri.lock().await;
+        let blob = match blob_by_uri.entry(blob_uri) {
             Entry::Occupied(x) => Arc::clone(&x.get().1),
             Entry::Vacant(x) => {
                 // Intentionally hold the lock, so we don't double connect under
@@ -142,29 +154,16 @@ impl PersistClientCache {
                 })
                 .await;
                 let blob = Arc::new(MetricsBlob::new(blob, Arc::clone(&self.metrics)));
-                let task = Arc::new(
-                    blob_rtt_latency_task(
-                        Arc::clone(&blob),
-                        Arc::clone(&self.metrics),
-                        Self::PROMETHEUS_SCRAPE_INTERVAL,
-                    )
-                    .await,
-                );
-                Arc::clone(&x.insert((task, blob)).1)
+                let task = blob_rtt_latency_task(
+                    Arc::clone(&blob),
+                    Arc::clone(&self.metrics),
+                    Self::PROMETHEUS_SCRAPE_INTERVAL,
+                )
+                .await;
+                Arc::clone(&x.insert((RttLatencyTask(task), blob)).1)
             }
         };
         Ok(blob)
-    }
-}
-
-impl Drop for PersistClientCache {
-    fn drop(&mut self) {
-        for (task, _) in self.consensus_by_uri.values() {
-            task.abort();
-        }
-        for (task, _) in self.blob_by_uri.values() {
-            task.abort();
-        }
     }
 }
 
@@ -260,12 +259,12 @@ mod tests {
 
     #[tokio::test]
     async fn client_cache() {
-        let mut cache = PersistClientCache::new(
+        let cache = PersistClientCache::new(
             PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
             &MetricsRegistry::new(),
         );
-        assert_eq!(cache.blob_by_uri.len(), 0);
-        assert_eq!(cache.consensus_by_uri.len(), 0);
+        assert_eq!(cache.blob_by_uri.lock().await.len(), 0);
+        assert_eq!(cache.consensus_by_uri.lock().await.len(), 0);
 
         // Opening a location on an empty cache saves the results.
         let _ = cache
@@ -275,8 +274,8 @@ mod tests {
             })
             .await
             .expect("failed to open location");
-        assert_eq!(cache.blob_by_uri.len(), 1);
-        assert_eq!(cache.consensus_by_uri.len(), 1);
+        assert_eq!(cache.blob_by_uri.lock().await.len(), 1);
+        assert_eq!(cache.consensus_by_uri.lock().await.len(), 1);
 
         // Opening a location with an already opened consensus reuses it, even
         // if the blob is different.
@@ -287,8 +286,8 @@ mod tests {
             })
             .await
             .expect("failed to open location");
-        assert_eq!(cache.blob_by_uri.len(), 2);
-        assert_eq!(cache.consensus_by_uri.len(), 1);
+        assert_eq!(cache.blob_by_uri.lock().await.len(), 2);
+        assert_eq!(cache.consensus_by_uri.lock().await.len(), 1);
 
         // Ditto the other way.
         let _ = cache
@@ -298,8 +297,8 @@ mod tests {
             })
             .await
             .expect("failed to open location");
-        assert_eq!(cache.blob_by_uri.len(), 2);
-        assert_eq!(cache.consensus_by_uri.len(), 2);
+        assert_eq!(cache.blob_by_uri.lock().await.len(), 2);
+        assert_eq!(cache.consensus_by_uri.lock().await.len(), 2);
 
         // Query params and path matter, so we get new instances.
         let _ = cache
@@ -309,8 +308,8 @@ mod tests {
             })
             .await
             .expect("failed to open location");
-        assert_eq!(cache.blob_by_uri.len(), 3);
-        assert_eq!(cache.consensus_by_uri.len(), 3);
+        assert_eq!(cache.blob_by_uri.lock().await.len(), 3);
+        assert_eq!(cache.consensus_by_uri.lock().await.len(), 3);
 
         // User info and port also matter, so we get new instances.
         let _ = cache
@@ -320,7 +319,7 @@ mod tests {
             })
             .await
             .expect("failed to open location");
-        assert_eq!(cache.blob_by_uri.len(), 4);
-        assert_eq!(cache.consensus_by_uri.len(), 4);
+        assert_eq!(cache.blob_by_uri.lock().await.len(), 4);
+        assert_eq!(cache.consensus_by_uri.lock().await.len(), 4);
     }
 }

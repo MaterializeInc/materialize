@@ -84,7 +84,6 @@ use axum::routing;
 use fail::FailScenario;
 use futures::future;
 use once_cell::sync::Lazy;
-use tokio::sync::Mutex;
 use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
@@ -264,10 +263,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         )
     });
 
-    let persist_clients = Arc::new(Mutex::new(PersistClientCache::new(
+    let persist_clients = Arc::new(PersistClientCache::new(
         PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone()),
         &metrics_registry,
-    )));
+    ));
 
     // Start storage server.
     let (_storage_server, storage_client) = mz_storage::serve(mz_storage::Config {

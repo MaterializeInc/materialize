@@ -51,7 +51,6 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::Mutex;
 use tracing::{info, trace, warn};
 
 use mz_expr::PartitionId;
@@ -114,7 +113,7 @@ pub struct RawSourceCreationConfig {
     /// The upper frontier this source should resume ingestion at
     pub resume_upper: Antichain<mz_repr::Timestamp>,
     /// A handle to the persist client cache
-    pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    pub persist_clients: Arc<PersistClientCache>,
     /// Place to share statistics updates with storage state.
     pub source_statistics: StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>,
 }
@@ -545,13 +544,10 @@ fn health_operator<G: Scope>(
     let button = health_op.build(move |mut _capabilities| async move {
         let mut buffer = Vec::new();
 
-        let persist_client = {
-            let mut persist_clients = persist_clients.lock().await;
-            persist_clients
-                .open(storage_metadata.persist_location.clone())
-                .await
-                .expect("error creating persist client for Healthchecker")
-        };
+        let persist_client = persist_clients
+            .open(storage_metadata.persist_location.clone())
+            .await
+            .expect("error creating persist client for Healthchecker");
 
         if is_active_worker {
             if let Some(status_shard) = storage_metadata.status_shard {

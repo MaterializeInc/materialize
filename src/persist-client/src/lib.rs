@@ -660,7 +660,7 @@ mod tests {
     }
 
     pub async fn new_test_client() -> PersistClient {
-        let mut cache = new_test_client_cache();
+        let cache = new_test_client_cache();
         cache
             .open(PersistLocation {
                 blob_uri: "mem://".to_owned(),

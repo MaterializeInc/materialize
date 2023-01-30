@@ -81,7 +81,7 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::{mpsc, watch, Mutex};
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
 use tracing::{info, trace};
@@ -137,7 +137,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         sink_metrics: SinkBaseMetrics,
         now: NowFn,
         connection_context: ConnectionContext,
-        persist_clients: Arc<Mutex<PersistClientCache>>,
+        persist_clients: Arc<PersistClientCache>,
     ) -> Self {
         // It is very important that we only create the internal control
         // flow/command sequencer once because a) the worker state is re-used
@@ -250,7 +250,7 @@ pub struct StorageState {
     pub connection_context: ConnectionContext,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
-    pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    pub persist_clients: Arc<PersistClientCache>,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
     pub sink_tokens: BTreeMap<GlobalId, SinkToken>,
@@ -300,7 +300,7 @@ impl SinkHandle {
         sink_id: GlobalId,
         from_metadata: &CollectionMetadata,
         shard_id: ShardId,
-        persist_clients: Arc<Mutex<PersistClientCache>>,
+        persist_clients: Arc<PersistClientCache>,
     ) -> SinkHandle {
         let (downgrade_tx, mut rx) = watch::channel(Antichain::from_elem(Timestamp::minimum()));
 
@@ -309,8 +309,6 @@ impl SinkHandle {
 
         let _handle = mz_ore::task::spawn(|| "Sink handle advancement", async move {
             let client = persist_clients
-                .lock()
-                .await
                 .open(persist_location)
                 .await
                 .expect("opening persist client");
