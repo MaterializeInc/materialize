@@ -251,6 +251,21 @@ impl Part {
         Ok(part)
     }
 
+    /// Flatmaps over the columns of this [Part]'s key and value, returning
+    /// a Vec with indices into each column's minimum and maximum element.
+    pub fn minmax(&self) -> Vec<(usize, usize)> {
+        let mut minmaxes = Vec::with_capacity(self.key.len() + self.val.len());
+        for (_name, col) in self.key.iter() {
+            let (min, max) = col.to_col_ord().minmax(col.len());
+            minmaxes.push((min, max));
+        }
+        for (_name, col) in self.val.iter() {
+            let (min, max) = col.to_col_ord().minmax(col.len());
+            minmaxes.push((min, max));
+        }
+        minmaxes
+    }
+
     /// Returns a sorted and consolidated copy of this Part.
     ///
     /// This is a full deep clone of the data. Sort ordering is `(K, V, T, D)`
@@ -791,6 +806,34 @@ mod tests {
 
         assert!(is_send_sync::<Part>(PhantomData));
         assert!(is_send_sync::<PartBuilder>(PhantomData));
+    }
+
+    #[test]
+    fn part_minmax() -> Result<(), String> {
+        let key_schema = StringSchema::default();
+        let val_schema = StringSchema::default();
+        let mut part = PartBuilder::new(&key_schema, &val_schema);
+        {
+            let mut keys = key_schema.encoder(part.key_mut()).unwrap();
+            keys.encode(&"z".to_string());
+            keys.encode(&"a".to_string());
+            keys.encode(&"b".to_string());
+            keys.encode(&"c".to_string());
+            let mut vals = val_schema.encoder(part.val_mut()).unwrap();
+            vals.encode(&"1".to_string());
+            vals.encode(&"2".to_string());
+            vals.encode(&"3".to_string());
+            vals.encode(&"4".to_string());
+        }
+        part.push_ts_diff(1, 1);
+        part.push_ts_diff(1, 1);
+        part.push_ts_diff(1, 1);
+        part.push_ts_diff(1, 1);
+        let part = part.finish()?;
+
+        assert_eq!(part.minmax(), vec![(1, 0), (0, 3)]);
+
+        Ok(())
     }
 
     #[test]

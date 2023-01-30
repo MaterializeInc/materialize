@@ -44,6 +44,30 @@ pub enum ColOrd<'a> {
 }
 
 impl<'a> ColOrd<'a> {
+    /// Returns the index of the (min, max) values in the column.
+    pub fn minmax(&self, len: usize) -> (usize, usize) {
+        // TODO: This is an expensive operation. There are several ways to reduce the cost:
+        // 1. Compare idx to idx+1, and then compare the smaller of the two to min and the
+        // greater of the two to max. This reduces the # of comparisons to 1.5*n instead of 2*n.
+        // 2. For the Arrow types that have the same total ordering as their Rust equivalents,
+        // use arrow2's SIMD-backed aggregations. Note that arrow2's aggregations may handle
+        // null values differently than in Rust.
+        // 3. Parallelize the comparison, as each column's minmax can be computed independently.
+        let mut min_idx = 0;
+        let mut max_idx = 0;
+        for idx in 0..len {
+            match self.cmp(min_idx, idx) {
+                Ordering::Less | Ordering::Equal => {}
+                Ordering::Greater => min_idx = idx,
+            }
+            match self.cmp(max_idx, idx) {
+                Ordering::Less => max_idx = idx,
+                Ordering::Equal | Ordering::Greater => {}
+            }
+        }
+        (min_idx, max_idx)
+    }
+
     fn cmp(&self, idx0: usize, idx1: usize) -> Ordering {
         match *self {
             ColOrd::Bool(x) => ColumnGet::<bool>::get(x, idx0).cmp(&ColumnGet::get(x, idx1)),
