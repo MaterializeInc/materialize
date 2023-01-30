@@ -50,6 +50,8 @@ use self::metrics::KafkaPartitionMetrics;
 
 mod metrics;
 
+type PartitionId = i32;
+
 /// Contains all information necessary to ingest data from Kafka
 pub struct KafkaSourceReader {
     /// Name of the topic on which this source is backed on
@@ -69,13 +71,13 @@ pub struct KafkaSourceReader {
     /// The most recently read offset for each partition known to this source
     /// reader. An offset of -1 indicates that no prior message has been read
     /// for the given partition.
-    last_offsets: BTreeMap<i32, i64>,
+    last_offsets: BTreeMap<PartitionId, i64>,
     /// The offset to start reading from for each partition.
-    start_offsets: BTreeMap<i32, i64>,
+    start_offsets: BTreeMap<PartitionId, i64>,
     /// Channel to receive Kafka statistics JSON blobs from the stats callback.
     stats_rx: crossbeam_channel::Receiver<Jsonb>,
     /// The last partition we received
-    partition_info: Arc<Mutex<Option<Vec<i32>>>>,
+    partition_info: Arc<Mutex<Option<Vec<PartitionId>>>>,
     /// A handle to the spawned metadata thread
     // Drop order is important here, we want the thread to be unparked after the `partition_info`
     // Arc has been dropped, so that the unpacked thread notices it and exits immediately
@@ -87,11 +89,13 @@ pub struct KafkaSourceReader {
     /// The latest status detected by the metadata refresh thread.
     health_status: Arc<Mutex<Option<HealthStatus>>>,
     /// Per partition uapabilities used to produce messages
-    partition_data_capabilities: HashMap<i32, Capability<Partitioned<i32, MzOffset>>>,
-    partition_upper_capabilities: HashMap<i32, Capability<Partitioned<i32, MzOffset>>>,
-    /// A capability representing the range partitions not yet seen
-    data_capability: Capability<Partitioned<i32, MzOffset>>,
-    upper_capability: Capability<Partitioned<i32, MzOffset>>,
+    partition_data_capabilities:
+        HashMap<PartitionId, Capability<Partitioned<PartitionId, MzOffset>>>,
+    partition_upper_capabilities:
+        HashMap<PartitionId, Capability<Partitioned<PartitionId, MzOffset>>>,
+    /// A capability representing the range partitions not yet seen _by this worker_.
+    data_capability: Capability<Partitioned<PartitionId, MzOffset>>,
+    upper_capability: Capability<Partitioned<PartitionId, MzOffset>>,
 }
 
 pub struct KafkaOffsetCommiter {
@@ -118,8 +122,8 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        mut data_capability: Capability<Partitioned<i32, MzOffset>>,
-        mut upper_capability: Capability<Partitioned<i32, MzOffset>>,
+        mut data_capability: Capability<Partitioned<PartitionId, MzOffset>>,
+        mut upper_capability: Capability<Partitioned<PartitionId, MzOffset>>,
         resume_upper: Antichain<<Self::Reader as SourceReader>::Time>,
         _: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
@@ -351,7 +355,7 @@ impl SourceConnectionBuilder for KafkaSourceConnection {
 impl SourceReader for KafkaSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
-    type Time = Partitioned<i32, MzOffset>;
+    type Time = Partitioned<PartitionId, MzOffset>;
     type Diff = ();
 
     /// This function polls from the next consumer for which a message is available. This function
@@ -463,10 +467,10 @@ impl SourceReader for KafkaSourceReader {
 }
 
 #[async_trait::async_trait]
-impl OffsetCommitter<Partitioned<i32, MzOffset>> for KafkaOffsetCommiter {
+impl OffsetCommitter<Partitioned<PartitionId, MzOffset>> for KafkaOffsetCommiter {
     async fn commit_offsets(
         &self,
-        frontier: Antichain<Partitioned<i32, MzOffset>>,
+        frontier: Antichain<Partitioned<PartitionId, MzOffset>>,
     ) -> Result<(), anyhow::Error> {
         use rdkafka::consumer::CommitMode;
         use rdkafka::topic_partition_list::Offset;
@@ -508,7 +512,7 @@ impl OffsetCommitter<Partitioned<i32, MzOffset>> for KafkaOffsetCommiter {
 
 impl KafkaSourceReader {
     /// Ensures that a partition queue for `pid` exists.
-    fn ensure_partition(&mut self, pid: i32) {
+    fn ensure_partition(&mut self, pid: PartitionId) {
         if self.last_offsets.contains_key(&pid) {
             return;
         }
@@ -529,7 +533,7 @@ impl KafkaSourceReader {
     }
 
     /// Creates a new partition queue for `partition_id`.
-    fn create_partition_queue(&mut self, partition_id: i32, initial_offset: Offset) {
+    fn create_partition_queue(&mut self, partition_id: PartitionId, initial_offset: Offset) {
         info!(
             source_id = self.id.to_string(),
             worker_id = self.worker_id,
@@ -593,7 +597,7 @@ impl KafkaSourceReader {
     /// Fast-forward consumer to specified Kafka Offset. Prints a warning if failed to do so
     /// Assumption: if offset does not exist (for instance, because of compaction), will seek
     /// to the next available offset
-    fn fast_forward_consumer(&self, pid: i32, next_offset: i64) {
+    fn fast_forward_consumer(&self, pid: PartitionId, next_offset: i64) {
         let res = self.consumer.seek(
             &self.topic_name,
             pid,
@@ -689,7 +693,7 @@ impl KafkaSourceReader {
     ) -> Result<
         Option<(
             SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
-            (i32, MzOffset),
+            (PartitionId, MzOffset),
         )>,
         String,
     > {
@@ -723,8 +727,8 @@ impl KafkaSourceReader {
     fn handle_message(
         &mut self,
         message: Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, SourceReaderError>,
-        (partition, offset): (i32, MzOffset),
-    ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>, Partitioned<i32, MzOffset>, ()> {
+        (partition, offset): (PartitionId, MzOffset),
+    ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>, Partitioned<PartitionId, MzOffset>, ()> {
         // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
         // a network issue or a new partition added, at which point the consumer may
         // start processing the topic from the beginning, or we may see duplicate offsets
@@ -791,7 +795,7 @@ fn construct_source_message(
     include_headers: bool,
 ) -> (
     SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
-    (i32, MzOffset),
+    (PartitionId, MzOffset),
 ) {
     let headers = match msg.headers() {
         Some(headers) if include_headers => Some(
@@ -819,7 +823,7 @@ fn construct_source_message(
 /// Wrapper around a partition containing the underlying consumer
 struct PartitionConsumer {
     /// the partition id with which this consumer is associated
-    pid: i32,
+    pid: PartitionId,
     /// The underlying Kafka partition queue
     partition_queue: PartitionQueue<BrokerRewritingClientContext<GlueConsumerContext>>,
     /// Whether or not to unpack and allocate headers and pass them through in the `SourceMessage`
@@ -829,7 +833,7 @@ struct PartitionConsumer {
 impl PartitionConsumer {
     /// Creates a new partition consumer from underlying Kafka consumer
     fn new(
-        pid: i32,
+        pid: PartitionId,
         partition_queue: PartitionQueue<BrokerRewritingClientContext<GlueConsumerContext>>,
         include_headers: bool,
     ) -> Self {
@@ -851,7 +855,7 @@ impl PartitionConsumer {
     ) -> Result<
         Option<(
             SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
-            (i32, MzOffset),
+            (PartitionId, MzOffset),
         )>,
         KafkaError,
     > {
@@ -867,7 +871,7 @@ impl PartitionConsumer {
     }
 
     /// Return the partition id for this PartitionConsumer
-    fn pid(&self) -> i32 {
+    fn pid(&self) -> PartitionId {
         self.pid
     }
 }
@@ -917,7 +921,7 @@ fn get_kafka_partitions<C>(
     consumer: &BaseConsumer<C>,
     topic: &str,
     timeout: Duration,
-) -> Result<Vec<i32>, anyhow::Error>
+) -> Result<Vec<PartitionId>, anyhow::Error>
 where
     C: ConsumerContext,
 {

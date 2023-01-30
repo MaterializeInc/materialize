@@ -139,7 +139,7 @@ pub trait SourceReader {
 }
 
 /// A sibling trait to `SourceReader` that represents a source's ability to commit the frontier
-/// that all updates that materialize might need in the future will be beyond of.
+/// that all updates that materialize may need in the future will be beyond of.
 #[async_trait]
 pub trait OffsetCommitter<Time: SourceTimestamp> {
     /// Commit the given frontier upstream. When this method is called permission is given to the
@@ -576,7 +576,7 @@ impl SourceReaderPartitionMetrics {
 /// Metrics about committing offsets
 pub struct OffsetCommitMetrics {
     /// The offset-domain resume_upper for a source.
-    //TODO: produce these metrics
+    //TODO(petrosagg): produce these metrics
     pub(crate) _offset_commit_failures: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 

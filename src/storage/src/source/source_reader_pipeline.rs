@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::capture::capture::Capture;
-use timely::dataflow::operators::capture::EventCore;
+use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Partition};
 use timely::dataflow::{Scope, Stream};
@@ -52,7 +52,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::Mutex;
-use tracing::{debug, info, trace, warn};
+use tracing::{info, trace, warn};
 
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
@@ -69,7 +69,7 @@ use mz_storage_client::types::errors::SourceError;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{MzOffset, SourceTimestamp, SourceToken};
 use mz_timely_util::antichain::AntichainExt;
-use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::capture::UnboundedTokioCapture;
 use mz_timely_util::operator::StreamExt as _;
 
@@ -162,8 +162,9 @@ where
     let worker_id = config.worker_id;
     let id = config.id;
     info!(
-        "timely-{worker_id} building source pipeline for {id}: resume_upper={}",
-        config.resume_upper.pretty()
+        %id,
+        resume_upper = %config.resume_upper.pretty(),
+        "timely-{worker_id} building source pipeline",
     );
     let (resume_stream, resume_token) =
         super::resumption::resumption_operator(scope, config.clone(), calc);
@@ -179,6 +180,8 @@ where
     let (source_tx, source_rx) = tokio::sync::mpsc::unbounded_channel();
     let (source_upper_tx, source_upper_rx) = tokio::sync::mpsc::unbounded_channel();
 
+    // The use of an _unbounded_ queue here is justified as it matches the unbounded buffers that
+    // lie between ordinary timely operators.
     resume_stream.capture_into(UnboundedTokioCapture(resume_tx));
     let reclocked_resume_stream =
         reclock_resume_upper(resume_rx, reclock_follower.share(), worker_id, id);
@@ -196,6 +199,8 @@ where
                 reclocked_resume_stream,
             );
 
+            // The use of an _unbounded_ queue here is justified as it matches the unbounded
+            // buffers that lie between ordinary timely operators.
             source.inner.capture_into(UnboundedTokioCapture(source_tx));
             source_upper.capture_into(UnboundedTokioCapture(source_upper_tx));
 
@@ -297,6 +302,7 @@ where
     let sync_activator = scope.sync_activator_for(&info.address[..]);
 
     let (mut output, stream) = builder.new_output();
+    // We don't need the output because we simply downgrade the output's capability.
     let (_upper_output, upper_stream) = builder.new_output();
     let (mut health_output, health_stream) = builder.new_output();
 
@@ -327,7 +333,7 @@ where
         );
 
         for ts in source_upper.iter() {
-            //TODO(petrosagg): rework metrics to be generic over the source timestamp
+            // TODO(petrosagg): rework metrics to be generic over the source timestamp
             if let Some((pid, offset)) = ts.try_into_compat_ts() {
                 source_metrics
                     .metrics_for_partition(&pid)
@@ -522,7 +528,7 @@ fn health_operator<G: Scope>(
         }
 
         while let Some(event) = input.next().await {
-            if let Event::Data(_cap, rows) = event {
+            if let AsyncEvent::Data(_cap, rows) = event {
                 rows.swap(&mut buffer);
                 let mut halt_with = None;
                 for (worker_id, health_event) in buffer.drain(..) {
@@ -645,7 +651,7 @@ impl futures::Stream for RemapClock {
 fn remap_operator<G, FromTime>(
     scope: &G,
     config: RawSourceCreationConfig,
-    mut source_upper_rx: UnboundedReceiver<EventCore<FromTime, Vec<()>>>,
+    mut source_upper_rx: UnboundedReceiver<Event<FromTime, ()>>,
     resume_stream: &Stream<G, ()>,
     remap_relation_desc: RelationDesc,
 ) -> (Stream<G, (FromTime, mz_repr::Timestamp, Diff)>, Rc<dyn Any>)
@@ -787,7 +793,7 @@ where
                         return;
                     }
                 }
-                Some(Event::Progress(resume_upper)) = resume_input.next() => {
+                Some(AsyncEvent::Progress(resume_upper)) = resume_input.next() => {
                     trace!("timely-{worker_id} remap({id}) received resume upper: {}", resume_upper.pretty());
                     // Compact the remap shard, but only if it has actually made progress. Note
                     // that resumption frontier progress does not drive this operator forward, only
@@ -808,7 +814,7 @@ where
                         }
                     }
                 }
-                Some(EventCore::Progress(progress)) = source_upper_rx.recv() => {
+                Some(Event::Progress(progress)) = source_upper_rx.recv() => {
                     source_upper.update_iter(progress);
                     trace!("timely-{worker_id} remap({id}) received source upper: {}", source_upper.pretty());
                 }
@@ -827,7 +833,7 @@ fn reclock_operator<G, K, V, FromTime, D>(
     config: RawSourceCreationConfig,
     mut timestamper: ReclockFollower<FromTime, mz_repr::Timestamp>,
     mut source_rx: UnboundedReceiver<
-        EventCore<FromTime, Vec<(Result<SourceMessage<K, V>, SourceReaderError>, FromTime, D)>>,
+        Event<FromTime, (Result<SourceMessage<K, V>, SourceReaderError>, FromTime, D)>,
     >,
     remap_trace_updates: Stream<G, (FromTime, mz_repr::Timestamp, Diff)>,
 ) -> (
@@ -897,13 +903,13 @@ where
         loop {
             tokio::select! {
                 Some(event) = remap_input.next() => match event {
-                    Event::Data(_cap, data) => {
+                    AsyncEvent::Data(_cap, data) => {
                         data.swap(&mut remap_trace_buffer);
                         remap_updates_stash.append(&mut remap_trace_buffer);
                     }
                     // If the remap frontier advanced it's time to carve out a batch that includes
                     // all updates not beyond the upper
-                    Event::Progress(remap_upper) => {
+                    AsyncEvent::Progress(remap_upper) => {
                         let remap_trace_batch = ReclockBatch {
                             updates: remap_updates_stash
                                 .drain_filter_swapping(|(_, ts, _)| !remap_upper.less_equal(ts))
@@ -921,7 +927,25 @@ where
                     }
                 },
                 Some(event) = source_rx.recv() => match event {
-                    EventCore::Progress(changes) => {
+                    Event::Progress(changes) => {
+                        // In some sense, this is the core place where we connect the two scopes
+                        // (the source-timestamp one, and the `mz_repr::Timestamp` one).
+                        //
+                        // The source reader produces messages using normal capabilities, which are
+                        // `Capture::capture`'d into the sender-side of the `source_rx` channel.
+                        // While `Messages` may be received out of order, timely ensures that
+                        // `Progress` messages represent frontiers that later `Messages` are never
+                        // beyond (note that these times can be, and in our case ARE, partially
+                        // ordered).
+                        //
+                        // This is in fact the _core_ behavior that timely frontier tracking
+                        // offers, and it allows us to in some sense, "not think" about timestamps
+                        // here, and simply update the `MutableAntichain`, which will be
+                        // interpreted by the `ReclockFollower`.
+                        //
+                        // Effectively, we let timely and the `reclock` module worry about partial
+                        // orders, and simply write "classic" timely code here, whereby we store
+                        // messages until we see frontiers progress.
                         source_upper.update_iter(changes);
                         trace!(
                             "timely-{worker_id} reclock({id}) \
@@ -930,14 +954,14 @@ where
                         );
                         work_to_do.notify_one();
                     }
-                    EventCore::Messages(_time, batch) => {
+                    Event::Messages(_time, batch) => {
                         untimestamped_batches.push(batch)
                     }
                 },
                 _ = work_to_do.notified(), if timestamper.initialized() => {
                     // The frontier at which we can retire work is the minimum of the timestamper
                     // upper and the source data upper
-                    let mut ready_upper  = timestamper.source_upper();
+                    let mut ready_upper = timestamper.source_upper();
                     ready_upper.extend(source_upper.frontier().iter().cloned());
 
                     // Drain all messages that can be reclocked from all the batches
@@ -951,7 +975,7 @@ where
 
                     // Accumulate updates to bytes_read for Prometheus metrics collection
                     let mut bytes_read = 0;
-                    // Accumulate updates to offsets for system table metrics collection
+                    // Accumulate updates to offsets for Prometheus and system table metrics collection
                     let mut metric_updates = BTreeMap::new();
 
                     let mut output = reclocked_output.activate();
@@ -971,6 +995,8 @@ where
                         );
                         total_processed += 1;
                     }
+                    // The loop above might have completely emptied batches. We can now remove them
+                    untimestamped_batches.retain(|batch| !batch.is_empty());
 
                     let total_skipped = total_buffered - total_processed;
                     trace!(
@@ -997,8 +1023,6 @@ where
                             .into(),
                     );
 
-                    // We only want to retain non-empty batches
-                    untimestamped_batches.retain(|batch| !batch.is_empty());
 
                     // And downgrade our capability to the reclocked source upper
 
@@ -1041,10 +1065,13 @@ where
 }
 
 /// Reclocks an `IntoTime` frontier stream into a `FromTime` frontier stream. This is used for the
-/// feedback edge that converts the `IntoTime` resumption frontier into the `FromTime` frontier
-/// that is used with the source's `OffsetCommiter`.
+/// virtual (through persist) feedback edge so that we convert the `IntoTime` resumption frontier
+/// into the `FromTime` frontier that is used with the source's `OffsetCommiter`.
+///
+/// Note that we also use this async-`Stream` converter as a convenient place to compact the
+/// `ReclockFollower` trace that is currently shared between this and the `reclock_operator`.
 fn reclock_resume_upper<FromTime, IntoTime>(
-    mut resume_rx: UnboundedReceiver<EventCore<IntoTime, Vec<()>>>,
+    mut resume_rx: UnboundedReceiver<Event<IntoTime, ()>>,
     mut reclock_follower: ReclockFollower<FromTime, IntoTime>,
     worker_id: usize,
     id: GlobalId,
@@ -1058,20 +1085,24 @@ where
         let mut prev_upper = reclock_follower.since().to_owned();
 
         while let Some(event) = resume_rx.recv().await {
-            if let EventCore::Progress(changes) = event {
+            if let Event::Progress(changes) = event {
                 resume_upper.update_iter(changes);
 
                 let source_upper = loop {
                     match reclock_follower.source_upper_at_frontier(resume_upper.frontier()) {
                         Ok(frontier) => break frontier,
                         Err(ReclockError::BeyondUpper(_) | ReclockError::Uninitialized) => {
+                            // Note that we can hold back ingestion of the `resume_rx`
+                            // indefinitely, because it will not produce unbounded progress
+                            // messages unless the reclock trace is being progressed, which will
+                            // unblock this loop!
                             tokio::time::sleep(Duration::from_millis(100)).await
                         }
                         Err(err) => panic!("unexpected reclock error {:?}", err),
                     }
                 };
 
-                debug!(
+                trace!(
                     "timely-{worker_id} source({id}) converted resume upper: into_upper={} source_upper={}",
                     resume_upper.pretty(), source_upper.pretty()
                 );

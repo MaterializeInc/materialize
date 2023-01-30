@@ -158,7 +158,7 @@
 //! timely's progress tracking, but that seems like a necessary evil if we want to do reclocking.
 //!
 //! The two main ways these tokio-fied streams are turned back into normal timely streams in the
-//! destination scope are by the `remap operator` and the `reclock operator` which process the
+//! destination scope are by the `reclock operator` and the `remap operator` which process the
 //! `data output` and `upper output` of the source reader respectively.
 //!
 //! The `remap operator` reads the `upper output`, which is composed only of frontiers, mints new
