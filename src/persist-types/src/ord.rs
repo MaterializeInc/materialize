@@ -60,10 +60,10 @@ impl<'a> ColOrd<'a> {
             ColOrd::F64(x) => OrderedFloat(ColumnGet::<f64>::get(x, idx0))
                 .cmp(&OrderedFloat(ColumnGet::get(x, idx1))),
             ColOrd::Bytes(x) => {
-                ColumnGet::<Vec<u8>>::get(x, idx0).cmp(&ColumnGet::<Vec<u8>>::get(x, idx1))
+                ColumnGet::<Vec<u8>>::get(x, idx0).cmp(ColumnGet::<Vec<u8>>::get(x, idx1))
             }
             ColOrd::String(x) => {
-                ColumnGet::<String>::get(x, idx0).cmp(&ColumnGet::<String>::get(x, idx1))
+                ColumnGet::<String>::get(x, idx0).cmp(ColumnGet::<String>::get(x, idx1))
             }
             ColOrd::OptBool(x) => {
                 ColumnGet::<Option<bool>>::get(x, idx0).cmp(&ColumnGet::get(x, idx1))
@@ -89,11 +89,11 @@ impl<'a> ColOrd<'a> {
                 ColumnGet::<Option<u64>>::get(x, idx0).cmp(&ColumnGet::get(x, idx1))
             }
             ColOrd::OptF32(x) => ColumnGet::<Option<f32>>::get(x, idx0)
-                .map(|x| OrderedFloat(x))
-                .cmp(&ColumnGet::get(x, idx1).map(|x| OrderedFloat(x))),
+                .map(OrderedFloat)
+                .cmp(&ColumnGet::get(x, idx1).map(OrderedFloat)),
             ColOrd::OptF64(x) => ColumnGet::<Option<f64>>::get(x, idx0)
-                .map(|x| OrderedFloat(x))
-                .cmp(&ColumnGet::get(x, idx1).map(|x| OrderedFloat(x))),
+                .map(OrderedFloat)
+                .cmp(&ColumnGet::get(x, idx1).map(OrderedFloat)),
             ColOrd::OptBytes(x) => {
                 ColumnGet::<Option<Vec<u8>>>::get(x, idx0)
                     .cmp(&ColumnGet::<Option<Vec<u8>>>::get(x, idx1))
@@ -157,6 +157,7 @@ impl<'a> PartialOrd for ColsOrdKey<'a> {
 impl<'a> Ord for ColsOrdKey<'a> {
     fn cmp(&self, other: &Self) -> Ordering {
         // Important! Make sure this is used correctly (only ColsOrdKeys issues by
+        #![allow(clippy::as_conversions)]
         assert_eq!(self.cols_ord as *const _, other.cols_ord as *const _);
         self.cols_ord.cmp(self.idx, other.idx)
     }

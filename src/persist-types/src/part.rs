@@ -784,15 +784,15 @@ mod tests {
         let mut part = PartBuilder::new(&StringSchema, &UnitSchema);
         {
             let mut keys = StringSchema.encoder(part.key_mut()).unwrap();
-            keys.encode(&format!("foo"));
-            keys.encode(&format!("foo"));
-            keys.encode(&format!("foo"));
-            keys.encode(&format!("bar"));
-            keys.encode(&format!("foo"));
-            keys.encode(&format!("baz"));
-            keys.encode(&format!("foo"));
-            keys.encode(&format!("qux"));
-            keys.encode(&format!("qux"));
+            keys.encode(&"foo".to_string());
+            keys.encode(&"foo".to_string());
+            keys.encode(&"foo".to_string());
+            keys.encode(&"bar".to_string());
+            keys.encode(&"foo".to_string());
+            keys.encode(&"baz".to_string());
+            keys.encode(&"foo".to_string());
+            keys.encode(&"qux".to_string());
+            keys.encode(&"qux".to_string());
         }
         part.push_ts_diff(3, 1);
         part.push_ts_diff(1, 1);
