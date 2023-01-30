@@ -21,7 +21,7 @@ use mz_ore::metrics::{
     ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
     DeleteOnDropGauge, GaugeVecExt, IntCounter, MetricsRegistry, UIntGauge,
 };
-use mz_ore::stats::HISTOGRAM_SECOND_BUCKETS;
+use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
 };
@@ -248,15 +248,9 @@ impl MetricsVecs {
                 name: "mz_persist_external_op_latency",
                 help: "rountrip latency observed by individual performance-critical operations",
                 var_labels: ["op"],
-                buckets: {
-                    // Times from half a millisecond up to half a minute,
-                    // using the standard bucket boundaries as much as possible.
-                    // NB: If we end up overrunning metrics quotas, we could plausibly cut this
-                    // down by switching to a factor of 4 between buckets (vs. the standard 2).
-                    let mut buckets: Vec<f64> = HISTOGRAM_SECOND_BUCKETS.iter().copied().filter(|f| *f >= 0.000_500).collect();
-                    buckets.extend([16.0, 32.0]);
-                    buckets
-                }
+                // NB: If we end up overrunning metrics quotas, we could plausibly cut this
+                // down by switching to a factor of 4 between buckets (vs. the standard 2).
+                buckets: histogram_seconds_buckets(0.000_500, 32.0),
             )),
 
             retry_started: registry.register(metric!(
