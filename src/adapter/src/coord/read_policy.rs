@@ -250,12 +250,15 @@ impl crate::coord::Coordinator {
                     let TimelineState { read_holds, .. } =
                         self.ensure_timeline_state(&timeline).await;
                     for (time, id_bundle) in &new_read_holds.holds {
-                        id_bundles.insert(Some(time.clone()), id_bundle.clone());
+                        id_bundles
+                            .entry(Some(time.clone()))
+                            .or_default()
+                            .extend(&id_bundle);
                     }
                     read_holds.extend(new_read_holds);
                 }
                 TimelineContext::TimestampIndependent | TimelineContext::TimestampDependent => {
-                    id_bundles.insert(None, id_bundle);
+                    id_bundles.entry(None).or_default().extend(&id_bundle);
                 }
             }
         }
