@@ -23,14 +23,14 @@ use std::fmt;
 use mz_expr::virtual_syntax::{AlgExcept, Except};
 use mz_expr::Id;
 use mz_ore::str::{separated, IndentLike};
-use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, Indices};
-use mz_sql::plan::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
+use mz_repr::explain_new::{
+    fmt_text_constant_rows, separated_text, CompactScalarSeq, DisplayText, Indices,
+    PlanRenderingContext,
+};
 
-use crate::explain_new::{CompactScalarSeq, Displayable, PlanRenderingContext};
+use crate::plan::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
 
-impl<'a> DisplayText<PlanRenderingContext<'_, HirRelationExpr>>
-    for Displayable<'a, HirRelationExpr>
-{
+impl DisplayText<PlanRenderingContext<'_, HirRelationExpr>> for HirRelationExpr {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
@@ -44,21 +44,21 @@ impl<'a> DisplayText<PlanRenderingContext<'_, HirRelationExpr>>
     }
 }
 
-impl<'a> Displayable<'a, HirRelationExpr> {
+impl HirRelationExpr {
     fn fmt_virtual_syntax(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, HirRelationExpr>,
     ) -> fmt::Result {
-        if let Some(Except { all, lhs, rhs }) = Hir::un_except(self.0) {
+        if let Some(Except { all, lhs, rhs }) = Hir::un_except(self) {
             if all {
                 writeln!(f, "{}ExceptAll", ctx.indent)?;
             } else {
                 writeln!(f, "{}Except", ctx.indent)?;
             }
             ctx.indented(|ctx| {
-                Displayable::from(lhs).fmt_text(f, ctx)?;
-                Displayable::from(rhs).fmt_text(f, ctx)?;
+                lhs.fmt_text(f, ctx)?;
+                rhs.fmt_text(f, ctx)?;
                 Ok(())
             })?;
         } else {
@@ -75,7 +75,7 @@ impl<'a> Displayable<'a, HirRelationExpr> {
         ctx: &mut PlanRenderingContext<'_, HirRelationExpr>,
     ) -> fmt::Result {
         use HirRelationExpr::*;
-        match &self.0 {
+        match &self {
             Constant { rows, .. } => {
                 if !rows.is_empty() {
                     writeln!(f, "{}Constant", ctx.indent)?;
@@ -109,26 +109,26 @@ impl<'a> Displayable<'a, HirRelationExpr> {
                 }
 
                 writeln!(f, "{}Return", ctx.indent)?;
-                ctx.indented(|ctx| Displayable::from(head).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With", ctx.indent)?;
                 ctx.indented(|ctx| {
                     for (id, value) in bindings.iter().rev() {
                         // TODO: print the name and not the id
                         writeln!(f, "{}cte {} =", ctx.indent, *id)?;
-                        ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                     }
                     Ok(())
                 })?;
             }
             LetRec { bindings, body } => {
                 writeln!(f, "{}Return", ctx.indent)?;
-                ctx.indented(|ctx| Displayable::from(body.as_ref()).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| body.as_ref().fmt_text(f, ctx))?;
                 writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
                 ctx.indented(|ctx| {
                     for (_name, id, value, _type) in bindings.iter().rev() {
                         // TODO: print the name and not the id
                         writeln!(f, "{}cte {} =", ctx.indent, *id)?;
-                        ctx.indented(|ctx| Displayable::from(value).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                     }
                     Ok(())
                 })?;
@@ -146,21 +146,21 @@ impl<'a> Displayable<'a, HirRelationExpr> {
             Project { outputs, input } => {
                 let outputs = Indices(outputs);
                 writeln!(f, "{}Project ({})", ctx.indent, outputs)?;
-                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
             }
             Map { scalars, input } => {
                 let scalars = CompactScalarSeq(scalars);
                 writeln!(f, "{}Map ({})", ctx.indent, scalars)?;
-                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
             }
             CallTable { func, exprs } => {
                 let exprs = CompactScalarSeq(exprs);
                 writeln!(f, "{}CallTable {}({})", ctx.indent, func, exprs)?;
             }
             Filter { predicates, input } => {
-                let predicates = separated_text(" AND ", predicates.iter().map(Displayable::from));
+                let predicates = separated_text(" AND ", predicates);
                 writeln!(f, "{}Filter {}", ctx.indent, predicates)?;
-                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
             }
             Join {
                 left,
@@ -172,12 +172,12 @@ impl<'a> Displayable<'a, HirRelationExpr> {
                     write!(f, "{}CrossJoin", ctx.indent)?;
                 } else {
                     write!(f, "{}{}Join ", ctx.indent, kind)?;
-                    Displayable::from(on).fmt_text(f, &mut ())?;
+                    on.fmt_text(f, &mut ())?;
                 }
                 writeln!(f)?;
                 ctx.indented(|ctx| {
-                    Displayable::from(left.as_ref()).fmt_text(f, ctx)?;
-                    Displayable::from(right.as_ref()).fmt_text(f, ctx)?;
+                    left.as_ref().fmt_text(f, ctx)?;
+                    right.as_ref().fmt_text(f, ctx)?;
                     Ok(())
                 })?;
             }
@@ -193,18 +193,18 @@ impl<'a> Displayable<'a, HirRelationExpr> {
                     write!(f, " group_by=[{}]", group_key)?;
                 }
                 if aggregates.len() > 0 {
-                    let aggregates = separated_text(", ", aggregates.iter().map(Displayable::from));
+                    let aggregates = separated_text(", ", aggregates);
                     write!(f, " aggregates=[{}]", aggregates)?;
                 }
                 if let Some(expected_group_size) = expected_group_size {
                     write!(f, " exp_group_size={}", expected_group_size)?;
                 }
                 writeln!(f)?;
-                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
             }
             Distinct { input } => {
                 writeln!(f, "{}Distinct", ctx.indent)?;
-                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
             }
             TopK {
                 group_key,
@@ -229,22 +229,22 @@ impl<'a> Displayable<'a, HirRelationExpr> {
                     write!(f, " offset={}", offset)?
                 }
                 writeln!(f)?;
-                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
             }
             Negate { input } => {
                 writeln!(f, "{}Negate", ctx.indent)?;
-                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
             }
             Threshold { input } => {
                 writeln!(f, "{}Threshold", ctx.indent)?;
-                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
             }
             Union { base, inputs } => {
                 writeln!(f, "{}Union", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    Displayable::from(base.as_ref()).fmt_text(f, ctx)?;
+                    base.as_ref().fmt_text(f, ctx)?;
                     for input in inputs.iter() {
-                        Displayable::from(input).fmt_text(f, ctx)?;
+                        input.fmt_text(f, ctx)?;
                     }
                     Ok(())
                 })?;
@@ -255,11 +255,11 @@ impl<'a> Displayable<'a, HirRelationExpr> {
     }
 }
 
-impl<'a> DisplayText for Displayable<'a, HirScalarExpr> {
+impl DisplayText for HirScalarExpr {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut ()) -> fmt::Result {
         use HirRelationExpr::Get;
         use HirScalarExpr::*;
-        match self.0 {
+        match self {
             Column(i) => write!(
                 f,
                 "#{}{}",
@@ -278,7 +278,7 @@ impl<'a> DisplayText for Displayable<'a, HirScalarExpr> {
                     {
                         if let Some(is) = func.is() {
                             write!(f, "(")?;
-                            Displayable::from(inner_expr.as_ref()).fmt_text(f, ctx)?;
+                            inner_expr.as_ref().fmt_text(f, ctx)?;
                             write!(f, ") IS NOT {}", is)?;
                             return Ok(());
                         }
@@ -286,27 +286,27 @@ impl<'a> DisplayText for Displayable<'a, HirScalarExpr> {
                 }
                 if let Some(is) = func.is() {
                     write!(f, "(")?;
-                    Displayable::from(expr.as_ref()).fmt_text(f, ctx)?;
+                    expr.as_ref().fmt_text(f, ctx)?;
                     write!(f, ") IS {}", is)
                 } else {
                     write!(f, "{}(", func)?;
-                    Displayable::from(expr.as_ref()).fmt_text(f, ctx)?;
+                    expr.as_ref().fmt_text(f, ctx)?;
                     write!(f, ")")
                 }
             }
             CallBinary { func, expr1, expr2 } => {
                 if func.is_infix_op() {
                     write!(f, "(")?;
-                    Displayable::from(expr1.as_ref()).fmt_text(f, ctx)?;
+                    expr1.as_ref().fmt_text(f, ctx)?;
                     write!(f, " {} ", func)?;
-                    Displayable::from(expr2.as_ref()).fmt_text(f, ctx)?;
+                    expr2.as_ref().fmt_text(f, ctx)?;
                     write!(f, ")")
                 } else {
                     write!(f, "{}", func)?;
                     write!(f, "(")?;
-                    Displayable::from(expr1.as_ref()).fmt_text(f, ctx)?;
+                    expr1.as_ref().fmt_text(f, ctx)?;
                     write!(f, ", ")?;
-                    Displayable::from(expr2.as_ref()).fmt_text(f, ctx)?;
+                    expr2.as_ref().fmt_text(f, ctx)?;
                     write!(f, ")")
                 }
             }
@@ -314,35 +314,35 @@ impl<'a> DisplayText for Displayable<'a, HirScalarExpr> {
                 use mz_expr::VariadicFunc::*;
                 match func {
                     ArrayCreate { .. } => {
-                        let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                        let exprs = separated_text(", ", exprs);
                         write!(f, "array[{}]", exprs)
                     }
                     ListCreate { .. } => {
-                        let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                        let exprs = separated_text(", ", exprs);
                         write!(f, "list[{}]", exprs)
                     }
                     RecordCreate { .. } => {
-                        let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                        let exprs = separated_text(", ", exprs);
                         write!(f, "row({})", exprs)
                     }
                     func if func.is_infix_op() && exprs.len() > 1 => {
                         let func = format!(" {} ", func);
-                        let exprs = separated_text(&func, exprs.iter().map(Displayable::from));
+                        let exprs = separated_text(&func, exprs);
                         write!(f, "({})", exprs)
                     }
                     func => {
-                        let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                        let exprs = separated_text(", ", exprs);
                         write!(f, "{}({})", func, exprs)
                     }
                 }
             }
             If { cond, then, els } => {
                 write!(f, "case when ")?;
-                Displayable::from(cond.as_ref()).fmt_text(f, ctx)?;
+                cond.as_ref().fmt_text(f, ctx)?;
                 write!(f, " then ")?;
-                Displayable::from(then.as_ref()).fmt_text(f, ctx)?;
+                then.as_ref().fmt_text(f, ctx)?;
                 write!(f, " else ")?;
-                Displayable::from(els.as_ref()).fmt_text(f, ctx)?;
+                els.as_ref().fmt_text(f, ctx)?;
                 write!(f, " end")
             }
             Windowing(expr) => {
@@ -352,7 +352,7 @@ impl<'a> DisplayText for Displayable<'a, HirScalarExpr> {
                     }
                     WindowExprType::Value(scalar) => {
                         write!(f, "{}(", scalar.clone().into_expr())?;
-                        Displayable::from(scalar.expr.as_ref()).fmt_text(f, ctx)?;
+                        scalar.expr.as_ref().fmt_text(f, ctx)?;
                         write!(f, ")")?
                     }
                 }
@@ -361,7 +361,7 @@ impl<'a> DisplayText for Displayable<'a, HirScalarExpr> {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    Displayable::from(e).fmt_text(f, ctx)?;
+                    e.fmt_text(f, ctx)?;
                 }
                 write!(f, ")")?;
 
@@ -371,7 +371,7 @@ impl<'a> DisplayText for Displayable<'a, HirScalarExpr> {
                         if i > 0 {
                             write!(f, ", ")?;
                         }
-                        Displayable::from(e).fmt_text(f, ctx)?;
+                        e.fmt_text(f, ctx)?;
                     }
                     write!(f, ")")?;
                 }
@@ -389,20 +389,20 @@ impl<'a> DisplayText for Displayable<'a, HirScalarExpr> {
     }
 }
 
-impl<'a> DisplayText for Displayable<'a, AggregateExpr> {
+impl DisplayText for AggregateExpr {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut ()) -> fmt::Result {
-        if self.0.is_count_asterisk() {
+        if self.is_count_asterisk() {
             return write!(f, "count(*)");
         }
 
         write!(
             f,
             "{}({}",
-            self.0.func.clone().into_expr(),
-            if self.0.distinct { "distinct " } else { "" }
+            self.func.clone().into_expr(),
+            if self.distinct { "distinct " } else { "" }
         )?;
 
-        Displayable::from(self.0.expr.as_ref()).fmt_text(f, ctx)?;
+        self.expr.as_ref().fmt_text(f, ctx)?;
         write!(f, ")")
     }
 }

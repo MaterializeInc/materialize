@@ -7,35 +7,174 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! `EXPLAIN ... AS TEXT` support for MIR structures.
-//!
-//! The format adheres to the following conventions:
-//! 1. In general, every line corresponds to an [`MirRelationExpr`] node in the
-//!    plan.
-//! 2. Non-recursive parameters of each sub-plan are written as `$key=$val`
-//!    pairs on the same line.
-//! 3. A single non-recursive parameter can be written just as `$val`.
-//! 4. Exceptions in (1) can be made when virtual syntax is requested (done by
-//!    default, can be turned off with `WITH(raw_syntax)`).
-//! 5. Exceptions in (2) can be made when join implementations are rendered
-//!    explicitly `WITH(join_impls)`.
+//! `EXPLAIN ... AS TEXT` support for structures defined in this crate.
 
 use std::fmt;
 
-use mz_expr::{
-    AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics, MapFilterProject,
-    MirRelationExpr, MirScalarExpr,
-};
 use mz_ore::soft_assert;
-use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
-use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer};
+use mz_ore::str::{bracketed, separated, Indent, IndentLike, StrExt};
+use mz_repr::explain_new::{
+    fmt_text_constant_rows, separated_text, CompactScalarSeq, DisplayText, ExprHumanizer, Indices,
+    PlanRenderingContext, RenderingContext,
+};
 use mz_repr::{GlobalId, Row};
 
-use crate::explain_new::{CompactScalarSeq, Displayable, Indices, PlanRenderingContext};
+use super::{ExplainMultiPlan, ExplainSinglePlan};
+use crate::{
+    AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics, MapFilterProject,
+    MirRelationExpr, MirScalarExpr, RowSetFinishing,
+};
 
-impl<'a> DisplayText<PlanRenderingContext<'_, MirRelationExpr>>
-    for Displayable<'a, MirRelationExpr>
+impl<'a, T: 'a> DisplayText<()> for ExplainSinglePlan<'a, T>
+where
+    T: DisplayText<PlanRenderingContext<'a, T>>,
 {
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+        let mut ctx = PlanRenderingContext::new(
+            Indent::default(),
+            self.context.humanizer,
+            self.plan.annotations.clone(),
+            self.context.config,
+        );
+
+        if let Some(finishing) = &self.context.finishing {
+            finishing.fmt_text(f, &mut ctx.indent)?;
+            ctx.indented(|ctx| self.plan.plan.fmt_text(f, ctx))?;
+        } else {
+            self.plan.plan.fmt_text(f, &mut ctx)?;
+        }
+
+        if !self.context.used_indexes.is_empty() {
+            writeln!(f, "")?;
+            self.context.used_indexes.fmt_text(f, &mut ctx)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl<'a, T: 'a> DisplayText<()> for ExplainMultiPlan<'a, T>
+where
+    T: DisplayText<PlanRenderingContext<'a, T>>,
+{
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
+        let mut ctx = RenderingContext::new(Indent::default(), self.context.humanizer);
+
+        // render plans
+        for (no, (id, plan)) in self.plans.iter().enumerate() {
+            let mut ctx = PlanRenderingContext::new(
+                ctx.indent.clone(),
+                ctx.humanizer,
+                plan.annotations.clone(),
+                self.context.config,
+            );
+
+            writeln!(f, "{}{}:", ctx.indent, id)?;
+            ctx.indented(|ctx| {
+                match &self.context.finishing {
+                    // if present, a RowSetFinishing always applies to the first rendered plan
+                    Some(finishing) if no == 0 => {
+                        finishing.fmt_text(f, &mut ctx.indent)?;
+                        ctx.indented(|ctx| plan.plan.fmt_text(f, ctx))?;
+                    }
+                    // all other plans are rendered without a RowSetFinishing
+                    _ => {
+                        plan.plan.fmt_text(f, ctx)?;
+                    }
+                }
+                Ok(())
+            })?;
+        }
+        if self.sources.iter().any(|(_, op)| !op.is_identity()) {
+            // render one blank line between the plans and sources
+            writeln!(f, "")?;
+            // render sources
+            for (id, op) in self.sources.iter().filter(|(_, op)| !op.is_identity()) {
+                writeln!(f, "{}Source {}", ctx.indent, id)?;
+                ctx.indented(|ctx| op.fmt_text(f, ctx))?;
+            }
+        }
+
+        if !self.context.used_indexes.is_empty() {
+            writeln!(f, "")?;
+            self.context.used_indexes.fmt_text(f, &mut ctx)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl DisplayText<Indent> for RowSetFinishing {
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut Indent) -> fmt::Result {
+        write!(f, "{}Finish", ctx)?;
+        // order by
+        if !self.order_by.is_empty() {
+            let order_by = separated(", ", &self.order_by);
+            write!(f, " order_by=[{}]", order_by)?;
+        }
+        // limit
+        if let Some(limit) = self.limit {
+            write!(f, " limit={}", limit)?;
+        }
+        // offset
+        if self.offset > 0 {
+            write!(f, " offset={}", self.offset)?;
+        }
+        // project
+        {
+            let project = Indices(&self.project);
+            write!(f, " output=[{}]", project)?;
+        }
+        writeln!(f, "")
+    }
+}
+
+impl<C> DisplayText<C> for MapFilterProject
+where
+    C: AsMut<Indent>,
+{
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        let (scalars, predicates, outputs, input_arity) = (
+            &self.expressions,
+            &self.predicates,
+            &self.projection,
+            &self.input_arity,
+        );
+
+        // render `project` field iff not the identity projection
+        if &outputs.len() != input_arity || outputs.iter().enumerate().any(|(i, p)| i != *p) {
+            let outputs = Indices(outputs);
+            writeln!(f, "{}project=({})", ctx.as_mut(), outputs)?;
+        }
+        // render `filter` field iff predicates are present
+        if !predicates.is_empty() {
+            let predicates = predicates.iter().map(|(_, p)| p);
+            let predicates = separated_text(" AND ", predicates);
+            writeln!(f, "{}filter=({})", ctx.as_mut(), predicates)?;
+        }
+        // render `map` field iff scalars are present
+        if !scalars.is_empty() {
+            let scalars = CompactScalarSeq(scalars);
+            writeln!(f, "{}map=({})", ctx.as_mut(), scalars)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// `EXPLAIN ... AS TEXT` support for [`MirRelationExpr`].
+///
+/// The format adheres to the following conventions:
+/// 1. In general, every line corresponds to an [`MirRelationExpr`] node in the
+///    plan.
+/// 2. Non-recursive parameters of each sub-plan are written as `$key=$val`
+///    pairs on the same line.
+/// 3. A single non-recursive parameter can be written just as `$val`.
+/// 4. Exceptions in (1) can be made when virtual syntax is requested (done by
+///    default, can be turned off with `WITH(raw_syntax)`).
+/// 5. Exceptions in (2) can be made when join implementations are rendered
+///    explicitly `WITH(join_impls)`.
+impl DisplayText<PlanRenderingContext<'_, MirRelationExpr>> for MirRelationExpr {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
@@ -49,7 +188,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, MirRelationExpr>>
     }
 }
 
-impl<'a> Displayable<'a, MirRelationExpr> {
+impl MirRelationExpr {
     fn fmt_virtual_syntax(
         &self,
         f: &mut fmt::Formatter<'_>,
@@ -67,7 +206,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
     ) -> fmt::Result {
         use MirRelationExpr::*;
 
-        match &self.0 {
+        match &self {
             Constant { rows, typ: _ } => match rows {
                 Ok(rows) => {
                     if !rows.is_empty() {
@@ -104,22 +243,22 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                     ctx.indented(|ctx| {
                         for (id, value) in bindings.iter() {
                             writeln!(f, "{}cte {} =", ctx.indent, *id)?;
-                            ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
+                            ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                         }
                         Ok(())
                     })?;
                     write!(f, "{}Return", ctx.indent)?;
                     self.fmt_attributes(f, ctx)?;
-                    ctx.indented(|ctx| Displayable::from(head).fmt_text(f, ctx))?;
+                    ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 } else {
                     write!(f, "{}Return", ctx.indent)?;
                     self.fmt_attributes(f, ctx)?;
-                    ctx.indented(|ctx| Displayable::from(head).fmt_text(f, ctx))?;
+                    ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                     writeln!(f, "{}With", ctx.indent)?;
                     ctx.indented(|ctx| {
                         for (id, value) in bindings.iter().rev() {
                             writeln!(f, "{}cte {} =", ctx.indent, *id)?;
-                            ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
+                            ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                         }
                         Ok(())
                     })?;
@@ -134,22 +273,22 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                     ctx.indented(|ctx| {
                         for (id, value) in bindings.iter() {
                             writeln!(f, "{}cte {} =", ctx.indent, *id)?;
-                            ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
+                            ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                         }
                         Ok(())
                     })?;
                     write!(f, "{}Return", ctx.indent)?;
                     self.fmt_attributes(f, ctx)?;
-                    ctx.indented(|ctx| Displayable::from(head).fmt_text(f, ctx))?;
+                    ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 } else {
                     write!(f, "{}Return", ctx.indent)?;
                     self.fmt_attributes(f, ctx)?;
-                    ctx.indented(|ctx| Displayable::from(head).fmt_text(f, ctx))?;
+                    ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                     writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
                     ctx.indented(|ctx| {
                         for (id, value) in bindings.iter().rev() {
                             writeln!(f, "{}cte {} =", ctx.indent, *id)?;
-                            ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
+                            ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                         }
                         Ok(())
                     })?;
@@ -175,7 +314,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                         self.fmt_attributes(f, ctx)
                     },
                     fmt_children: |f, ctx| {
-                        let input = Displayable::from(input.as_ref());
+                        let input = input.as_ref();
                         input.fmt_text(f, ctx)
                     },
                 }
@@ -189,7 +328,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                         self.fmt_attributes(f, ctx)
                     },
                     fmt_children: |f, ctx| {
-                        let input = Displayable::from(input.as_ref());
+                        let input = input.as_ref();
                         input.fmt_text(f, ctx)
                     },
                 }
@@ -203,7 +342,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                         self.fmt_attributes(f, ctx)
                     },
                     fmt_children: |f, ctx| {
-                        let input = Displayable::from(input.as_ref());
+                        let input = input.as_ref();
                         input.fmt_text(f, ctx)
                     },
                 }
@@ -212,13 +351,12 @@ impl<'a> Displayable<'a, MirRelationExpr> {
             Filter { predicates, input } => {
                 FmtNode {
                     fmt_root: |f, ctx| {
-                        let predicates =
-                            separated_text(" AND ", predicates.iter().map(Displayable::from));
+                        let predicates = separated_text(" AND ", predicates);
                         write!(f, "{}Filter {}", ctx.indent, predicates)?;
                         self.fmt_attributes(f, ctx)
                     },
                     fmt_children: |f, ctx| {
-                        let input = Displayable::from(input.as_ref());
+                        let input = input.as_ref();
                         input.fmt_text(f, ctx)
                     },
                 }
@@ -364,7 +502,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
 
                 ctx.indented(|ctx| {
                     for input in inputs {
-                        Displayable::from(input).fmt_text(f, ctx)?;
+                        input.fmt_text(f, ctx)?;
                     }
                     Ok(())
                 })?;
@@ -394,8 +532,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                             write!(f, " group_by=[{}]", group_key)?;
                         }
                         if aggregates.len() > 0 {
-                            let aggregates =
-                                separated_text(", ", aggregates.iter().map(Displayable::from));
+                            let aggregates = separated_text(", ", aggregates);
                             write!(f, " aggregates=[{}]", aggregates)?;
                         }
                         if let Some(expected_group_size) = expected_group_size {
@@ -404,7 +541,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                         self.fmt_attributes(f, ctx)
                     },
                     fmt_children: |f, ctx| {
-                        let input = Displayable::from(input.as_ref());
+                        let input = input.as_ref();
                         input.fmt_text(f, ctx)
                     },
                 }
@@ -439,7 +576,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                         self.fmt_attributes(f, ctx)
                     },
                     fmt_children: |f, ctx| {
-                        let input = Displayable::from(input.as_ref());
+                        let input = input.as_ref();
                         input.fmt_text(f, ctx)
                     },
                 }
@@ -452,7 +589,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                         self.fmt_attributes(f, ctx)
                     },
                     fmt_children: |f, ctx| {
-                        let input = Displayable::from(input.as_ref());
+                        let input = input.as_ref();
                         input.fmt_text(f, ctx)
                     },
                 }
@@ -465,7 +602,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                         self.fmt_attributes(f, ctx)
                     },
                     fmt_children: |f, ctx| {
-                        let input = Displayable::from(input.as_ref());
+                        let input = input.as_ref();
                         input.fmt_text(f, ctx)
                     },
                 }
@@ -475,9 +612,9 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                 write!(f, "{}Union", ctx.indent)?;
                 self.fmt_attributes(f, ctx)?;
                 ctx.indented(|ctx| {
-                    Displayable::from(base.as_ref()).fmt_text(f, ctx)?;
+                    base.as_ref().fmt_text(f, ctx)?;
                     for input in inputs.iter() {
-                        Displayable::from(input).fmt_text(f, ctx)?;
+                        input.fmt_text(f, ctx)?;
                     }
                     Ok(())
                 })?;
@@ -489,7 +626,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
                         write!(f, "{}ArrangeBy keys=[[{}]]", ctx.indent, keys)?;
                         self.fmt_attributes(f, ctx)
                     },
-                    fmt_children: |f, ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx),
+                    fmt_children: |f, ctx| input.as_ref().fmt_text(f, ctx),
                 }
                 .render(f, ctx)?;
             }
@@ -504,7 +641,7 @@ impl<'a> Displayable<'a, MirRelationExpr> {
         ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.requires_attributes() {
-            if let Some(attrs) = ctx.annotations.get(self.0) {
+            if let Some(attrs) = ctx.annotations.get(self) {
                 writeln!(f, " {}", attrs)
             } else {
                 writeln!(f, " # error: no attrs for subtree in map")
@@ -603,10 +740,10 @@ where
     }
 }
 
-impl<'a> DisplayText for Displayable<'a, MirScalarExpr> {
+impl DisplayText for MirScalarExpr {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut ()) -> fmt::Result {
         use MirScalarExpr::*;
-        match self.0 {
+        match self {
             Column(i) => write!(f, "#{}", i),
             Literal(row, _) => match row {
                 Ok(row) => write!(f, "{}", row.unpack_first()),
@@ -614,7 +751,7 @@ impl<'a> DisplayText for Displayable<'a, MirScalarExpr> {
             },
             CallUnmaterializable(func) => write!(f, "{}()", func),
             CallUnary { func, expr } => {
-                if let mz_expr::UnaryFunc::Not(_) = *func {
+                if let crate::UnaryFunc::Not(_) = *func {
                     if let CallUnary {
                         func,
                         expr: inner_expr,
@@ -622,7 +759,7 @@ impl<'a> DisplayText for Displayable<'a, MirScalarExpr> {
                     {
                         if let Some(is) = func.is() {
                             write!(f, "(")?;
-                            Displayable::from(inner_expr.as_ref()).fmt_text(f, ctx)?;
+                            inner_expr.as_ref().fmt_text(f, ctx)?;
                             write!(f, ") IS NOT {}", is)?;
                             return Ok(());
                         }
@@ -630,83 +767,83 @@ impl<'a> DisplayText for Displayable<'a, MirScalarExpr> {
                 }
                 if let Some(is) = func.is() {
                     write!(f, "(")?;
-                    Displayable::from(expr.as_ref()).fmt_text(f, ctx)?;
+                    expr.as_ref().fmt_text(f, ctx)?;
                     write!(f, ") IS {}", is)
                 } else {
                     write!(f, "{}(", func)?;
-                    Displayable::from(expr.as_ref()).fmt_text(f, ctx)?;
+                    expr.as_ref().fmt_text(f, ctx)?;
                     write!(f, ")")
                 }
             }
             CallBinary { func, expr1, expr2 } => {
                 if func.is_infix_op() {
                     write!(f, "(")?;
-                    Displayable::from(expr1.as_ref()).fmt_text(f, ctx)?;
+                    expr1.as_ref().fmt_text(f, ctx)?;
                     write!(f, " {} ", func)?;
-                    Displayable::from(expr2.as_ref()).fmt_text(f, ctx)?;
+                    expr2.as_ref().fmt_text(f, ctx)?;
                     write!(f, ")")
                 } else {
                     write!(f, "{}", func)?;
                     write!(f, "(")?;
-                    Displayable::from(expr1.as_ref()).fmt_text(f, ctx)?;
+                    expr1.as_ref().fmt_text(f, ctx)?;
                     write!(f, ", ")?;
-                    Displayable::from(expr2.as_ref()).fmt_text(f, ctx)?;
+                    expr2.as_ref().fmt_text(f, ctx)?;
                     write!(f, ")")
                 }
             }
             CallVariadic { func, exprs } => {
-                use mz_expr::VariadicFunc::*;
+                use crate::VariadicFunc::*;
                 match func {
                     ArrayCreate { .. } => {
-                        let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                        let exprs = separated_text(", ", exprs);
                         write!(f, "array[{}]", exprs)
                     }
                     ListCreate { .. } => {
-                        let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                        let exprs = separated_text(", ", exprs);
                         write!(f, "list[{}]", exprs)
                     }
                     RecordCreate { .. } => {
-                        let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                        let exprs = separated_text(", ", exprs);
                         write!(f, "row({})", exprs)
                     }
                     func if func.is_infix_op() && exprs.len() > 1 => {
                         let func = format!(" {} ", func);
-                        let exprs = separated_text(&func, exprs.iter().map(Displayable::from));
+                        let exprs = separated_text(&func, exprs);
                         write!(f, "({})", exprs)
                     }
                     func => {
-                        let exprs = separated_text(", ", exprs.iter().map(Displayable::from));
+                        let exprs = separated_text(", ", exprs);
                         write!(f, "{}({})", func, exprs)
                     }
                 }
             }
             If { cond, then, els } => {
                 write!(f, "case when ")?;
-                Displayable::from(cond.as_ref()).fmt_text(f, ctx)?;
+                cond.as_ref().fmt_text(f, ctx)?;
                 write!(f, " then ")?;
-                Displayable::from(then.as_ref()).fmt_text(f, ctx)?;
+                then.as_ref().fmt_text(f, ctx)?;
                 write!(f, " else ")?;
-                Displayable::from(els.as_ref()).fmt_text(f, ctx)?;
+                els.as_ref().fmt_text(f, ctx)?;
                 write!(f, " end")
             }
         }
     }
 }
 
-impl<'a> DisplayText for Displayable<'a, AggregateExpr> {
+impl DisplayText for AggregateExpr {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut ()) -> fmt::Result {
-        if self.0.is_count_asterisk() {
+        if self.is_count_asterisk() {
             return write!(f, "count(*)");
         }
 
         write!(
             f,
             "{}({}",
-            self.0.func.clone(),
-            if self.0.distinct { "distinct " } else { "" }
+            self.func.clone(),
+            if self.distinct { "distinct " } else { "" }
         )?;
 
-        Displayable::from(&self.0.expr).fmt_text(f, ctx)?;
+        self.expr.fmt_text(f, ctx)?;
         write!(f, ")")
     }
 }

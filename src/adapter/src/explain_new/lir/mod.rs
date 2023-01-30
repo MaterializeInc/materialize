@@ -9,85 +9,42 @@
 
 //! `EXPLAIN` support for LIR structures.
 
-pub(crate) mod text;
-
-use std::collections::BTreeMap;
-
 use mz_compute_client::plan::Plan;
 use mz_compute_client::types::dataflows::DataflowDescription;
-use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
+use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError};
 
-use super::{AnnotatedPlan, ExplainContext, ExplainMultiPlan, Explainable};
+use super::Explainable;
 
 impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<Plan>> {
-    type Context = ExplainContext<'a>;
+    type Context = <DataflowDescription<Plan> as Explain<'a>>::Context;
 
-    type Text = ExplainMultiPlan<'a, Plan>;
+    type Text = <DataflowDescription<Plan> as Explain<'a>>::Text;
 
-    type Json = ExplainMultiPlan<'a, Plan>;
+    type Json = <DataflowDescription<Plan> as Explain<'a>>::Json;
 
-    type Dot = UnsupportedFormat;
+    type Dot = <DataflowDescription<Plan> as Explain<'a>>::Dot;
 
     fn explain_text(
         &'a mut self,
         config: &'a ExplainConfig,
         context: &'a Self::Context,
     ) -> Result<Self::Text, ExplainError> {
-        self.as_explain_multi_plan(config, context)
+        self.0.explain_text(config, context)
     }
 
     fn explain_json(
         &'a mut self,
         config: &'a ExplainConfig,
         context: &'a Self::Context,
-    ) -> Result<Self::Text, ExplainError> {
-        self.as_explain_multi_plan(config, context)
+    ) -> Result<Self::Json, ExplainError> {
+        self.0.explain_json(config, context)
     }
-}
 
-impl<'a> Explainable<'a, DataflowDescription<Plan>> {
-    fn as_explain_multi_plan(
+    fn explain_dot(
         &'a mut self,
-        _config: &'a ExplainConfig,
-        context: &'a ExplainContext<'a>,
-    ) -> Result<ExplainMultiPlan<'a, Plan>, ExplainError> {
-        let plans = self
-            .0
-            .objects_to_build
-            .iter_mut()
-            .rev()
-            .map(|build_desc| {
-                let id = context
-                    .humanizer
-                    .humanize_id(build_desc.id)
-                    .unwrap_or_else(|| build_desc.id.to_string());
-                let plan = AnnotatedPlan {
-                    plan: &build_desc.plan,
-                    annotations: BTreeMap::default(),
-                };
-                (id, plan)
-            })
-            .collect::<Vec<_>>();
-
-        let sources = self
-            .0
-            .source_imports
-            .iter_mut()
-            .filter_map(|(id, (source_desc, _))| {
-                source_desc.arguments.operators.as_ref().map(|op| {
-                    let id = context
-                        .humanizer
-                        .humanize_id(*id)
-                        .unwrap_or_else(|| id.to_string());
-                    (id, op)
-                })
-            })
-            .collect::<Vec<_>>();
-
-        Ok(ExplainMultiPlan {
-            context,
-            sources,
-            plans,
-        })
+        config: &'a ExplainConfig,
+        context: &'a Self::Context,
+    ) -> Result<Self::Dot, ExplainError> {
+        self.0.explain_dot(config, context)
     }
 }

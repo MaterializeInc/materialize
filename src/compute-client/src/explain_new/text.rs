@@ -22,7 +22,13 @@
 
 use std::{collections::BTreeMap, fmt, ops::Deref};
 
-use mz_compute_client::plan::{
+use mz_expr::{Id, MirScalarExpr};
+use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
+use mz_repr::explain_new::{
+    fmt_text_constant_rows, CompactScalarSeq, DisplayText, Indices, PlanRenderingContext,
+};
+
+use crate::plan::{
     join::{
         delta_join::{DeltaPathPlan, DeltaStagePlan},
         linear_join::LinearStagePlan,
@@ -31,13 +37,8 @@ use mz_compute_client::plan::{
     reduce::{AccumulablePlan, BasicPlan, CollationPlan, HierarchicalPlan},
     AvailableCollections, Plan,
 };
-use mz_expr::{Id, MapFilterProject, MirScalarExpr};
-use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
-use mz_repr::explain_new::{fmt_text_constant_rows, separated_text, DisplayText, Indices};
 
-use crate::explain_new::{CompactScalarSeq, Displayable, PlanRenderingContext};
-
-impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
+impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
@@ -45,7 +46,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
     ) -> fmt::Result {
         use Plan::*;
 
-        match &self.0 {
+        match &self {
             Constant { rows } => match rows {
                 Ok(rows) => {
                     if !rows.is_empty() {
@@ -74,7 +75,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                     Id::Global(id) => ctx.humanizer.humanize_id(*id).ok_or(fmt::Error)?,
                 };
                 // Render plan-specific fields.
-                use mz_compute_client::plan::GetPlan;
+                use crate::plan::GetPlan;
                 match plan {
                     GetPlan::PassArrangements => {
                         writeln!(f, "{}Get::PassArrangements {}", ctx.indent, id)?;
@@ -83,7 +84,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                     GetPlan::Arrangement(key, val, mfp) => {
                         writeln!(f, "{}Get::Arrangement {}", ctx.indent, id)?;
                         ctx.indent += 1;
-                        Displayable::from(mfp).fmt_text(f, ctx)?;
+                        mfp.fmt_text(f, ctx)?;
                         {
                             let key = CompactScalarSeq(key);
                             writeln!(f, "{}key={}", ctx.indent, key)?;
@@ -95,12 +96,12 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                     GetPlan::Collection(mfp) => {
                         writeln!(f, "{}Get::Collection {}", ctx.indent, id)?;
                         ctx.indent += 1;
-                        Displayable::from(mfp).fmt_text(f, ctx)?;
+                        mfp.fmt_text(f, ctx)?;
                     }
                 }
 
                 // Render plan-agnostic fields (common for all plans for this variant).
-                Displayable::from(keys).fmt_text(f, ctx)?;
+                keys.fmt_text(f, ctx)?;
 
                 ctx.indent.reset(); // reset the original indent level
             }
@@ -116,12 +117,12 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                 }
 
                 writeln!(f, "{}Return", ctx.indent)?;
-                ctx.indented(|ctx| Displayable::from(head).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With", ctx.indent)?;
                 ctx.indented(|ctx| {
                     for (id, value) in bindings.iter().rev() {
                         writeln!(f, "{}cte {} =", ctx.indent, *id)?;
-                        ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                     }
                     Ok(())
                 })?;
@@ -131,12 +132,12 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                 let head = body.as_ref();
 
                 writeln!(f, "{}Return", ctx.indent)?;
-                ctx.indented(|ctx| Displayable::from(head).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
                 ctx.indented(|ctx| {
                     for (id, value) in bindings.iter().rev() {
                         writeln!(f, "{}cte {} =", ctx.indent, *id)?;
-                        ctx.indented(|ctx| Displayable::from(*value).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                     }
                     Ok(())
                 })?;
@@ -148,7 +149,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
             } => {
                 writeln!(f, "{}Mfp", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    Displayable::from(mfp).fmt_text(f, ctx)?;
+                    mfp.fmt_text(f, ctx)?;
                     if let Some((key, val)) = input_key_val {
                         {
                             let key = CompactScalarSeq(key);
@@ -158,7 +159,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                             writeln!(f, "{}input_val={}", ctx.indent, val)?;
                         }
                     }
-                    Displayable::from(input.as_ref()).fmt_text(f, ctx)
+                    input.as_ref().fmt_text(f, ctx)
                 })?;
             }
             FlatMap {
@@ -171,29 +172,29 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                 let exprs = CompactScalarSeq(exprs);
                 writeln!(f, "{}FlatMap {}({})", ctx.indent, func, exprs)?;
                 ctx.indented(|ctx| {
-                    Displayable::from(mfp).fmt_text(f, ctx)?;
+                    mfp.fmt_text(f, ctx)?;
                     if let Some(key) = input_key {
                         let key = CompactScalarSeq(key);
                         writeln!(f, "{}input_key={}", ctx.indent, key)?;
                     }
-                    Displayable::from(input.as_ref()).fmt_text(f, ctx)
+                    input.as_ref().fmt_text(f, ctx)
                 })?;
             }
             Join { inputs, plan } => {
-                use mz_compute_client::plan::join::JoinPlan;
+                use crate::plan::join::JoinPlan;
                 match plan {
                     JoinPlan::Linear(plan) => {
                         writeln!(f, "{}Join::Linear", ctx.indent)?;
-                        ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     JoinPlan::Delta(plan) => {
                         writeln!(f, "{}Join::Delta", ctx.indent)?;
-                        ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                 }
                 ctx.indented(|ctx| {
                     for input in inputs {
-                        Displayable::from(input).fmt_text(f, ctx)?;
+                        input.fmt_text(f, ctx)?;
                     }
                     Ok(())
                 })?;
@@ -204,7 +205,7 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                 plan,
                 input_key,
             } => {
-                use mz_compute_client::plan::reduce::ReducePlan;
+                use crate::plan::reduce::ReducePlan;
                 match plan {
                     ReducePlan::Distinct => {
                         writeln!(f, "{}Reduce::Distinct", ctx.indent)?;
@@ -214,19 +215,19 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                     }
                     ReducePlan::Accumulable(plan) => {
                         writeln!(f, "{}Reduce::Accumulable", ctx.indent)?;
-                        ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     ReducePlan::Hierarchical(plan) => {
                         writeln!(f, "{}Reduce::Hierarchical", ctx.indent)?;
-                        ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     ReducePlan::Basic(plan) => {
                         writeln!(f, "{}Reduce::Basic", ctx.indent)?;
-                        ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     ReducePlan::Collation(plan) => {
                         writeln!(f, "{}Reduce::Collation", ctx.indent)?;
-                        ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                 }
                 ctx.indented(|ctx| {
@@ -234,27 +235,23 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                         writeln!(f, "{}val_plan=id", ctx.indent)?;
                     } else {
                         writeln!(f, "{}val_plan", ctx.indent)?;
-                        ctx.indented(|ctx| {
-                            Displayable::from(key_val_plan.val_plan.deref()).fmt_text(f, ctx)
-                        })?;
+                        ctx.indented(|ctx| key_val_plan.val_plan.deref().fmt_text(f, ctx))?;
                     }
                     if key_val_plan.key_plan.deref().is_identity() {
                         writeln!(f, "{}key_plan=id", ctx.indent)?;
                     } else {
                         writeln!(f, "{}key_plan", ctx.indent)?;
-                        ctx.indented(|ctx| {
-                            Displayable::from(key_val_plan.key_plan.deref()).fmt_text(f, ctx)
-                        })?;
+                        ctx.indented(|ctx| key_val_plan.key_plan.deref().fmt_text(f, ctx))?;
                     }
                     if let Some(key) = input_key {
                         let key = CompactScalarSeq(key);
                         writeln!(f, "{}input_key={}", ctx.indent, key)?;
                     }
-                    Displayable::from(input.as_ref()).fmt_text(f, ctx)
+                    input.as_ref().fmt_text(f, ctx)
                 })?;
             }
             TopK { input, top_k_plan } => {
-                use mz_compute_client::plan::top_k::TopKPlan;
+                use crate::plan::top_k::TopKPlan;
                 match top_k_plan {
                     TopKPlan::MonotonicTop1(plan) => {
                         write!(f, "{}TopK::MonotonicTop1", ctx.indent)?;
@@ -300,17 +297,17 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                     }
                 }
                 writeln!(f)?;
-                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
             }
             Negate { input } => {
                 writeln!(f, "{}Negate", ctx.indent)?;
-                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
             }
             Threshold {
                 input,
                 threshold_plan,
             } => {
-                use mz_compute_client::plan::threshold::ThresholdPlan;
+                use crate::plan::threshold::ThresholdPlan;
                 match threshold_plan {
                     ThresholdPlan::Basic(plan) => {
                         let ensure_arrangement = Arrangement::from(&plan.ensure_arrangement);
@@ -323,13 +320,13 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                         writeln!(f, " ensure_arrangement={}", ensure_arrangement)?;
                     }
                 };
-                ctx.indented(|ctx| Displayable::from(input.as_ref()).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
             }
             Union { inputs } => {
                 writeln!(f, "{}Union", ctx.indent)?;
                 ctx.indented(|ctx| {
                     for input in inputs.iter() {
-                        Displayable::from(input).fmt_text(f, ctx)?;
+                        input.fmt_text(f, ctx)?;
                     }
                     Ok(())
                 })?;
@@ -346,10 +343,10 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
                         let key = CompactScalarSeq(key);
                         writeln!(f, "{}input_key=[{}]", ctx.indent, key)?;
                     }
-                    Displayable::from(input_mfp).fmt_text(f, ctx)?;
-                    Displayable::from(forms).fmt_text(f, ctx)?;
+                    input_mfp.fmt_text(f, ctx)?;
+                    forms.fmt_text(f, ctx)?;
                     // Render input
-                    Displayable::from(input.as_ref()).fmt_text(f, ctx)
+                    input.as_ref().fmt_text(f, ctx)
                 })?;
             }
         }
@@ -358,17 +355,17 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Plan> {
     }
 }
 
-impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, AvailableCollections> {
+impl DisplayText<PlanRenderingContext<'_, Plan>> for AvailableCollections {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
         // raw field
-        let raw = &self.0.raw;
+        let raw = &self.raw;
         writeln!(f, "{}raw={}", ctx.indent, raw)?;
         // arranged field
-        for (i, arrangement) in self.0.arranged.iter().enumerate() {
+        for (i, arrangement) in self.arranged.iter().enumerate() {
             let arrangement = Arrangement::from(arrangement);
             writeln!(f, "{}arrangements[{}]={}", ctx.indent, i, arrangement)?;
         }
@@ -377,61 +374,27 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Availab
     }
 }
 
-impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, MapFilterProject> {
+impl DisplayText<PlanRenderingContext<'_, Plan>> for LinearJoinPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
-        let (scalars, predicates, outputs, input_arity) = (
-            &self.0.expressions,
-            &self.0.predicates,
-            &self.0.projection,
-            &self.0.input_arity,
-        );
-
-        // render `project` field iff not the identity projection
-        if &outputs.len() != input_arity || outputs.iter().enumerate().any(|(i, p)| i != *p) {
-            let outputs = Indices(outputs);
-            writeln!(f, "{}project=({})", ctx.indent, outputs)?;
-        }
-        // render `filter` field iff predicates are present
-        if !predicates.is_empty() {
-            let predicates = predicates.iter().map(|(_, p)| Displayable::from(p));
-            let predicates = separated_text(" AND ", predicates);
-            writeln!(f, "{}filter=({})", ctx.indent, predicates)?;
-        }
-        // render `map` field iff scalars are present
-        if !scalars.is_empty() {
-            let scalars = CompactScalarSeq(scalars);
-            writeln!(f, "{}map=({})", ctx.indent, scalars)?;
-        }
-
-        Ok(())
-    }
-}
-
-impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, LinearJoinPlan> {
-    fn fmt_text(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
-    ) -> fmt::Result {
-        let plan = self.0;
+        let plan = self;
         if let Some(closure) = plan.final_closure.as_ref() {
             if !closure.is_identity() {
                 writeln!(f, "{}final_closure", ctx.indent)?;
-                ctx.indented(|ctx| Displayable::from(closure).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| closure.fmt_text(f, ctx))?;
             }
         }
         for (i, plan) in plan.stage_plans.iter().enumerate().rev() {
             writeln!(f, "{}linear_stage[{}]", ctx.indent, i)?;
-            ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
         }
         if let Some(closure) = plan.initial_closure.as_ref() {
             if !closure.is_identity() {
                 writeln!(f, "{}initial_closure", ctx.indent)?;
-                ctx.indented(|ctx| Displayable::from(closure).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| closure.fmt_text(f, ctx))?;
             }
         }
         match &plan.source_key {
@@ -452,16 +415,16 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, LinearJ
     }
 }
 
-impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, LinearStagePlan> {
+impl DisplayText<PlanRenderingContext<'_, Plan>> for LinearStagePlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
-        let plan = self.0;
+        let plan = self;
         if !plan.closure.is_identity() {
             writeln!(f, "{}closure", ctx.indent)?;
-            ctx.indented(|ctx| Displayable::from(&plan.closure).fmt_text(f, ctx))?;
+            ctx.indented(|ctx| plan.closure.fmt_text(f, ctx))?;
         }
         {
             let lookup_relation = &plan.lookup_relation;
@@ -485,40 +448,40 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, LinearS
     }
 }
 
-impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, DeltaJoinPlan> {
+impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaJoinPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
-        for (i, plan) in self.0.path_plans.iter().enumerate() {
+        for (i, plan) in self.path_plans.iter().enumerate() {
             writeln!(f, "{}plan_path[{}]", ctx.indent, i)?;
-            ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
         }
         Ok(())
     }
 }
 
-impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, DeltaPathPlan> {
+impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaPathPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
-        let plan = self.0;
+        let plan = self;
         if let Some(closure) = plan.final_closure.as_ref() {
             if !closure.is_identity() {
                 writeln!(f, "{}final_closure", ctx.indent)?;
-                ctx.indented(|ctx| Displayable::from(closure).fmt_text(f, ctx))?;
+                ctx.indented(|ctx| closure.fmt_text(f, ctx))?;
             }
         }
         for (i, plan) in plan.stage_plans.iter().enumerate().rev() {
             writeln!(f, "{}delta_stage[{}]", ctx.indent, i)?;
-            ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
         }
         if !plan.initial_closure.is_identity() {
             writeln!(f, "{}initial_closure", ctx.indent)?;
-            ctx.indented(|ctx| Displayable::from(&plan.initial_closure).fmt_text(f, ctx))?;
+            ctx.indented(|ctx| plan.initial_closure.fmt_text(f, ctx))?;
         }
         {
             let source_relation = &plan.source_relation;
@@ -533,16 +496,16 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, DeltaPa
     }
 }
 
-impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, DeltaStagePlan> {
+impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaStagePlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
-        let plan = self.0;
+        let plan = self;
         if !plan.closure.is_identity() {
             writeln!(f, "{}closure", ctx.indent)?;
-            ctx.indented(|ctx| Displayable::from(&plan.closure).fmt_text(f, ctx))?;
+            ctx.indented(|ctx| plan.closure.fmt_text(f, ctx))?;
         }
         {
             let lookup_relation = &plan.lookup_relation;
@@ -566,17 +529,17 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, DeltaSt
     }
 }
 
-impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, JoinClosure> {
+impl DisplayText<PlanRenderingContext<'_, Plan>> for JoinClosure {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
-        Displayable::from(self.0.before.deref()).fmt_text(f, ctx)?;
-        if !self.0.ready_equivalences.is_empty() {
+        self.before.deref().fmt_text(f, ctx)?;
+        if !self.ready_equivalences.is_empty() {
             let equivalences = separated(
                 " AND ",
-                self.0.ready_equivalences.iter().map(|equivalence| {
+                self.ready_equivalences.iter().map(|equivalence| {
                     if equivalence.len() == 2 {
                         bracketed("", "", separated(" = ", equivalence))
                     } else {
@@ -590,43 +553,43 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, JoinClo
     }
 }
 
-impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, AccumulablePlan> {
+impl DisplayText<PlanRenderingContext<'_, Plan>> for AccumulablePlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
         // full_aggrs (skipped because they are repeated in simple_aggrs ∪ distinct_aggrs)
-        // for (i, aggr) in self.0.full_aggrs.iter().enumerate() {
+        // for (i, aggr) in self.full_aggrs.iter().enumerate() {
         //     write!(f, "{}full_aggrs[{}]=", ctx.indent, i)?;
-        //     Displayable::from(aggr).fmt_text(f, &mut ())?;
+        //     aggr.fmt_text(f, &mut ())?;
         //     writeln!(f)?;
         // }
         // simple_aggrs
-        for (i, (i_aggs, i_datum, agg)) in self.0.simple_aggrs.iter().enumerate() {
+        for (i, (i_aggs, i_datum, agg)) in self.simple_aggrs.iter().enumerate() {
             write!(f, "{}simple_aggrs[{}]=", ctx.indent, i)?;
             write!(f, "({}, {}, ", i_aggs, i_datum)?;
-            Displayable::from(agg).fmt_text(f, &mut ())?;
+            agg.fmt_text(f, &mut ())?;
             writeln!(f, ")")?;
         }
         // distinct_aggrs
-        for (i, (i_aggs, i_datum, agg)) in self.0.distinct_aggrs.iter().enumerate() {
+        for (i, (i_aggs, i_datum, agg)) in self.distinct_aggrs.iter().enumerate() {
             write!(f, "{}distinct_aggrs[{}]=", ctx.indent, i)?;
             write!(f, "({}, {}, ", i_aggs, i_datum)?;
-            Displayable::from(agg).fmt_text(f, &mut ())?;
+            agg.fmt_text(f, &mut ())?;
             writeln!(f, ")")?;
         }
         Ok(())
     }
 }
 
-impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, HierarchicalPlan> {
+impl DisplayText<PlanRenderingContext<'_, Plan>> for HierarchicalPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
-        match self.0 {
+        match self {
             HierarchicalPlan::Monotonic(plan) => {
                 let aggr_funcs = separated(", ", &plan.aggr_funcs);
                 writeln!(f, "{}aggr_funcs=[{}]", ctx.indent, aggr_funcs)?;
@@ -646,22 +609,22 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Hierarc
     }
 }
 
-impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, BasicPlan> {
+impl DisplayText<PlanRenderingContext<'_, Plan>> for BasicPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
-        match self.0 {
+        match self {
             BasicPlan::Single(idx, agg) => {
                 write!(f, "{}aggr=[({}, ", ctx.indent, idx)?;
-                Displayable::from(agg).fmt_text(f, &mut ())?;
+                agg.fmt_text(f, &mut ())?;
                 writeln!(f, ")")?;
             }
             BasicPlan::Multiple(aggs) => {
                 for (i, (i_datum, agg)) in aggs.iter().enumerate() {
                     write!(f, "{}aggrs[{}]=({}, ", ctx.indent, i, i_datum)?;
-                    Displayable::from(agg).fmt_text(f, &mut ())?;
+                    agg.fmt_text(f, &mut ())?;
                     writeln!(f, ")")?;
                 }
             }
@@ -670,16 +633,15 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, BasicPl
     }
 }
 
-impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, CollationPlan> {
+impl DisplayText<PlanRenderingContext<'_, Plan>> for CollationPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
         {
-            use mz_compute_client::plan::reduce::ReductionType;
+            use crate::plan::reduce::ReductionType;
             let aggregate_types = &self
-                .0
                 .aggregate_types
                 .iter()
                 .map(|reduction_type| match reduction_type {
@@ -691,17 +653,17 @@ impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Displayable<'a, Collati
             let aggregate_types = separated(", ", aggregate_types);
             writeln!(f, "{}aggregate_types=[{}]", ctx.indent, aggregate_types)?;
         }
-        if let Some(plan) = &self.0.accumulable {
+        if let Some(plan) = &self.accumulable {
             writeln!(f, "{}accumulable", ctx.indent)?;
-            ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
         }
-        if let Some(plan) = &self.0.hierarchical {
+        if let Some(plan) = &self.hierarchical {
             writeln!(f, "{}hierarchical", ctx.indent)?;
-            ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
         }
-        if let Some(plan) = &self.0.basic {
+        if let Some(plan) = &self.basic {
             writeln!(f, "{}basic", ctx.indent)?;
-            ctx.indented(|ctx| Displayable::from(plan).fmt_text(f, ctx))?;
+            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
         }
         Ok(())
     }

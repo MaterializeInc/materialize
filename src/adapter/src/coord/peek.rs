@@ -25,19 +25,20 @@ use uuid::Uuid;
 use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_client::types::dataflows::DataflowDescription;
-use mz_expr::{EvalError, Id, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{
+    EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::str::Indent;
 use mz_ore::str::StrExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain_new::{
-    fmt_text_constant_rows, separated_text, DisplayText, ExprHumanizer, Indices,
+    fmt_text_constant_rows, separated_text, CompactScalarSeq, DisplayText, ExprHumanizer, Indices,
 };
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::ConnectionId;
 use crate::coord::timestamp_selection::TimestampContext;
-use crate::explain_new::{CompactScalarSeq, Displayable};
 use crate::util::send_immediate_rows;
 use crate::{AdapterError, AdapterNotice};
 
@@ -68,7 +69,7 @@ pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
     thinned_arity: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum FastPathPlan {
     /// The view evaluates to a constant result that can be returned.
     ///
@@ -114,7 +115,7 @@ where
                     *ctx.as_mut() += 1;
                 }
                 if !filter.is_empty() {
-                    let predicates = separated_text(" AND ", filter.iter().map(Displayable::from));
+                    let predicates = separated_text(" AND ", filter);
                     writeln!(f, "{}Filter {}", ctx.as_mut(), predicates)?;
                     *ctx.as_mut() += 1;
                 }
@@ -123,7 +124,7 @@ where
                     writeln!(f, "{}Map ({})", ctx.as_mut(), scalars)?;
                     *ctx.as_mut() += 1;
                 }
-                Displayable::fmt_indexed_filter(f, ctx, id, literal_constraints.clone())?;
+                MirRelationExpr::fmt_indexed_filter(f, ctx, id, literal_constraints.clone())?;
                 ctx.as_mut().reset();
                 Ok(())
             }
