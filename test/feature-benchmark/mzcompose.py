@@ -131,7 +131,7 @@ def run_one_scenario(
                 rm=True,
             )
 
-            c.start_and_wait_for_tcp(services=["materialized"])
+            c.up("materialized")
 
         executor = Docker(composition=c, seed=common_seed, materialized=mz)
 
@@ -264,7 +264,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     else:
         dependencies += ["zookeeper", "kafka", "schema-registry"]
 
-    c.start_and_wait_for_tcp(services=dependencies)
+    c.up(*dependencies)
 
     scenarios = initial_scenarios.copy()
 
@@ -374,7 +374,7 @@ root_scenario: {args.root_scenario}"""
     ]
 
     with c.override(*overrides):
-        c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+        c.up("zookeeper", "kafka", "schema-registry")
         c.up("testdrive", persistent=True)
 
         # Build the list of scenarios to run

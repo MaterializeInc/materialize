@@ -43,10 +43,6 @@ def workflow_default(c: Composition) -> None:
 def initialize(c: Composition) -> None:
     c.up("materialized", "postgres", "toxiproxy")
 
-    c.wait_for_materialized()
-    c.wait_for_postgres()
-    c.wait_for_tcp(host="toxiproxy", port=8474)
-
     # We run configure-postgres.td only once for all workflows as
     # it contains CREATE USER that is not indempotent
 
@@ -56,13 +52,11 @@ def initialize(c: Composition) -> None:
 def restart_pg(c: Composition) -> None:
     c.kill("postgres")
     c.up("postgres")
-    c.wait_for_postgres()
 
 
 def restart_mz(c: Composition) -> None:
     c.kill("materialized")
     c.up("materialized")
-    c.wait_for_materialized()
 
 
 def begin(c: Composition) -> None:

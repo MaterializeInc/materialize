@@ -96,7 +96,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
     scenario_class = globals()[args.scenario]
 
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.up("zookeeper", "kafka", "schema-registry")
 
     random.seed(args.seed)
 
@@ -119,7 +119,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
     ):
         c.up("materialized")
-        c.wait_for_materialized()
         c.sql(
             """
             CREATE CLUSTER storaged REPLICAS (r1 (

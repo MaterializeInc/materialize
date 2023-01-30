@@ -17,8 +17,7 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=["materialized"])
-    c.wait_for_materialized("materialized")
+    c.up("materialized")
 
     # ensure that the directory has restricted permissions
     c.exec(

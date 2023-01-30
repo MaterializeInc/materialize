@@ -43,7 +43,7 @@ class KafkaStart(Action):
         return [KafkaRunning()]
 
     def run(self, c: Composition) -> None:
-        c.start_and_wait_for_tcp(services=["kafka"])
+        c.up("kafka")
 
 
 class KafkaStop(Action):

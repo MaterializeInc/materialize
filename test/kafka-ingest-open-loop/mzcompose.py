@@ -129,10 +129,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     override = [Materialized(options=options)]
 
     with c.override(*override):
-        c.start_and_wait_for_tcp(services=prerequisites)
-
-        c.up("materialized")
-        c.wait_for_materialized("materialized")
+        c.up(*prerequisites, "materialized")
 
         c.run(
             "testdrive",

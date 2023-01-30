@@ -1249,10 +1249,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.up("zookeeper", "kafka", "schema-registry")
 
     c.up("materialized")
-    c.wait_for_materialized()
 
     run_test(c, args)
 
@@ -1273,10 +1272,9 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.up("zookeeper", "kafka", "schema-registry")
 
     c.up("materialized")
-    c.wait_for_materialized()
 
     nodes = [
         Clusterd(name="clusterd_1_1"),
@@ -1311,7 +1309,7 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Create multiple clusters with multiple nodes and replicas each"""
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.up("zookeeper", "kafka", "schema-registry")
 
     parser.add_argument(
         "--workers",
@@ -1346,7 +1344,6 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
     c.up("testdrive", persistent=True)
     c.up("materialized")
-    c.wait_for_materialized()
 
     # Construct the requied Clusterd instances and peer them into clusters
     cluster_replicas = []

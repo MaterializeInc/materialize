@@ -26,8 +26,6 @@ class MzStart(Action):
 
     def run(self, c: Composition) -> None:
         c.up("materialized")
-        # Loaded Mz environments take a while to start up
-        c.wait_for_materialized(timeout_secs=600)
 
         for config_param in [
             "max_tables",
@@ -71,7 +69,6 @@ class MzRestart(Action):
     def run(self, c: Composition) -> None:
         c.kill("materialized")
         c.up("materialized")
-        c.wait_for_materialized(timeout_secs=300)
 
 
 class KillClusterd(Action):

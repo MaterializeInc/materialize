@@ -363,10 +363,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.down(destroy_volumes=True)
 
-        c.start_and_wait_for_tcp(
-            services=["redpanda", "materialized", "postgres", "clusterd"]
-        )
-        c.wait_for_materialized()
+        c.up("redpanda", "materialized", "postgres", "clusterd")
 
         c.sql(
             """
@@ -383,7 +380,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         # Restart Mz to confirm that re-hydration is also bounded memory
         c.kill("materialized", "clusterd")
-        c.start_and_wait_for_tcp(services=["materialized", "clusterd"])
-        c.wait_for_materialized()
+        c.up("materialized", "clusterd")
 
         c.testdrive(scenario.post_restart)

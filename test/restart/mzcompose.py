@@ -35,19 +35,16 @@ SERVICES = [
 
 def workflow_github_8021(c: Composition) -> None:
     c.up("materialized")
-    c.wait_for_materialized("materialized")
     c.run("testdrive", "github-8021.td")
 
     # Ensure MZ can boot
     c.kill("materialized")
     c.up("materialized")
-    c.wait_for_materialized("materialized")
     c.kill("materialized")
 
 
 def workflow_audit_log(c: Composition) -> None:
     c.up("materialized")
-    c.wait_for_materialized(service="materialized")
 
     # Create some audit log entries.
     c.sql("CREATE TABLE t (i INT)")
@@ -58,7 +55,6 @@ def workflow_audit_log(c: Composition) -> None:
     # Restart mz.
     c.kill("materialized")
     c.up("materialized")
-    c.wait_for_materialized()
 
     # Verify the audit log entries are still present and have not changed.
     restart_log = c.sql_query("SELECT * FROM mz_audit_events ORDER BY id")
@@ -71,15 +67,7 @@ def workflow_audit_log(c: Composition) -> None:
 # Test for GitHub issue #13726
 def workflow_timelines(c: Composition) -> None:
     for _ in range(3):
-        c.start_and_wait_for_tcp(
-            services=[
-                "zookeeper",
-                "kafka",
-                "schema-registry",
-                "materialized",
-            ]
-        )
-        c.wait_for_materialized()
+        c.up("zookeeper", "kafka", "schema-registry", "materialized")
         c.run("testdrive", "timelines.td")
         c.rm(
             "zookeeper",
@@ -102,8 +90,7 @@ def workflow_stash(c: Composition) -> None:
     with c.override(Materialized(external_cockroach=True)):
         c.up("cockroach")
 
-        c.start_and_wait_for_tcp(services=["materialized"])
-        c.wait_for_materialized("materialized")
+        c.up("materialized")
 
         cursor = c.sql_cursor()
         cursor.execute("CREATE TABLE a (i INT)")
@@ -133,7 +120,6 @@ def workflow_stash(c: Composition) -> None:
 
 def workflow_storage_managed_collections(c: Composition) -> None:
     c.up("materialized")
-    c.wait_for_materialized(service="materialized")
 
     # Create some storage shard entries.
     c.sql("CREATE TABLE t (i INT)")
@@ -150,7 +136,6 @@ def workflow_storage_managed_collections(c: Composition) -> None:
     # Restart mz.
     c.kill("materialized")
     c.up("materialized")
-    c.wait_for_materialized()
 
     # Verify the shard mappings are still present and have not changed.
     restart_user_shards = None
@@ -167,7 +152,7 @@ def workflow_storage_managed_collections(c: Composition) -> None:
 
 def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
     c.up("testdrive_no_reset", persistent=True)
-    c.start_and_wait_for_tcp(services=["materialized"])
+    c.up("materialized")
 
     c.testdrive(
         service="testdrive_no_reset",
@@ -195,7 +180,6 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
     # Assert that mz restarts successfully even in the presence of replica sizes that are not allowed
     c.kill("materialized")
     c.up("materialized")
-    c.wait_for_materialized()
 
     c.testdrive(
         service="testdrive_no_reset",

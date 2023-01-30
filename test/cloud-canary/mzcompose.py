@@ -40,8 +40,7 @@ def workflow_default(c: Composition) -> None:
     """Deploy the current source to the cloud and run a smoke test."""
 
     print("Obtaining mz_version() string from local instance ...")
-    c.start_and_wait_for_tcp(services=["materialized"])
-    c.wait_for_materialized()
+    c.up("materialized")
     local_version = c.sql_query("SELECT mz_version();")[0][0]
 
     print(f"Shutting down region {REGION} ...")

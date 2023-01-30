@@ -34,9 +34,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    c.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "materialized"]
-    )
+    c.up("zookeeper", "kafka", "schema-registry", "materialized")
     c.run(
         "testdrive",
         f"--seed={args.seed}",
@@ -46,7 +44,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     c.kill("materialized")
     c.up("materialized")
-    c.wait_for_materialized()
     c.run(
         "testdrive",
         f"--seed={args.seed}",

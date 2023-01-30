@@ -83,7 +83,7 @@ def workflow_default(c: Composition) -> None:
 
         # Assert that the default max_result_size is served when sync is disabled.
         with c.override(Materialized()):
-            c.start_and_wait_for_tcp(services=["materialized"])
+            c.up("materialized")
             c.testdrive("\n".join(["> SHOW max_result_size", "1073741824"]))
             c.stop("materialized")
 
@@ -117,19 +117,19 @@ def workflow_default(c: Composition) -> None:
                 ]
             )
         ):
-            c.start_and_wait_for_tcp(services=["materialized"])
+            c.up("materialized")
             c.testdrive("\n".join(["> SHOW max_result_size", "2147483648"]))
             c.stop("materialized")
 
         # Assert that the last value is persisted and available upon restart,
         # even if the parameter sync loop is not running.
         with c.override(Materialized()):
-            c.start_and_wait_for_tcp(services=["materialized"])
+            c.up("materialized")
             c.testdrive("\n".join(["> SHOW max_result_size", "2147483648"]))
             c.stop("materialized")
 
         # Restart Materialized with the parameter sync loop running.
-        c.start_and_wait_for_tcp(services=["materialized"])
+        c.up("materialized")
 
         # Add a rule that targets the current user with the 3GiB variant.
         ld_client.update_targeting(

@@ -31,7 +31,7 @@ class DebeziumStart(Action):
         return [DebeziumRunning()]
 
     def run(self, c: Composition) -> None:
-        c.start_and_wait_for_tcp(services=["debezium"])
+        c.up("debezium")
 
 
 class DebeziumStop(Action):

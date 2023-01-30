@@ -33,7 +33,7 @@ def workflow_default(c: Composition) -> None:
 
 
 def workflow_with_otel(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=["materialized"])
+    c.up("materialized")
     port = c.port("materialized", 6878)
 
     # Start with fastpath
@@ -75,7 +75,7 @@ def workflow_with_otel(c: Composition) -> None:
 
 def workflow_without_otel(c: Composition) -> None:
     with c.override(Materialized()):
-        c.start_and_wait_for_tcp(services=["materialized"])
+        c.up("materialized")
         port = c.port("materialized", 6878)
 
         # Start with fastpath

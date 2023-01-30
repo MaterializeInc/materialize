@@ -83,11 +83,8 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     c.down(destroy_volumes=True)
-    c.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "localstack"]
-    )
+    c.up("zookeeper", "kafka", "schema-registry", "localstack")
     c.up("materialized")
-    c.wait_for_materialized()
 
     # Create a cluster and verify that tests pass.
     c.up("clusterd1")
@@ -131,7 +128,6 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     """Ensure clusterds correctly crash if used in unsupported communication config"""
     c.down(destroy_volumes=True)
     c.up("materialized")
-    c.wait_for_materialized()
 
     # Create a remote cluster and verify that tests pass.
     c.up("clusterd1")
@@ -172,7 +168,6 @@ def workflow_test_github_12251(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("materialized")
-    c.wait_for_materialized()
 
     start_time = time.process_time()
     try:
@@ -214,7 +209,6 @@ def workflow_test_github_15531(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized")
     c.up("clusterd1")
-    c.wait_for_materialized()
 
     # helper function to get command history metrics for clusterd
     def find_clusterd_command_history_metrics(c: Composition) -> Tuple[int, int]:
@@ -322,7 +316,6 @@ def workflow_test_github_15535(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized")
     c.up("clusterd1")
-    c.wait_for_materialized()
 
     # Set up a dataflow on clusterd.
     c.sql(
@@ -344,7 +337,6 @@ def workflow_test_github_15535(c: Composition) -> None:
     # Restart environmentd to trigger a reconciliation on clusterd.
     c.kill("materialized")
     c.up("materialized")
-    c.wait_for_materialized()
 
     print("Sleeping to wait for frontier updates")
     time.sleep(10)
@@ -388,7 +380,6 @@ def workflow_test_github_15799(c: Composition) -> None:
     c.up("materialized")
     c.up("clusterd1")
     c.up("clusterd2")
-    c.wait_for_materialized()
 
     c.sql(
         """
@@ -435,7 +426,6 @@ def workflow_test_github_15930(c: Composition) -> None:
         c.up("testdrive", persistent=True)
         c.up("materialized")
         c.up("clusterd1")
-        c.wait_for_materialized()
 
         c.sql(
             """
@@ -464,7 +454,6 @@ def workflow_test_github_15930(c: Composition) -> None:
         # Restart environmentd to trigger a reconciliation on clusterd.
         c.kill("materialized")
         c.up("materialized")
-        c.wait_for_materialized()
 
         # verify again that we can query the introspection source
         c.testdrive(
@@ -490,7 +479,6 @@ def workflow_test_github_15930(c: Composition) -> None:
         # Restart environmentd to trigger yet another reconciliation on clusterd.
         c.kill("materialized")
         c.up("materialized")
-        c.wait_for_materialized()
 
         # verify yet again that we can query the introspection source and now the table.
         c.testdrive(
@@ -512,15 +500,7 @@ def workflow_test_upsert(c: Composition) -> None:
         Testdrive(default_timeout="30s", no_reset=True, consistent_seed=True),
     ):
         c.down(destroy_volumes=True)
-        dependencies = [
-            "materialized",
-            "zookeeper",
-            "kafka",
-            "schema-registry",
-        ]
-        c.start_and_wait_for_tcp(
-            services=dependencies,
-        )
+        c.up("materialized", "zookeeper", "kafka", "schema-registry")
 
         c.run("testdrive", "upsert/01-create-sources.td")
         # Sleep to make sure the errors have made it to persist.
@@ -543,16 +523,13 @@ def workflow_test_remote_storage(c: Composition) -> None:
     with c.override(
         Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
     ):
-        dependencies = [
+        c.up(
             "cockroach",
             "materialized",
             "clusterd1",
             "zookeeper",
             "kafka",
             "schema-registry",
-        ]
-        c.start_and_wait_for_tcp(
-            services=dependencies,
         )
 
         c.run("testdrive", "storage/01-create-sources.td")
@@ -573,7 +550,6 @@ def workflow_test_drop_default_cluster(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("materialized")
-    c.wait_for_materialized()
 
     c.sql("DROP CLUSTER default CASCADE")
     c.sql("CREATE CLUSTER default REPLICAS (default (SIZE '1'))")
@@ -589,13 +565,7 @@ def workflow_test_resource_limits(c: Composition) -> None:
         Postgres(),
         Materialized(),
     ):
-        dependencies = [
-            "materialized",
-            "postgres",
-        ]
-        c.start_and_wait_for_tcp(
-            services=dependencies,
-        )
+        c.up("materialized", "postgres")
 
         c.run("testdrive", "resources/resource-limits.td")
 
@@ -613,14 +583,7 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
             name="storage", environment_extra=["FAILPOINTS=pg_snapshot_failure=return"]
         ),
     ):
-        dependencies = [
-            "materialized",
-            "postgres",
-            "storage",
-        ]
-        c.start_and_wait_for_tcp(
-            services=dependencies,
-        )
+        c.up("materialized", "postgres", "storage")
 
         c.run("testdrive", "pg-snapshot-resumption/01-configure-postgres.td")
         c.run("testdrive", "pg-snapshot-resumption/02-create-sources.td")
@@ -637,9 +600,7 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
             # turn off the failpoint
             Clusterd(name="storage")
         ):
-            c.start_and_wait_for_tcp(
-                services=["storage"],
-            )
+            c.up("storage")
             c.run("testdrive", "pg-snapshot-resumption/04-verify-data.td")
 
 
@@ -656,12 +617,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
             ],
         ),
     ):
-        dependencies = [
-            "materialized",
-        ]
-        c.start_and_wait_for_tcp(
-            services=dependencies,
-        )
+        c.up("materialized")
 
         c.run("testdrive", "resources/bootstrapped-system-vars.td")
 
@@ -673,13 +629,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
             ],
         ),
     ):
-        dependencies = [
-            "materialized",
-        ]
-        c.start_and_wait_for_tcp(
-            services=dependencies,
-        )
-
+        c.up("materialized")
         c.run("testdrive", "resources/bootstrapped-system-vars.td")
 
 
@@ -694,7 +644,6 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
-        c.wait_for_materialized()
         c.testdrive(
             input=dedent(
                 """
@@ -712,7 +661,6 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
-        c.wait_for_materialized()
         c.testdrive(
             input=dedent(
                 """
@@ -733,7 +681,6 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     c.up("materialized")
     c.up("clusterd1")
     c.up("clusterd2")
-    c.wait_for_materialized()
 
     c.sql(
         """

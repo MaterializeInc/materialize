@@ -23,5 +23,5 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka"])
+    c.up("zookeeper", "kafka")
     c.run("catcompatck")

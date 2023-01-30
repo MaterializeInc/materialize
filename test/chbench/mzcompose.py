@@ -25,7 +25,7 @@ SERVICES = [
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
     Debezium(),
-    MySql(mysql_root_password="rootpw"),
+    MySql(root_password="rootpw"),
     Materialized(),
     Metabase(),
     Service(
@@ -50,12 +50,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # Start Materialize.
     c.up("materialized")
-    c.wait_for_materialized()
 
     # Start MySQL and Debezium.
-    c.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "mysql", "debezium"]
-    )
+    c.up("zookeeper", "kafka", "schema-registry", "mysql", "debezium")
 
     # Generate initial data.
     c.run(
