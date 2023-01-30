@@ -64,7 +64,7 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
         None,
         None,
         // Copy the logic in DeltaJoin/Get/Join to start.
-        1_000_000,
+        |_timer, count| count > 1_000_000,
     );
     needed_tokens.push(source_token);
 

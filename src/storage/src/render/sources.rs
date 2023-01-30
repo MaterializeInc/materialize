@@ -357,7 +357,7 @@ where
                                     None,
                                     None,
                                     // Copy the logic in DeltaJoin/Get/Join to start.
-                                    1_000_000,
+                                    |_timer, count| count > 1_000_000,
                                 );
                             let (tx_source_ok, tx_source_err) = (
                                 tx_source_ok_stream.as_collection(),
@@ -416,7 +416,7 @@ where
                                 None,
                                 None,
                                 // Copy the logic in DeltaJoin/Get/Join to start.
-                                1_000_000,
+                                |_timer, count| count > 1_000_000,
                             );
                             (stream, Some(tok))
                         } else {

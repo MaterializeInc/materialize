@@ -226,7 +226,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         mfp.as_mut(),
                         Some(flow_control),
                         // Copy the logic in DeltaJoin/Get/Join to start.
-                        1_000_000,
+                        |_timer, count| count > 1_000_000,
                     );
 
                     // If `mfp` is non-identity, we need to apply what remains.

@@ -12,6 +12,7 @@
 use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use mz_persist_client::operators::shard_source::shard_source;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -59,7 +60,7 @@ use mz_timely_util::buffer::ConsolidateBuffer;
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source<G>(
+pub fn persist_source<G, YFn>(
     scope: &G,
     source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
@@ -68,7 +69,7 @@ pub fn persist_source<G>(
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     flow_control: Option<FlowControl<G>>,
-    refuel: usize,
+    yield_fn: YFn,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
@@ -76,6 +77,7 @@ pub fn persist_source<G>(
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
+    YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let (stream, token) = persist_source_core(
         scope,
@@ -86,7 +88,7 @@ where
         until,
         map_filter_project,
         flow_control,
-        refuel,
+        yield_fn,
     );
     let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
         Ok(row) => Ok((row, t, r)),
@@ -102,7 +104,7 @@ where
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 #[allow(clippy::needless_borrow)]
-pub fn persist_source_core<G>(
+pub fn persist_source_core<G, YFn>(
     scope: &G,
     source_id: GlobalId,
     persist_clients: Arc<Mutex<PersistClientCache>>,
@@ -111,13 +113,14 @@ pub fn persist_source_core<G>(
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     flow_control: Option<FlowControl<G>>,
-    refuel: usize,
+    yield_fn: YFn,
 ) -> (
     Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     Rc<dyn Any>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
+    YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let name = source_id.to_string();
     let (fetched, token) = shard_source(
@@ -132,7 +135,7 @@ where
         Arc::new(metadata.relation_desc),
         Arc::new(UnitSchema),
     );
-    let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, refuel);
+    let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
     (rows, token)
 }
 
@@ -146,18 +149,21 @@ struct PendingWork {
 
 impl PendingWork {
     /// Perform roughly `fuel` work, reading from the fetched part, decoding, and sending outputs.
-    fn do_work<P>(
+    fn do_work<P, YFn>(
         &mut self,
-        fuel: &mut usize,
+        work: &mut usize,
+        start_time: Instant,
+        yield_fn: YFn,
         until: &Antichain<Timestamp>,
         map_filter_project: Option<&MfpPlan>,
         datum_vec: &mut DatumVec,
         row_builder: &mut Row,
         output: &mut ConsolidateBuffer<Timestamp, Result<Row, DataflowError>, Diff, P>,
-    ) where
+    ) -> bool
+    where
         P: Push<Bundle<Timestamp, (Result<Row, DataflowError>, Timestamp, Diff)>>,
+        YFn: Fn(Instant, usize) -> bool,
     {
-        let mut work = 0;
         while let Some(((key, val), time, diff)) = self.fetched_part.next() {
             if until.less_equal(&time) {
                 continue;
@@ -180,50 +186,50 @@ impl PendingWork {
                                     // Additional `until` filtering due to temporal filters.
                                     if !until.less_equal(&time) {
                                         output.give_at(&self.capability, (Ok(row), time, diff));
-                                        work += 1;
+                                        *work += 1;
                                     }
                                 }
                                 Err((err, time, diff)) => {
                                     // Additional `until` filtering due to temporal filters.
                                     if !until.less_equal(&time) {
                                         output.give_at(&self.capability, (Err(err), time, diff));
-                                        work += 1;
+                                        *work += 1;
                                     }
                                 }
                             }
                         }
                     } else {
                         output.give_at(&self.capability, (Ok(row), time, diff));
-                        work += 1;
+                        *work += 1;
                     }
                 }
                 (Ok(SourceData(Err(err))), Ok(())) => {
                     output.give_at(&self.capability, (Err(err), time, diff));
-                    work += 1;
+                    *work += 1;
                 }
                 // TODO(petrosagg): error handling
                 (Err(_), Ok(_)) | (Ok(_), Err(_)) | (Err(_), Err(_)) => {
                     panic!("decoding failed")
                 }
             }
-            if work >= *fuel {
-                *fuel = 0;
-                return;
+            if yield_fn(start_time, *work) {
+                return false;
             }
         }
-        *fuel -= work;
+        true
     }
 }
 
-pub fn decode_and_mfp<G>(
+pub fn decode_and_mfp<G, YFn>(
     fetched: &Stream<G, FetchedPart<SourceData, (), Timestamp, Diff>>,
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
-    refuel: usize,
+    yield_fn: YFn,
 ) -> Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
+    YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let scope = fetched.scope();
     let mut builder = OperatorBuilder::new(
@@ -262,18 +268,21 @@ where
                 }
             });
 
-            let mut fuel = refuel;
+            let mut work = 0;
+            let start_time = Instant::now();
             let mut handle = ConsolidateBuffer::new(updates_output.activate(), 0);
-            while !todo.is_empty() && fuel > 0 {
-                todo.front_mut().unwrap().do_work(
-                    &mut fuel,
+            while !todo.is_empty() && !yield_fn(start_time, work) {
+                let done = todo.front_mut().unwrap().do_work(
+                    &mut work,
+                    start_time,
+                    &yield_fn,
                     &until,
                     map_filter_project.as_ref(),
                     &mut datum_vec,
                     &mut row_builder,
                     &mut handle,
                 );
-                if fuel > 0 {
+                if done {
                     todo.pop_front();
                 }
             }
