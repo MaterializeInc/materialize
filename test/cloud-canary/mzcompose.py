@@ -25,7 +25,7 @@ APP_PASSWORD = os.environ["NIGHTLY_CANARY_APP_PASSWORD"]
 VERSION = "devel-" + os.environ["BUILDKITE_COMMIT"]
 
 SERVICES = [
-    Materialized(),
+    Materialized(image=f"materialize/materialized:{VERSION}"),
     Testdrive(),
     Mz(
         region=REGION,
