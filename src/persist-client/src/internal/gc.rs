@@ -21,14 +21,15 @@ use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
+use prometheus::Counter;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, Semaphore};
 use tracing::{debug, debug_span, warn, Instrument, Span};
 
 use crate::internal::machine::{retry_external, Machine};
+use crate::internal::metrics::RetryMetrics;
 use crate::internal::paths::{BlobKey, PartialRollupKey, RollupId};
-use crate::metrics::Metrics;
 use crate::ShardId;
 
 #[derive(Debug, Clone)]
@@ -194,6 +195,46 @@ where
     }
 
     pub async fn gc_and_truncate(machine: &mut Machine<K, V, T, D>, req: GcReq) {
+        // There's also a bulk delete API in s3 if the performance of this
+        // becomes an issue. Maybe make Blob::delete take a list of keys?
+        //
+        // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
+        async fn delete_all(
+            blob: &(dyn Blob + Send + Sync),
+            keys: impl Iterator<Item = BlobKey>,
+            metrics: &RetryMetrics,
+            span: Span,
+            semaphore: &Semaphore,
+        ) {
+            let futures = FuturesUnordered::new();
+            for key in keys {
+                futures.push(
+                    retry_external(metrics, move || {
+                        let key = key.clone();
+                        async move {
+                            let _permit = semaphore
+                                .acquire()
+                                .await
+                                .expect("acquiring permit from open semaphore");
+                            blob.delete(&key).await.map(|_| ())
+                        }
+                    })
+                    .instrument(span.clone()),
+                )
+            }
+
+            futures.collect().await
+        }
+
+        let delete_semaphore = Semaphore::new(machine.cfg.gc_blob_delete_concurrency_limit);
+
+        let mut step_start = Instant::now();
+        let mut report_step_timing = |counter: &Counter| {
+            let now = Instant::now();
+            counter.inc_by(now.duration_since(step_start).as_secs_f64());
+            step_start = now;
+        };
+
         assert_eq!(req.shard_id, machine.shard_id());
         // NB: Because these requests can be processed concurrently (and in
         // arbitrary order), all of the logic below has to work even if we've
@@ -211,6 +252,7 @@ where
             req.new_seqno_since,
             states.len()
         );
+        report_step_timing(&machine.metrics.gc.steps.fetch_seconds);
 
         let earliest_live_seqno = match states.peek_seqno() {
             Some(x) => x,
@@ -300,16 +342,21 @@ where
             deleteable_batch_blobs.len(),
             deleteable_rollup_blobs.len()
         );
+        report_step_timing(&machine.metrics.gc.steps.apply_diff_seconds);
 
         // Delete the rollup blobs before removing them from state.
-        for (_, key) in deleteable_rollup_blobs.iter() {
-            machine
-                .state_versions
-                .delete_rollup(&req.shard_id, key)
-                .await;
-            debug!("gc {} deleted rollup blob {key}", req.shard_id);
-        }
+        delete_all(
+            machine.state_versions.blob.borrow(),
+            deleteable_rollup_blobs
+                .iter()
+                .map(|(_, k)| k.complete(&req.shard_id)),
+            &machine.metrics.retries.external.rollup_delete,
+            debug_span!("rollup::delete"),
+            &delete_semaphore,
+        )
+        .await;
         debug!("gc {} deleted rollup blobs", req.shard_id);
+        report_step_timing(&machine.metrics.gc.steps.delete_rollup_seconds);
 
         // As described in the big rustdoc comment on [StateVersions], we
         // maintain the invariant that there is always a rollup corresponding to
@@ -343,48 +390,20 @@ where
             "gc {} wrote rollup at seqno {}. applied={}",
             req.shard_id, rollup_seqno, applied
         );
-
-        // There's also a bulk delete API in s3 if the performance of this
-        // becomes an issue. Maybe make Blob::delete take a list of keys?
-        //
-        // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
-        async fn delete_all(
-            blob: &(dyn Blob + Send + Sync),
-            keys: impl Iterator<Item = BlobKey>,
-            metrics: &Metrics,
-            semaphore: &Semaphore,
-        ) {
-            let futures = FuturesUnordered::new();
-            for key in keys {
-                futures.push(
-                    retry_external(&metrics.retries.external.batch_delete, move || {
-                        let key = key.clone();
-                        async move {
-                            let _permit = semaphore
-                                .acquire()
-                                .await
-                                .expect("acquiring permit from open semaphore");
-                            blob.delete(&key).await.map(|_| ())
-                        }
-                    })
-                    .instrument(debug_span!("batch::delete")),
-                )
-            }
-
-            futures.collect().await
-        }
+        report_step_timing(&machine.metrics.gc.steps.write_rollup_seconds);
 
         delete_all(
             machine.state_versions.blob.borrow(),
             deleteable_batch_blobs
                 .into_iter()
                 .map(|k| k.complete(&req.shard_id)),
-            &machine.metrics,
-            &Semaphore::new(machine.cfg.gc_batch_part_delete_concurrency_limit),
+            &machine.metrics.retries.external.batch_delete,
+            debug_span!("batch::delete"),
+            &delete_semaphore,
         )
         .await;
-
         debug!("gc {} deleted batch blobs", req.shard_id);
+        report_step_timing(&machine.metrics.gc.steps.delete_batch_part_seconds);
 
         // Now that we've deleted the eligible blobs, "commit" this info by
         // truncating the state versions that referenced them.
@@ -396,6 +415,7 @@ where
             "gc {} truncated diffs through seqno {}",
             req.shard_id, req.new_seqno_since
         );
+        report_step_timing(&machine.metrics.gc.steps.truncate_diff_seconds);
 
         // Finally, apply the remaining diffs to calculate metrics.
         while let Some(state) = states.next() {
@@ -419,5 +439,6 @@ where
         let shard_metrics = machine.metrics.shards.shard(&req.shard_id);
         shard_metrics.set_gc_seqno_held_parts(seqno_held_parts.len());
         shard_metrics.gc_live_diffs.set(live_diffs);
+        report_step_timing(&machine.metrics.gc.steps.finish_seconds);
     }
 }

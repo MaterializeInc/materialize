@@ -779,10 +779,41 @@ pub struct GcMetrics {
     pub(crate) finished: IntCounter,
     pub(crate) merged: IntCounter,
     pub(crate) seconds: Counter,
+    pub(crate) steps: GcStepTimings,
+}
+
+#[derive(Debug)]
+pub struct GcStepTimings {
+    pub(crate) fetch_seconds: Counter,
+    pub(crate) apply_diff_seconds: Counter,
+    pub(crate) delete_rollup_seconds: Counter,
+    pub(crate) write_rollup_seconds: Counter,
+    pub(crate) delete_batch_part_seconds: Counter,
+    pub(crate) truncate_diff_seconds: Counter,
+    pub(crate) finish_seconds: Counter,
+}
+
+impl GcStepTimings {
+    fn new(step_timings: CounterVec) -> Self {
+        Self {
+            fetch_seconds: step_timings.with_label_values(&["fetch"]),
+            apply_diff_seconds: step_timings.with_label_values(&["apply_diff"]),
+            delete_rollup_seconds: step_timings.with_label_values(&["delete_rollup"]),
+            write_rollup_seconds: step_timings.with_label_values(&["write_rollup"]),
+            delete_batch_part_seconds: step_timings.with_label_values(&["delete_batch_part"]),
+            truncate_diff_seconds: step_timings.with_label_values(&["truncate_diff"]),
+            finish_seconds: step_timings.with_label_values(&["finish"]),
+        }
+    }
 }
 
 impl GcMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
+        let step_timings: CounterVec = registry.register(metric!(
+                name: "mz_persist_gc_step_seconds",
+                help: "time spent on individual steps of gc",
+                var_labels: ["step"],
+        ));
         GcMetrics {
             noop: registry.register(metric!(
                 name: "mz_persist_gc_noop",
@@ -804,6 +835,7 @@ impl GcMetrics {
                 name: "mz_persist_gc_seconds",
                 help: "time spent in garbage collections",
             )),
+            steps: GcStepTimings::new(step_timings),
         }
     }
 }
