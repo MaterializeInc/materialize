@@ -660,7 +660,7 @@ where
                                 crate::source::responsible_for(&id, worker_id, worker_count, pid)
                             });
 
-                            info!(
+                            trace!(
                                 resumption_frontier = ?resume_frontier_update,
                                 ?offset_upper,
                                 "reclock({id}) {worker_id}/{worker_count}: \
@@ -938,9 +938,9 @@ where
                     &*MZ_SOURCE_STATUS_HISTORY_DESC
                 ).await;
             } else {
-                info!("Health for source {source_id} not being written to status shard");
+                trace!("Health for source {source_id} not being written to status shard");
             }
-            info!("Health for source {source_id} initialized to: {last_reported_status:?}");
+            trace!("Health for source {source_id} initialized to: {last_reported_status:?}");
         }
 
 
@@ -962,7 +962,7 @@ where
 
                 let new_status = overall_status(&healths);
                 if &last_reported_status != new_status {
-                    info!("Health transition for source {source_id}: {last_reported_status:?} -> {new_status:?}");
+                    trace!("Health transition for source {source_id}: {last_reported_status:?} -> {new_status:?}");
                     if let Some(status_shard) = storage_metadata.status_shard {
                         write_to_persist(
                             source_id,
@@ -1700,7 +1700,7 @@ fn derive_new_compaction_since(
     if let Some(upper_ts) = upper_ts {
         let compaction_since = Antichain::from_elem(upper_ts.saturating_sub(set_back_by_ms));
         if PartialOrder::less_than(last_compaction_since, &compaction_since) {
-            info!(
+            trace!(
                 ?compaction_since,
                 ?resumption_frontier,
                 "{0}({id}) {worker_id}/{worker_count}: produced new compaction \

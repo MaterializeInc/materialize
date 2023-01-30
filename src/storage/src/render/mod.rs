@@ -169,6 +169,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 let token = crate::render::persist_sink::render(
                     region,
                     target,
+                    export.output_index,
                     export.storage_metadata,
                     source_data,
                     storage_state,
