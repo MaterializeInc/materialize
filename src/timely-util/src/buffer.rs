@@ -73,6 +73,18 @@ where
         }
     }
 
+    #[inline]
+    /// Provides an iterator of elements to the buffer
+    pub fn give_iterator<I: Iterator<Item = (D, T, R)>>(
+        &mut self,
+        cap: &InputCapability<T>,
+        iter: I,
+    ) {
+        for item in iter {
+            self.give(cap, item);
+        }
+    }
+
     /// Give an element to the buffer
     pub fn give(&mut self, cap: &InputCapability<T>, data: (D, T, R)) {
         // Retain a cap for the current time, which will be used on flush.
@@ -95,6 +107,12 @@ where
             } else {
                 self.previous_len = self.buffer.len();
             }
+            // At this point, it is an invariant across give calls that self.previous_len
+            // will be in the interval [0, self.buffer.capacity() / 2]. So, we will enter
+            // this if-statement block again when self.buffer.len() == self.buffer.capacity()
+            // or earlier. If consolidation is not effective to keep self.buffer.len()
+            // below half capacity, then flushing when more than half-full will
+            // maintain the invariant.
         }
     }
 
@@ -102,8 +120,16 @@ where
     pub fn flush(&mut self) {
         if let Some(cap) = &self.cap {
             self.output_handle.session(cap).give_vec(&mut self.buffer);
-            self.buffer
-                .reserve_exact(::timely::container::buffer::default_capacity::<(D, T, R)>());
+
+            // Ensure that the capacity is at least equal to the default in case
+            // it was reduced by give_vec. Note that we cannot rely here on give_vec
+            // returning us a buffer with zero capacity.
+            if self.buffer.capacity() < ::timely::container::buffer::default_capacity::<(D, T, R)>()
+            {
+                let to_reserve = ::timely::container::buffer::default_capacity::<(D, T, R)>()
+                    - self.buffer.capacity();
+                self.buffer.reserve_exact(to_reserve);
+            }
             self.previous_len = 0;
         }
     }

@@ -426,15 +426,14 @@ where
                     let mut out = ConsolidateBuffer::new(output, 0);
                     input.for_each(|time, data| {
                         data.swap(&mut buffer);
-                        let exploded = buffer.drain(..).map(|(x, t, d)| {
-                            let (x, d2) = logic(x);
-                            (x, t, d2.multiply(&d))
-                        });
-                        for item in exploded {
-                            out.give(&time, item);
-                        }
+                        out.give_iterator(
+                            &time,
+                            buffer.drain(..).map(|(x, t, d)| {
+                                let (x, d2) = logic(x);
+                                (x, t, d2.multiply(&d))
+                            }),
+                        );
                     });
-                    out.flush();
                 }
             })
             .as_collection()
