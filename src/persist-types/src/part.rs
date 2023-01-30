@@ -64,6 +64,16 @@ impl Part {
         }
     }
 
+    /// Returns a slice to the timestamp column.
+    pub fn ts_ref<'a>(&'a self) -> &[i64] {
+        self.ts.as_slice()
+    }
+
+    /// Returns a slice to the diff column.
+    pub fn diff_ref<'a>(&'a self) -> &[i64] {
+        self.diff.as_slice()
+    }
+
     pub(crate) fn to_arrow(&self) -> (Vec<Field>, Vec<Vec<Encoding>>, Chunk<Box<dyn Array>>) {
         let (mut fields, mut encodings, mut arrays) =
             (Vec::new(), Vec::new(), Vec::<Box<dyn Array>>::new());
@@ -247,7 +257,7 @@ impl Part {
     /// This is a full deep clone of the data. Sort ordering is `(K, V, T, D)`
     /// where each column is ordered according to the parquet ordering
     /// semantics.
-    pub fn consolidate(&self) -> Self {
+    pub fn consolidate(&self) -> Result<Self, String> {
         let key_cols = self
             .key
             .iter()
@@ -273,38 +283,26 @@ impl Part {
                 .map(|(k, v, t)| (k.idx, v.idx, t.idx))
                 .collect::<Vec<_>>()
         );
-        // WIP this probably wants to be a new method
-        let mut sorted = {
-            let key = self
-                .key
-                .iter()
-                .map(|(name, col)| (name.to_owned(), DynColumnMut::new_untyped(&col.0)))
-                .collect();
-            let val = self
-                .val
-                .iter()
-                .map(|(name, col)| (name.to_owned(), DynColumnMut::new_untyped(&col.0)))
-                .collect();
-            let ts = Vec::new();
-            let diff = Vec::new();
-            PartBuilder { key, val, ts, diff }
-        };
+        let mut sorted = PartBuilder::new_from_part(self);
         let mut prev: Option<((ColsOrdKey, ColsOrdKey, ColsOrdKey), i64)> = None;
         for current in indexes {
             if let Some((prev_key, prev_diff)) = prev.as_ref() {
                 if prev_key != &current {
-                    // WIP figure out how to have just one idx: usize
                     let prev_idx = prev_key.0.idx;
                     assert_eq!(prev_idx, prev_key.1.idx);
                     assert_eq!(prev_idx, prev_key.2.idx);
-                    for ((_, src), (_, dst)) in self.key.iter().zip(sorted.key.iter_mut()) {
-                        dst.push_from(src, prev_idx).expect("WIP");
+
+                    if *prev_diff != 0 {
+                        for ((_, src), (_, dst)) in self.key.iter().zip(sorted.key.iter_mut()) {
+                            dst.push_from(src, prev_idx)?;
+                        }
+                        for ((_, src), (_, dst)) in self.val.iter().zip(sorted.val.iter_mut()) {
+                            dst.push_from(src, prev_idx)?;
+                        }
+                        sorted.ts.push(self.ts[prev_idx]);
+                        sorted.diff.push(*prev_diff);
                     }
-                    for ((_, src), (_, dst)) in self.val.iter().zip(sorted.val.iter_mut()) {
-                        dst.push_from(src, prev_idx).expect("WIP");
-                    }
-                    sorted.ts.push(self.ts[prev_idx]);
-                    sorted.diff.push(*prev_diff);
+
                     let _ = prev.take();
                 }
             }
@@ -316,20 +314,21 @@ impl Part {
             }
         }
         if let Some((prev_key, prev_diff)) = prev.as_ref() {
-            // WIP figure out how to have just one idx: usize
             let prev_idx = prev_key.0.idx;
             assert_eq!(prev_idx, prev_key.1.idx);
             assert_eq!(prev_idx, prev_key.2.idx);
-            for ((_, src), (_, dst)) in self.key.iter().zip(sorted.key.iter_mut()) {
-                dst.push_from(src, prev_idx).expect("WIP");
+            if *prev_diff != 0 {
+                for ((_, src), (_, dst)) in self.key.iter().zip(sorted.key.iter_mut()) {
+                    dst.push_from(src, prev_idx)?;
+                }
+                for ((_, src), (_, dst)) in self.val.iter().zip(sorted.val.iter_mut()) {
+                    dst.push_from(src, prev_idx)?;
+                }
+                sorted.ts.push(self.ts[prev_idx]);
+                sorted.diff.push(*prev_diff);
             }
-            for ((_, src), (_, dst)) in self.val.iter().zip(sorted.val.iter_mut()) {
-                dst.push_from(src, prev_idx).expect("WIP");
-            }
-            sorted.ts.push(self.ts[prev_idx]);
-            sorted.diff.push(*prev_diff);
         }
-        sorted.finish().expect("WIP")
+        sorted.finish()
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -372,8 +371,7 @@ impl Part {
     }
 }
 
-// WIP I couldn't figure out how to reuse the Formatter helpers here, so this
-// doesn't e.g. respect the pretty flag
+// TODO: Reuse formatter helps so this can respect pretty flag
 impl Debug for Part {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("[")?;
@@ -420,6 +418,23 @@ impl PartBuilder {
             .columns()
             .into_iter()
             .map(|(name, data_type)| (name, DynColumnMut::new_untyped(&data_type)))
+            .collect();
+        let ts = Vec::new();
+        let diff = Vec::new();
+        PartBuilder { key, val, ts, diff }
+    }
+
+    /// Returns a new PartBuilder with the schema of the given Part
+    pub fn new_from_part(part: &Part) -> Self {
+        let key = part
+            .key
+            .iter()
+            .map(|(name, col)| (name.to_owned(), DynColumnMut::new_untyped(&col.0)))
+            .collect();
+        let val = part
+            .val
+            .iter()
+            .map(|(name, col)| (name.to_owned(), DynColumnMut::new_untyped(&col.0)))
             .collect();
         let ts = Vec::new();
         let diff = Vec::new();
@@ -763,7 +778,7 @@ mod tests {
     use std::marker::PhantomData;
 
     use crate::codec_impls::{StringSchema, UnitSchema};
-    use crate::columnar::PartEncoder;
+    use crate::columnar::{PartDecoder, PartEncoder};
 
     use super::*;
 
@@ -780,10 +795,12 @@ mod tests {
     }
 
     #[test]
-    fn part_consolidate() {
-        let mut part = PartBuilder::new(&StringSchema, &UnitSchema);
+    fn part_consolidate() -> Result<(), String> {
+        let key_schema = StringSchema::default();
+        let val_schema = UnitSchema::default();
+        let mut part = PartBuilder::new(&key_schema, &val_schema);
         {
-            let mut keys = StringSchema.encoder(part.key_mut()).unwrap();
+            let mut keys = key_schema.encoder(part.key_mut()).unwrap();
             keys.encode(&"foo".to_string());
             keys.encode(&"foo".to_string());
             keys.encode(&"foo".to_string());
@@ -803,8 +820,57 @@ mod tests {
         part.push_ts_diff(1, 1);
         part.push_ts_diff(1, 1);
         part.push_ts_diff(1, -1);
-        let part = part.finish().unwrap();
-        let consolidated = part.consolidate();
-        eprintln!("{:?}", consolidated);
+        let part = part.finish()?;
+        let consolidated = part.consolidate()?;
+
+        let mut key = String::new();
+        let mut val = ();
+        assert_eq!(
+            decode_rows(&part, &key_schema, &val_schema, &mut key, &mut val)?,
+            vec![
+                ("foo".to_string(), (), 3, 1),
+                ("foo".to_string(), (), 1, 1),
+                ("foo".to_string(), (), 2, 1),
+                ("bar".to_string(), (), 1, 1),
+                ("foo".to_string(), (), 1, 1),
+                ("baz".to_string(), (), 1, 1),
+                ("foo".to_string(), (), 1, 1),
+                ("qux".to_string(), (), 1, 1),
+                ("qux".to_string(), (), 1, -1)
+            ]
+        );
+
+        assert_eq!(
+            decode_rows(&consolidated, &key_schema, &val_schema, &mut key, &mut val)?,
+            vec![
+                ("bar".to_string(), (), 1, 1),
+                ("baz".to_string(), (), 1, 1),
+                ("foo".to_string(), (), 1, 3),
+                ("foo".to_string(), (), 2, 1),
+                ("foo".to_string(), (), 3, 1)
+            ]
+        );
+
+        Ok(())
+    }
+
+    fn decode_rows<K: Clone, KS: Schema<K>, V: Clone, VS: Schema<V>>(
+        part: &Part,
+        key_schema: &KS,
+        val_schema: &VS,
+        key: &mut K,
+        val: &mut V,
+    ) -> Result<Vec<(K, V, i64, i64)>, String> {
+        let mut updates = Vec::with_capacity(part.len);
+        let key_decoder = key_schema.decoder(part.key_ref())?;
+        let val_decoder = val_schema.decoder(part.val_ref())?;
+        let ts = part.ts_ref();
+        let diff = part.diff_ref();
+        for idx in 0..part.len {
+            key_decoder.decode(idx, key);
+            val_decoder.decode(idx, val);
+            updates.push((key.clone(), val.clone(), ts[idx], diff[idx]));
+        }
+        Ok(updates)
     }
 }
