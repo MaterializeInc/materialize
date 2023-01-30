@@ -45,7 +45,7 @@ In other databases, a popular way of computing the top _K_ records per key is to
 SELECT state, name
 FROM (
   SELECT state, name, ROW_NUMBER() OVER
-    (PARTITION BY state ORDER BY pop) as row_num
+    (PARTITION BY state ORDER BY pop DESC) as row_num
   FROM cities
 )
 WHERE row_num <= 3;
