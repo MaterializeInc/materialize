@@ -10,7 +10,7 @@
 //! Logic related to the creation of dataflow sinks.
 
 use std::any::Any;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use differential_dataflow::Collection;
@@ -35,7 +35,7 @@ where
     pub(crate) fn export_sink(
         &mut self,
         compute_state: &mut crate::compute_state::ComputeState,
-        tokens: &mut std::collections::BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
+        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         import_ids: BTreeSet<GlobalId>,
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,

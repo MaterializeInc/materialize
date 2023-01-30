@@ -1142,7 +1142,7 @@ impl fmt::Display for Datum<'_> {
 #[derive(
     Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, EnumKind, MzReflect,
 )]
-#[enum_kind(ScalarBaseType, derive(Hash))]
+#[enum_kind(ScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum ScalarType {
     /// The type of [`Datum::True`] and [`Datum::False`].
     Bool,

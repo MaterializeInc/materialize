@@ -10,7 +10,7 @@
 //! A mechanism to ensure that a sequence of writes and reads proceed correctly through timestamps.
 
 use std::cmp;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::thread;
 use std::time::Duration;
@@ -633,11 +633,11 @@ impl Coordinator {
     }
 
     /// Return the timeline contexts belonging to a list of GlobalIds, if any exist.
-    fn get_timeline_contexts<I>(&self, ids: I) -> HashSet<TimelineContext>
+    fn get_timeline_contexts<I>(&self, ids: I) -> BTreeSet<TimelineContext>
     where
         I: IntoIterator<Item = GlobalId>,
     {
-        let mut timelines: HashMap<GlobalId, TimelineContext> = HashMap::new();
+        let mut timelines: BTreeMap<GlobalId, TimelineContext> = BTreeMap::new();
         let mut contains_temporal = false;
 
         // Recurse through IDs to find all sources and tables, adding new ones to
@@ -648,7 +648,7 @@ impl Coordinator {
             id: GlobalId,
             optimized_expr: &OptimizedMirRelationExpr,
             ids: &mut Vec<GlobalId>,
-            timelines: &mut HashMap<GlobalId, TimelineContext>,
+            timelines: &mut BTreeMap<GlobalId, TimelineContext>,
             contains_temporal: &mut bool,
         ) {
             if !*contains_temporal && optimized_expr.contains_temporal() {
@@ -729,7 +729,7 @@ impl Coordinator {
         &self,
         id_bundle: &CollectionIdBundle,
     ) -> impl Iterator<Item = (TimelineContext, CollectionIdBundle)> {
-        let mut res: HashMap<TimelineContext, CollectionIdBundle> = HashMap::new();
+        let mut res: BTreeMap<TimelineContext, CollectionIdBundle> = BTreeMap::new();
 
         for id in &id_bundle.storage_ids {
             let timeline_context = self.get_timeline_context(*id);
@@ -770,7 +770,7 @@ impl Coordinator {
         I: IntoIterator<Item = &'a GlobalId>,
     {
         // Gather all the used schemas.
-        let mut schemas = HashSet::new();
+        let mut schemas = BTreeSet::new();
         for id in uses_ids {
             let entry = self.catalog.get_entry(id);
             let name = entry.name();
@@ -802,7 +802,7 @@ impl Coordinator {
         }
 
         // Gather the IDs of all items in all used schemas.
-        let mut item_ids: HashSet<GlobalId> = HashSet::new();
+        let mut item_ids: BTreeSet<GlobalId> = BTreeSet::new();
         for (db, schema) in schemas {
             let schema = self.catalog.get_schema(db, schema, conn_id);
             item_ids.extend(schema.items.values());

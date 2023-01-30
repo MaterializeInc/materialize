@@ -15,7 +15,7 @@
 
 //! Functions for working with permutations
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Given a permutation, construct its inverse.
 pub fn invert<I>(permutation: I) -> impl Iterator<Item = (usize, usize)>
@@ -40,6 +40,6 @@ pub fn inverse_argsort<T>(data: &[T]) -> Vec<usize>
 where
     T: Ord,
 {
-    let map = invert(argsort(data)).collect::<HashMap<_, _>>();
+    let map = invert(argsort(data)).collect::<BTreeMap<_, _>>();
     (0..data.len()).map(|i| map[&i]).collect()
 }

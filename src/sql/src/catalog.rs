@@ -12,7 +12,7 @@
 //! Catalog abstraction layer.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
@@ -199,7 +199,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     fn now(&self) -> EpochMillis;
 
     /// Returns the set of supported AWS PrivateLink availability zone ids.
-    fn aws_privatelink_availability_zones(&self) -> Option<HashSet<String>>;
+    fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>>;
 }
 
 /// Configuration associated with a catalog.
@@ -291,11 +291,11 @@ pub trait CatalogCluster<'a> {
     fn linked_object_id(&self) -> Option<GlobalId>;
 
     /// Returns the objects that are bound to this cluster.
-    fn bound_objects(&self) -> &HashSet<GlobalId>;
+    fn bound_objects(&self) -> &BTreeSet<GlobalId>;
 
     /// Returns the replicas of the cluster as a map from replica name to
     /// replica ID.
-    fn replicas(&self) -> &HashMap<String, ReplicaId>;
+    fn replicas(&self) -> &BTreeMap<String, ReplicaId>;
 }
 
 /// An item in a [`SessionCatalog`].
@@ -926,7 +926,7 @@ impl SessionCatalog for DummyCatalog {
         name
     }
 
-    fn aws_privatelink_availability_zones(&self) -> Option<HashSet<String>> {
+    fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>> {
         unimplemented!()
     }
 }
@@ -969,7 +969,7 @@ impl CatalogDatabase for DummyDatabase {
 /// Provides a method of generating a 3-layer catalog on the fly, and then
 /// resolving objects within it.
 pub(crate) struct ErsatzCatalog<'a, T>(
-    pub HashMap<String, HashMap<String, HashMap<String, &'a T>>>,
+    pub BTreeMap<String, BTreeMap<String, BTreeMap<String, &'a T>>>,
 );
 
 impl<'a, T> ErsatzCatalog<'a, T> {

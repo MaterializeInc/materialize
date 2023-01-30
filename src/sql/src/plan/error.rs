@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 use std::io;
@@ -134,7 +134,7 @@ pub enum PlanError {
     },
     InvalidPrivatelinkAvailabilityZone {
         name: String,
-        supported_azs: HashSet<String>,
+        supported_azs: BTreeSet<String>,
     },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),

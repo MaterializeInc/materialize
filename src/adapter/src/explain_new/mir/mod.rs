@@ -11,7 +11,7 @@
 
 pub(crate) mod text;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_expr::{
@@ -166,7 +166,7 @@ impl<'a> AnnotatedPlan<'a, MirRelationExpr> {
         context: &'a ExplainContext,
         plan: &'a MirRelationExpr,
     ) -> Result<Self, RecursionLimitError> {
-        let mut annotations = HashMap::<&MirRelationExpr, Attributes>::default();
+        let mut annotations = BTreeMap::<&MirRelationExpr, Attributes>::default();
         let config = context.config;
 
         if config.requires_attributes() {

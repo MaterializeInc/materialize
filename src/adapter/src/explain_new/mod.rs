@@ -16,7 +16,7 @@
 //! the various IRs live, this is not possible. Consequencly, we
 //! currently resort to using a wrapper type.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 
 use mz_expr::{MapFilterProject, RowSetFinishing};
@@ -74,7 +74,7 @@ pub(crate) struct ExplainContext<'a> {
 /// of attributes derived for each node in that plan.
 pub(crate) struct AnnotatedPlan<'a, T> {
     pub(crate) plan: &'a T,
-    pub(crate) annotations: HashMap<&'a T, Attributes>,
+    pub(crate) annotations: BTreeMap<&'a T, Attributes>,
 }
 
 /// A container for derived attributes.
@@ -357,7 +357,7 @@ impl<'a> DisplayText<RenderingContext<'a>> for Displayable<'a, MapFilterProject>
 pub(crate) struct PlanRenderingContext<'a, T> {
     pub(crate) indent: Indent, // TODO: can this be a ref?
     pub(crate) humanizer: &'a dyn ExprHumanizer,
-    pub(crate) annotations: HashMap<&'a T, Attributes>, // TODO: can this be a ref?
+    pub(crate) annotations: BTreeMap<&'a T, Attributes>, // TODO: can this be a ref?
     pub(crate) config: &'a ExplainConfig,
 }
 
@@ -365,7 +365,7 @@ impl<'a, T> PlanRenderingContext<'a, T> {
     pub fn new(
         indent: Indent,
         humanizer: &'a dyn ExprHumanizer,
-        annotations: HashMap<&'a T, Attributes>,
+        annotations: BTreeMap<&'a T, Attributes>,
         config: &'a ExplainConfig,
     ) -> PlanRenderingContext<'a, T> {
         PlanRenderingContext {

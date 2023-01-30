@@ -79,6 +79,9 @@ use std::env;
 fn main() {
     env::set_var("PROTOC", protobuf_src::protoc());
 
+    let mut config = prost_build::Config::new();
+    config.btree_map(["."]);
+
     tonic_build::configure()
         // Enabling `emit_rerun_if_changed` will rerun the build script when
         // anything in the include directory (..) changes. This causes quite a
@@ -103,7 +106,8 @@ fn main() {
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.url", "::mz_repr::url")
-        .compile(
+        .compile_with_config(
+            config,
             &[
                 "storage-client/src/controller.proto",
                 "storage-client/src/client.proto",

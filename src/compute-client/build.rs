@@ -74,10 +74,16 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+// Disallow usage of `Hash*` types from std.
+#![warn(clippy::disallowed_types)]
+
 use std::env;
 
 fn main() {
     env::set_var("PROTOC", protobuf_src::protoc());
+
+    let mut config = prost_build::Config::new();
+    config.btree_map(["."]);
 
     tonic_build::configure()
         // Enabling `emit_rerun_if_changed` will rerun the build script when
@@ -103,7 +109,8 @@ fn main() {
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.url", "::mz_repr::url")
         .extern_path(".mz_storage_client", "::mz_storage_client")
-        .compile(
+        .compile_with_config(
+            config,
             &[
                 "compute-client/src/logging.proto",
                 "compute-client/src/plan.proto",

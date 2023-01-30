@@ -9,7 +9,7 @@
 
 //! Introspection of storage utilization by persist
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::info;
 
@@ -51,11 +51,11 @@ impl StorageUsageClient {
     /// None) where the shard id is unknown. This latter count _should_ always
     /// be 0, so it being nonzero indicates either persist wrote an invalid blob
     /// key, or another process is storing data under the same path (!)
-    pub async fn shard_sizes(&self) -> HashMap<Option<ShardId>, u64> {
+    pub async fn shard_sizes(&self) -> BTreeMap<Option<ShardId>, u64> {
         retry_external(
             &self.metrics.retries.external.storage_usage_shard_size,
             || async {
-                let mut shard_sizes = HashMap::new();
+                let mut shard_sizes = BTreeMap::new();
                 let mut batch_part_bytes = 0;
                 let mut batch_part_count = 0;
                 let mut rollup_size = 0;

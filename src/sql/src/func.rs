@@ -11,7 +11,7 @@
 //! built-in functions (for most built-in functions, at least).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 
 use chrono::{DateTime, Utc};
@@ -1753,7 +1753,7 @@ macro_rules! builtins {
         ),+
     } => {{
 
-        let mut builtins = HashMap::new();
+        let mut builtins = BTreeMap::new();
         $(
             let impls = vec![$(impl_def!($params, $op $(,$return_type)?, $oid)),+];
             let old = builtins.insert($name, Func::$ty(impls));
@@ -1803,7 +1803,7 @@ macro_rules! catalog_name_only {
 }
 
 /// Correlates a built-in function name to its implementations.
-pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
+pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {
@@ -2951,7 +2951,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
     }
 });
 
-pub static INFORMATION_SCHEMA_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
+pub static INFORMATION_SCHEMA_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use ParamType::*;
     builtins! {
         "_pg_expandarray" => Table {
@@ -2969,7 +2969,7 @@ pub static INFORMATION_SCHEMA_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy
     }
 });
 
-pub static MZ_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
+pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use ParamType::*;
     use ScalarType::*;
     builtins! {
@@ -3130,7 +3130,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
     }
 });
 
-pub static MZ_INTERNAL_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
+pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use ParamType::*;
     use ScalarType::*;
     builtins! {
@@ -3217,7 +3217,7 @@ fn array_to_string(
 }
 
 /// Correlates an operator with all of its implementations.
-static OP_IMPLS: Lazy<HashMap<&'static str, Func>> = Lazy::new(|| {
+static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use BinaryFunc::*;
     use ParamType::*;
     use ScalarBaseType::*;

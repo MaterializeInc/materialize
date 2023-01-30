@@ -13,7 +13,7 @@
 
 //! Compute layer client and server.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::iter;
 
 use async_trait::async_trait;
@@ -93,16 +93,16 @@ pub struct PartitionedComputeState<T> {
     parts: usize,
     /// Upper frontiers for indexes and sinks, both unioned across all partitions and from each
     /// individual partition.
-    uppers: HashMap<GlobalId, (MutableAntichain<T>, Vec<Antichain<T>>)>,
+    uppers: BTreeMap<GlobalId, (MutableAntichain<T>, Vec<Antichain<T>>)>,
     /// Pending responses for a peek; returnable once all are available.
-    peek_responses: HashMap<Uuid, HashMap<usize, PeekResponse>>,
+    peek_responses: BTreeMap<Uuid, BTreeMap<usize, PeekResponse>>,
     /// Tracks in-progress `SUBSCRIBE`s, and the stashed rows we are holding
     /// back until their timestamps are complete.
     ///
     /// The updates may be `Err` if any of the batches have reported an error, in which case the
     /// subscribe is permanently borked.
     pending_subscribes:
-        HashMap<GlobalId, Option<(MutableAntichain<T>, Result<Vec<(T, Row, Diff)>, String>)>>,
+        BTreeMap<GlobalId, Option<(MutableAntichain<T>, Result<Vec<(T, Row, Diff)>, String>)>>,
 }
 
 impl<T> Partitionable<ComputeCommand<T>, ComputeResponse<T>>
@@ -115,9 +115,9 @@ where
     fn new(parts: usize) -> PartitionedComputeState<T> {
         PartitionedComputeState {
             parts,
-            uppers: HashMap::new(),
-            peek_responses: HashMap::new(),
-            pending_subscribes: HashMap::new(),
+            uppers: BTreeMap::new(),
+            peek_responses: BTreeMap::new(),
+            pending_subscribes: BTreeMap::new(),
         }
     }
 }

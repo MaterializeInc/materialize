@@ -3129,7 +3129,7 @@ pub mod BUILTINS {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{BTreeMap, BTreeSet};
     use std::env;
 
     use tokio_postgres::NoTls;
@@ -3182,7 +3182,7 @@ mod tests {
                 array: u32,
             }
 
-            let pg_proc: HashMap<_, _> = client
+            let pg_proc: BTreeMap<_, _> = client
                 .query(
                     "SELECT
                     p.oid,
@@ -3211,12 +3211,12 @@ mod tests {
                 })
                 .collect();
 
-            let pg_proc_by_name: HashMap<_, _> = pg_proc
+            let pg_proc_by_name: BTreeMap<_, _> = pg_proc
                 .iter()
                 .map(|(_, proc)| ((&*proc.schema, &*proc.name), proc))
                 .collect();
 
-            let pg_type: HashMap<_, _> = client
+            let pg_type: BTreeMap<_, _> = client
                 .query(
                     "SELECT oid, typname, typtype::text, typelem, typarray FROM pg_type",
                     &[],
@@ -3250,8 +3250,8 @@ mod tests {
                     .oid()
             };
 
-            let mut proc_oids = HashSet::new();
-            let mut type_oids = HashSet::new();
+            let mut proc_oids = BTreeSet::new();
+            let mut type_oids = BTreeSet::new();
 
             for builtin in BUILTINS::iter() {
                 match builtin {

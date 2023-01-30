@@ -10,10 +10,10 @@
 //! Logic for processing [`Coordinator`] messages. The [`Coordinator`] receives
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
-use anyhow::anyhow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+use anyhow::anyhow;
 use chrono::DurationRound;
 use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Level};
@@ -102,7 +102,7 @@ impl Coordinator {
         let client = self.storage_usage_client.clone();
 
         // Record the currently live shards.
-        let live_shards: HashSet<_> = self
+        let live_shards: BTreeSet<_> = self
             .controller
             .storage
             .collections()
@@ -159,7 +159,7 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_update(&mut self, shard_sizes: HashMap<Option<ShardId>, u64>) {
+    async fn storage_usage_update(&mut self, shard_sizes: BTreeMap<Option<ShardId>, u64>) {
         // Similar to audit events, use the oracle ts so this is guaranteed to
         // increase. This is intentionally the timestamp of when collection
         // finished, not when it started, so that we don't write data with a
@@ -402,7 +402,7 @@ impl Coordinator {
         };
 
         let mut plans = vec![];
-        let mut id_allocation = HashMap::new();
+        let mut id_allocation = BTreeMap::new();
 
         // First we'll allocate global ids for each subsource and plan them
         for (transient_id, subsource_stmt) in subsource_stmts {

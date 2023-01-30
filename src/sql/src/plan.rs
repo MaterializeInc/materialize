@@ -30,7 +30,7 @@
 // https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
 #![allow(clippy::extra_unused_lifetimes)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
@@ -506,7 +506,7 @@ pub struct ReadThenWritePlan {
     pub id: GlobalId,
     pub selection: mz_expr::MirRelationExpr,
     pub finishing: RowSetFinishing,
-    pub assignments: HashMap<usize, mz_expr::MirScalarExpr>,
+    pub assignments: BTreeMap<usize, mz_expr::MirScalarExpr>,
     pub kind: MutationKind,
     pub returning: Vec<mz_expr::MirScalarExpr>,
 }
@@ -526,7 +526,7 @@ pub struct AlterIndexSetOptionsPlan {
 #[derive(Debug)]
 pub struct AlterIndexResetOptionsPlan {
     pub id: GlobalId,
-    pub options: HashSet<IndexOptionName>,
+    pub options: BTreeSet<IndexOptionName>,
 }
 
 #[derive(Debug, Clone)]
@@ -641,8 +641,8 @@ pub struct Source {
 #[derive(Clone, Debug)]
 pub struct Ingestion {
     pub desc: SourceDesc,
-    pub source_imports: HashSet<GlobalId>,
-    pub subsource_exports: HashMap<GlobalId, usize>,
+    pub source_imports: BTreeSet<GlobalId>,
+    pub subsource_exports: BTreeMap<GlobalId, usize>,
 }
 
 #[derive(Clone, Debug)]

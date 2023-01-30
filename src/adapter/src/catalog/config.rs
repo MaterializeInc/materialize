@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
@@ -59,7 +59,7 @@ pub struct Config<'a> {
     /// Context for generating an AWS Principal.
     pub aws_principal_context: Option<AwsPrincipalContext>,
     /// Supported AWS PrivateLink availability zone ids.
-    pub aws_privatelink_availability_zones: Option<HashSet<String>>,
+    pub aws_privatelink_availability_zones: Option<BTreeSet<String>>,
     /// A optional frontend used to pull system parameters for initial sync in
     /// Catalog::open. A `None` value indicates that the initial sync should be
     /// skipped.
@@ -67,7 +67,7 @@ pub struct Config<'a> {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ClusterReplicaSizeMap(pub HashMap<String, ReplicaAllocation>);
+pub struct ClusterReplicaSizeMap(pub BTreeMap<String, ReplicaAllocation>);
 
 impl Default for ClusterReplicaSizeMap {
     fn default() -> Self {
@@ -101,7 +101,7 @@ impl Default for ClusterReplicaSizeMap {
                     },
                 )
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
 
         for i in 1..=5 {
             let scale = 1 << i;

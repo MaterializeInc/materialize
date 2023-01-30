@@ -41,6 +41,9 @@
 //! clippy lint for the affected piece of code. Note that the onus is on you then to verify that
 //! doing so is sound and does not introduce bugs.
 
+// Allow the use of `HashMap` and `HashSet`, so we can define wrappers.
+#![allow(clippy::disallowed_types)]
+
 use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap as StdMap;

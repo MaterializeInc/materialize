@@ -12,8 +12,6 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `DISCARD` and `SET`.
 
-use std::collections::HashSet;
-
 use uncased::UncasedStr;
 
 use mz_repr::adt::interval::Interval;

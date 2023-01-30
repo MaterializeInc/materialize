@@ -15,7 +15,7 @@
 
 //! Graph utilities.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 /// A non-recursive implementation of a fallible depth-first traversal
 /// starting from `root`.
@@ -40,7 +40,7 @@ pub fn try_nonrecursive_dft<Graph, NodeId, AtEnter, AtExit, E>(
     at_exit: &mut AtExit,
 ) -> Result<(), E>
 where
-    NodeId: std::cmp::Eq + std::hash::Hash,
+    NodeId: std::cmp::Ord,
     AtEnter: FnMut(&Graph, &NodeId) -> Result<Vec<NodeId>, E>,
     AtExit: FnMut(&Graph, &NodeId) -> Result<(), E>,
 {
@@ -48,7 +48,7 @@ where
     // the node that we most recently entered.
     let mut entered = Vec::new();
     // All nodes that have been exited.
-    let mut exited = HashSet::new();
+    let mut exited = BTreeSet::new();
 
     // Pseudocode for the recursive version of this function would look like:
     // ```
@@ -89,13 +89,13 @@ pub fn try_nonrecursive_dft_mut<Graph, NodeId, AtEnter, AtExit, E>(
     at_exit: &mut AtExit,
 ) -> Result<(), E>
 where
-    NodeId: std::cmp::Eq + std::hash::Hash + Clone,
+    NodeId: std::cmp::Ord + Clone,
     AtEnter: FnMut(&mut Graph, &NodeId) -> Result<Vec<NodeId>, E>,
     AtExit: FnMut(&mut Graph, &NodeId) -> Result<(), E>,
 {
     // Code in this method is identical to the code in `nonrecursive_dft`.
     let mut entered = Vec::new();
-    let mut exited = HashSet::new();
+    let mut exited = BTreeSet::new();
 
     let children = at_enter(graph, &root)?;
     entered_node(&mut entered, root, children);
@@ -134,7 +134,7 @@ pub fn nonrecursive_dft<Graph, NodeId, AtEnter, AtExit>(
     at_enter: &mut AtEnter,
     at_exit: &mut AtExit,
 ) where
-    NodeId: std::cmp::Eq + std::hash::Hash,
+    NodeId: std::cmp::Ord,
     AtEnter: FnMut(&Graph, &NodeId) -> Vec<NodeId>,
     AtExit: FnMut(&Graph, &NodeId) -> (),
 {
@@ -142,7 +142,7 @@ pub fn nonrecursive_dft<Graph, NodeId, AtEnter, AtExit>(
     // the node that we most recently entered.
     let mut entered = Vec::new();
     // All nodes that have been exited.
-    let mut exited = HashSet::new();
+    let mut exited = BTreeSet::new();
 
     // Pseudocode for the recursive version of this function would look like:
     // ```
@@ -181,13 +181,13 @@ pub fn nonrecursive_dft_mut<Graph, NodeId, AtEnter, AtExit>(
     at_enter: &mut AtEnter,
     at_exit: &mut AtExit,
 ) where
-    NodeId: std::cmp::Eq + std::hash::Hash + Clone,
+    NodeId: std::cmp::Ord + Clone,
     AtEnter: FnMut(&mut Graph, &NodeId) -> Vec<NodeId>,
     AtExit: FnMut(&mut Graph, &NodeId) -> (),
 {
     // Code in this method is identical to the code in `nonrecursive_dft`.
     let mut entered = Vec::new();
-    let mut exited = HashSet::new();
+    let mut exited = BTreeSet::new();
 
     let children = at_enter(graph, &root);
     entered_node(&mut entered, root, children);
@@ -209,7 +209,7 @@ fn entered_node<NodeId>(
     node: NodeId,
     mut children: Vec<NodeId>,
 ) where
-    NodeId: std::cmp::Eq + std::hash::Hash,
+    NodeId: std::cmp::Ord,
 {
     // Reverse children because `find_next_child_to_enter` will traverse the
     // list of children by popping them out from the back.
@@ -220,10 +220,10 @@ fn entered_node<NodeId>(
 /// Find the next child node, if any, that we have not entered.
 fn find_next_child_to_enter<NodeId>(
     entered: &mut Vec<(NodeId, Vec<NodeId>)>,
-    exited: &mut HashSet<NodeId>,
+    exited: &mut BTreeSet<NodeId>,
 ) -> Option<NodeId>
 where
-    NodeId: std::cmp::Eq + std::hash::Hash,
+    NodeId: std::cmp::Ord,
 {
     let (_, children) = entered.last_mut().unwrap();
     while let Some(child) = children.pop() {

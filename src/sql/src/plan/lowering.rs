@@ -36,7 +36,7 @@
 //! contain "holes" from prepared statements, as if the query was a subquery
 //! against a relation containing the assignments of values to those holes.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 
@@ -60,15 +60,15 @@ use crate::plan::{transform_expr, PlanError};
 /// after all prior references.
 #[derive(Debug, Clone)]
 struct ColumnMap {
-    inner: HashMap<ColumnRef, usize>,
+    inner: BTreeMap<ColumnRef, usize>,
 }
 
 impl ColumnMap {
     fn empty() -> ColumnMap {
-        Self::new(HashMap::new())
+        Self::new(BTreeMap::new())
     }
 
-    fn new(inner: HashMap<ColumnRef, usize>) -> ColumnMap {
+    fn new(inner: BTreeMap<ColumnRef, usize>) -> ColumnMap {
         ColumnMap { inner }
     }
 
@@ -112,7 +112,7 @@ impl ColumnMap {
 }
 
 /// Map with the CTEs currently in scope.
-type CteMap = HashMap<mz_expr::LocalId, CteDesc>;
+type CteMap = BTreeMap<mz_expr::LocalId, CteDesc>;
 
 /// Information about needed when finding a reference to a CTE in scope.
 struct CteDesc {
@@ -748,7 +748,7 @@ impl HirScalarExpr {
         col_map: &ColumnMap,
         cte_map: &mut CteMap,
         inner: &mut mz_expr::MirRelationExpr,
-        subquery_map: &Option<&HashMap<HirScalarExpr, usize>>,
+        subquery_map: &Option<&BTreeMap<HirScalarExpr, usize>>,
     ) -> mz_expr::MirScalarExpr {
         maybe_grow(|| {
             use self::HirScalarExpr::*;
@@ -1340,8 +1340,8 @@ impl HirScalarExpr {
         col_map: &ColumnMap,
         cte_map: &mut CteMap,
         inner: mz_expr::MirRelationExpr,
-    ) -> (mz_expr::MirRelationExpr, HashMap<HirScalarExpr, usize>) {
-        let mut subquery_map = HashMap::new();
+    ) -> (mz_expr::MirRelationExpr, BTreeMap<HirScalarExpr, usize>) {
+        let mut subquery_map = BTreeMap::new();
         let output = inner.let_in(id_gen, |id_gen, get_inner| {
             let mut subqueries = Vec::new();
             let distinct_inner = get_inner.clone().distinct();
@@ -1621,7 +1621,7 @@ where
         }
         _ => {}
     });
-    let mut new_col_map = HashMap::new();
+    let mut new_col_map = BTreeMap::new();
     let mut key = vec![];
     for col in outer_cols {
         new_col_map.insert(col, key.len());

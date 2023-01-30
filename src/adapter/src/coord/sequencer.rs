@@ -9,7 +9,7 @@
 
 //! Logic for executing a planned SQL query.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::time::Duration;
 
@@ -488,7 +488,7 @@ impl Coordinator {
                     None
                 }
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
 
         for (source_id, plan, depends_on) in plans {
             let source_oid = self.catalog.allocate_oid()?;
@@ -780,7 +780,7 @@ impl Coordinator {
     // I put this in the `Coordinator`'s impl block in case we ever want to
     // change the logic and make it depend on some other state, but for now it's
     // a pure function of the `n_replicas_per_az` state.
-    fn choose_az<'a>(n_replicas_per_az: &'a HashMap<String, usize>) -> String {
+    fn choose_az<'a>(n_replicas_per_az: &'a BTreeMap<String, usize>) -> String {
         let min = *n_replicas_per_az
             .values()
             .min()
@@ -817,7 +817,7 @@ impl Coordinator {
         let mut n_replicas_per_az = azs
             .iter()
             .map(|s| (s.clone(), 0))
-            .collect::<HashMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
         for (_name, r) in replicas.iter() {
             if let mz_sql::plan::ReplicaConfig::Managed {
                 availability_zone: Some(az),
@@ -1002,7 +1002,7 @@ impl Coordinator {
                         let mut n_replicas_per_az = azs
                             .iter()
                             .map(|s| (s.clone(), 0))
-                            .collect::<HashMap<_, _>>();
+                            .collect::<BTreeMap<_, _>>();
                         for r in cluster.replicas_by_id.values() {
                             if let Some(az) = r.config.location.availability_zone() {
                                 *n_replicas_per_az.get_mut(az).expect("unknown AZ") += 1;
@@ -1064,7 +1064,7 @@ impl Coordinator {
     }
 
     async fn create_cluster_replicas(&mut self, replicas: &[(ClusterId, ReplicaId)]) {
-        let mut log_source_ids: HashMap<_, Vec<_>> = HashMap::new();
+        let mut log_source_ids: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let mut log_source_collections_to_create = Vec::new();
         let mut replicas_to_start = Vec::new();
 
@@ -1758,7 +1758,7 @@ impl Coordinator {
             self.ensure_cluster_is_not_linked(*id)?;
         }
 
-        let ops = self.catalog.drop_cluster_ops(&ids, &mut HashSet::new());
+        let ops = self.catalog.drop_cluster_ops(&ids, &mut BTreeSet::new());
 
         self.catalog_transact(Some(session), ops).await?;
 
@@ -1783,7 +1783,7 @@ impl Coordinator {
         }
         let ops = self
             .catalog
-            .drop_cluster_replica_ops(&ids, &mut HashSet::new());
+            .drop_cluster_replica_ops(&ids, &mut BTreeSet::new());
 
         self.catalog_transact(Some(session), ops).await?;
         fail::fail_point!("after_sequencer_drop_replica");
@@ -3109,7 +3109,7 @@ impl Coordinator {
                     id: plan.id,
                     selection,
                     finishing,
-                    assignments: HashMap::new(),
+                    assignments: BTreeMap::new(),
                     kind: MutationKind::Insert,
                     returning: plan.returning,
                 };
@@ -3943,7 +3943,7 @@ impl Coordinator {
             let n_replicas_per_az = azs
                 .iter()
                 .map(|az| (az.clone(), 0))
-                .collect::<HashMap<_, _>>();
+                .collect::<BTreeMap<_, _>>();
             Self::choose_az(&n_replicas_per_az)
         };
         let location = SerializedReplicaLocation::Managed {
@@ -3992,7 +3992,7 @@ impl Coordinator {
             for id in linked_cluster.replicas_by_id.keys() {
                 let drop_ops = self
                     .catalog
-                    .drop_cluster_replica_ops(&[(linked_cluster.id, *id)], &mut HashSet::new());
+                    .drop_cluster_replica_ops(&[(linked_cluster.id, *id)], &mut BTreeSet::new());
                 ops.extend(drop_ops);
             }
             let size = match config {

@@ -246,7 +246,7 @@ impl AstDisplay for CopyTarget {
 }
 impl_display!(CopyTarget);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CopyOptionName {
     Format,
     Delimiter,
@@ -269,7 +269,7 @@ impl AstDisplay for CopyOptionName {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CopyOption<T: AstInfo> {
     pub name: CopyOptionName,
     pub value: Option<WithOptionValue<T>>,
@@ -681,7 +681,7 @@ impl<T: AstInfo> AstDisplay for CreateSubsourceStatement<T> {
 impl_display_t!(CreateSubsourceStatement);
 
 /// An option in a `CREATE SINK` statement.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CreateSinkOptionName {
     Size,
     Snapshot,
@@ -700,7 +700,7 @@ impl AstDisplay for CreateSinkOptionName {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CreateSinkOption<T: AstInfo> {
     pub name: CreateSinkOptionName,
     pub value: Option<WithOptionValue<T>>,
@@ -944,7 +944,7 @@ impl<T: AstInfo> AstDisplay for CreateIndexStatement<T> {
 impl_display_t!(CreateIndexStatement);
 
 /// An option in a `CREATE CLUSTER` statement.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IndexOptionName {
     // The `LOGICAL COMPACTION WINDOW` option
     LogicalCompactionWindow,
@@ -1093,7 +1093,7 @@ impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
 }
 impl_display_t!(CreateTypeStatement);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ClusterOptionName {
     /// The `REPLICAS` option.
     Replicas,
@@ -1107,7 +1107,7 @@ impl AstDisplay for ClusterOptionName {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `CREATE CLUSTER` ostatement.
 pub struct ClusterOption<T: AstInfo> {
     pub name: ClusterOptionName,
@@ -1268,7 +1268,7 @@ impl<T: AstInfo> AstDisplay for CreateTypeAs<T> {
 }
 impl_display_t!(CreateTypeAs);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CreateTypeListOptionName {
     ElementType,
 }
@@ -1281,7 +1281,7 @@ impl AstDisplay for CreateTypeListOptionName {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CreateTypeListOption<T: AstInfo> {
     pub name: CreateTypeListOptionName,
     pub value: Option<WithOptionValue<T>>,
@@ -1297,7 +1297,7 @@ impl<T: AstInfo> AstDisplay for CreateTypeListOption<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CreateTypeMapOptionName {
     KeyType,
     ValueType,
@@ -1312,7 +1312,7 @@ impl AstDisplay for CreateTypeMapOptionName {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CreateTypeMapOption<T: AstInfo> {
     pub name: CreateTypeMapOptionName,
     pub value: Option<WithOptionValue<T>>,
@@ -2060,7 +2060,7 @@ impl AstDisplay for RollbackStatement {
 }
 impl_display!(RollbackStatement);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SubscribeOptionName {
     Snapshot,
     Progress,
@@ -2522,7 +2522,7 @@ impl AstDisplay for CloseStatement {
 }
 impl_display!(CloseStatement);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FetchOptionName {
     Timeout,
 }
@@ -2535,7 +2535,7 @@ impl AstDisplay for FetchOptionName {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FetchOption<T: AstInfo> {
     pub name: FetchOptionName,
     pub value: Option<WithOptionValue<T>>,

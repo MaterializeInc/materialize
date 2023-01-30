@@ -9,7 +9,7 @@
 
 //! Logic and types for all appends executed by the [`Coordinator`].
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -230,8 +230,7 @@ impl Coordinator {
             timestamp,
             advance_to,
         } = self.get_local_write_ts().await;
-        let mut appends: HashMap<GlobalId, Vec<(Row, Diff)>> =
-            HashMap::with_capacity(self.pending_writes.len());
+        let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
         let mut responses = Vec::with_capacity(self.pending_writes.len());
         let should_block = pending_writes.iter().any(|write| write.should_block());
         for pending_write_txn in pending_writes {

@@ -10,7 +10,7 @@
 //! Management of arrangements across dataflows.
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -86,9 +86,9 @@ impl MaintenanceMetrics {
 /// A `TraceManager` stores maps from global identifiers to the primary arranged
 /// representation of that collection.
 pub struct TraceManager {
-    pub(crate) traces: HashMap<GlobalId, TraceBundle>,
+    pub(crate) traces: BTreeMap<GlobalId, TraceBundle>,
     worker_id: usize,
-    maintenance_metrics: HashMap<GlobalId, MaintenanceMetrics>,
+    maintenance_metrics: BTreeMap<GlobalId, MaintenanceMetrics>,
     /// 1 if this worker is currently doing maintenance.
     ///
     /// If maintenance turns out to take a very long time, this will allow us
@@ -103,10 +103,10 @@ impl TraceManager {
     pub fn new(metrics: TraceMetrics, worker_id: usize) -> Self {
         let doing_maintenance = metrics.maintenance_flag_metric(worker_id);
         TraceManager {
-            traces: HashMap::new(),
+            traces: BTreeMap::new(),
             worker_id,
             metrics,
-            maintenance_metrics: HashMap::new(),
+            maintenance_metrics: BTreeMap::new(),
             doing_maintenance,
         }
     }

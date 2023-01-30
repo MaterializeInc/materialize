@@ -9,7 +9,7 @@
 
 //! Types and traits related to the introduction of changing collections into `dataflow`.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::rc::Rc;
 use std::str::FromStr;
@@ -1354,7 +1354,7 @@ pub struct KafkaSourceConnection {
     pub connection_id: GlobalId,
     pub topic: String,
     // Map from partition -> starting offset
-    pub start_offsets: HashMap<i32, i64>,
+    pub start_offsets: BTreeMap<i32, i64>,
     pub group_id_prefix: Option<String>,
     pub environment_id: String,
     /// If present, include the timestamp as an output column of the source with the given name
@@ -1395,7 +1395,7 @@ impl Arbitrary for KafkaSourceConnection {
             any::<KafkaConnection>(),
             any::<GlobalId>(),
             any::<String>(),
-            proptest::collection::hash_map(any::<i32>(), any::<i64>(), 1..4),
+            proptest::collection::btree_map(any::<i32>(), any::<i64>(), 1..4),
             any::<Option<String>>(),
             any::<String>(),
             any::<Option<IncludedColumnPos>>(),
@@ -1889,7 +1889,7 @@ pub struct PostgresSourceConnection {
     pub connection: PostgresConnection,
     /// The cast expressions to convert the incoming string encoded rows to
     /// their target types, keyed by their position in the source.
-    pub table_casts: HashMap<usize, Vec<MirScalarExpr>>,
+    pub table_casts: BTreeMap<usize, Vec<MirScalarExpr>>,
     pub publication: String,
     pub publication_details: PostgresSourcePublicationDetails,
 }
@@ -1905,7 +1905,7 @@ impl Arbitrary for PostgresSourceConnection {
         (
             any::<PostgresConnection>(),
             any::<GlobalId>(),
-            proptest::collection::hash_map(
+            proptest::collection::btree_map(
                 any::<usize>(),
                 proptest::collection::vec(any::<MirScalarExpr>(), 1..4),
                 1..4,
@@ -1972,7 +1972,7 @@ impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
                 .collect()
         };
 
-        let mut table_casts = HashMap::new();
+        let mut table_casts = BTreeMap::new();
         for (pos, cast) in table_cast_pos
             .into_iter()
             .zip_eq(proto.table_casts.into_iter())

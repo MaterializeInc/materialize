@@ -12,7 +12,6 @@
 //! Consult [TopKPlan] documentation for details.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use differential_dataflow::hashable::Hashable;
@@ -30,6 +29,7 @@ use timely::dataflow::Scope;
 use mz_compute_client::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
+use mz_ore::collections::HashMap;
 use mz_repr::{DatumVec, Diff, Row};
 
 use crate::render::context::CollectionBundle;
@@ -367,7 +367,10 @@ where
             G: Scope,
             G::Timestamp: Lattice,
         {
-            let mut aggregates = HashMap::new();
+            // Using a `BTreeMap` here might impact performance, so we keep using a `HashMap` here,
+            // pending further benchmarks.
+            #[allow(clippy::disallowed_types)]
+            let mut aggregates = HashMap::<_, std::collections::HashMap<_, _>>::new();
             let mut vector = Vec::new();
             let shared = Rc::new(RefCell::new(monoids::Top1MonoidShared {
                 order_key,
@@ -383,9 +386,7 @@ where
                     move |input, output, notificator| {
                         while let Some((time, data)) = input.next() {
                             data.swap(&mut vector);
-                            let agg_time = aggregates
-                                .entry(time.time().clone())
-                                .or_insert_with(HashMap::new);
+                            let agg_time = aggregates.entry(time.time().clone()).or_default();
                             for ((grp_row, row), record_time, diff) in vector.drain(..) {
                                 let monoid = monoids::Top1MonoidLocal {
                                     row,

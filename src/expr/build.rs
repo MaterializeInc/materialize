@@ -96,6 +96,7 @@ fn main() {
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.strconv", "::mz_repr::strconv")
         .type_attribute(".", "#[allow(missing_docs)]")
+        .btree_map(["."])
         .compile_protos(
             &[
                 "expr/src/id.proto",

@@ -11,7 +11,7 @@
 //!
 //! See the [crate-level documentation](crate) for details.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
@@ -268,13 +268,13 @@ pub async fn purify_create_source(
                 })?;
 
             // An index from table name -> schema name -> database name -> PostgresTableDesc
-            let mut tables_by_name = HashMap::new();
+            let mut tables_by_name = BTreeMap::new();
             for table in &publication_tables {
                 tables_by_name
                     .entry(table.name.clone())
-                    .or_insert_with(HashMap::new)
+                    .or_insert_with(BTreeMap::new)
                     .entry(table.namespace.clone())
-                    .or_insert_with(HashMap::new)
+                    .or_insert_with(BTreeMap::new)
                     .entry(connection.database.clone())
                     .or_insert(table);
             }
@@ -301,13 +301,13 @@ pub async fn purify_create_source(
                     // validate that the names actually exist and are not ambiguous
 
                     // An index from table name -> schema name -> database name -> PostgresTableDesc
-                    let mut tables_by_name = HashMap::new();
+                    let mut tables_by_name = BTreeMap::new();
                     for table in &publication_tables {
                         tables_by_name
                             .entry(table.name.clone())
-                            .or_insert_with(HashMap::new)
+                            .or_insert_with(BTreeMap::new)
                             .entry(table.namespace.clone())
-                            .or_insert_with(HashMap::new)
+                            .or_insert_with(BTreeMap::new)
                             .entry(connection.database.clone())
                             .or_insert(table);
                     }
@@ -318,7 +318,7 @@ pub async fn purify_create_source(
                 None => {}
             };
 
-            let mut text_cols_dict: HashMap<u32, HashSet<String>> = HashMap::new();
+            let mut text_cols_dict: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();
 
             for name in text_columns.iter_mut() {
                 let (qual, col) = match name.0.split_last().expect("must have at least one element")
@@ -510,7 +510,7 @@ pub async fn purify_create_source(
                     // validate that the names actually exist and are not ambiguous
 
                     // An index from table name -> schema name -> database name -> PostgresTableDesc
-                    let mut tables_by_name = HashMap::new();
+                    let mut tables_by_name = BTreeMap::new();
                     for (subsource_name, (_, desc)) in available_subsources {
                         let database = match &subsource_name.database {
                             RawDatabaseSpecifier::Name(database) => database.clone(),
@@ -518,9 +518,9 @@ pub async fn purify_create_source(
                         };
                         tables_by_name
                             .entry(subsource_name.item.clone())
-                            .or_insert_with(HashMap::new)
+                            .or_insert_with(BTreeMap::new)
                             .entry(subsource_name.schema.clone())
-                            .or_insert_with(HashMap::new)
+                            .or_insert_with(BTreeMap::new)
                             .entry(database)
                             .or_insert(desc);
                     }

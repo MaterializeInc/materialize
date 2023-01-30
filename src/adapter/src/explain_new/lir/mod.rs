@@ -11,7 +11,7 @@
 
 pub(crate) mod text;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use mz_compute_client::plan::Plan;
 use mz_compute_client::types::dataflows::DataflowDescription;
@@ -63,7 +63,7 @@ impl<'a> Explainable<'a, DataflowDescription<Plan>> {
                     .unwrap_or_else(|| build_desc.id.to_string());
                 let plan = AnnotatedPlan {
                     plan: &build_desc.plan,
-                    annotations: HashMap::default(),
+                    annotations: BTreeMap::default(),
                 };
                 (id, plan)
             })

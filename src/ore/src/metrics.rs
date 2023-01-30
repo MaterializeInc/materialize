@@ -69,21 +69,20 @@ macro_rules! metric {
         $(, buckets: $bk_name:expr)?
         $(,)?
     ) => {{
-        let const_labels: ::std::collections::HashMap<String, String> = (&[
+        let const_labels = (&[
             $($(
                 ($cl_key.to_string(), $cl_value.to_string()),
             )*)?
         ]).into_iter().cloned().collect();
-        let var_labels: ::std::vec::Vec<String> = vec![
+        let var_labels = vec![
             $(
                 $($vl_name.into(),)*
             )?];
         #[allow(unused_mut)]
         let mut mk_opts = $crate::metrics::MakeCollectorOpts {
-            opts:
-                $crate::metrics::PrometheusOpts::new($name, $help)
-                    .const_labels(const_labels)
-                    .variable_labels(var_labels),
+            opts: $crate::metrics::PrometheusOpts::new($name, $help)
+                .const_labels(const_labels)
+                .variable_labels(var_labels),
             buckets: None,
         };
         // Set buckets if passed

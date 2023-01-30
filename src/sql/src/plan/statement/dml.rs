@@ -13,7 +13,7 @@
 //! `INSERT`, `SELECT`, `SUBSCRIBE`, and `COPY`.
 
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
@@ -138,7 +138,7 @@ pub fn plan_read_then_write(
 ) -> Result<Plan, PlanError> {
     selection.bind_parameters(params)?;
     let selection = selection.optimize_and_lower(&scx.into())?;
-    let mut assignments_outer = HashMap::new();
+    let mut assignments_outer = BTreeMap::new();
     for (idx, mut set) in assignments {
         set.bind_parameters(params)?;
         let set = set.lower_uncorrelated()?;

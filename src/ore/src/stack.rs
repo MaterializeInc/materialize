@@ -114,7 +114,7 @@ where
 /// Consider a simple expression evaluator:
 ///
 /// ```
-/// # use std::collections::HashMap;
+/// # use std::collections::BTreeMap;
 ///
 /// enum Expr {
 ///     Var { name: String },
@@ -122,7 +122,7 @@ where
 /// }
 ///
 /// struct Evaluator {
-///     vars: HashMap<String, i64>,
+///     vars: BTreeMap<String, i64>,
 /// }
 ///
 /// impl Evaluator {
@@ -140,7 +140,7 @@ where
 /// so:
 ///
 /// ```
-/// # use std::collections::HashMap;
+/// # use std::collections::BTreeMap;
 /// # enum Expr {
 /// #     Var { name: String },
 /// #     Add { left: Box<Expr>, right: Box<Expr> },
@@ -148,7 +148,7 @@ where
 /// use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 ///
 /// struct Evaluator {
-///     vars: HashMap<String, i64>,
+///     vars: BTreeMap<String, i64>,
 ///     recursion_guard: RecursionGuard,
 /// }
 ///

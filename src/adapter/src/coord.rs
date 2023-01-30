@@ -66,7 +66,7 @@
 //! ```
 //!
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::ops::Neg;
@@ -197,7 +197,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     },
     LinearizeReads(Vec<PendingReadTxn>),
     StorageUsageFetch,
-    StorageUsageUpdate(HashMap<Option<ShardId>, u64>),
+    StorageUsageUpdate(BTreeMap<Option<ShardId>, u64>),
     RealTimeRecencyTimestamp {
         conn_id: ConnectionId,
         transient_revision: u64,
@@ -433,7 +433,7 @@ pub struct Coordinator {
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
     /// active connections.
-    active_conns: HashMap<ConnectionId, ConnMeta>,
+    active_conns: BTreeMap<ConnectionId, ConnMeta>,
 
     /// For each identifier in STORAGE, its read policy and any read holds on time.
     ///
@@ -443,7 +443,7 @@ pub struct Coordinator {
     /// to the controller for it to have an effect.
     ///
     /// Access to this field should be restricted to methods in the [`read_policy`] API.
-    storage_read_capabilities: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
+    storage_read_capabilities: BTreeMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
     /// For each identifier in COMPUTE, its read policy and any read holds on time.
     ///
     /// Transactions should introduce and remove constraints through the methods
@@ -452,27 +452,27 @@ pub struct Coordinator {
     /// to the controller for it to have an effect.
     ///
     /// Access to this field should be restricted to methods in the [`read_policy`] API.
-    compute_read_capabilities: HashMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
+    compute_read_capabilities: BTreeMap<GlobalId, ReadCapability<mz_repr::Timestamp>>,
 
     /// For each transaction, the pinned storage and compute identifiers and time at
     /// which they are pinned.
     ///
     /// Upon completing a transaction, this timestamp should be removed from the holds
     /// in `self.read_capability[id]`, using the `release_read_holds` method.
-    txn_reads: HashMap<ConnectionId, crate::coord::read_policy::ReadHolds<mz_repr::Timestamp>>,
+    txn_reads: BTreeMap<ConnectionId, crate::coord::read_policy::ReadHolds<mz_repr::Timestamp>>,
 
     /// Access to the peek fields should be restricted to methods in the [`peek`] API.
     /// A map from pending peek ids to the queue into which responses are sent, and
     /// the connection id of the client that initiated the peek.
-    pending_peeks: HashMap<Uuid, PendingPeek>,
+    pending_peeks: BTreeMap<Uuid, PendingPeek>,
     /// A map from client connection ids to a set of all pending peeks for that client.
-    client_pending_peeks: HashMap<ConnectionId, BTreeMap<Uuid, ClusterId>>,
+    client_pending_peeks: BTreeMap<ConnectionId, BTreeMap<Uuid, ClusterId>>,
 
     /// A map from client connection ids to a pending real time recency timestamps.
-    pending_real_time_recency_timestamp: HashMap<ConnectionId, RealTimeRecencyContext>,
+    pending_real_time_recency_timestamp: BTreeMap<ConnectionId, RealTimeRecencyContext>,
 
     /// A map from pending subscribes to the subscribe description.
-    pending_subscribes: HashMap<GlobalId, PendingSubscribe>,
+    pending_subscribes: BTreeMap<GlobalId, PendingSubscribe>,
 
     /// Serializes accesses to write critical sections.
     write_lock: Arc<tokio::sync::Mutex<()>>,
@@ -497,7 +497,7 @@ pub struct Coordinator {
     ///
     /// `None` is used as a tombstone value for replicas that have been
     /// dropped and for which no further updates should be recorded.
-    transient_replica_metadata: HashMap<ReplicaId, Option<ReplicaMetadata>>,
+    transient_replica_metadata: BTreeMap<ReplicaId, Option<ReplicaMetadata>>,
 
     /// Persist client for fetching storage metadata such as size metrics.
     storage_usage_client: StorageUsageClient,
@@ -630,7 +630,7 @@ impl Coordinator {
             }
         });
 
-        let logs: HashSet<_> = BUILTINS::logs()
+        let logs: BTreeSet<_> = BUILTINS::logs()
             .map(|log| self.catalog.resolve_builtin_log(log))
             .collect();
 
@@ -726,7 +726,7 @@ impl Coordinator {
             .unwrap();
 
         info!("coordinator init: installing existing objects in catalog");
-        let mut privatelink_connections = HashMap::new();
+        let mut privatelink_connections = BTreeMap::new();
         for entry in &entries {
             info!(
                 "coordinator init: installing {} {}",
@@ -1221,7 +1221,7 @@ pub async fn serve(
         };
 
     let aws_privatelink_availability_zones = aws_privatelink_availability_zones
-        .map(|azs_vec| HashSet::from_iter(azs_vec.iter().cloned()));
+        .map(|azs_vec| BTreeSet::from_iter(azs_vec.iter().cloned()));
 
     info!("coordinator init: opening catalog");
     let (mut catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
@@ -1284,21 +1284,21 @@ pub async fn serve(
                 strict_serializable_reads_tx,
                 global_timelines: timestamp_oracles,
                 transient_id_counter: 1,
-                active_conns: HashMap::new(),
+                active_conns: BTreeMap::new(),
                 storage_read_capabilities: Default::default(),
                 compute_read_capabilities: Default::default(),
                 txn_reads: Default::default(),
-                pending_peeks: HashMap::new(),
-                client_pending_peeks: HashMap::new(),
-                pending_real_time_recency_timestamp: HashMap::new(),
-                pending_subscribes: HashMap::new(),
+                pending_peeks: BTreeMap::new(),
+                client_pending_peeks: BTreeMap::new(),
+                pending_real_time_recency_timestamp: BTreeMap::new(),
+                pending_subscribes: BTreeMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
                 pending_writes: Vec::new(),
                 secrets_controller,
                 cloud_resource_controller,
                 connection_context,
-                transient_replica_metadata: HashMap::new(),
+                transient_replica_metadata: BTreeMap::new(),
                 storage_usage_client,
                 storage_usage_collection_interval,
                 segment_client,
