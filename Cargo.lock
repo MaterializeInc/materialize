@@ -3527,6 +3527,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-cluster-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "bytesize",
+ "chrono",
+ "columnation",
+ "differential-dataflow",
+ "futures",
+ "http",
+ "itertools",
+ "mz-build-info",
+ "mz-expr",
+ "mz-orchestrator",
+ "mz-ore",
+ "mz-persist",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-proto",
+ "mz-repr",
+ "mz-service",
+ "mz-timely-util",
+ "once_cell",
+ "prometheus",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "timely",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
+ "tracing",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-clusterd"
 version = "0.43.0-dev"
 dependencies = [
