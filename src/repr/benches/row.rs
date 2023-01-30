@@ -338,14 +338,13 @@ fn decode_legacy(part: &ColumnarRecords) -> Vec<Row> {
 
 fn encode_structured(schema: &RelationDesc, rows: &[Row]) -> Part {
     let mut part = PartBuilder::new(schema, &UnitSchema);
-    let mut encoder = schema.encoder(part.key_mut()).unwrap();
+    let (keys, _vals, mut ts_diff) = part.mut_handles();
+    let mut encoder = schema.encoder(keys).unwrap();
     for row in rows.iter() {
         encoder.encode(row);
+        ts_diff.push(1, 1);
     }
     drop(encoder);
-    for _ in rows.iter() {
-        part.push_ts_diff(1, 1);
-    }
     part.finish().unwrap()
 }
 

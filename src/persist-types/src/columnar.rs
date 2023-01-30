@@ -232,8 +232,9 @@ pub fn validate_roundtrip<T: Codec + Default + PartialEq + Debug>(
     val: &T,
 ) -> Result<(), String> {
     let mut part = PartBuilder::new(schema, &UnitSchema);
-    schema.encoder(part.key_mut())?.encode(val);
-    part.push_ts_diff(1, 1);
+    let (keys, _vals, mut ts_diff) = part.mut_handles();
+    schema.encoder(keys)?.encode(val);
+    ts_diff.push(1, 1);
     let part = part.finish()?;
 
     let mut actual = T::default();

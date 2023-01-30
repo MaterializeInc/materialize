@@ -455,34 +455,27 @@ impl PartBuilder {
         PartBuilder { key, val, ts, diff }
     }
 
-    /// Returns a [ColumnsMut] for the key columns.
-    pub fn key_mut<'a>(&'a mut self) -> ColumnsMut<'a> {
-        ColumnsMut {
+    /// Returns handles to push keys, values, and timestamp and diffs.
+    pub fn mut_handles<'a>(&'a mut self) -> (ColumnsMut<'a>, ColumnsMut<'a>, TsDiffMut<'a>) {
+        let keys = ColumnsMut {
             cols: self
                 .key
                 .iter_mut()
                 .map(|(name, col)| (name.as_str(), col))
                 .collect(),
-        }
-    }
-
-    /// Returns a [ColumnsMut] for the val columns.
-    pub fn val_mut<'a>(&'a mut self) -> ColumnsMut<'a> {
-        ColumnsMut {
+        };
+        let vals = ColumnsMut {
             cols: self
                 .val
                 .iter_mut()
                 .map(|(name, col)| (name.as_str(), col))
                 .collect(),
-        }
-    }
-
-    /// Adds a single timestamp and diff.
-    ///
-    /// TODO: Feels like there's some better way to model this.
-    pub fn push_ts_diff(&mut self, ts: i64, diff: i64) {
-        self.ts.push(ts);
-        self.diff.push(diff);
+        };
+        let ts_diff = TsDiffMut {
+            ts: &mut self.ts,
+            diff: &mut self.diff,
+        };
+        (keys, vals, ts_diff)
     }
 
     /// Completes construction of the [Part].
@@ -510,6 +503,21 @@ impl PartBuilder {
         };
         let () = part.validate()?;
         Ok(part)
+    }
+}
+
+/// A handle to push timestamp and diff updates to a [PartBuilder].
+#[derive(Debug)]
+pub struct TsDiffMut<'a> {
+    ts: &'a mut Vec<i64>,
+    diff: &'a mut Vec<i64>,
+}
+
+impl<'a> TsDiffMut<'a> {
+    /// Push a timestamp and diff update to a [PartBuilder].
+    pub fn push(&mut self, ts: i64, diff: i64) {
+        self.ts.push(ts);
+        self.diff.push(diff);
     }
 }
 
@@ -791,7 +799,7 @@ impl DataType {
 mod tests {
     use std::marker::PhantomData;
 
-    use crate::codec_impls::{StringSchema, UnitSchema};
+    use crate::codec_impls::{SimpleEncoder, StringSchema, UnitSchema};
     use crate::columnar::{PartDecoder, PartEncoder};
 
     use super::*;
@@ -814,21 +822,24 @@ mod tests {
         let val_schema = StringSchema::default();
         let mut part = PartBuilder::new(&key_schema, &val_schema);
         {
-            let mut keys = key_schema.encoder(part.key_mut()).unwrap();
+            let (keys, vals, mut ts_diff) = part.mut_handles();
+            let mut keys = key_schema.encoder(keys).unwrap();
+            let mut vals = val_schema.encoder(vals).unwrap();
             keys.encode(&"z".to_string());
             keys.encode(&"a".to_string());
             keys.encode(&"b".to_string());
             keys.encode(&"c".to_string());
-            let mut vals = val_schema.encoder(part.val_mut()).unwrap();
+
             vals.encode(&"1".to_string());
             vals.encode(&"2".to_string());
             vals.encode(&"3".to_string());
             vals.encode(&"4".to_string());
+
+            ts_diff.push(1, 1);
+            ts_diff.push(1, 1);
+            ts_diff.push(1, 1);
+            ts_diff.push(1, 1);
         }
-        part.push_ts_diff(1, 1);
-        part.push_ts_diff(1, 1);
-        part.push_ts_diff(1, 1);
-        part.push_ts_diff(1, 1);
         let part = part.finish()?;
 
         assert_eq!(part.minmax(), vec![(1, 0), (0, 3)]);
@@ -842,26 +853,30 @@ mod tests {
         let val_schema = UnitSchema::default();
         let mut part = PartBuilder::new(&key_schema, &val_schema);
         {
-            let mut keys = key_schema.encoder(part.key_mut()).unwrap();
-            keys.encode(&"foo".to_string());
-            keys.encode(&"foo".to_string());
-            keys.encode(&"foo".to_string());
-            keys.encode(&"bar".to_string());
-            keys.encode(&"foo".to_string());
-            keys.encode(&"baz".to_string());
-            keys.encode(&"foo".to_string());
-            keys.encode(&"qux".to_string());
-            keys.encode(&"qux".to_string());
+            let (keys, _vals, mut ts_diff) = part.mut_handles();
+            let mut keys = key_schema.encoder(keys).unwrap();
+
+            fn push_row(
+                keys: &mut SimpleEncoder<String>,
+                ts_diff: &mut TsDiffMut,
+                key: &str,
+                ts: i64,
+                diff: i64,
+            ) {
+                keys.encode(&key.to_string());
+                ts_diff.push(ts, diff);
+            }
+
+            push_row(&mut keys, &mut ts_diff, "foo", 3, 1);
+            push_row(&mut keys, &mut ts_diff, "foo", 1, 1);
+            push_row(&mut keys, &mut ts_diff, "foo", 2, 1);
+            push_row(&mut keys, &mut ts_diff, "bar", 1, 1);
+            push_row(&mut keys, &mut ts_diff, "foo", 1, 1);
+            push_row(&mut keys, &mut ts_diff, "baz", 1, 1);
+            push_row(&mut keys, &mut ts_diff, "foo", 1, 1);
+            push_row(&mut keys, &mut ts_diff, "qux", 1, 1);
+            push_row(&mut keys, &mut ts_diff, "qux", 1, -1);
         }
-        part.push_ts_diff(3, 1);
-        part.push_ts_diff(1, 1);
-        part.push_ts_diff(2, 1);
-        part.push_ts_diff(1, 1);
-        part.push_ts_diff(1, 1);
-        part.push_ts_diff(1, 1);
-        part.push_ts_diff(1, 1);
-        part.push_ts_diff(1, 1);
-        part.push_ts_diff(1, -1);
         let part = part.finish()?;
         let consolidated = part.consolidate()?;
 
