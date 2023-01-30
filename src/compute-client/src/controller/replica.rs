@@ -19,13 +19,14 @@ use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use mz_build_info::BuildInfo;
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_service::client::GenericClient;
 
 use crate::logging::LoggingConfig;
 use crate::metrics::ReplicaMetrics;
-use crate::protocol::command::{ComputeCommand, ComputeStartupEpoch, TimelyConfig};
+use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -67,7 +68,7 @@ where
         id: ReplicaId,
         build_info: &'static BuildInfo,
         config: ReplicaConfig,
-        epoch: ComputeStartupEpoch,
+        epoch: ClusterStartupEpoch,
         metrics: ReplicaMetrics,
     ) -> Self {
         // Launch a task to handle communication with the replica
@@ -128,7 +129,7 @@ struct ReplicaTask<T> {
     response_tx: UnboundedSender<ComputeResponse<T>>,
     /// A number (technically, pair of numbers) identifying this incarnation of the replica.
     /// The semantics of this don't matter, except that it must strictly increase.
-    epoch: ComputeStartupEpoch,
+    epoch: ClusterStartupEpoch,
     /// Replica metrics
     metrics: ReplicaMetrics,
 }
@@ -268,7 +269,7 @@ where
 struct CommandSpecialization {
     logging_config: LoggingConfig,
     timely_config: TimelyConfig,
-    epoch: ComputeStartupEpoch,
+    epoch: ClusterStartupEpoch,
 }
 
 impl CommandSpecialization {

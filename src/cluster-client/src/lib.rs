@@ -78,3 +78,5 @@
 //! The public API for both compute and storage.
 
 #![warn(missing_docs)]
+
+pub mod client;
