@@ -11,7 +11,6 @@
 
 use std::any::Any;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -26,7 +25,7 @@ use crate::columnar::{ColumnFormat, ColumnGet, ColumnPush, Data, DataType, Schem
 use crate::ord::{ColOrd, ColsOrd, ColsOrdKey};
 
 /// A columnar representation of one blob's worth of data.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Part {
     len: usize,
     key: Vec<(String, DynColumnRef)>,
