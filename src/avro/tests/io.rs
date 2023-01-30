@@ -95,7 +95,6 @@ use std::str::FromStr;
 
 use chrono::{NaiveDate, NaiveDateTime};
 use mz_avro::schema::resolve_schemas;
-use mz_avro::types::AvroMap;
 use mz_avro::{
     error::Error as AvroError,
     from_avro_datum, to_avro_datum,
@@ -134,16 +133,14 @@ static SCHEMAS_TO_VALIDATE: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
         ),
         (
             r#"{"type": "map", "values": "long"}"#,
-            Value::Map(AvroMap(
+            Value::Map(
                 [
                     ("a".to_string(), Value::Long(1i64)),
                     ("b".to_string(), Value::Long(3i64)),
                     ("c".to_string(), Value::Long(2i64)),
                 ]
-                .iter()
-                .cloned()
-                .collect(),
-            )),
+                .into(),
+            ),
         ),
         (
             r#"["string", "null", "long"]"#,
@@ -195,15 +192,13 @@ static DEFAULT_VALUE_EXAMPLES: Lazy<Vec<(&'static str, &'static str, Value)>> = 
         (
             r#"{"type": "map", "values": "int"}"#,
             r#"{"a": 1, "b": 2}"#,
-            Value::Map(AvroMap(
+            Value::Map(
                 [
                     ("a".to_string(), Value::Int(1)),
                     ("b".to_string(), Value::Int(2)),
                 ]
-                .iter()
-                .cloned()
-                .collect(),
-            )),
+                .into(),
+            ),
         ),
         //(r#"["int", "null"]"#, "5", Value::Union(Box::new(Value::Int(5)))),
         (
@@ -936,11 +931,7 @@ fn test_complex_resolutions() {
                 ),
                 (
                     "f0_2".to_owned(),
-                    Value::Map(AvroMap(
-                        vec![("a".to_string(), Value::Long(42))]
-                            .into_iter()
-                            .collect(),
-                    )),
+                    Value::Map([("a".to_string(), Value::Long(42))].into()),
                 ),
             ]),
         ),

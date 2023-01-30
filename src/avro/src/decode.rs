@@ -34,7 +34,7 @@ use crate::schema::{
     RecordField, ResolvedDefaultValueField, ResolvedRecordField, SchemaNode, SchemaPiece,
     SchemaPieceOrNamed,
 };
-use crate::types::{AvroMap, Scalar, Value};
+use crate::types::{Scalar, Value};
 use crate::{
     util::{safe_len, zag_i32, zag_i64, TsUnit},
     TrivialDecoder, ValueDecoder,
@@ -730,7 +730,7 @@ pub mod public_decoders {
 
     use super::{AvroDecodable, AvroMapAccess, StatefulAvroDecodable};
     use crate::error::{DecodeError, Error as AvroError};
-    use crate::types::{AvroMap, DecimalValue, Scalar, Value};
+    use crate::types::{DecimalValue, Scalar, Value};
     use crate::{
         AvroArrayAccess, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, ValueOrReader,
     };
@@ -1202,7 +1202,7 @@ pub mod public_decoders {
                 let val = a.decode_field(d)?;
                 entries.insert(name, val);
             }
-            Ok(Value::Map(AvroMap(entries)))
+            Ok(Value::Map(entries))
         }
     }
 }
@@ -1254,7 +1254,7 @@ pub fn give_value<D: AvroDecode>(d: D, v: &Value) -> Result<D::Out, AvroError> {
             let mut a = ValueArrayAccess::new(val);
             d.array(&mut a)
         }
-        Value::Map(AvroMap(val)) => {
+        Value::Map(val) => {
             let vals: Vec<_> = val.clone().into_iter().collect();
             let mut m = ValueMapAccess::new(vals.as_slice());
             d.map(&mut m)

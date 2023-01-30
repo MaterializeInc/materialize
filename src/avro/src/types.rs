@@ -93,20 +93,6 @@ impl From<Scalar> for Value {
     }
 }
 
-/// The values stored in an Avro map.
-// This simple wrapper exists so we can Debug-print the values deterministically, i.e. in sorted order
-// by keys.
-#[derive(Clone, PartialEq)]
-pub struct AvroMap(pub BTreeMap<String, Value>);
-
-impl fmt::Debug for AvroMap {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut entries = self.0.clone().into_iter().collect::<Vec<_>>();
-        entries.sort_by_key(|(k, _)| k.clone());
-        f.debug_map().entries(entries).finish()
-    }
-}
-
 /// Represents any valid Avro value
 /// More information about Avro values can be found in the
 /// [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas)
@@ -166,7 +152,7 @@ pub enum Value {
     /// An `array` Avro value.
     Array(Vec<Value>),
     /// A `map` Avro value.
-    Map(AvroMap),
+    Map(BTreeMap<String, Value>),
     /// A `record` Avro value.
     ///
     /// A Record is represented by a vector of (`<field name>`, `value`).
@@ -236,11 +222,11 @@ where
     T: ToAvro,
 {
     fn avro(self) -> Value {
-        Value::Map(AvroMap(
+        Value::Map(
             self.into_iter()
                 .map(|(key, value)| (key, value.avro()))
                 .collect::<_>(),
-        ))
+        )
     }
 }
 
@@ -249,11 +235,11 @@ where
     T: ToAvro,
 {
     fn avro(self) -> Value {
-        Value::Map(AvroMap(
+        Value::Map(
             self.into_iter()
                 .map(|(key, value)| (key.to_owned(), value.avro()))
                 .collect::<_>(),
-        ))
+        )
     }
 }
 
@@ -357,12 +343,12 @@ impl ToAvro for JsonValue {
             JsonValue::Array(items) => {
                 Value::Array(items.into_iter().map(|item| item.avro()).collect::<_>())
             }
-            JsonValue::Object(items) => Value::Map(AvroMap(
+            JsonValue::Object(items) => Value::Map(
                 items
                     .into_iter()
                     .map(|(key, value)| (key, value.avro()))
                     .collect::<_>(),
-            )),
+            ),
         }
     }
 }
@@ -429,7 +415,7 @@ impl Value {
                 let node = schema.step(&**inner);
                 items.iter().all(|item| item.validate(node))
             }
-            (&Value::Map(AvroMap(ref items)), SchemaPiece::Map(inner)) => {
+            (&Value::Map(ref items), SchemaPiece::Map(inner)) => {
                 let node = schema.step(&**inner);
                 items.iter().all(|(_, value)| value.validate(node))
             }

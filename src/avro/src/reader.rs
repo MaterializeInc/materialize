@@ -35,8 +35,8 @@ use crate::schema::{
     SchemaPieceRefOrNamed,
 };
 use crate::schema::{ResolvedRecordField, Schema};
-use crate::types::{AvroMap, Value};
-use crate::util::{self};
+use crate::types::Value;
+use crate::util;
 use crate::{Codec, SchemaResolutionError};
 
 use sha2::Sha256;
@@ -64,7 +64,7 @@ impl Header {
             return Err(AvroError::Decode(DecodeError::WrongHeaderMagic(buf)));
         }
 
-        if let Value::Map(AvroMap(meta)) = decode(meta_schema.top_node(), reader)? {
+        if let Value::Map(meta) = decode(meta_schema.top_node(), reader)? {
             // TODO: surface original parse schema errors instead of coalescing them here
             let json = meta
                 .get("avro.schema")

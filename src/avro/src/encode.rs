@@ -22,7 +22,6 @@
 // of which can be found in the LICENSE file at the root of this repository.
 
 use crate::schema::{Schema, SchemaNode, SchemaPiece};
-use crate::types::AvroMap;
 use crate::types::{DecimalValue, Value};
 use crate::util::{zig_i32, zig_i64};
 
@@ -129,7 +128,7 @@ pub fn encode_ref(value: &Value, schema: SchemaNode, buffer: &mut Vec<u8>) {
                 buffer.push(0u8);
             }
         }
-        Value::Map(AvroMap(items)) => {
+        Value::Map(items) => {
             if let SchemaPiece::Map(inner) = schema.inner {
                 if !items.is_empty() {
                     encode_long(items.len() as i64, buffer);
@@ -190,7 +189,7 @@ mod tests {
         let mut buf = Vec::new();
         let empty: BTreeMap<String, Value> = BTreeMap::new();
         encode(
-            &Value::Map(AvroMap(empty)),
+            &Value::Map(empty),
             &r#"{"type": "map", "values": "int"}"#.parse().unwrap(),
             &mut buf,
         );

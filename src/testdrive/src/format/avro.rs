@@ -31,7 +31,7 @@ use serde_json::Value as JsonValue;
 // testdrive modules can import just this one.
 
 pub use mz_avro::schema::{Schema, SchemaKind, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
-pub use mz_avro::types::{AvroMap, DecimalValue, ToAvro, Value};
+pub use mz_avro::types::{DecimalValue, ToAvro, Value};
 pub use mz_avro::{from_avro_datum, to_avro_datum, Codec, Reader, Writer};
 pub use mz_interchange::avro::parse_schema;
 
@@ -163,7 +163,7 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, anyhow::
                     )?,
                 );
             }
-            Ok(Value::Map(AvroMap(map)))
+            Ok(Value::Map(map))
         }
         (val, SchemaPiece::Union(us)) => {
             let variants = us.variants();

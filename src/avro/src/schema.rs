@@ -46,7 +46,6 @@ use types::{DecimalValue, Value as AvroValue};
 use crate::error::Error as AvroError;
 use crate::reader::SchemaResolver;
 use crate::types;
-use crate::types::AvroMap;
 use crate::util::MapHelper;
 
 pub fn resolve_schemas(
@@ -1823,7 +1822,7 @@ impl<'a> SchemaNode<'a> {
                     .iter()
                     .map(|(k, v)| node.json_to_value(v).map(|v| (k.clone(), v)))
                     .collect::<Result<BTreeMap<_, _>, ParseSchemaError>>()?;
-                AvroValue::Map(AvroMap(map))
+                AvroValue::Map(map)
             }
             (String(s), SchemaPiece::Fixed { size }) if s.len() == *size => {
                 AvroValue::Fixed(*size, s.clone().into_bytes())
