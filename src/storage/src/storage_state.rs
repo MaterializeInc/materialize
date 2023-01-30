@@ -658,21 +658,23 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.storage_state
                         .source_statistics
                         .insert(*export_id, stats);
+                }
 
+                for id in ingestion_description.subsource_ids() {
                     // If there is already a shared upper, we re-use it, to make
                     // sure that parties that are already using the shared upper
                     // can continue doing so.
-                    let source_upper = self
-                        .storage_state
-                        .source_uppers
-                        .entry(export_id.clone())
-                        .or_insert_with(|| {
-                            Rc::new(RefCell::new(if is_closed {
-                                Antichain::new()
-                            } else {
-                                Antichain::from_elem(mz_repr::Timestamp::minimum())
-                            }))
-                        });
+                    let source_upper =
+                        self.storage_state
+                            .source_uppers
+                            .entry(id)
+                            .or_insert_with(|| {
+                                Rc::new(RefCell::new(if is_closed {
+                                    Antichain::new()
+                                } else {
+                                    Antichain::from_elem(mz_repr::Timestamp::minimum())
+                                }))
+                            });
 
                     let mut source_upper = source_upper.borrow_mut();
                     if !source_upper.is_empty() {
@@ -1010,11 +1012,9 @@ impl StorageState {
                         .insert(ingestion.id, ingestion.description.clone());
 
                     // Initialize shared frontier reporting.
-                    for (export_id, _export) in ingestion.description.source_exports.iter() {
-                        self.reported_frontiers.insert(
-                            *export_id,
-                            Antichain::from_elem(mz_repr::Timestamp::minimum()),
-                        );
+                    for id in ingestion.description.subsource_ids() {
+                        self.reported_frontiers
+                            .insert(id, Antichain::from_elem(mz_repr::Timestamp::minimum()));
                     }
 
                     // This needs to be done by one worker, which will
