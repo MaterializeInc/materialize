@@ -26,7 +26,7 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::future::Future;
 use std::pin::Pin;
@@ -1098,7 +1098,7 @@ fn handle_message<K, V, T, D>(
         (usize, Result<SourceOutput<K, V, D>, SourceError>),
         Tee<mz_repr::Timestamp, (usize, Result<SourceOutput<K, V, D>, SourceError>)>,
     >,
-    metric_updates: &mut BTreeMap<PartitionId, (MzOffset, Timestamp, Diff)>,
+    metric_updates: &mut BTreeMap<PartitionId, (MzOffset, mz_repr::Timestamp, Diff)>,
     ts: mz_repr::Timestamp,
     source_id: GlobalId,
 ) where

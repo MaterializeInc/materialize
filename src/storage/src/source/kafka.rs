@@ -30,6 +30,7 @@ use tokio::runtime::Handle as TokioHandle;
 use tracing::{error, info, trace, warn};
 
 use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
+use mz_ore::collections::HashMap;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId, RelationDesc};
 use mz_storage_client::types::connections::{ConnectionContext, StringOrSecret};

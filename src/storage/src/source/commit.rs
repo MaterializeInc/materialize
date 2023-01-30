@@ -8,8 +8,6 @@
 // by the Apache License, Version 2.0.
 
 //! Drivers for upstream commit
-use std::collections::BTreeMap;
-
 use async_trait::async_trait;
 use timely::progress::Antichain;
 
