@@ -139,7 +139,82 @@ where
     (rows, token)
 }
 
-/// Pending work to read from feteched parts
+pub fn decode_and_mfp<G, YFn>(
+    fetched: &Stream<G, FetchedPart<SourceData, (), Timestamp, Diff>>,
+    name: &str,
+    until: Antichain<Timestamp>,
+    mut map_filter_project: Option<&mut MfpPlan>,
+    yield_fn: YFn,
+) -> Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>
+where
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+    YFn: Fn(Instant, usize) -> bool + 'static,
+{
+    let scope = fetched.scope();
+    let mut builder = OperatorBuilder::new(
+        format!("persist_source::decode_and_mfp({})", name),
+        scope.clone(),
+    );
+    let operator_info = builder.operator_info();
+
+    let mut fetched_input = builder.new_input(fetched, Pipeline);
+    let (mut updates_output, updates_stream) = builder.new_output();
+
+    // Re-used state for processing and building rows.
+    let mut datum_vec = mz_repr::DatumVec::new();
+    let mut row_builder = Row::default();
+
+    // Extract the MFP if it exists; leave behind an identity MFP in that case.
+    let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
+
+    builder.build(move |_caps| {
+        // Acquire an activator to reschedule the operator when it has unfinished work.
+        let activations = scope.activations();
+        let activator = Activator::new(&operator_info.address[..], activations);
+        // Maintain a list of work to do
+        let mut todo = std::collections::VecDeque::new();
+        let mut buffer = Default::default();
+
+        move |_frontier| {
+            fetched_input.for_each(|time, data| {
+                data.swap(&mut buffer);
+                let capability = time.retain();
+                for fetched_part in buffer.drain(..) {
+                    todo.push_back(PendingWork {
+                        capability: capability.clone(),
+                        fetched_part,
+                    })
+                }
+            });
+
+            let mut work = 0;
+            let start_time = Instant::now();
+            let mut handle = ConsolidateBuffer::new(updates_output.activate(), 0);
+            while !todo.is_empty() && !yield_fn(start_time, work) {
+                let done = todo.front_mut().unwrap().do_work(
+                    &mut work,
+                    start_time,
+                    &yield_fn,
+                    &until,
+                    map_filter_project.as_ref(),
+                    &mut datum_vec,
+                    &mut row_builder,
+                    &mut handle,
+                );
+                if done {
+                    todo.pop_front();
+                }
+            }
+            if !todo.is_empty() {
+                activator.activate();
+            }
+        }
+    });
+
+    updates_stream
+}
+
+/// Pending work to read from fetched parts
 struct PendingWork {
     /// The time at which the work should happen.
     capability: Capability<Timestamp>,
@@ -218,79 +293,4 @@ impl PendingWork {
         }
         true
     }
-}
-
-pub fn decode_and_mfp<G, YFn>(
-    fetched: &Stream<G, FetchedPart<SourceData, (), Timestamp, Diff>>,
-    name: &str,
-    until: Antichain<Timestamp>,
-    mut map_filter_project: Option<&mut MfpPlan>,
-    yield_fn: YFn,
-) -> Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-    YFn: Fn(Instant, usize) -> bool + 'static,
-{
-    let scope = fetched.scope();
-    let mut builder = OperatorBuilder::new(
-        format!("persist_source::decode_and_mfp({})", name),
-        scope.clone(),
-    );
-    let operator_info = builder.operator_info();
-
-    let mut fetched_input = builder.new_input(fetched, Pipeline);
-    let (mut updates_output, updates_stream) = builder.new_output();
-
-    // Re-used state for processing and building rows.
-    let mut datum_vec = mz_repr::DatumVec::new();
-    let mut row_builder = Row::default();
-
-    // Extract the MFP if it exists; leave behind an identity MFP in that case.
-    let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
-
-    builder.build(move |_caps| {
-        // Acquire an activator to reschedule the operator when it has unfinished work.
-        let activations = scope.activations();
-        let activator = Activator::new(&operator_info.address[..], activations);
-        // Maintain a list of work to do
-        let mut todo = std::collections::VecDeque::new();
-        let mut buffer = Default::default();
-
-        move |_frontier| {
-            fetched_input.for_each(|time, data| {
-                data.swap(&mut buffer);
-                let capability = time.retain();
-                for fetched_part in buffer.drain(..) {
-                    todo.push_back(PendingWork {
-                        capability: capability.clone(),
-                        fetched_part,
-                    })
-                }
-            });
-
-            let mut work = 0;
-            let start_time = Instant::now();
-            let mut handle = ConsolidateBuffer::new(updates_output.activate(), 0);
-            while !todo.is_empty() && !yield_fn(start_time, work) {
-                let done = todo.front_mut().unwrap().do_work(
-                    &mut work,
-                    start_time,
-                    &yield_fn,
-                    &until,
-                    map_filter_project.as_ref(),
-                    &mut datum_vec,
-                    &mut row_builder,
-                    &mut handle,
-                );
-                if done {
-                    todo.pop_front();
-                }
-            }
-            if !todo.is_empty() {
-                activator.activate();
-            }
-        }
-    });
-
-    updates_stream
 }
