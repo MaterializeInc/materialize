@@ -197,6 +197,7 @@ async fn blob_rtt_latency_task(
             match blob.get(BLOB_GET_LIVENESS_KEY).await {
                 Ok(_) => {}
                 Err(_) => {
+                    next_measurement = tokio::time::Instant::now() + measurement_interval;
                     continue;
                 }
             }
@@ -237,6 +238,7 @@ async fn consensus_rtt_latency_task(
             match consensus.head(CONSENSUS_HEAD_LIVENESS_KEY).await {
                 Ok(_) => {}
                 Err(_) => {
+                    next_measurement = tokio::time::Instant::now() + measurement_interval;
                     continue;
                 }
             }
