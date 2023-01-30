@@ -372,6 +372,27 @@ where
 
         let mut timer = Instant::now();
 
+        // We want to commit offsets concurrently with ingestion so that a slow commit
+        // implementation doesn't stall the operator and prevent it from reading more data. For
+        // this reason we package up the logic in a future that is polled below in the select loop.
+        let offset_commit_loop = async {
+            while let Some(frontier) = resume_uppers.next().await {
+                trace!(
+                    "timely-{worker_id} source({id}) committing offsets: resume_upper={}",
+                    frontier.pretty()
+                );
+                if let Err(e) = offset_committer.commit_offsets(frontier.clone()).await {
+                    // TODO(guswynn): stats for this error
+                    tracing::error!(
+                        %e,
+                        "timely-{worker_id} source({id}) failed to commit offsets: resume_upper={}",
+                        frontier.pretty()
+                    );
+                }
+            }
+        };
+        tokio::pin!(offset_commit_loop);
+
         loop {
             tokio::select! {
                 message = source_stream.next() => match message {
@@ -424,20 +445,10 @@ where
                         return;
                     }
                 },
-                Some(frontier) = resume_uppers.next() => {
-                    trace!(
-                        "timely-{worker_id} source({id}) committing offsets: resume_upper={}",
-                        frontier.pretty()
-                    );
-                    if let Err(e) = offset_committer.commit_offsets(frontier.clone()).await {
-                        // TODO(guswynn): stats for this error
-                        tracing::error!(
-                            %e,
-                            "timely-{worker_id} source({id}) failed to commit offsets: resume_upper={}",
-                            frontier.pretty()
-                        );
-                    }
-                }
+                // This future is not cancel safe but we are only passing a reference to it in the
+                // select! loop so the future stays on the stack and never gets cancelled until the
+                // end of the function.
+                _ = offset_commit_loop.as_mut() => {},
             }
         }
     });
