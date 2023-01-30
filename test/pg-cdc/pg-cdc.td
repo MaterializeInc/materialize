@@ -258,6 +258,11 @@ utf<NUMBER>_table     subsource <null>
 > SELECT * FROM mz_source_progress
 <NUMBER>
 
+# Ensure we report the write frontier of the progress subsource
+$ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+> EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source_progress
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+
 $ set-regex match=[0-9]+|_[a-f0-9]+ replacement=<SUPPRESSED>
 
 > SELECT * FROM mz_internal.mz_postgres_sources

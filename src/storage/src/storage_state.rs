@@ -664,17 +664,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     // If there is already a shared upper, we re-use it, to make
                     // sure that parties that are already using the shared upper
                     // can continue doing so.
-                    let source_upper =
-                        self.storage_state
-                            .source_uppers
-                            .entry(id)
-                            .or_insert_with(|| {
-                                Rc::new(RefCell::new(if is_closed {
-                                    Antichain::new()
-                                } else {
-                                    Antichain::from_elem(mz_repr::Timestamp::minimum())
-                                }))
-                            });
+                    let source_upper = self
+                        .storage_state
+                        .source_uppers
+                        .entry(id.clone())
+                        .or_insert_with(|| {
+                            Rc::new(RefCell::new(if is_closed {
+                                Antichain::new()
+                            } else {
+                                Antichain::from_elem(mz_repr::Timestamp::minimum())
+                            }))
+                        });
 
                     let mut source_upper = source_upper.borrow_mut();
                     if !source_upper.is_empty() {

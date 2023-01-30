@@ -60,4 +60,9 @@ contains:Unable to validate AWS credentials
 $ set-regex match=\d+ replacement=<NUMBER>
 
 > SELECT * FROM f_progress
-<NUMBER> <NUMBER>
+<NUMBER>
+
+# Ensure we report the write frontier of the progress subsource
+$ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+> EXPLAIN TIMESTAMP FOR SELECT * FROM f_progress
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.f_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"

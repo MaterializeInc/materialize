@@ -10,6 +10,8 @@
 //! Reclocking compatibility code until the whole ingestion pipeline is transformed to native
 //! timestamps
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
@@ -49,6 +51,8 @@ pub struct PersistHandle<FromTime: SourceTimestamp, IntoTime: Timestamp + Lattic
     >,
     write_handle: WriteHandle<SourceData, (), IntoTime, Diff>,
     pending_batch: Vec<(FromTime, IntoTime, Diff)>,
+    // Reports `self`'s write frontier.
+    shared_write_frontier: Rc<RefCell<Antichain<IntoTime>>>,
 }
 
 impl<FromTime: Timestamp, IntoTime: Timestamp> PersistHandle<FromTime, IntoTime>
@@ -60,6 +64,7 @@ where
         persist_clients: Arc<PersistClientCache>,
         metadata: CollectionMetadata,
         as_of: Antichain<IntoTime>,
+        shared_write_frontier: Rc<RefCell<Antichain<IntoTime>>>,
         // additional information to improve logging
         id: GlobalId,
         operator: &str,
@@ -154,6 +159,7 @@ where
             events,
             write_handle,
             pending_batch: vec![],
+            shared_write_frontier,
         })
     }
 }
@@ -215,10 +221,13 @@ where
 
         match self
             .write_handle
-            .compare_and_append(row_updates, upper, new_upper)
+            .compare_and_append(row_updates, upper, new_upper.clone())
             .await
         {
-            Ok(result) => return result,
+            Ok(result) => {
+                *self.shared_write_frontier.borrow_mut() = new_upper;
+                return result;
+            }
             Err(invalid_use) => panic!("compare_and_append failed: {invalid_use}"),
         }
     }
