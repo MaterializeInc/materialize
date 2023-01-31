@@ -28,5 +28,9 @@ kubectl describe all > kubectl-describe-all.log || true
 buildkite-agent artifact upload "kubectl-*.log"
 buildkite-agent artifact upload /var/log/dmesg
 
+# shellcheck disable=SC2024
+sudo journalctl --merge > journalctl-merge.log
+buildkite-agent artifact upload journalctl-merge.log
+
 ci_unimportant_heading "cloudtest: Resetting..."
 bin/ci-builder run stable test/cloudtest/reset

@@ -191,16 +191,16 @@ async fn blob_rtt_latency_task(
         loop {
             tokio::time::sleep_until(next_measurement).await;
             let start = Instant::now();
-            // Don't spam retries if this returns an error. We're guaranteed by
-            // the method signature that we've already got metrics coverage of
-            // these, so we'll count the errors.
             match blob.get(BLOB_GET_LIVENESS_KEY).await {
-                Ok(_) => {}
+                Ok(_) => {
+                    metrics.blob.rtt_latency.set(start.elapsed().as_secs_f64());
+                }
                 Err(_) => {
-                    continue;
+                    // Don't spam retries if this returns an error. We're
+                    // guaranteed by the method signature that we've already got
+                    // metrics coverage of these, so we'll count the errors.
                 }
             }
-            metrics.blob.rtt_latency.set(start.elapsed().as_secs_f64());
             next_measurement = tokio::time::Instant::now() + measurement_interval;
         }
     })
@@ -231,19 +231,19 @@ async fn consensus_rtt_latency_task(
         loop {
             tokio::time::sleep_until(next_measurement).await;
             let start = Instant::now();
-            // Don't spam retries if this returns an error. We're guaranteed by
-            // the method signature that we've already got metrics coverage of
-            // these, so we'll count the errors.
             match consensus.head(CONSENSUS_HEAD_LIVENESS_KEY).await {
-                Ok(_) => {}
+                Ok(_) => {
+                    metrics
+                        .consensus
+                        .rtt_latency
+                        .set(start.elapsed().as_secs_f64());
+                }
                 Err(_) => {
-                    continue;
+                    // Don't spam retries if this returns an error. We're
+                    // guaranteed by the method signature that we've already got
+                    // metrics coverage of these, so we'll count the errors.
                 }
             }
-            metrics
-                .consensus
-                .rtt_latency
-                .set(start.elapsed().as_secs_f64());
             next_measurement = tokio::time::Instant::now() + measurement_interval;
         }
     })

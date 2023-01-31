@@ -10,24 +10,31 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::future;
+use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
-use futures::{FutureExt, StreamExt};
+use futures::{FutureExt, Stream, StreamExt};
 use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
+use timely::dataflow::operators::to_stream::Event;
+use timely::dataflow::operators::Capability;
+use timely::progress::Antichain;
 use timely::scheduling::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_postgres::error::DbError;
 use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
+use tokio_postgres::Client;
 use tokio_postgres::SimpleQueryMessage;
 use tracing::{error, info, warn};
 
-use mz_expr::{MirScalarExpr, PartitionId};
+use mz_expr::MirScalarExpr;
 use mz_ore::display::DisplayExt;
 use mz_ore::task;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -57,10 +64,7 @@ static PG_EPOCH: Lazy<SystemTime> = Lazy::new(|| UNIX_EPOCH + Duration::from_sec
 static FEEDBACK_INTERVAL: Duration = Duration::from_secs(30);
 
 /// The amount of time we should wait after the last received message before worrying about WAL lag
-static WAL_LAG_GRACE_PERIOD: Duration = Duration::from_secs(5 * 60); // 5 minutes
-
-/// The maximum amount of WAL lag allowed before restarting the replication process
-static MAX_WAL_LAG: u64 = 100 * 1024 * 1024;
+static WAL_LAG_GRACE_PERIOD: Duration = Duration::from_secs(30);
 
 trait ErrorExt {
     fn is_definite(&self) -> bool;
@@ -72,26 +76,29 @@ impl ErrorExt for tokio::time::error::Elapsed {
     }
 }
 
+impl ErrorExt for DbError {
+    fn is_definite(&self) -> bool {
+        let class = match self.code().code().get(0..2) {
+            None => return false,
+            Some(class) => class,
+        };
+        // See https://www.postgresql.org/docs/current/errcodes-appendix.html for the class
+        // definitions.
+        match class {
+            // unknown catalog or schema names
+            "3D" | "3F" => true,
+            // syntax error or access rule violation
+            "42" => true,
+            _ => false,
+        }
+    }
+}
+
 impl ErrorExt for tokio_postgres::Error {
     fn is_definite(&self) -> bool {
         match self.source() {
             Some(err) => match err.downcast_ref::<DbError>() {
-                Some(db_err) => {
-                    let class = match db_err.code().code().get(0..2) {
-                        None => return false,
-                        Some(class) => class,
-                    };
-                    match class {
-                        // See https://www.postgresql.org/docs/current/errcodes-appendix.html
-                        // for the class definitions.
-
-                        // unknown catalog or schema names
-                        "3D" | "3F" => true,
-                        // syntax error or access rule violation
-                        "42" => true,
-                        _ => false,
-                    }
-                }
+                Some(db_err) => db_err.is_definite(),
                 None => false,
             },
             // We have no information about what happened, it might be a fatal error or
@@ -105,6 +112,28 @@ impl ErrorExt for tokio_postgres::Error {
     }
 }
 
+impl ErrorExt for std::io::Error {
+    fn is_definite(&self) -> bool {
+        match self.source() {
+            Some(err) => match err.downcast_ref::<tokio_postgres::Error>() {
+                Some(tokio_err) => tokio_err.is_definite(),
+                None => match err.downcast_ref::<DbError>() {
+                    Some(db_err) => db_err.is_definite(),
+                    None => false,
+                },
+            },
+            // We have no information about what happened, it might be a fatal error or
+            // it might not. Unexpected errors can happen if the upstream crashes for
+            // example in which case we should retry.
+            //
+            // Therefore, we adopt a "indefinite unless proven otherwise" policy and
+            // keep retrying in the event of unexpected errors.
+            None => false,
+        }
+    }
+}
+
+#[derive(Debug)]
 enum ReplicationError {
     /// This error is definite: this source is permanently wedged.
     /// Returning a definite error will cause the collection to become un-queryable.
@@ -112,6 +141,8 @@ enum ReplicationError {
     /// This error may or may not resolve itself in the future, and
     /// should be retried instead of being added to the output.
     Indefinite(anyhow::Error),
+    /// When this error happens we must halt
+    Irrecoverable(anyhow::Error),
 }
 
 impl<E: ErrorExt + Into<anyhow::Error>> From<E> for ReplicationError {
@@ -124,21 +155,31 @@ impl<E: ErrorExt + Into<anyhow::Error>> From<E> for ReplicationError {
     }
 }
 
-macro_rules! try_definite {
-    ($expr:expr $(,)?) => {
-        match $expr {
-            Ok(val) => val,
-            Err(err) => return Err(ReplicationError::Definite(err.into())),
-        }
-    };
+trait ResultExt<T, E> {
+    fn err_definite(self) -> Result<T, ReplicationError>;
+    fn err_indefinite(self) -> Result<T, ReplicationError>;
+    fn err_irrecoverable(self) -> Result<T, ReplicationError>;
 }
-macro_rules! try_indefinite {
-    ($expr:expr $(,)?) => {
-        match $expr {
-            Ok(val) => val,
-            Err(err) => return Err(ReplicationError::Indefinite(err.into())),
+
+impl<T, E: Into<anyhow::Error>> ResultExt<T, E> for Result<T, E> {
+    fn err_definite(self) -> Result<T, ReplicationError> {
+        match self {
+            Ok(val) => Ok(val),
+            Err(err) => Err(ReplicationError::Definite(err.into())),
         }
-    };
+    }
+    fn err_indefinite(self) -> Result<T, ReplicationError> {
+        match self {
+            Ok(val) => Ok(val),
+            Err(err) => Err(ReplicationError::Indefinite(err.into())),
+        }
+    }
+    fn err_irrecoverable(self) -> Result<T, ReplicationError> {
+        match self {
+            Ok(val) => Ok(val),
+            Err(err) => Err(ReplicationError::Irrecoverable(err.into())),
+        }
+    }
 }
 
 // Message used to communicate between `get_next_message` and the tokio task
@@ -162,15 +203,13 @@ pub struct PostgresSourceReader {
     // the `PostgresSourceReader`s will actually produce data.
     active_read_worker: bool,
 
-    // The non-active reader (see above `active_read_worker`) has to report back
-    // that is is not consuming from the one [`PartitionId:None`] partition.
-    // Before it can return a [`NextMessage::Finished`]. This is keeping track
-    // of that.
-    reported_unconsumed_partitions: bool,
-
     /// The lsn we last emitted data at. Used to fabricate timestamps for errors. This should
     /// ideally go away and only emit errors that we can associate with source timestamps
     last_lsn: PgLsn,
+
+    /// Capabilities used to produce messages
+    data_capability: Capability<MzOffset>,
+    upper_capability: Capability<MzOffset>,
 }
 
 /// An OffsetCommitter for postgres, that sends
@@ -178,7 +217,7 @@ pub struct PostgresSourceReader {
 /// through a channel
 pub struct PgOffsetCommitter {
     logger: LogCommitter,
-    tx: Sender<BTreeMap<PartitionId, MzOffset>>,
+    resume_lsn: Arc<AtomicU64>,
 }
 
 /// Information about an ingested upstream table
@@ -199,15 +238,13 @@ struct PostgresTaskInfo {
     publication: String,
     slot: String,
     /// Our cursor into the WAL
-    lsn: PgLsn,
+    replication_lsn: PgLsn,
     metrics: PgSourceMetrics,
     /// A map of the table oid to its information
     source_tables: BTreeMap<u32, SourceTable>,
     row_sender: RowSender,
     sender: Sender<InternalMessage>,
-    /// Channel to receive lsn's from the PgOffsetCommitter
-    /// that are safe to send status updates for.
-    offset_rx: Receiver<BTreeMap<PartitionId, MzOffset>>,
+    resume_lsn: Arc<AtomicU64>,
 }
 
 impl SourceConnectionBuilder for PostgresSourceConnection {
@@ -223,33 +260,27 @@ impl SourceConnectionBuilder for PostgresSourceConnection {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        start_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        mut data_capability: Capability<MzOffset>,
+        mut upper_capability: Capability<MzOffset>,
+        resume_upper: Antichain<MzOffset>,
         _encoding: SourceDataEncoding,
         metrics: SourceBaseMetrics,
         connection_context: ConnectionContext,
     ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error> {
         let active_read_worker =
-            crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
+            crate::source::responsible_for(&source_id, worker_id, worker_count, ());
 
         // TODO: figure out the best default here; currently this is optimized
         // for the speed to pass pg-cdc-resumption tests on a local machine.
         let (dataflow_tx, dataflow_rx) = tokio::sync::mpsc::channel(50_000);
 
-        let (offset_tx, offset_rx) = tokio::sync::mpsc::channel(10);
+        // TODO(petrosagg): handle the empty frontier correctly. Currenty the framework code never
+        // constructs a reader when the resumption frontier is the empty antichain
+        let start_offset = resume_upper.into_option().unwrap();
+        data_capability.downgrade(&start_offset);
+        upper_capability.downgrade(&start_offset);
 
-        // Pick out the partition we care about
-        // TODO(petrosagg): add an associated type to SourceReader so that each source can define
-        // its own gauge type
-        let start_offset = start_offsets
-            .into_iter()
-            .find_map(|(pid, offset)| {
-                if pid == PartitionId::None {
-                    offset
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_default();
+        let resume_lsn = Arc::new(AtomicU64::new(start_offset.offset));
 
         let connection_config = TokioHandle::current()
             .block_on(self.connection.config(&*connection_context.secrets_reader))
@@ -284,13 +315,12 @@ impl SourceConnectionBuilder for PostgresSourceConnection {
                 connection_config,
                 publication: self.publication,
                 slot: self.publication_details.slot,
-                /// Our cursor into the WAL
-                lsn: start_offset.offset.into(),
+                replication_lsn: start_offset.offset.into(),
                 metrics: PgSourceMetrics::new(&metrics, source_id),
                 source_tables,
                 row_sender: RowSender::new(dataflow_tx.clone(), consumer_activator),
                 sender: dataflow_tx,
-                offset_rx,
+                resume_lsn: Arc::clone(&resume_lsn),
             };
 
             task::spawn(
@@ -303,8 +333,9 @@ impl SourceConnectionBuilder for PostgresSourceConnection {
             PostgresSourceReader {
                 receiver_stream: dataflow_rx,
                 active_read_worker,
-                reported_unconsumed_partitions: false,
                 last_lsn: start_offset.offset.into(),
+                data_capability,
+                upper_capability,
             },
             PgOffsetCommitter {
                 logger: LogCommitter {
@@ -312,7 +343,7 @@ impl SourceConnectionBuilder for PostgresSourceConnection {
                     worker_id,
                     worker_count,
                 },
-                tx: offset_tx,
+                resume_lsn,
             },
         ))
     }
@@ -321,19 +352,12 @@ impl SourceConnectionBuilder for PostgresSourceConnection {
 impl SourceReader for PostgresSourceReader {
     type Key = ();
     type Value = Row;
-    // Postgres can produce deletes that cause retractions
     type Time = MzOffset;
     type Diff = Diff;
 
     // TODO(guswynn): use `next` instead of using a channel
-    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {
+    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Time, Self::Diff> {
         if !self.active_read_worker {
-            if !self.reported_unconsumed_partitions {
-                self.reported_unconsumed_partitions = true;
-                return NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(vec![
-                    PartitionId::None,
-                ]));
-            }
             return NextMessage::Finished;
         }
 
@@ -347,35 +371,35 @@ impl SourceReader for PostgresSourceReader {
                 end,
             })) => {
                 self.last_lsn = lsn;
+                let msg = SourceMessage {
+                    output,
+                    upstream_time_millis: None,
+                    key: (),
+                    value,
+                    headers: None,
+                };
+
+                let ts = lsn.into();
+                let cap = self.data_capability.delayed(&ts);
+                let next_ts = ts + 1;
+                self.upper_capability.downgrade(&next_ts);
                 if end {
-                    let msg = SourceMessage {
-                        output,
-                        upstream_time_millis: None,
-                        key: (),
-                        value,
-                        headers: None,
-                    };
-                    let ts = (PartitionId::None, lsn.into());
-                    NextMessage::Ready(SourceMessageType::Finalized(Ok(msg), ts, diff))
-                } else {
-                    let msg = SourceMessage {
-                        output,
-                        upstream_time_millis: None,
-                        key: (),
-                        value,
-                        headers: None,
-                    };
-                    let ts = (PartitionId::None, lsn.into());
-                    NextMessage::Ready(SourceMessageType::InProgress(Ok(msg), ts, diff))
+                    self.data_capability.downgrade(&next_ts);
                 }
+                NextMessage::Ready(SourceMessageType::Message(Ok(msg), cap, diff))
             }
             Some(Some(InternalMessage::Status(update))) => {
                 NextMessage::Ready(SourceMessageType::SourceStatus(update))
             }
             Some(Some(InternalMessage::Err(err))) => {
                 // XXX(petrosagg): we are fabricating a timestamp here!!
-                let non_definite_ts = (PartitionId::None, MzOffset::from(self.last_lsn) + 1);
-                NextMessage::Ready(SourceMessageType::Finalized(Err(err), non_definite_ts, 1))
+                let non_definite_ts = MzOffset::from(self.last_lsn) + 1;
+
+                let cap = self.data_capability.delayed(&non_definite_ts);
+                let next_ts = non_definite_ts + 1;
+                self.data_capability.downgrade(&next_ts);
+                self.upper_capability.downgrade(&next_ts);
+                NextMessage::Ready(SourceMessageType::Message(Err(err), cap, 1))
             }
             None => NextMessage::Pending,
             Some(None) => NextMessage::Finished,
@@ -386,57 +410,48 @@ impl SourceReader for PostgresSourceReader {
 }
 
 #[async_trait::async_trait]
-impl OffsetCommitter for PgOffsetCommitter {
-    async fn commit_offsets(
-        &self,
-        offsets: BTreeMap<PartitionId, MzOffset>,
-    ) -> Result<(), anyhow::Error> {
-        self.tx.send(offsets.clone()).await?;
-        self.logger.commit_offsets(offsets).await?;
+impl OffsetCommitter<MzOffset> for PgOffsetCommitter {
+    async fn commit_offsets(&self, frontier: Antichain<MzOffset>) -> Result<(), anyhow::Error> {
+        if let Some(offset) = frontier.as_option() {
+            // TODO(petrosagg): this minus one is very suspicious. It is replicating the previous
+            // behaviour where the commit offset was calculated by calling
+            // OffsetAntichain::as_data_offsets, which subtracted one. Investigate if it's truly
+            // needed
+            self.resume_lsn
+                .store(offset.offset.saturating_sub(1), Ordering::SeqCst);
+        }
+        self.logger.commit_offsets(frontier).await?;
 
         Ok(())
     }
 }
 
 /// Defers to `postgres_replication_loop_inner` and sends errors through the channel if they occur
+#[allow(clippy::or_fun_call)]
 async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
-    match postgres_replication_loop_inner(&mut task_info).await {
-        Ok(()) => {}
-        Err(e) => {
-            // Drop the send error, as we have no way of communicating back to the
-            // source operator if the channel is gone.
-            let _ = task_info
-                .row_sender
-                .sender
-                .send(InternalMessage::Err(e))
-                .await;
-            task_info
-                .row_sender
-                .activator
-                .activate()
-                .expect("postgres reader activation failed");
-        }
-    }
-}
-
-/// Core logic
-async fn postgres_replication_loop_inner(
-    task_info: &mut PostgresTaskInfo,
-) -> Result<(), SourceReaderError> {
-    if task_info.lsn == PgLsn::from(0) {
-        // Buffer rows from snapshot to retract and retry, if initial snapshot fails.
-        // Postgres sources cannot proceed without a successful snapshot.
-        match task_info.produce_snapshot().await {
-            Ok(_) => {
-                info!(
-                    "replication snapshot for source {} succeeded",
-                    &task_info.source_id
-                );
-            }
+    loop {
+        match postgres_replication_loop_inner(&mut task_info).await {
+            Ok(()) => {}
             Err(ReplicationError::Indefinite(e)) => {
                 warn!(
-                    "replication snapshot for source {} failed: {}",
-                    &task_info.source_id, e
+                    "replication for source {} interrupted, retrying: {e}",
+                    task_info.source_id
+                );
+                // If the channel is shutting down, so is the source.
+                let _ = task_info
+                    .sender
+                    .send(InternalMessage::Status(HealthStatusUpdate {
+                        update: HealthStatus::StalledWithError(e.to_string_alt()),
+                        should_halt: false,
+                    }))
+                    .await;
+            }
+            Err(ReplicationError::Irrecoverable(e)) => {
+                warn!(
+                    "irrecoverable error for source {}: {}, cause: {}",
+                    &task_info.source_id,
+                    e,
+                    e.source().unwrap_or(anyhow::anyhow!("unknown").as_ref())
                 );
                 // If the channel is shutting down, so is the source.
                 let _ = task_info
@@ -456,44 +471,230 @@ async fn postgres_replication_loop_inner(
                 future::pending().await
             }
             Err(ReplicationError::Definite(e)) => {
-                return Err(SourceReaderError {
-                    inner: SourceErrorDetails::Initialization(e.to_string()),
-                })
-            }
-        }
-    }
-
-    loop {
-        match task_info.produce_replication().await {
-            Err(ReplicationError::Indefinite(e)) => {
-                // If the channel is shutting down, so is the source.
+                warn!(
+                    "definite error for source {}: {}, cause: {}",
+                    &task_info.source_id,
+                    e,
+                    e.source().unwrap_or(anyhow::anyhow!("unknown").as_ref())
+                );
+                // Drop the send error, as we have no way of communicating back to the
+                // source operator if the channel is gone.
                 let _ = task_info
+                    .row_sender
                     .sender
-                    .send(InternalMessage::Status(HealthStatusUpdate {
-                        update: HealthStatus::StalledWithError(e.to_string()),
-                        should_halt: false,
+                    .send(InternalMessage::Err(SourceReaderError {
+                        inner: SourceErrorDetails::Initialization(e.to_string()),
                     }))
                     .await;
-                warn!(
-                    "replication for source {} interrupted, retrying: {}",
-                    task_info.source_id, e
-                );
-            }
-            Err(ReplicationError::Definite(e)) => {
-                return Err(SourceReaderError {
-                    inner: SourceErrorDetails::Other(e.to_string()),
-                })
-            }
-            Ok(_) => {
-                // shutdown initiated elsewhere
-                return Ok(());
+                task_info
+                    .row_sender
+                    .activator
+                    .activate()
+                    .expect("postgres reader activation failed");
+                return;
             }
         }
-
         // TODO(petrosagg): implement exponential back-off
         tokio::time::sleep(Duration::from_secs(3)).await;
-        info!("resuming replication for source {}", task_info.source_id);
     }
+}
+
+/// Core logic
+async fn postgres_replication_loop_inner(
+    task_info: &mut PostgresTaskInfo,
+) -> Result<(), ReplicationError> {
+    if task_info.replication_lsn == PgLsn::from(0) {
+        // Get all the relevant tables for this publication
+        let publication_tables = mz_postgres_util::publication_info(
+            &task_info.connection_config,
+            &task_info.publication,
+        )
+        .await
+        .err_indefinite()?;
+
+        // Validate publication tables against the state snapshot
+        validate_tables(&task_info.source_tables, publication_tables).err_definite()?;
+
+        let client = task_info
+            .connection_config
+            .clone()
+            .connect_replication()
+            .await
+            .err_indefinite()?;
+
+        // Technically there is TOCTOU problem here but it makes the code easier and if we end
+        // up attempting to create a slot and it already exists we will simply retry
+        // Also, we must check if the slot exists before we start a transaction because creating a
+        // slot must be the first statement in a transaction
+        let res = client
+            .simple_query(&format!(
+                r#"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = '{}'"#,
+                task_info.slot
+            ))
+            .await?;
+        let slot_lsn = parse_single_row(&res, "confirmed_flush_lsn");
+        client
+            .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
+            .await?;
+
+        let (slot_lsn, snapshot_lsn, temp_slot) = match slot_lsn {
+            Ok(slot_lsn) => {
+                // The main slot already exists which means we can't use it for the snapshot. So
+                // we'll create a temporary replication slot in order to both set the transaction's
+                // snapshot to be a consistent point and also to find out the LSN that the snapshot
+                // is going to run at.
+                //
+                // When this happens we'll most likely be snapshotting at a later LSN than the slot
+                // which we will take care below by rewinding.
+                let temp_slot = uuid::Uuid::new_v4().to_string().replace('-', "");
+                let res = client
+                    .simple_query(&format!(
+                        r#"CREATE_REPLICATION_SLOT {:?} TEMPORARY LOGICAL "pgoutput" USE_SNAPSHOT"#,
+                        temp_slot
+                    ))
+                    .await?;
+                let snapshot_lsn = parse_single_row(&res, "consistent_point")?;
+                (slot_lsn, snapshot_lsn, Some(temp_slot))
+            }
+            Err(_) => {
+                let res = client
+                    .simple_query(&format!(
+                        r#"CREATE_REPLICATION_SLOT {:?} LOGICAL "pgoutput" USE_SNAPSHOT"#,
+                        task_info.slot
+                    ))
+                    .await?;
+                let slot_lsn = parse_single_row(&res, "consistent_point")?;
+                (slot_lsn, slot_lsn, None)
+            }
+        };
+
+        let mut stream = Box::pin(
+            produce_snapshot(&client, &task_info.metrics, &task_info.source_tables).enumerate(),
+        );
+
+        while let Some((i, event)) = stream.as_mut().next().await {
+            if i > 0 {
+                // Failure scenario after we have produced at least one row, but before a
+                // successful `COMMIT`
+                fail::fail_point!("pg_snapshot_failure", |_| {
+                    Err(ReplicationError::Indefinite(anyhow::anyhow!(
+                        "recoverable errors should crash the process"
+                    )))
+                });
+            }
+            let (output, row) = match event {
+                Ok(event) => event,
+                Err(err @ ReplicationError::Definite(_)) => return Err(err),
+                Err(ReplicationError::Indefinite(err) | ReplicationError::Irrecoverable(err)) => {
+                    return Err(ReplicationError::Irrecoverable(err))
+                }
+            };
+            task_info
+                .row_sender
+                .send_row(output, row, slot_lsn, 1)
+                .await;
+        }
+
+        if let Some(temp_slot) = temp_slot {
+            let _ = client
+                .simple_query(&format!("DROP_REPLICATION_SLOT {temp_slot:?}"))
+                .await;
+        }
+        client.simple_query("COMMIT;").await?;
+
+        // Drop the stream and the client, to ensure that the future `produce_replication` don't
+        // conflict with the above processing.
+        //
+        // Its possible we can avoid dropping the `client` value here, but we do it out of an
+        // abundance of caution, as rust-postgres has had curious bugs around this.
+        drop(stream);
+        drop(client);
+
+        assert!(slot_lsn <= snapshot_lsn);
+        if slot_lsn < snapshot_lsn {
+            tracing::info!("postgres snapshot was at {snapshot_lsn:?} but we need it at {slot_lsn:?}. Rewinding");
+            // Our snapshot was too far ahead so we must rewind it by reading the replication
+            // stream until the snapshot lsn and emitting any rows that we find with negated diffs
+            let replication_stream = produce_replication(
+                task_info.connection_config.clone(),
+                &task_info.slot,
+                &task_info.publication,
+                slot_lsn,
+                Arc::clone(&task_info.resume_lsn),
+                &task_info.metrics,
+                &task_info.source_tables,
+            )
+            .await;
+            tokio::pin!(replication_stream);
+
+            while let Some(event) = replication_stream.next().await {
+                match event {
+                    Ok(Event::Message(lsn, (output, row, diff))) => {
+                        // Here we ignore the lsn that this row actually happened at and we
+                        // forcefully emit it at the slot_lsn with a negated diff.
+                        if lsn <= snapshot_lsn {
+                            task_info
+                                .row_sender
+                                .send_row(output, row, slot_lsn, -diff)
+                                .await;
+                        }
+                    }
+                    Ok(Event::Progress([lsn])) => {
+                        if lsn > snapshot_lsn {
+                            // We successfully rewinded the snapshot from snapshot_lsn to slot_lsn
+                            task_info.row_sender.close_lsn(slot_lsn).await;
+                            break;
+                        }
+                    }
+                    Err(err @ ReplicationError::Definite(_)) => return Err(err),
+                    Err(
+                        ReplicationError::Indefinite(err) | ReplicationError::Irrecoverable(err),
+                    ) => return Err(ReplicationError::Irrecoverable(err)),
+                }
+            }
+        }
+        task_info.metrics.lsn.set(slot_lsn.into());
+        task_info.row_sender.close_lsn(slot_lsn).await;
+
+        info!(
+            "replication snapshot for source {} succeeded",
+            &task_info.source_id
+        );
+        task_info.replication_lsn = slot_lsn;
+    }
+
+    let replication_stream = produce_replication(
+        task_info.connection_config.clone(),
+        &task_info.slot,
+        &task_info.publication,
+        task_info.replication_lsn,
+        Arc::clone(&task_info.resume_lsn),
+        &task_info.metrics,
+        &task_info.source_tables,
+    )
+    .await;
+    tokio::pin!(replication_stream);
+
+    // TODO(petrosagg): The API does not guarantee that we won't see an error after we have already
+    // partially emitted a transaction, but we know it is the case due to the implementation. Find
+    // a way to encode this in the type signature
+    while let Some(event) = replication_stream.next().await.transpose()? {
+        match event {
+            Event::Message(lsn, (output, row, diff)) => {
+                task_info.row_sender.send_row(output, row, lsn, diff).await;
+            }
+            Event::Progress([lsn]) => {
+                // The lsn passed to `START_REPLICATION_SLOT` produces all transactions that
+                // committed at LSNs *strictly after*, but upper frontiers have "greater than
+                // or equal" semantics, so we must subtract one from the upper to make it
+                // compatible with what `START_REPLICATION_SLOT` expects.
+                task_info.replication_lsn = PgLsn::from(u64::from(lsn) - 1);
+                task_info.row_sender.close_lsn(lsn).await;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 struct RowMessage {
@@ -525,11 +726,11 @@ impl RowSender {
         }
     }
 
-    /// Insert a row at an lsn.
-    pub async fn insert(&mut self, output_index: usize, row: Row, lsn: PgLsn) {
+    /// Send a triplet for the specific output
+    pub async fn send_row(&mut self, output_index: usize, row: Row, lsn: PgLsn, diff: Diff) {
         if let Some(buffered) = self.buffered_message.take() {
             assert_eq!(buffered.lsn, lsn);
-            self.send_row(
+            self.send_row_inner(
                 buffered.output_index,
                 buffered.row,
                 buffered.lsn,
@@ -543,28 +744,7 @@ impl RowSender {
             output_index,
             row,
             lsn,
-            diff: 1,
-        });
-    }
-    /// Delete a row at an lsn.
-    pub async fn delete(&mut self, output_index: usize, row: Row, lsn: PgLsn) {
-        if let Some(buffered) = self.buffered_message.take() {
-            assert_eq!(buffered.lsn, lsn);
-            self.send_row(
-                buffered.output_index,
-                buffered.row,
-                buffered.lsn,
-                buffered.diff,
-                false,
-            )
-            .await;
-        }
-
-        self.buffered_message = Some(RowMessage {
-            output_index,
-            row,
-            lsn,
-            diff: -1,
+            diff,
         });
     }
 
@@ -573,8 +753,8 @@ impl RowSender {
     /// rest of the source pipeline.
     pub async fn close_lsn(&mut self, lsn: PgLsn) {
         if let Some(buffered) = self.buffered_message.take() {
-            assert_eq!(buffered.lsn, lsn);
-            self.send_row(
+            assert!(buffered.lsn <= lsn);
+            self.send_row_inner(
                 buffered.output_index,
                 buffered.row,
                 buffered.lsn,
@@ -585,7 +765,7 @@ impl RowSender {
         }
     }
 
-    async fn send_row(&self, output: usize, row: Row, lsn: PgLsn, diff: i64, end: bool) {
+    async fn send_row_inner(&self, output: usize, row: Row, lsn: PgLsn, diff: i64, end: bool) {
         // a closed receiver means the source has been shutdown
         // (dropped or the process is dying), so just continue on
         // without activation
@@ -607,98 +787,76 @@ impl RowSender {
     }
 }
 
-// implement the core pg logic in this impl block
-impl PostgresTaskInfo {
-    /// Validates that all expected tables exist in the publication tables and they have the same schema
-    fn validate_tables(&self, tables: Vec<PostgresTableDesc>) -> Result<(), anyhow::Error> {
-        let pub_tables: BTreeMap<u32, PostgresTableDesc> =
-            tables.into_iter().map(|t| (t.oid, t)).collect();
-        for (id, info) in self.source_tables.iter() {
-            match pub_tables.get(id) {
-                Some(pub_schema) => {
-                    if pub_schema != &info.desc {
-                        error!(
-                            "Error validating table in publication. Expected: {:?} Actual: {:?}",
-                            &info.desc, pub_schema
-                        );
-                        bail!("Schema for table {} differs, recreate Materialize source to use new schema", info.desc.name)
-                    }
-                }
-                None => {
+/// Validates that all expected tables exist in the publication tables and they have the same schema
+fn validate_tables(
+    source_tables: &BTreeMap<u32, SourceTable>,
+    tables: Vec<PostgresTableDesc>,
+) -> Result<(), anyhow::Error> {
+    let pub_tables: BTreeMap<u32, PostgresTableDesc> =
+        tables.into_iter().map(|t| (t.oid, t)).collect();
+    for (id, info) in source_tables.iter() {
+        match pub_tables.get(id) {
+            Some(pub_schema) => {
+                if pub_schema != &info.desc {
                     error!(
-                        "publication missing table: {} with id {}",
-                        info.desc.name, id
+                        "Error validating table in publication. Expected: {:?} Actual: {:?}",
+                        &info.desc, pub_schema
                     );
-                    bail!(
-                        "Publication missing expected table {} with oid {}",
-                        info.desc.name,
-                        id
-                    )
+                    bail!("Schema for table {} differs, recreate Materialize source to use new schema", info.desc.name)
                 }
             }
+            None => {
+                error!(
+                    "publication missing table: {} with id {}",
+                    info.desc.name, id
+                );
+                bail!(
+                    "Publication missing expected table {} with oid {}",
+                    info.desc.name,
+                    id
+                )
+            }
         }
-        Ok(())
     }
+    Ok(())
+}
 
-    /// Creates the replication slot and produces the initial snapshot of the data
-    ///
-    /// After the initial snapshot has been produced it returns the name of the created slot and
-    /// the LSN at which we should start the replication stream at.
-    async fn produce_snapshot(&mut self) -> Result<(), ReplicationError> {
-        // Get all the relevant tables for this publication
-        let publication_tables = try_indefinite!(
-            mz_postgres_util::publication_info(&self.connection_config, &self.publication).await
-        );
+/// Parses SQL results that are expected to be a single row into a Rust type
+fn parse_single_row<T: FromStr>(
+    result: &[SimpleQueryMessage],
+    column: &str,
+) -> Result<T, ReplicationError> {
+    let mut rows = result.into_iter().filter_map(|msg| match msg {
+        SimpleQueryMessage::Row(row) => Some(row),
+        _ => None,
+    });
+    match (rows.next(), rows.next()) {
+        (Some(row), None) => row
+            .get(column)
+            .ok_or_else(|| anyhow!("missing expected column: {column}"))
+            .and_then(|col| col.parse().or_else(|_| Err(anyhow!("invalid data"))))
+            .err_indefinite(),
+        (None, None) => Err(anyhow!("empty result")).err_indefinite(),
+        _ => Err(anyhow!("ambiguous result, more than one row")).err_indefinite(),
+    }
+}
 
-        let client = try_indefinite!(self.connection_config.clone().connect_replication().await);
-
-        // We're initializing this source so any previously existing slot must be removed and
-        // re-created. Once we have data persistence we will be able to reuse slots across restarts
-        let _ = client
-            .simple_query(&format!("DROP_REPLICATION_SLOT {:?}", &self.slot))
-            .await;
-
-        // Validate publication tables against the state snapshot
-        try_definite!(self.validate_tables(publication_tables));
-
-        // Start a transaction and immediately create a replication slot with the USE SNAPSHOT
-        // directive. This makes the starting point of the slot and the snapshot of the transaction
-        // identical.
-        client
-            .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
-            .await?;
-
-        let slot_query = format!(
-            r#"CREATE_REPLICATION_SLOT {:?} LOGICAL "pgoutput" USE_SNAPSHOT"#,
-            &self.slot
-        );
-        let slot_row = client
-            .simple_query(&slot_query)
-            .await?
-            .into_iter()
-            .next()
-            .and_then(|msg| match msg {
-                SimpleQueryMessage::Row(row) => Some(row),
-                _ => None,
-            })
-            .ok_or_else(|| {
-                ReplicationError::Indefinite(anyhow!(
-                    "empty result after creating replication slot"
-                ))
-            })?;
-
-        // Store the lsn at which we will need to start the replication stream from
-        let consistent_point = try_indefinite!(slot_row
-            .get("consistent_point")
-            .ok_or_else(|| anyhow!("missing expected column: `consistent_point`")));
-        self.lsn = try_definite!(consistent_point
-            .parse()
-            .or_else(|_| Err(anyhow!("invalid lsn"))));
-
+/// Produces the initial snapshot of the data by performing a `COPY` query for each of the provided
+/// `source_tables`.
+///
+/// The return stream of data returned is not annotated with LSN numbers. It is up to the caller to
+/// provide a client that is in a known LSN context in which the snapshot will be taken. For
+/// example by calling this method while being in a transaction for which the LSN is known.
+fn produce_snapshot<'a>(
+    client: &'a Client,
+    metrics: &'a PgSourceMetrics,
+    source_tables: &'a BTreeMap<u32, SourceTable>,
+) -> impl Stream<Item = Result<(usize, Row), ReplicationError>> + 'a {
+    async_stream::try_stream! {
         // Scratch space to use while evaluating casts
         let mut datum_vec = DatumVec::new();
 
-        for info in self.source_tables.values() {
+        for info in source_tables.values() {
             let reader = client
                 .copy_out_simple(
                     format!(
@@ -724,9 +882,9 @@ impl PostgresTaskInfo {
 
                 let mut raw_values = parser.iter_raw(info.desc.columns.len());
                 while let Some(raw_value) = raw_values.next() {
-                    match try_definite!(raw_value) {
+                    match raw_value.err_definite()? {
                         Some(value) => {
-                            packer.push(Datum::String(try_definite!(std::str::from_utf8(value))))
+                            packer.push(Datum::String(std::str::from_utf8(value).err_definite()?))
                         }
                         None => packer.push(Datum::Null),
                     }
@@ -735,161 +893,68 @@ impl PostgresTaskInfo {
                 let mut datums = datum_vec.borrow();
                 datums.extend(text_row.iter());
 
-                let row = try_definite!(PostgresTaskInfo::cast_row(&info.casts, &datums));
+                let row = cast_row(&info.casts, &datums).err_definite()?;
 
-                self.row_sender
-                    .insert(info.output_index, row, self.lsn)
-                    .await;
-                // Failure scenario after we have produced at least one row, but before a
-                // successful `COMMIT`
-                fail::fail_point!("pg_snapshot_failure", |_| {
-                    Err(ReplicationError::Indefinite(anyhow::anyhow!(
-                        "recoverable errors should crash the process"
-                    )))
-                });
+                yield (info.output_index, row);
             }
 
-            self.metrics.tables.inc();
+            metrics.tables.inc();
         }
-        self.metrics.lsn.set(self.lsn.into());
-        client.simple_query("COMMIT;").await?;
-
-        // close the current `row_sender` context after we are sure we have not errored
-        // out (in the commit).
-        self.row_sender.close_lsn(self.lsn).await;
-        Ok(())
     }
+}
 
-    /// Packs a Tuple received in the replication stream into a Row packer.
-    fn datums_from_tuple<'a, T>(
-        rel_id: u32,
-        tuple_data: T,
-        datums: &mut Vec<Datum<'a>>,
-    ) -> Result<(), anyhow::Error>
-    where
-        T: IntoIterator<Item = &'a TupleData>,
-    {
-        for val in tuple_data.into_iter() {
-            let datum = match val {
-                TupleData::Null => Datum::Null,
-                TupleData::UnchangedToast => bail!(
-                    "Missing TOASTed value from table with OID = {}. \
-                    Did you forget to set REPLICA IDENTITY to FULL for your table?",
-                    rel_id
-                ),
-                TupleData::Text(b) => std::str::from_utf8(b)?.into(),
-            };
-            datums.push(datum);
-        }
-        Ok(())
-    }
-
-    /// Casts a text row into the target types
-    fn cast_row(table_cast: &[MirScalarExpr], datums: &[Datum<'_>]) -> Result<Row, anyhow::Error> {
-        let arena = mz_repr::RowArena::new();
-        let mut row = Row::default();
-        let mut packer = row.packer();
-        for column_cast in table_cast {
-            let datum = column_cast.eval(datums, &arena)?;
-            packer.push(datum);
-        }
-        Ok(row)
-    }
-
-    async fn produce_replication(&mut self) -> Result<(), ReplicationError> {
-        use ReplicationError::*;
-
-        // An lsn that is safe to send status updates for. This is primarily derived from
-        // the resumption frontier, as that represents an lsn that is durably recorded
-        // into persist. In the beginning, we can use this initial lsn, which is either:
-        // - From the initial resumption frontier if we are restarting and skipping snapshotting
-        // - The end lsn from the snapshot, which is safe to use because pg keeps
-        //   all updates >= this lsn.
-        let mut committed_lsn: PgLsn = self.lsn;
-
-        let client = try_indefinite!(self.connection_config.clone().connect_replication().await);
-
-        // Before consuming the replication stream we will peek into the replication slot using a
-        // normal SQL query and the `pg_logical_slot_peek_binary_changes` administrative function.
-        //
-        // By doing so we can get a positive statement about existence or absence of relevant data
-        // from the LSN we wish to restart from until the last known LSN end of the database. If
-        // there are no message then it is safe to fast forward to the end WAL LSN and start the
-        // replication stream from there.
-        let cur_lsn = {
-            let rows = try_indefinite!(
-                client
-                    .simple_query("SELECT pg_current_wal_flush_lsn()")
-                    .await
-            );
-            match rows.first().expect("query returns exactly one row") {
-                SimpleQueryMessage::Row(row) => row
-                    .get(0)
-                    .expect("query returns one column")
-                    .parse::<PgLsn>()
-                    .expect("pg_current_wal_flush_lsn returned invalid lsn"),
-                _ => panic!(),
-            }
+/// Packs a Tuple received in the replication stream into a Row packer.
+fn datums_from_tuple<'a, T>(
+    rel_id: u32,
+    tuple_data: T,
+    datums: &mut Vec<Datum<'a>>,
+) -> Result<(), anyhow::Error>
+where
+    T: IntoIterator<Item = &'a TupleData>,
+{
+    for val in tuple_data.into_iter() {
+        let datum = match val {
+            TupleData::Null => Datum::Null,
+            TupleData::UnchangedToast => bail!(
+                "Missing TOASTed value from table with OID = {}. \
+                Did you forget to set REPLICA IDENTITY to FULL for your table?",
+                rel_id
+            ),
+            TupleData::Text(b) => std::str::from_utf8(b)?.into(),
         };
+        datums.push(datum);
+    }
+    Ok(())
+}
 
-        self.lsn = {
-            let query = format!(
-                "SELECT COUNT(*) FROM pg_logical_slot_peek_binary_changes(
-                     '{name}', '{lsn}', 1,
-                     'proto_version', '1',
-                     'publication_names', '{publication}'
-                )",
-                name = &self.slot,
-                lsn = cur_lsn,
-                publication = self.publication
-            );
+/// Casts a text row into the target types
+fn cast_row(table_cast: &[MirScalarExpr], datums: &[Datum<'_>]) -> Result<Row, anyhow::Error> {
+    let arena = mz_repr::RowArena::new();
+    let mut row = Row::default();
+    let mut packer = row.packer();
+    for column_cast in table_cast {
+        let datum = column_cast.eval(datums, &arena)?;
+        packer.push(datum);
+    }
+    Ok(row)
+}
 
-            let peek_binary_start_time = Instant::now();
-            let rows = try_indefinite!(client.simple_query(&query).await);
-
-            match rows.first().expect("query returns exactly one row") {
-                SimpleQueryMessage::Row(row) => {
-                    let changes: u64 = row
-                        .get(0)
-                        .expect("query returns one column")
-                        .parse()
-                        .expect("count returned invalid number");
-                    let chosen_lsn = if changes == 0 {
-                        // If there are no changes until the end of the WAL it's safe to fast forward
-                        cur_lsn
-                    } else {
-                        self.lsn
-                    };
-
-                    tracing::info!(
-                        slot = ?self.slot,
-                        query_time = ?peek_binary_start_time.elapsed(),
-                        ?chosen_lsn,
-                        current_lsn = ?cur_lsn,
-                        resumption_lsn = ?self.lsn,
-                        "Found {} changes in the wal.",
-                        changes
-                    );
-
-                    chosen_lsn
-                }
-                _ => panic!(),
-            }
-        };
-
-        let query = format!(
-            r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
-              ("proto_version" '1', "publication_names" '{publication}')"#,
-            name = &self.slot,
-            lsn = self.lsn,
-            publication = self.publication
-        );
-        let copy_stream = try_indefinite!(client.copy_both_simple(&query).await);
-
-        let stream = LogicalReplicationStream::new(copy_stream).take_until(self.sender.closed());
-        tokio::pin!(stream);
-
-        let mut last_data_message = Instant::now();
+// TODO(guswynn|petrosagg): fix the underlying bug that prevents client re-use
+// when exiting the CopyBoth mode, so we don't need to re-create clients in every loop
+// in this function.
+async fn produce_replication<'a>(
+    client_config: mz_postgres_util::Config,
+    slot: &'a str,
+    publication: &'a str,
+    as_of: PgLsn,
+    committed_lsn: Arc<AtomicU64>,
+    metrics: &'a PgSourceMetrics,
+    source_tables: &'a BTreeMap<u32, SourceTable>,
+) -> impl Stream<Item = Result<Event<[PgLsn; 1], (usize, Row, Diff)>, ReplicationError>> + 'a {
+    use ReplicationError::*;
+    use ReplicationMessage::*;
+    async_stream::try_stream!({
+        //let mut last_data_message = Instant::now();
         let mut inserts = vec![];
         let mut deletes = vec![];
 
@@ -898,277 +963,340 @@ impl PostgresTaskInfo {
         // Scratch space to use while evaluating casts
         let mut datum_vec = DatumVec::new();
 
+        let mut last_commit_lsn = as_of;
+        let mut observed_wal_end = as_of;
+        // The outer loop alternates the client between streaming the replication slot and using
+        // normal SQL queries with pg admin functions to fast-foward our cursor in the event of WAL
+        // lag.
+        //
+        // TODO(petrosagg): we need to do the above because a replication slot can be active only
+        // one place which is why we need to do this dance of entering and exiting replication mode
+        // in order to be able to use the administrative functions below. Perhaps it's worth
+        // creating two independent slots so that we can use the secondary to check without
+        // interrupting the stream on the first one
         loop {
-            let data_next = stream.next();
-            tokio::pin!(data_next);
-            let offset_recv = self.offset_rx.recv();
-            tokio::pin!(offset_recv);
+            let client = client_config
+                .clone()
+                .connect_replication()
+                .await
+                .err_indefinite()?;
+            tracing::trace!("starting replication slot");
+            let query = format!(
+                r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
+                  ("proto_version" '1', "publication_names" '{publication}')"#,
+                name = &slot,
+                lsn = last_commit_lsn,
+                publication = publication
+            );
+            let copy_stream = client.copy_both_simple(&query).await.err_indefinite()?;
+            let mut stream = Box::pin(LogicalReplicationStream::new(copy_stream));
 
-            use futures::future::Either;
-            let item = match futures::future::select(offset_recv, data_next).await {
-                Either::Left((Some(to_commit), _)) => {
-                    // We assume there is only a single partition here.
-                    let lsn: PgLsn = to_commit[&PartitionId::None].offset.into();
-                    // Set the committed lsn so we can send a correct status update
-                    // next time we are required. We assume this is always
-                    // increasing, and >= the initial lsn.
-                    committed_lsn = lsn;
-                    continue;
-                }
-                Either::Right((Some(item), _)) => item,
-                Either::Left((None, _)) | Either::Right((None, _)) => {
-                    break;
-                }
-            };
+            let mut last_data_message = Instant::now();
 
-            let item = item?;
-            use ReplicationMessage::*;
+            // The inner loop
+            loop {
+                // The upstream will periodically request status updates by setting the keepalive's
+                // reply field to 1. However, we cannot rely on these messages arriving on time. For
+                // example, when the upstream is sending a big transaction its keepalive messages are
+                // queued and can be delayed arbitrarily. Therefore, we also make sure to
+                // send a proactive status update every 30 seconds There is an implicit requirement
+                // that a new resumption frontier is converted into an lsn relatively soon after
+                // startup.
+                //
+                // See: https://www.postgresql.org/message-id/CAMsr+YE2dSfHVr7iEv1GSPZihitWX-PMkD9QALEGcTYa+sdsgg@mail.gmail.com
+                let mut needs_status_update = last_feedback.elapsed() > FEEDBACK_INTERVAL;
 
-            // The upstream will periodically request status updates by setting the keepalive's
-            // reply field to 1. However, we cannot rely on these messages arriving on time. For
-            // example, when the upstream is sending a big transaction its keepalive messages are
-            // queued and can be delayed arbitrarily. Therefore, we also make sure to
-            // send a proactive status update every 30 seconds, but only after we receive
-            // resumption_frontier advancement. There is an implicit requirement that
-            // a new resumption frontier is converted into an lsn relatively soon
-            // after startup.
-            //
-            // See: https://www.postgresql.org/message-id/CAMsr+YE2dSfHVr7iEv1GSPZihitWX-PMkD9QALEGcTYa+sdsgg@mail.gmail.com
-            let mut needs_status_update = last_feedback.elapsed() > FEEDBACK_INTERVAL;
-
-            self.metrics.total.inc();
-            use LogicalReplicationMessage::*;
-            match &item {
-                XLogData(xlog_data) => match xlog_data.data() {
-                    Begin(_) => {
-                        last_data_message = Instant::now();
-                        if !inserts.is_empty() || !deletes.is_empty() {
-                            return Err(Definite(anyhow!(
-                                "got BEGIN statement after uncommitted data"
-                            )));
-                        }
-                    }
-                    Insert(insert) if self.source_tables.contains_key(&insert.rel_id()) => {
-                        last_data_message = Instant::now();
-                        self.metrics.inserts.inc();
-                        let rel_id = insert.rel_id();
-                        let info = self.source_tables.get(&rel_id).unwrap();
-                        let new_tuple = insert.tuple().tuple_data();
-                        let mut datums = datum_vec.borrow();
-                        try_definite!(PostgresTaskInfo::datums_from_tuple(
-                            rel_id,
-                            new_tuple,
-                            &mut *datums
-                        ));
-                        let row = try_definite!(PostgresTaskInfo::cast_row(&info.casts, &datums));
-                        inserts.push((info.output_index, row));
-                    }
-                    Update(update) if self.source_tables.contains_key(&update.rel_id()) => {
-                        last_data_message = Instant::now();
-                        self.metrics.updates.inc();
-                        let rel_id = update.rel_id();
-                        let info = self.source_tables.get(&rel_id).unwrap();
-                        let err = || {
-                            anyhow!(
-                                "Old row missing from replication stream for table with OID = {}.
-                                 Did you forget to set REPLICA IDENTITY to FULL for your table?",
-                                rel_id
-                            )
-                        };
-                        let old_tuple =
-                            try_definite!(update.old_tuple().ok_or_else(err)).tuple_data();
-                        let mut old_datums = datum_vec.borrow();
-                        try_definite!(PostgresTaskInfo::datums_from_tuple(
-                            rel_id,
-                            old_tuple,
-                            &mut *old_datums
-                        ));
-                        let old_row =
-                            try_definite!(PostgresTaskInfo::cast_row(&info.casts, &old_datums));
-                        deletes.push((info.output_index, old_row));
-                        drop(old_datums);
-
-                        // If the new tuple contains unchanged toast values, reuse the ones
-                        // from the old tuple
-                        let new_tuple = update
-                            .new_tuple()
-                            .tuple_data()
-                            .iter()
-                            .zip(old_tuple.iter())
-                            .map(|(new, old)| match new {
-                                TupleData::UnchangedToast => old,
-                                _ => new,
-                            });
-                        let mut new_datums = datum_vec.borrow();
-                        try_definite!(PostgresTaskInfo::datums_from_tuple(
-                            rel_id,
-                            new_tuple,
-                            &mut *new_datums
-                        ));
-                        let new_row =
-                            try_definite!(PostgresTaskInfo::cast_row(&info.casts, &new_datums));
-                        inserts.push((info.output_index, new_row));
-                    }
-                    Delete(delete) if self.source_tables.contains_key(&delete.rel_id()) => {
-                        last_data_message = Instant::now();
-                        self.metrics.deletes.inc();
-                        let rel_id = delete.rel_id();
-                        let info = self.source_tables.get(&rel_id).unwrap();
-                        let err = || {
-                            anyhow!(
-                                "Old row missing from replication stream for table with OID = {}.
-                                 Did you forget to set REPLICA IDENTITY to FULL for your table?",
-                                rel_id
-                            )
-                        };
-                        let old_tuple =
-                            try_definite!(delete.old_tuple().ok_or_else(err)).tuple_data();
-                        let mut datums = datum_vec.borrow();
-                        try_definite!(PostgresTaskInfo::datums_from_tuple(
-                            rel_id,
-                            old_tuple,
-                            &mut *datums
-                        ));
-                        let row = try_definite!(PostgresTaskInfo::cast_row(&info.casts, &datums));
-                        deletes.push((info.output_index, row));
-                    }
-                    Commit(commit) => {
-                        last_data_message = Instant::now();
-                        self.metrics.transactions.inc();
-                        self.lsn = commit.end_lsn().into();
-
-                        for (output, row) in deletes.drain(..) {
-                            self.row_sender.delete(output, row, self.lsn).await;
-                        }
-                        for (output, row) in inserts.drain(..) {
-                            self.row_sender.insert(output, row, self.lsn).await;
-                        }
-
-                        self.row_sender.close_lsn(self.lsn).await;
-                        self.metrics.lsn.set(self.lsn.into());
-                    }
-                    Relation(relation) => {
-                        last_data_message = Instant::now();
-                        let rel_id = relation.rel_id();
-                        if let Some(info) = self.source_tables.get(&rel_id) {
-                            // Start with the cheapest check first, this will catch the majority of alters
-                            if info.desc.columns.len() != relation.columns().len() {
-                                error!(
-                                    "alter table detected on {} with id {}",
-                                    info.desc.name, info.desc.oid
-                                );
+                metrics.total.inc();
+                use LogicalReplicationMessage::*;
+                match stream.as_mut().next().await {
+                    Some(Ok(XLogData(xlog_data))) => match xlog_data.data() {
+                        Begin(_) => {
+                            last_data_message = Instant::now();
+                            if !inserts.is_empty() || !deletes.is_empty() {
                                 return Err(Definite(anyhow!(
-                                    "source table {} with oid {} has been altered",
-                                    info.desc.name,
-                                    info.desc.oid
-                                )));
+                                    "got BEGIN statement after uncommitted data"
+                                )))?;
                             }
-                            let same_name = info.desc.name == relation.name().unwrap();
-                            let same_namespace =
-                                info.desc.namespace == relation.namespace().unwrap();
-                            if !same_name || !same_namespace {
-                                error!(
-                                    "table name changed on {}.{} with id {} to {}.{}",
-                                    info.desc.namespace,
-                                    info.desc.name,
-                                    info.desc.oid,
-                                    relation.namespace().unwrap(),
-                                    relation.name().unwrap()
-                                );
-                                return Err(Definite(anyhow!(
-                                    "source table {} with oid {} has been altered",
-                                    info.desc.name,
-                                    info.desc.oid
-                                )));
-                            }
-                            // Relation messages do not include nullability/primary_key data so we
-                            // check the name, type_oid, and type_mod explicitly and error if any
-                            // of them differ
-                            for (src, rel) in info.desc.columns.iter().zip(relation.columns()) {
-                                let same_name = src.name == rel.name().unwrap();
-                                let rel_typoid = u32::try_from(rel.type_id()).unwrap();
-                                let same_typoid = src.type_oid == rel_typoid;
-                                let same_typmod = src.type_mod == rel.type_modifier();
+                        }
+                        Insert(insert) if source_tables.contains_key(&insert.rel_id()) => {
+                            last_data_message = Instant::now();
+                            metrics.inserts.inc();
+                            let rel_id = insert.rel_id();
+                            let info = source_tables.get(&rel_id).unwrap();
+                            let new_tuple = insert.tuple().tuple_data();
+                            let mut datums = datum_vec.borrow();
+                            datums_from_tuple(rel_id, new_tuple, &mut *datums).err_definite()?;
+                            let row = cast_row(&info.casts, &datums).err_definite()?;
+                            inserts.push((info.output_index, row));
+                        }
+                        Update(update) if source_tables.contains_key(&update.rel_id()) => {
+                            last_data_message = Instant::now();
+                            metrics.updates.inc();
+                            let rel_id = update.rel_id();
+                            let info = source_tables.get(&rel_id).unwrap();
+                            let err = || {
+                                anyhow!(
+                                    "Old row missing from replication stream for table with OID = {}.
+                                     Did you forget to set REPLICA IDENTITY to FULL for your table?",
+                                    rel_id
+                                )
+                            };
+                            let old_tuple = update
+                                .old_tuple()
+                                .ok_or_else(err)
+                                .err_definite()?
+                                .tuple_data();
 
-                                if !same_name || !same_typoid || !same_typmod {
+                            let mut old_datums = datum_vec.borrow();
+                            datums_from_tuple(rel_id, old_tuple, &mut *old_datums)
+                                .err_definite()?;
+                            let old_row = cast_row(&info.casts, &old_datums).err_definite()?;
+                            deletes.push((info.output_index, old_row));
+                            drop(old_datums);
+
+                            // If the new tuple contains unchanged toast values, reuse the ones
+                            // from the old tuple
+                            let new_tuple = update
+                                .new_tuple()
+                                .tuple_data()
+                                .iter()
+                                .zip(old_tuple.iter())
+                                .map(|(new, old)| match new {
+                                    TupleData::UnchangedToast => old,
+                                    _ => new,
+                                });
+                            let mut new_datums = datum_vec.borrow();
+                            datums_from_tuple(rel_id, new_tuple, &mut *new_datums)
+                                .err_definite()?;
+                            let new_row = cast_row(&info.casts, &new_datums).err_definite()?;
+                            inserts.push((info.output_index, new_row));
+                        }
+                        Delete(delete) if source_tables.contains_key(&delete.rel_id()) => {
+                            last_data_message = Instant::now();
+                            metrics.deletes.inc();
+                            let rel_id = delete.rel_id();
+                            let info = source_tables.get(&rel_id).unwrap();
+                            let err = || {
+                                anyhow!(
+                                    "Old row missing from replication stream for table with OID = {}.
+                                     Did you forget to set REPLICA IDENTITY to FULL for your table?",
+                                    rel_id
+                                )
+                            };
+                            let old_tuple = delete
+                                .old_tuple()
+                                .ok_or_else(err)
+                                .err_definite()?
+                                .tuple_data();
+                            let mut datums = datum_vec.borrow();
+                            datums_from_tuple(rel_id, old_tuple, &mut *datums).err_definite()?;
+                            let row = cast_row(&info.casts, &datums).err_definite()?;
+                            deletes.push((info.output_index, row));
+                        }
+                        Commit(commit) => {
+                            last_data_message = Instant::now();
+                            metrics.transactions.inc();
+                            last_commit_lsn = PgLsn::from(commit.end_lsn());
+
+                            for (output, row) in deletes.drain(..) {
+                                yield Event::Message(last_commit_lsn, (output, row, -1));
+                            }
+                            for (output, row) in inserts.drain(..) {
+                                yield Event::Message(last_commit_lsn, (output, row, 1));
+                            }
+                            yield Event::Progress([PgLsn::from(u64::from(last_commit_lsn) + 1)]);
+                            metrics.lsn.set(last_commit_lsn.into());
+                        }
+                        Relation(relation) => {
+                            last_data_message = Instant::now();
+                            let rel_id = relation.rel_id();
+                            if let Some(info) = source_tables.get(&rel_id) {
+                                // Start with the cheapest check first, this will catch the majority of alters
+                                if info.desc.columns.len() != relation.columns().len() {
                                     error!(
-                                        "alter table error: name {}, oid {}, old_schema {:?}, new_schema {:?}",
-                                        info.desc.name,
-                                        info.desc.oid,
-                                        info.desc.columns,
-                                        relation.columns()
+                                        "alter table detected on {} with id {}",
+                                        info.desc.name, info.desc.oid
                                     );
                                     return Err(Definite(anyhow!(
                                         "source table {} with oid {} has been altered",
                                         info.desc.name,
                                         info.desc.oid
-                                    )));
+                                    )))?;
+                                }
+                                let same_name = info.desc.name == relation.name().unwrap();
+                                let same_namespace =
+                                    info.desc.namespace == relation.namespace().unwrap();
+                                if !same_name || !same_namespace {
+                                    error!(
+                                        "table name changed on {}.{} with id {} to {}.{}",
+                                        info.desc.namespace,
+                                        info.desc.name,
+                                        info.desc.oid,
+                                        relation.namespace().unwrap(),
+                                        relation.name().unwrap()
+                                    );
+                                    return Err(Definite(anyhow!(
+                                        "source table {} with oid {} has been altered",
+                                        info.desc.name,
+                                        info.desc.oid
+                                    )))?;
+                                }
+                                // Relation messages do not include nullability/primary_key data so we
+                                // check the name, type_oid, and type_mod explicitly and error if any
+                                // of them differ
+                                for (src, rel) in info.desc.columns.iter().zip(relation.columns()) {
+                                    let same_name = src.name == rel.name().unwrap();
+                                    let rel_typoid = u32::try_from(rel.type_id()).unwrap();
+                                    let same_typoid = src.type_oid == rel_typoid;
+                                    let same_typmod = src.type_mod == rel.type_modifier();
+
+                                    if !same_name || !same_typoid || !same_typmod {
+                                        error!(
+                                            "alter table error: name {}, oid {}, old_schema {:?}, new_schema {:?}",
+                                            info.desc.name,
+                                            info.desc.oid,
+                                            info.desc.columns,
+                                            relation.columns()
+                                        );
+                                        return Err(Definite(anyhow!(
+                                            "source table {} with oid {} has been altered",
+                                            info.desc.name,
+                                            info.desc.oid
+                                        )))?;
+                                    }
                                 }
                             }
                         }
-                    }
-                    Insert(_) | Update(_) | Delete(_) | Origin(_) | Type(_) => {
-                        last_data_message = Instant::now();
-                        self.metrics.ignored.inc();
-                    }
-                    Truncate(truncate) => {
-                        let tables = truncate
-                            .rel_ids()
-                            .iter()
-                            // Filter here makes option handling in map "safe"
-                            .filter_map(|id| self.source_tables.get(id))
-                            .map(|info| format!("name: {} id: {}", info.desc.name, info.desc.oid))
-                            .collect::<Vec<String>>();
-                        return Err(Definite(anyhow!(
-                            "source table(s) {} got truncated",
-                            tables.join(", ")
-                        )));
-                    }
-                    // The enum is marked as non_exhaustive. Better to be conservative here in
-                    // case a new message is relevant to the semantics of our source
-                    _ => return Err(Definite(anyhow!("unexpected logical replication message"))),
-                },
-                PrimaryKeepAlive(keepalive) => {
-                    needs_status_update = needs_status_update || keepalive.reply() == 1;
+                        Insert(_) | Update(_) | Delete(_) | Origin(_) | Type(_) => {
+                            last_data_message = Instant::now();
+                            metrics.ignored.inc();
+                        }
+                        Truncate(truncate) => {
+                            let tables = truncate
+                                .rel_ids()
+                                .iter()
+                                // Filter here makes option handling in map "safe"
+                                .filter_map(|id| source_tables.get(id))
+                                .map(|info| {
+                                    format!("name: {} id: {}", info.desc.name, info.desc.oid)
+                                })
+                                .collect::<Vec<String>>();
+                            return Err(Definite(anyhow!(
+                                "source table(s) {} got truncated",
+                                tables.join(", ")
+                            )))?;
+                        }
+                        // The enum is marked as non_exhaustive. Better to be conservative here in
+                        // case a new message is relevant to the semantics of our source
+                        _ => {
+                            return Err(Definite(anyhow!(
+                                "unexpected logical replication message"
+                            )))?;
+                        }
+                    },
+                    Some(Ok(PrimaryKeepAlive(keepalive))) => {
+                        needs_status_update = needs_status_update || keepalive.reply() == 1;
+                        observed_wal_end = PgLsn::from(keepalive.wal_end());
 
-                    // Additional logging for incident 25
-                    if last_data_message.elapsed() > WAL_LAG_GRACE_PERIOD
-                        && keepalive.wal_end().saturating_sub(self.lsn.into()) > MAX_WAL_LAG
-                    {
-                        tracing::info!(
-                            wal_lag_grace_period = ?WAL_LAG_GRACE_PERIOD,
-                            max_wal_lag = %bytesize::to_string(MAX_WAL_LAG, false),
-                            last_elapsed = ?last_data_message.elapsed(),
-                            lsn_diff = ?keepalive.wal_end().saturating_sub(self.lsn.into()),
-                            resumption_lsn = ?self.lsn,
-                            "Got PrimaryKeepAlive");
-                        return Err(Indefinite(anyhow!("reached maximum WAL lag")));
+                        if last_data_message.elapsed() > WAL_LAG_GRACE_PERIOD {
+                            break;
+                        }
+                    }
+                    Some(Err(err)) => {
+                        return Err(ReplicationError::from(err))?;
+                    }
+                    None => {
+                        break;
+                    }
+                    // The enum is marked non_exhaustive, better be conservative
+                    _ => {
+                        return Err(Definite(anyhow!("Unexpected replication message")))?;
                     }
                 }
-                // The enum is marked non_exhaustive, better be conservative
-                _ => return Err(Definite(anyhow!("Unexpected replication message"))),
-            }
-            if needs_status_update {
-                let ts: i64 = PG_EPOCH
-                    .elapsed()
-                    .expect("system clock set earlier than year 2000!")
-                    .as_micros()
-                    .try_into()
-                    .expect("software more than 200k years old, consider updating");
+                if needs_status_update {
+                    let ts: i64 = PG_EPOCH
+                        .elapsed()
+                        .expect("system clock set earlier than year 2000!")
+                        .as_micros()
+                        .try_into()
+                        .expect("software more than 200k years old, consider updating");
 
-                try_indefinite!(
-                    stream
+                    let committed_lsn = PgLsn::from(committed_lsn.load(Ordering::SeqCst));
+                    let standby_res = stream
                         .as_mut()
-                        .get_pin_mut()
                         .standby_status_update(committed_lsn, committed_lsn, committed_lsn, ts, 0)
-                        .await
-                );
-                last_feedback = Instant::now();
+                        .await;
+                    if let Err(err) = standby_res {
+                        return Err(Indefinite(err.into()))?;
+                    }
+                    last_feedback = Instant::now();
+                }
             }
+            // This may not be required, but as mentioned above in
+            // `postgres_replication_loop_inner`, we drop clients aggressively out of caution.
+            drop(stream);
+
+            let client = client_config
+                .clone()
+                .connect_replication()
+                .await
+                .err_indefinite()?;
+
+            // We reach this place if the consume loop above detected large WAL lag. This
+            // section determines whether or not we can skip over that part of the WAL by
+            // peeking into the replication slot using a normal SQL query and the
+            // `pg_logical_slot_peek_binary_changes` administrative function.
+            //
+            // By doing so we can get a positive statement about existence or absence of
+            // relevant data from the current LSN to the observed WAL end. If there are no
+            // messages then it is safe to fast forward last_commit_lsn to the WAL end LSN and restart
+            // the replication stream from there.
+            let query = format!(
+                "SELECT lsn FROM pg_logical_slot_peek_binary_changes(
+                     '{name}', NULL, NULL,
+                     'proto_version', '1',
+                     'publication_names', '{publication}'
+                )",
+                name = &slot,
+                publication = publication
+            );
+
+            let peek_binary_start_time = Instant::now();
+            let rows = client.simple_query(&query).await.err_indefinite()?;
+
+            let changes = rows
+                .into_iter()
+                .filter(|row| match row {
+                    SimpleQueryMessage::Row(row) => {
+                        let change_lsn: PgLsn = row
+                            .get("lsn")
+                            .expect("missing expected column: `lsn`")
+                            .parse()
+                            .expect("invalid lsn");
+                        // Keep all the changes that may exist after our last observed transaction
+                        // commit
+                        change_lsn > last_commit_lsn
+                    }
+                    SimpleQueryMessage::CommandComplete(_) => false,
+                    _ => panic!("unexpected enum variant"),
+                })
+                .count();
+
+            // If there are no changes until the end of the WAL it's safe to fast forward
+            if changes == 0 {
+                last_commit_lsn = observed_wal_end;
+                // `Progress` events are _frontiers_, so we add 1, just like when we
+                // handle data in `Commit` above.
+                yield Event::Progress([PgLsn::from(u64::from(last_commit_lsn) + 1)]);
+            }
+
+            tracing::info!(
+                slot = ?slot,
+                query_time = ?peek_binary_start_time.elapsed(),
+                current_lsn = ?last_commit_lsn,
+                "Found {} changes in the wal.",
+                changes
+            );
         }
-        if !stream.is_stopped() {
-            return Err(Indefinite(anyhow!("replication stream ended")));
-        }
-        Ok(())
-    }
+    })
 }

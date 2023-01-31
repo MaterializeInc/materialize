@@ -42,6 +42,8 @@ use aws_sdk_sqs::Client as SqsClient;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use globset::GlobMatcher;
 use once_cell::sync::Lazy;
+use timely::dataflow::operators::Capability;
+use timely::progress::Antichain;
 use timely::scheduling::SyncActivator;
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -50,7 +52,6 @@ use tokio_util::io::{ReaderStream, StreamReader};
 use tracing::{debug, error, trace, warn};
 
 use mz_cloud_resources::AwsExternalIdPrefix;
-use mz_expr::PartitionId;
 use mz_ore::retry::{Retry, RetryReader};
 use mz_ore::task;
 use mz_repr::{GlobalId, RelationDesc};
@@ -95,15 +96,13 @@ pub struct S3SourceReader {
     /// Total number of records that this source has read
     offset: S3Offset,
 
+    /// Capabilities used to produce messages
+    data_capability: Capability<MzOffset>,
+    upper_capability: Capability<MzOffset>,
+
     // S3 sources support single-threaded ingestion only, so only one of the
     // `S3SourceReader`s will actually produce data.
     active_read_worker: bool,
-
-    // The non-active reader (see above `active_read_worker`) has to report back
-    // that is is not consuming from the one [`PartitionId:None`] partition.
-    // Before it can return a [`NextMessage::Finished`]. This is keeping track
-    // of that.
-    reported_unconsumed_partitions: bool,
 }
 
 /// Current dataflow status
@@ -826,13 +825,15 @@ impl SourceConnectionBuilder for S3SourceConnection {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        data_capability: Capability<<Self::Reader as SourceReader>::Time>,
+        upper_capability: Capability<<Self::Reader as SourceReader>::Time>,
+        _resume_upper: Antichain<<Self::Reader as SourceReader>::Time>,
         _encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
     ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error> {
         let active_read_worker =
-            crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
+            crate::source::responsible_for(&source_id, worker_id, worker_count, ());
 
         // a single arbitrary worker is responsible for scanning the bucket
         let (receiver, shutdowner) = if active_read_worker {
@@ -915,9 +916,10 @@ impl SourceConnectionBuilder for S3SourceConnection {
                 id: source_id,
                 receiver_stream: receiver,
                 dataflow_status: shutdowner,
+                data_capability,
+                upper_capability,
                 offset: S3Offset(0),
                 active_read_worker,
-                reported_unconsumed_partitions: false,
             },
             LogCommitter {
                 source_id,
@@ -934,14 +936,8 @@ impl SourceReader for S3SourceReader {
     type Time = MzOffset;
     type Diff = ();
 
-    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {
+    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Time, Self::Diff> {
         if !self.active_read_worker {
-            if !self.reported_unconsumed_partitions {
-                self.reported_unconsumed_partitions = true;
-                return NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(vec![
-                    PartitionId::None,
-                ]));
-            }
             return NextMessage::Finished;
         }
 
@@ -955,8 +951,12 @@ impl SourceReader for S3SourceReader {
                     value: record,
                     headers: None,
                 };
-                let ts = (PartitionId::None, self.offset.into());
-                NextMessage::Ready(SourceMessageType::Finalized(Ok(msg), ts, ()))
+                let ts = MzOffset::from(self.offset);
+                let cap = self.data_capability.delayed(&ts);
+                let next_ts = ts + 1;
+                self.data_capability.downgrade(&next_ts);
+                self.upper_capability.downgrade(&next_ts);
+                NextMessage::Ready(SourceMessageType::Message(Ok(msg), cap, ()))
             }
             Some(Some(Err(e))) => match e {
                 S3Error::GetObjectError { .. } => {
@@ -970,8 +970,12 @@ impl SourceReader for S3SourceReader {
                     let err = SourceReaderError::other_definite(anyhow::Error::new(e));
                     // XXX(petrosagg): We are fabricating a timestamp here. Is this error truly
                     // definite?
-                    let not_definite_ts = (PartitionId::None, self.offset.into());
-                    NextMessage::Ready(SourceMessageType::Finalized(Err(err), not_definite_ts, ()))
+                    let not_definite_ts = MzOffset::from(self.offset);
+                    let cap = self.data_capability.delayed(&not_definite_ts);
+                    let next_ts = not_definite_ts + 1;
+                    self.data_capability.downgrade(&next_ts);
+                    self.upper_capability.downgrade(&next_ts);
+                    NextMessage::Ready(SourceMessageType::Message(Err(err), cap, ()))
                 }
             },
             None => NextMessage::Pending,

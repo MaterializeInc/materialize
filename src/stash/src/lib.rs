@@ -77,7 +77,7 @@
 //! Durable metadata storage.
 
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
@@ -860,7 +860,7 @@ where
     /// Iterates over the items viewable in the current transaction in arbitrary
     /// order.
     pub fn for_values<F: FnMut(&K, &V)>(&self, mut f: F) {
-        let mut seen = HashSet::with_capacity(self.pending.len());
+        let mut seen = BTreeSet::new();
         for (k, v) in self.pending.iter() {
             seen.insert(k);
             // Deleted items don't exist so shouldn't be visited, but still suppress

@@ -627,7 +627,7 @@ VIEW ov
 {
   "plans": [
     {
-      "id": "Explained Query",
+      "id": "materialize.public.ov",
       "plan": {
         "TopK": {
           "input": {

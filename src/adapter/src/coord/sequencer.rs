@@ -494,8 +494,8 @@ impl Coordinator {
             let source_oid = self.catalog.allocate_oid()?;
             let source = catalog::Source {
                 create_sql: plan.source.create_sql,
-                data_source: match plan.source.ingestion {
-                    Some(ingestion) => {
+                data_source: match plan.source.data_source {
+                    mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => {
                         let cluster_id = self
                             .create_linked_cluster_ops(
                                 source_id,
@@ -511,7 +511,10 @@ impl Coordinator {
                             cluster_id,
                         })
                     }
-                    None => {
+                    mz_sql::plan::DataSourceDesc::Progress => {
+                        unreachable!("PROGRESS subsources error in purification");
+                    }
+                    mz_sql::plan::DataSourceDesc::Source => {
                         assert!(
                             matches!(
                                 plan.cluster_config,
@@ -1583,7 +1586,7 @@ impl Coordinator {
                 )
                 .await;
 
-                self.ship_dataflow(df, cluster_id).await;
+                self.must_ship_dataflow(df, cluster_id).await;
 
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
@@ -1654,7 +1657,7 @@ impl Coordinator {
             .await
         {
             Ok(df) => {
-                self.ship_dataflow(df, cluster_id).await;
+                self.must_ship_dataflow(df, cluster_id).await;
                 self.set_index_options(id, options).expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex)
             }
@@ -2662,14 +2665,29 @@ impl Coordinator {
                 arity,
             },
         );
-        self.ship_dataflow(dataflow, cluster_id).await;
 
+        match self.ship_dataflow(dataflow, cluster_id).await {
+            Ok(_) => {}
+            Err(e) => {
+                self.remove_subscribe(&sink_id);
+                return Err(e);
+            }
+        };
         if let Some(target) = target_replica {
             self.controller
                 .compute
                 .set_subscribe_target_replica(cluster_id, sink_id, target)
                 .unwrap_or_terminate("cannot fail to set subscribe target replica");
         }
+
+        self.active_conns
+            .get_mut(&session.conn_id())
+            .expect("must exist for active sessions")
+            .drop_sinks
+            .push(ComputeSinkId {
+                cluster_id,
+                global_id: sink_id,
+            });
 
         let resp = ExecuteResponse::Subscribing { rx };
         match copy_to {
@@ -2728,6 +2746,11 @@ impl Coordinator {
                     trace_plan(&raw_plan);
                 });
 
+                let explainee_id = match explainee {
+                    Explainee::Dataflow(id) => id,
+                    Explainee::Query => GlobalId::Explain,
+                };
+
                 // run optimization pipeline
                 let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {})?;
 
@@ -2738,8 +2761,7 @@ impl Coordinator {
                         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
                         let mut dataflow = DataflowDesc::new("explanation".to_string());
                         self.dataflow_builder(cluster).import_view_into_dataflow(
-                            // TODO: If explaining a view, pipe the actual id of the view.
-                            &GlobalId::Explain,
+                            &explainee_id,
                             &optimized_plan,
                             &mut dataflow,
                         )?;

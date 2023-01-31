@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::future::Future;
 use std::iter;
@@ -79,7 +79,7 @@ pub struct RunParams<'a, A> {
     /// The protocol version that the client provided in the startup message.
     pub version: i32,
     /// The parameters that the client provided in the startup message.
-    pub params: HashMap<String, String>,
+    pub params: BTreeMap<String, String>,
     /// Frontegg authentication.
     pub frontegg: Option<&'a FronteggAuthentication>,
     /// Whether this is an internal server that permits access to restricted

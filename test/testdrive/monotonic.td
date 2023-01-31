@@ -74,7 +74,7 @@ a min max
 $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
 
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v2
-Explained Query:
+materialize.public.v2:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3
     ArrangeBy
       input_key=[#0]
@@ -98,7 +98,7 @@ Used Indexes:
 > CREATE VIEW v3 AS SELECT * FROM non_dbz_data_indexed ORDER BY b LIMIT 3
 
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v3
-Explained Query:
+materialize.public.v3:
   TopK::MonotonicTopK order_by=[#1 asc nulls_last] limit=3
     ArrangeBy
       input_key=[#0, #1]
@@ -118,7 +118,7 @@ Used Indexes:
 > CREATE VIEW v5 AS SELECT * from i4 ORDER BY c LIMIT 2;
 
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v5;
-Explained Query:
+materialize.public.v5:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2
     ArrangeBy
       input_key=[#0]
@@ -138,7 +138,7 @@ Used Indexes:
 > CREATE VIEW v7 AS SELECT * from i6 ORDER BY c LIMIT 2;
 
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v7;
-Explained Query:
+materialize.public.v7:
   TopK::Basic order_by=[#0 asc nulls_last] limit=2
     ArrangeBy
       input_key=[#0]
@@ -161,7 +161,7 @@ Used Indexes:
 # Propagating monotonicity analysis in a complex situation: (i1, i1) -> i8; (i1, i8) -> i9
 
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v10;
-Explained Query:
+materialize.public.v10:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2
     ArrangeBy
       input_key=[#0]
@@ -180,7 +180,7 @@ Used Indexes:
 # Propagating monotonicity analysis through materialized views
 
 ? EXPLAIN PHYSICAL PLAN FOR VIEW v11;
-Explained Query:
+materialize.public.v11:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3
     Get::PassArrangements materialize.public.m1
       raw=true

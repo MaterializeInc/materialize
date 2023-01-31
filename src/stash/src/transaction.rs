@@ -9,7 +9,7 @@
 
 use std::{
     cmp,
-    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap},
+    collections::{btree_map::Entry, BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
 };
 
@@ -37,14 +37,14 @@ impl Stash {
             .transact(|stmts, client, collections| {
                 let f = f.clone();
                 let (cons_tx, cons_rx) = mpsc::unbounded_channel();
-                let txn_collections = Arc::new(Mutex::new(HashMap::new()));
+                let txn_collections = Arc::new(Mutex::new(BTreeMap::new()));
                 let tx = Transaction {
                     stmts,
                     client,
                     consolidations: cons_tx,
                     savepoint: Arc::new(Mutex::new(false)),
-                    sinces: Arc::new(Mutex::new(HashMap::new())),
-                    uppers: Arc::new(Mutex::new(HashMap::new())),
+                    sinces: Arc::new(Mutex::new(BTreeMap::new())),
+                    uppers: Arc::new(Mutex::new(BTreeMap::new())),
                     stash_collections: collections,
                     txn_collections: Arc::clone(&txn_collections),
                 };
@@ -60,7 +60,7 @@ impl Stash {
                 .expect("consolidator unexpectedly gone");
         }
         self.collections
-            .extend(txn_collections.lock().unwrap().drain());
+            .extend(std::mem::take(&mut *txn_collections.lock().unwrap()));
         Ok(res)
     }
 }
@@ -77,13 +77,13 @@ pub struct Transaction<'a> {
 
     // Cached sinces and uppers for this transaction. These are set on first
     // query and updated on seal/compact.
-    sinces: Arc<Mutex<HashMap<Id, Antichain<Timestamp>>>>,
-    uppers: Arc<Mutex<HashMap<Id, Antichain<Timestamp>>>>,
+    sinces: Arc<Mutex<BTreeMap<Id, Antichain<Timestamp>>>>,
+    uppers: Arc<Mutex<BTreeMap<Id, Antichain<Timestamp>>>>,
 
     // Collections cached by the outer Stash.
-    stash_collections: &'a HashMap<String, Id>,
+    stash_collections: &'a BTreeMap<String, Id>,
     // Collections discovered by this transaction.
-    txn_collections: Arc<Mutex<HashMap<String, Id>>>,
+    txn_collections: Arc<Mutex<BTreeMap<String, Id>>>,
 }
 
 impl<'a> Transaction<'a> {
@@ -236,7 +236,7 @@ impl<'a> Transaction<'a> {
     pub async fn sinces_batch(
         &self,
         collections: &[Id],
-    ) -> Result<HashMap<Id, Antichain<Timestamp>>, StashError> {
+    ) -> Result<BTreeMap<Id, Antichain<Timestamp>>, StashError> {
         let mut futures = Vec::with_capacity(collections.len());
         for collection_id in collections {
             futures.push(async move {
@@ -246,7 +246,7 @@ impl<'a> Transaction<'a> {
                 Result::<_, StashError>::Ok((*collection_id, since))
             });
         }
-        let sinces = HashMap::from_iter(try_join_all(futures).await?);
+        let sinces = BTreeMap::from_iter(try_join_all(futures).await?);
         Ok(sinces)
     }
 
@@ -679,7 +679,7 @@ impl<'a> Transaction<'a> {
 // unknown order and we want to prevent a race condition poisioning the cache by
 // going backward.
 fn maybe_update_antichain(
-    map: &Arc<Mutex<HashMap<Id, Antichain<Timestamp>>>>,
+    map: &Arc<Mutex<BTreeMap<Id, Antichain<Timestamp>>>>,
     id: Id,
     updated: Antichain<Timestamp>,
 ) {

@@ -25,7 +25,7 @@
 //!       compare to expected results
 //!       if wrong, record the error
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::env;
 use std::error::Error;
 use std::fmt;
@@ -342,7 +342,7 @@ pub struct RunnerInner {
     internal_server_addr: SocketAddr,
     // Drop order matters for these fields.
     client: tokio_postgres::Client,
-    clients: HashMap<String, tokio_postgres::Client>,
+    clients: BTreeMap<String, tokio_postgres::Client>,
     auto_index_tables: bool,
     _shutdown_trigger: oneshot::Sender<()>,
     _server_thread: JoinOnDropHandle<()>,
@@ -749,7 +749,7 @@ impl<'a> Runner<'a> {
         }
 
         inner.client = connect(inner.server_addr, None).await;
-        inner.clients = HashMap::new();
+        inner.clients = BTreeMap::new();
 
         Ok(())
     }
@@ -925,7 +925,7 @@ impl RunnerInner {
             _server_thread: server_thread.join_on_drop(),
             _temp_dir: temp_dir,
             client,
-            clients: HashMap::new(),
+            clients: BTreeMap::new(),
             auto_index_tables: config.auto_index_tables,
         })
     }

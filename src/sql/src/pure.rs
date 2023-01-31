@@ -34,10 +34,10 @@ use mz_repr::{strconv, GlobalId};
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ColumnDef, CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode,
-    DeferredObjectName, Envelope, Ident, KafkaConfigOption, KafkaConfigOptionName, KafkaConnection,
-    KafkaSourceConnection, PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy,
-    UnresolvedObjectName,
+    ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CsrConnection, CsrSeedAvro,
+    CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredObjectName, Envelope, Ident,
+    KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
+    PgConfigOption, PgConfigOptionName, ReaderSchemaSelectionStrategy, UnresolvedObjectName,
 };
 use mz_storage_client::types::connections::aws::AwsConfig;
 use mz_storage_client::types::connections::{Connection, ConnectionContext};
@@ -111,8 +111,13 @@ pub async fn purify_create_source(
         envelope,
         include_metadata: _,
         referenced_subsources: requested_subsources,
+        progress_subsource,
         ..
     } = &mut stmt;
+
+    if progress_subsource.is_some() {
+        bail_unsupported!("PROGRESS subsources not yet supported");
+    }
 
     // Disallow manually targetting subsources, this syntax is reserved for purification only
     if let Some(ReferencedSubsources::Subset(subsources)) = requested_subsources {
@@ -448,6 +453,10 @@ pub async fn purify_create_source(
                     // one without and now we're producing garbage data.
                     constraints: vec![],
                     if_not_exists: false,
+                    with_options: vec![CreateSubsourceOption {
+                        name: CreateSubsourceOptionName::References,
+                        value: Some(WithOptionValue::Value(Value::Boolean(true))),
+                    }],
                 };
                 subsources.push((transient_id, subsource));
             }
@@ -562,6 +571,10 @@ pub async fn purify_create_source(
                     // worried about introducing junk data.
                     constraints: table_constraints,
                     if_not_exists: false,
+                    with_options: vec![CreateSubsourceOption {
+                        name: CreateSubsourceOptionName::References,
+                        value: Some(WithOptionValue::Value(Value::Boolean(true))),
+                    }],
                 };
                 subsources.push((transient_id, subsource));
             }

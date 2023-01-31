@@ -3651,7 +3651,9 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
             // If we can convert to the input type then we call the function
             Ok(input) => self.call(input).into_result(temp_storage),
             // If we can't and we got a non-null datum something went wrong in the planner
-            Err(Ok(datum)) if !datum.is_null() => panic!("invalid input type"),
+            Err(Ok(datum)) if !datum.is_null() => {
+                Err(EvalError::Internal("invalid input type".into()))
+            }
             // Otherwise we just propagate NULLs and errors
             Err(res) => res,
         }

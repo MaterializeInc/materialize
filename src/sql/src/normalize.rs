@@ -307,6 +307,7 @@ pub fn create_statement(
             key_constraint: _,
             with_options: _,
             referenced_subsources: _,
+            progress_subsource: _,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;
@@ -317,6 +318,7 @@ pub fn create_statement(
             columns,
             constraints: _,
             if_not_exists,
+            with_options: _,
         }) => {
             *name = allocate_name(name)?;
             let mut normalizer = QueryNormalizer::new(scx);
