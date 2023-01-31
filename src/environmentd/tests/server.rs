@@ -623,7 +623,7 @@ fn test_storage_usage_updates_between_restarts() {
 #[test]
 fn test_storage_usage_doesnt_update_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
-    let storage_usage_collection_interval = Duration::from_secs(60);
+    let storage_usage_collection_interval = Duration::from_secs(10);
     let config = util::Config::default()
         .with_storage_usage_collection_interval(storage_usage_collection_interval)
         .data_directory(data_dir.path());
@@ -645,10 +645,12 @@ fn test_storage_usage_doesnt_update_between_restarts() {
         }).unwrap()
     };
 
-    std::thread::sleep(Duration::from_secs(2));
-
     // Another storage usage collection should not be scheduled immediately.
     {
+        // Give plenty of time so we don't accidentally do another collection if this test is slow.
+        let storage_usage_collection_interval = Duration::from_secs(60 * 10);
+        let config =
+            config.with_storage_usage_collection_interval(storage_usage_collection_interval);
         let server = util::start_server(config).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
