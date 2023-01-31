@@ -1215,7 +1215,7 @@ pub async fn serve(
         && connection_context.aws_external_id_prefix.is_some()
     {
         Some(AwsPrincipalContext {
-            aws_account_id: aws_account_id.expect("known to be `Some` from`is_some()` call above"),
+            aws_account_id: aws_account_id.expect("known to be `Some` from `is_some()` call above"),
             aws_external_id_prefix: connection_context
                 .aws_external_id_prefix
                 .clone()
