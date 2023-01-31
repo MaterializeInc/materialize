@@ -88,7 +88,7 @@
 //! Consult the `StorageController` and `ComputeController` documentation for more information
 //! about each of these interfaces.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::mem;
 use std::num::NonZeroI64;
 use std::sync::Arc;
@@ -226,7 +226,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     /// Tracks the readiness of the underlying controllers.
     readiness: Readiness,
     /// Tasks for collecting replica metrics.
-    metrics_tasks: HashMap<ReplicaId, AbortOnDropHandle<()>>,
+    metrics_tasks: BTreeMap<ReplicaId, AbortOnDropHandle<()>>,
     /// Sender for the channel over which replica metrics are sent.
     metrics_tx: UnboundedSender<(ReplicaId, Vec<ServiceProcessMetrics>)>,
     /// Receiver for the channel over which replica metrics are sent.
@@ -364,7 +364,7 @@ where
             init_container_image: config.init_container_image,
             orchestrator: config.orchestrator.namespace("cluster"),
             readiness: Readiness::NotReady,
-            metrics_tasks: HashMap::new(),
+            metrics_tasks: BTreeMap::new(),
             metrics_tx,
             metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
         }
