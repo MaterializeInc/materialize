@@ -197,6 +197,7 @@ impl std::fmt::Debug for TracingHandle {
 /// A guard for the tracing infrastructure configured with [`configure`].
 ///
 /// This guard should be kept alive for the lifetime of the program.
+#[must_use = "Must hold for the lifetime of the program, otherwise tracing will be shutdown"]
 pub struct TracingGuard {
     _sentry_guard: Option<sentry::ClientInitGuard>,
 }
