@@ -428,7 +428,8 @@ async fn main() -> Result<()> {
                 .with_context(|| "Retrieving cloud provider region.")?;
                 let health = check_environment_health(&valid_profile, &environment)?;
 
-                print_environment_status(environment, health);
+                print_environment_status(&valid_profile, environment, health)
+                    .with_context(|| "Printing the status of the environment.")?;
             }
         },
 
