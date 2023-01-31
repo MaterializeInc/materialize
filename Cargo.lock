@@ -3527,6 +3527,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-cluster"
+version = "0.38.0-dev"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytesize",
+ "clap",
+ "crossbeam-channel",
+ "dec",
+ "differential-dataflow",
+ "dogsdogsdogs",
+ "futures",
+ "mz-build-info",
+ "mz-cluster-client",
+ "mz-compute-client",
+ "mz-expr",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-pid-file",
+ "mz-repr",
+ "mz-service",
+ "mz-storage-client",
+ "mz-timely-util",
+ "once_cell",
+ "prometheus",
+ "scopeguard",
+ "serde",
+ "smallvec",
+ "timely",
+ "tokio",
+ "tracing",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-cluster-client"
 version = "0.0.0"
 dependencies = [
