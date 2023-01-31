@@ -1329,7 +1329,7 @@ pub async fn serve(
                 handle.block_on(coord.serve(internal_cmd_rx, strict_serializable_reads_rx, cmd_rx));
             }
         })
-        .unwrap_or_terminate("cannot fail to create coordinator thread");
+        .expect("failed to create coordinator thread");
     match bootstrap_rx
         .await
         .expect("bootstrap_tx always sends a message or panics/halts")

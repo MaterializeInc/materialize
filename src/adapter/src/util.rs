@@ -365,12 +365,6 @@ impl ShouldHalt for TransformError {
     }
 }
 
-impl ShouldHalt for std::io::Error {
-    fn should_halt(&self) -> bool {
-        false
-    }
-}
-
 // Needed for some functions that return an () error. We have no info, so just panic.
 impl ShouldHalt for () {
     fn should_halt(&self) -> bool {
