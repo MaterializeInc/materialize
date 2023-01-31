@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 #![cfg_attr(nightly_doc_features, feature(doc_cfg))]
@@ -94,9 +95,6 @@
 //!
 //! The main interface to the coordinator is [`Client`]. To start a coordinator,
 //! use the [`serve`] function.
-
-// Disallow usage of `Hash*` types from std.
-#![warn(clippy::disallowed_types)]
 
 // TODO(benesch): delete this once we use structured errors everywhere.
 macro_rules! coord_bail {
