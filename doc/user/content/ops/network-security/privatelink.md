@@ -213,6 +213,17 @@ CREATE SOURCE mz_source
 {{< /tab >}}
 {{< /tabs >}}
 
+## Terraform Modules
+
+Materialize provides Terraform modules that can be used to create the AWS PrivateLink connection and the VPC endpoint service:
+
+- [AWS MSK](https://github.com/MaterializeInc/terraform-aws-msk-privatelink)
+- [AWS self-managed Kafka](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink)
+
+{{< warning >}}
+This is provided on a best-effort basis and Materialize cannot offer support for this module.
+{{< /warning >}}
+
 ## Related pages
 
 - [`CREATE SECRET`](/sql/create-secret)
