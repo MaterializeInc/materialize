@@ -105,7 +105,8 @@ impl Coordinator {
     /// Finalizes a dataflow and then broadcasts it to all workers.
     /// Utility method for the more general [`Self::ship_dataflows_fallible`]
     ///
-    /// Returns an error on failure. DO NOT call this for DDL.
+    /// Returns an error on failure. DO NOT call this for DDL. Instead, use the non-fallible version
+    /// [`Self::ship_dataflow`].
     pub(crate) async fn ship_dataflow_fallible(
         &mut self,
         dataflow: DataflowDesc,
@@ -116,7 +117,8 @@ impl Coordinator {
 
     /// Finalizes a list of dataflows and then broadcasts it to all workers.
     ///
-    /// Returns an error on failure. DO NOT call this for DDL.
+    /// Returns an error on failure. DO NOT call this for DDL. Instead, use the non-fallible version
+    /// [`Self::ship_dataflows`].
     async fn ship_dataflows_fallible(
         &mut self,
         dataflows: Vec<DataflowDesc>,
@@ -191,7 +193,7 @@ impl Coordinator {
     /// frontiers of dataflow inputs (sources and imported arrangements).
     ///
     /// This method will return an error if the finalization fails. DO NOT call this
-    /// method for DDL. Instead, use the non-fallible version [`finalize_dataflow`].
+    /// method for DDL. Instead, use the non-fallible version [`Self::finalize_dataflow`].
     ///
     /// # Panics
     ///
