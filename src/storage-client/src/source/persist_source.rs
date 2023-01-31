@@ -172,7 +172,7 @@ where
         let activations = scope.activations();
         let activator = Activator::new(&operator_info.address[..], activations);
         // Maintain a list of work to do
-        let mut todo = std::collections::VecDeque::new();
+        let mut pending_work = std::collections::VecDeque::new();
         let mut buffer = Default::default();
 
         move |_frontier| {
@@ -180,7 +180,7 @@ where
                 data.swap(&mut buffer);
                 let capability = time.retain();
                 for fetched_part in buffer.drain(..) {
-                    todo.push_back(PendingWork {
+                    pending_work.push_back(PendingWork {
                         capability: capability.clone(),
                         fetched_part,
                     })
@@ -190,8 +190,8 @@ where
             let mut work = 0;
             let start_time = Instant::now();
             let mut handle = ConsolidateBuffer::new(updates_output.activate(), 0);
-            while !todo.is_empty() && !yield_fn(start_time, work) {
-                let done = todo.front_mut().unwrap().do_work(
+            while !pending_work.is_empty() && !yield_fn(start_time, work) {
+                let done = pending_work.front_mut().unwrap().do_work(
                     &mut work,
                     start_time,
                     &yield_fn,
@@ -202,10 +202,10 @@ where
                     &mut handle,
                 );
                 if done {
-                    todo.pop_front();
+                    pending_work.pop_front();
                 }
             }
-            if !todo.is_empty() {
+            if !pending_work.is_empty() {
                 activator.activate();
             }
         }
@@ -223,7 +223,8 @@ struct PendingWork {
 }
 
 impl PendingWork {
-    /// Perform roughly `fuel` work, reading from the fetched part, decoding, and sending outputs.
+    /// Perform work, reading from the fetched part, decoding, and sending outputs, while checking
+    /// `yield_fn` whether more fuel is available.
     fn do_work<P, YFn>(
         &mut self,
         work: &mut usize,
