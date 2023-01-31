@@ -1219,7 +1219,7 @@ pub async fn serve(
             aws_external_id_prefix: connection_context
                 .aws_external_id_prefix
                 .clone()
-                .expect("known to be `Some` from`is_some()` call above"),
+                .expect("known to be `Some` from `is_some()` call above"),
         })
     } else {
         None
