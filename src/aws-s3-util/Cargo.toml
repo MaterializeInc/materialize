@@ -10,3 +10,6 @@ publish = false
 aws-sdk-s3 = { version = "0.23.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-types = "0.53.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]
