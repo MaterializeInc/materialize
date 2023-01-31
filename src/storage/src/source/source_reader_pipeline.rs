@@ -967,17 +967,12 @@ where
                     }
                 },
                 _ = work_to_do.notified(), if timestamper.initialized() => {
-                    // The frontier at which we can retire work is the minimum of the timestamper
-                    // upper and the source data upper
-                    let mut ready_upper = timestamper.source_upper();
-                    ready_upper.extend(source_upper.frontier().iter().cloned());
-
                     // Drain all messages that can be reclocked from all the batches
                     let total_buffered: usize = untimestamped_batches.iter().map(|b| b.len()).sum();
                     let msgs = untimestamped_batches
                         .iter_mut()
                         .flat_map(|batch| batch.drain_filter_swapping(|(_, ts, _)| {
-                            !ready_upper.less_equal(ts)
+                            !timestamper.source_upper().less_equal(ts)
                         }))
                         .map(|(data, time, diff)| ((data, time.clone(), diff), time));
 
@@ -1032,7 +1027,11 @@ where
                     );
 
 
-                    // And downgrade our capability to the reclocked source upper
+                    // We must downgrade our capability to the meet of the timestamper frontier and
+                    // the source frontier because it's only when both advance past some time `t`
+                    // that we are guaranteed that we'll not need to produce more data at time `t`.
+                    let mut ready_upper = timestamper.source_upper();
+                    ready_upper.extend(source_upper.frontier().iter().cloned());
 
                     let into_ready_upper = timestamper
                         .reclock_frontier(ready_upper.borrow())
