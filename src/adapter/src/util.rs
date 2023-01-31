@@ -364,10 +364,3 @@ impl ShouldHalt for TransformError {
         }
     }
 }
-
-// Needed for some functions that return an () error. We have no info, so just panic.
-impl ShouldHalt for () {
-    fn should_halt(&self) -> bool {
-        false
-    }
-}
