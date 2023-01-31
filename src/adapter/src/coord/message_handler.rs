@@ -251,11 +251,7 @@ impl Coordinator {
                 if let Some(pending_subscribe) = self.pending_subscribes.get_mut(&sink_id) {
                     let remove = pending_subscribe.process_response(response);
                     if remove {
-                        self.metrics
-                            .active_subscribes
-                            .with_label_values(&[pending_subscribe.session_type])
-                            .dec();
-                        self.pending_subscribes.remove(&sink_id);
+                        self.remove_subscribe(&sink_id);
                     }
                 }
             }

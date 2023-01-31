@@ -2632,14 +2632,6 @@ impl Coordinator {
         };
 
         let (&sink_id, sink_desc) = dataflow.sink_exports.iter().next().unwrap();
-        self.active_conns
-            .get_mut(&session.conn_id())
-            .expect("must exist for active sessions")
-            .drop_sinks
-            .push(ComputeSinkId {
-                cluster_id,
-                global_id: sink_id,
-            });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
         let session_type = metrics::session_type_label_value(session);
@@ -2660,16 +2652,7 @@ impl Coordinator {
         match self.ship_dataflow(dataflow, cluster_id).await {
             Ok(_) => {}
             Err(e) => {
-                self.active_conns
-                    .get_mut(&session.conn_id())
-                    .expect("must exist for active sessions")
-                    .drop_sinks
-                    .retain(|sink| sink.global_id != sink_id);
-                self.metrics
-                    .active_subscribes
-                    .with_label_values(&[session_type])
-                    .dec();
-                self.pending_subscribes.remove(&sink_id);
+                self.remove_subscribe(&sink_id);
                 return Err(e);
             }
         };
@@ -2679,6 +2662,15 @@ impl Coordinator {
                 .set_subscribe_target_replica(cluster_id, sink_id, target)
                 .unwrap();
         }
+
+        self.active_conns
+            .get_mut(&session.conn_id())
+            .expect("must exist for active sessions")
+            .drop_sinks
+            .push(ComputeSinkId {
+                cluster_id,
+                global_id: sink_id,
+            });
 
         let resp = ExecuteResponse::Subscribing { rx };
         match copy_to {
