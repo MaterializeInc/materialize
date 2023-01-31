@@ -37,7 +37,7 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
@@ -363,7 +363,7 @@ where
             )
             .expect("Failed to create source");
 
-        let source_stream = source_reader.into_stream(timestamp_interval);
+        let source_stream = source_reader.into_stream(timestamp_interval).peekable();
         tokio::pin!(source_stream);
         tokio::pin!(resume_uppers);
 
@@ -375,8 +375,6 @@ where
             update: HealthStatus::Starting,
             should_halt: false,
         };
-
-        let mut timer = Instant::now();
 
         // We want to commit offsets concurrently with ingestion so that a slow commit
         // implementation doesn't stall the operator and prevent it from reading more data. For
@@ -401,56 +399,66 @@ where
 
         loop {
             tokio::select! {
-                message = source_stream.next() => match message {
-                    Some(SourceMessageType::Message(message, cap, diff)) => {
-                        let new_status = match message {
-                            Ok(_) => HealthStatus::Running,
-                            Err(ref error) => {
-                                HealthStatus::StalledWithError(error.inner.to_string())
+                _ = source_stream.as_mut().peek() => {
+                    let timer = Instant::now();
+
+                    // We want to efficiently batch up messages that are ready. To do that we will
+                    // activate the output handle here and then drain the currently available
+                    // messages until we either run out of messages or run out of time.
+                    let mut output = output.activate();
+                    while timer.elapsed() < YIELD_INTERVAL {
+                        match source_stream.next().now_or_never() {
+                            Some(Some(SourceMessageType::Message(message, cap, diff))) => {
+                                let new_status = match message {
+                                    Ok(_) => HealthStatus::Running,
+                                    Err(ref error) => {
+                                        HealthStatus::StalledWithError(error.inner.to_string())
+                                    }
+                                };
+
+                                let new_status_update = HealthStatusUpdate {
+                                    update: new_status,
+                                    should_halt: false,
+                                };
+
+                                if prev_status != new_status_update {
+                                    prev_status = new_status_update.clone();
+                                    health_output
+                                        .activate()
+                                        .session(&health_cap)
+                                        .give((worker_id, new_status_update));
+                                }
+
+                                if let Ok(message) = &message {
+                                    source_statistics.inc_messages_received_by(1);
+                                    let key_len = u64::cast_from(message.key.len().unwrap_or(0));
+                                    let value_len = u64::cast_from(message.value.len().unwrap_or(0));
+                                    source_statistics.inc_bytes_received_by(key_len + value_len);
+                                }
+
+                                output
+                                    .session(&cap)
+                                    .give((message, cap.time().clone(), diff));
                             }
-                        };
-
-                        let new_status_update = HealthStatusUpdate {
-                            update: new_status,
-                            should_halt: false,
-                        };
-
-                        if prev_status != new_status_update {
-                            prev_status = new_status_update.clone();
-                            health_output
-                                .activate()
-                                .session(&health_cap)
-                                .give((worker_id, new_status_update));
-                        }
-
-                        if let Ok(message) = &message {
-                            source_statistics.inc_messages_received_by(1);
-                            let key_len = u64::cast_from(message.key.len().unwrap_or(0));
-                            let value_len = u64::cast_from(message.value.len().unwrap_or(0));
-                            source_statistics.inc_bytes_received_by(key_len + value_len);
-                        }
-
-                        {
-                            output
-                                .activate()
-                                .session(&cap)
-                                .give((message, cap.time().clone(), diff));
-                        }
-
-                        if timer.elapsed() > YIELD_INTERVAL {
-                            timer = Instant::now();
-                            tokio::task::yield_now().await;
+                            Some(Some(SourceMessageType::SourceStatus(new_status))) => {
+                                prev_status = new_status.clone();
+                                health_output.activate().session(&health_cap).give((worker_id, new_status));
+                            }
+                            Some(None) => {
+                                trace!("timely-{worker_id} source({id}): source ended, dropping capabilities");
+                                return;
+                            }
+                            None => break,
                         }
                     }
-                    Some(SourceMessageType::SourceStatus(new_status)) => {
-                        prev_status = new_status.clone();
-                        health_output.activate().session(&health_cap).give((worker_id, new_status));
+                    // Now we drop the activated output handle to force timely to emit any pending
+                    // batch. It's crucial that this happens before our attempt to yield otherwise
+                    // the buffer would get stuck in this operator.
+                    drop(output);
+                    if timer.elapsed() > YIELD_INTERVAL {
+                        tokio::task::yield_now().await;
                     }
-                    None => {
-                        trace!("timely-{worker_id} source({id}): source ended, dropping capabilities");
-                        return;
-                    }
-                },
+                }
                 // This future is not cancel safe but we are only passing a reference to it in the
                 // select! loop so the future stays on the stack and never gets cancelled until the
                 // end of the function.
