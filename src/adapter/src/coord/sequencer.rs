@@ -2656,8 +2656,23 @@ impl Coordinator {
                 arity,
             },
         );
-        self.ship_dataflow(dataflow, cluster_id).await;
 
+        match self.ship_dataflow_fallible(dataflow, cluster_id).await {
+            Ok(_) => {}
+            Err(e) => {
+                self.active_conns
+                    .get_mut(&session.conn_id())
+                    .expect("must exist for active sessions")
+                    .drop_sinks
+                    .retain(|sink| sink.global_id != sink_id);
+                self.metrics
+                    .active_subscribes
+                    .with_label_values(&[session_type])
+                    .dec();
+                self.pending_subscribes.remove(&sink_id);
+                return Err(e);
+            }
+        };
         if let Some(target) = target_replica {
             self.controller
                 .compute
