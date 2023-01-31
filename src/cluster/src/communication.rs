@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Code to spin up communication mesh for a compute replica.
+//! Code to spin up communication mesh for a cluster replica.
 //!
 //! The startup protocol is as follows:
-//! The compute controller in `environmentd`, after having connected to all the
+//! The controller in `environmentd`, after having connected to all the
 //! `clusterd` processes in a replica, sends each of them a `CreateTimely` command
 //! containing an epoch value (which is the same across all copies of the command).
 //! The meaning of this value is irrelevant,
