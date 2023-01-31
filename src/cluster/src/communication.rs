@@ -59,6 +59,7 @@ pub async fn initialize_networking(
 ) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error> {
     info!(
         process = process,
+        ?addresses,
         "initializing network for multi-process timely instance, with {} processes for epoch number {epoch}",
         addresses.len()
     );

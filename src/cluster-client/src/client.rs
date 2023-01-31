@@ -153,6 +153,32 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
         })
     }
 }
+
+impl TimelyConfig {
+    pub fn split_command(&self, parts: usize) -> Vec<Self> {
+        (0..parts)
+            .into_iter()
+            .map(|part| TimelyConfig {
+                process: part,
+                ..self.clone()
+            })
+            .collect()
+    }
+}
+
+/// Specifies the location of a cluster replica.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClusterReplicaLocation {
+    /// The network addresses of the cluster control endpoints for each process in
+    /// the replica.
+    pub ctl_addrs: Vec<String>,
+    /// The network addresses of the dataflow (Timely) endpoints for
+    /// each process in the replica.
+    pub dataflow_addrs: Vec<String>,
+    /// The workers per process in the replica.
+    pub workers: usize,
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::ProptestConfig;

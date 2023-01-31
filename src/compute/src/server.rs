@@ -58,7 +58,7 @@ pub fn serve(
     config: mz_cluster::server::ClusterConfig,
 ) -> Result<
     (
-        TimelyContainerRef<ComputeCommand, ComputeResponse>,
+        TimelyContainerRef<ComputeCommand, ComputeResponse, SyncActivator>,
         impl Fn() -> Box<dyn ComputeClient>,
     ),
     Error,
@@ -149,6 +149,7 @@ struct Worker<'w, A: Allocate> {
 }
 
 impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Config {
+    type Activatable = SyncActivator;
     fn build_and_run<A: Allocate>(
         config: Self,
         timely_worker: &mut TimelyWorker<A>,

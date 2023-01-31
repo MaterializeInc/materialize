@@ -11,17 +11,23 @@
 
 use std::sync::Arc;
 
-use timely::scheduling::SyncActivator;
 use timely::worker::Worker as TimelyWorker;
 
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_persist_client::cache::PersistClientCache;
-type ActivatorSender = crossbeam_channel::Sender<SyncActivator>;
 
 /// A trait for letting specific server implementations hook
 /// into handling of `CreateTimely` commands. Usually implemented by
 /// the config object that are specific to the implementation.
 pub trait AsRunnableWorker<C, R> {
+    /// The `Activatable` type this server needs to be activated
+    /// when being send new commands.
+    // TODO(guswynn): cluster-unification: currently compute
+    // and storage have different ways of interacting with the timely
+    // threads from the grpc server. When the disparate internal
+    // command flow techniques are merged, this type should go away.
+    type Activatable: mz_service::local::Activatable + Send;
+
     /// Build and continuously run a worker. Called on each timely
     /// thread.
     fn build_and_run<A: timely::communication::Allocate>(
@@ -30,7 +36,7 @@ pub trait AsRunnableWorker<C, R> {
         client_rx: crossbeam_channel::Receiver<(
             crossbeam_channel::Receiver<C>,
             tokio::sync::mpsc::UnboundedSender<R>,
-            ActivatorSender,
+            crossbeam_channel::Sender<Self::Activatable>,
         )>,
         persist_clients: Arc<PersistClientCache>,
     );
@@ -53,6 +59,17 @@ impl TryIntoTimelyConfig for mz_compute_client::protocol::command::ComputeComman
                 config,
                 epoch,
             } => Ok((config, epoch)),
+            cmd => Err(cmd),
+        }
+    }
+}
+
+impl TryIntoTimelyConfig for mz_storage_client::client::StorageCommand {
+    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
+        match self {
+            mz_storage_client::client::StorageCommand::CreateTimely { config, epoch } => {
+                Ok((config, epoch))
+            }
             cmd => Err(cmd),
         }
     }

@@ -24,8 +24,9 @@ use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use tracing::{error, warn};
 
+use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_compute_client::controller::{
-    ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLocation, ComputeReplicaLogging,
+    ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLogging,
 };
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
@@ -222,17 +223,21 @@ where
                     // This branch doesn't do any async work, so there is a slight performance
                     // opportunity to serially process it, but it makes the code worse to read.
                     ReplicaLocation::Unmanaged(u) => {
-                        let storage_addr = u.storagectl_addr;
-                        let compute_location = ComputeReplicaLocation {
-                            computectl_addrs: u.computectl_addrs,
-                            compute_addrs: u.compute_addrs,
+                        let compute_location = ClusterReplicaLocation {
+                            ctl_addrs: u.computectl_addrs,
+                            dataflow_addrs: u.compute_addrs,
                             workers: u.workers,
                         };
+
+                        // This is not correct, and will be fixed in a later
+                        // commit.
+                        let storage_location = compute_location.clone();
+
                         Ok::<_, anyhow::Error>((
                             cluster_id,
                             replica_id,
                             config.compute,
-                            storage_addr,
+                            storage_location,
                             compute_location,
                             None,
                         ))
@@ -242,21 +247,21 @@ where
                         let (service, metrics_task_join_handle) = this
                             .provision_replica(cluster_id, replica_id, role, m)
                             .await?;
-                        let storage_addr = service
-                            .addresses("storagectl")
-                            .into_iter()
-                            .next()
-                            .expect("should be at least one process");
-                        let compute_location = ComputeReplicaLocation {
-                            computectl_addrs: service.addresses("computectl"),
-                            compute_addrs: service.addresses("compute"),
+                        let storage_location = ClusterReplicaLocation {
+                            ctl_addrs: service.addresses("storagectl"),
+                            dataflow_addrs: service.addresses("storage"),
+                            workers,
+                        };
+                        let compute_location = ClusterReplicaLocation {
+                            ctl_addrs: service.addresses("computectl"),
+                            dataflow_addrs: service.addresses("compute"),
                             workers,
                         };
                         Ok((
                             cluster_id,
                             replica_id,
                             config.compute,
-                            storage_addr,
+                            storage_location,
                             compute_location,
                             Some(metrics_task_join_handle),
                         ))
@@ -275,7 +280,7 @@ where
             cluster_id,
             replica_id,
             compute_config,
-            storage_addr,
+            storage_location,
             compute_location,
             metrics_task_join_handle,
         ) in replicas
@@ -283,7 +288,7 @@ where
             if let Some(jh) = metrics_task_join_handle {
                 self.metrics_tasks.insert(replica_id, jh);
             }
-            self.storage.connect_replica(cluster_id, storage_addr);
+            self.storage.connect_replica(cluster_id, storage_location);
             self.active_compute().add_replica_to_instance(
                 cluster_id,
                 replica_id,
@@ -427,6 +432,10 @@ where
                         ServicePort {
                             name: "compute".into(),
                             port_hint: 2102,
+                        },
+                        ServicePort {
+                            name: "storage".into(),
+                            port_hint: 2103,
                         },
                         ServicePort {
                             name: "internal-http".into(),

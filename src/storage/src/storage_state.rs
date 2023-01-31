@@ -122,7 +122,11 @@ pub struct Worker<'w, A: Allocate> {
     pub timely_worker: &'w mut TimelyWorker<A>,
     /// The channel over which communication handles for newly connected clients
     /// are delivered.
-    pub client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
+    pub client_rx: crossbeam_channel::Receiver<(
+        CommandReceiver,
+        ResponseSender,
+        crossbeam_channel::Sender<std::thread::Thread>,
+    )>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
 }
@@ -131,7 +135,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Creates new `Worker` state from the given components.
     pub fn new(
         timely_worker: &'w mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
+        client_rx: crossbeam_channel::Receiver<(
+            CommandReceiver,
+            ResponseSender,
+            crossbeam_channel::Sender<std::thread::Thread>,
+        )>,
         decode_metrics: DecodeMetrics,
         source_metrics: SourceBaseMetrics,
         sink_metrics: SinkBaseMetrics,
@@ -379,8 +387,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let mut shutdown = false;
         while !shutdown {
             match self.client_rx.recv() {
-                Ok((rx, tx)) => self.run_client(rx, tx),
-                Err(_) => shutdown = true,
+                Ok((rx, tx, activator_tx)) => {
+                    activator_tx
+                        .send(std::thread::current())
+                        .expect("activator_tx working");
+                    self.run_client(rx, tx)
+                }
+                Err(_) => {
+                    shutdown = true;
+                }
             }
         }
     }
@@ -861,6 +876,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let mut stale_exports = self.storage_state.exports.keys().collect::<BTreeSet<_>>();
         for command in &mut commands {
             match command {
+                StorageCommand::CreateTimely { .. } => {
+                    panic!("CreateTimely must be captured before")
+                }
                 StorageCommand::CreateSources(ingestions) => {
                     ingestions.retain_mut(|ingestion| {
 
@@ -960,6 +978,7 @@ impl StorageState {
         cmd: StorageCommand,
     ) {
         match cmd {
+            StorageCommand::CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             StorageCommand::InitializationComplete => (),
             StorageCommand::UpdateConfiguration(params) => {
                 tracing::info!("Applying configuration update: {params:?}");
