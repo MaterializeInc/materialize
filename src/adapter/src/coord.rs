@@ -795,7 +795,8 @@ impl Coordinator {
                             .entry(idx.cluster_id)
                             .or_insert_with(Default::default)
                             .extend(dataflow.export_ids());
-                        let dataflow_plan = vec![self.finalize_dataflow(dataflow, idx.cluster_id)];
+                        let dataflow_plan =
+                            vec![self.must_finalize_dataflow(dataflow, idx.cluster_id)];
                         self.controller
                             .active_compute()
                             .create_dataflows(idx.cluster_id, dataflow_plan)
@@ -827,7 +828,7 @@ impl Coordinator {
                     let df = self
                         .dataflow_builder(mview.cluster_id)
                         .build_materialized_view_dataflow(entry.id(), as_of, internal_view_id)?;
-                    self.ship_dataflow(df, mview.cluster_id).await;
+                    self.must_ship_dataflow(df, mview.cluster_id).await;
                 }
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink.

@@ -86,40 +86,52 @@ impl Coordinator {
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
-    /// Utility method for the more general [`Self::ship_dataflows`]
-    pub(crate) async fn ship_dataflow(
+    /// Utility method for the more general [`Self::must_ship_dataflows`]
+    ///
+    /// # Panics
+    ///
+    /// Panics if the dataflow fails to ship.
+    pub(crate) async fn must_ship_dataflow(
         &mut self,
         dataflow: DataflowDesc,
         instance: ComputeInstanceId,
     ) {
-        self.ship_dataflows(vec![dataflow], instance).await
+        self.must_ship_dataflows(vec![dataflow], instance).await
     }
 
     /// Finalizes a list of dataflows and then broadcasts it to all workers.
-    async fn ship_dataflows(&mut self, dataflows: Vec<DataflowDesc>, instance: ComputeInstanceId) {
-        self.ship_dataflows_fallible(dataflows, instance)
+    ///
+    /// # Panics
+    ///
+    /// Panics if any of the dataflows fail to ship.
+    async fn must_ship_dataflows(
+        &mut self,
+        dataflows: Vec<DataflowDesc>,
+        instance: ComputeInstanceId,
+    ) {
+        self.ship_dataflows(dataflows, instance)
             .await
             .expect("failed to ship dataflows");
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
-    /// Utility method for the more general [`Self::ship_dataflows_fallible`]
+    /// Utility method for the more general [`Self::ship_dataflows`]
     ///
     /// Returns an error on failure. DO NOT call this for DDL. Instead, use the non-fallible version
-    /// [`Self::ship_dataflow`].
-    pub(crate) async fn ship_dataflow_fallible(
+    /// [`Self::must_ship_dataflow`].
+    pub(crate) async fn ship_dataflow(
         &mut self,
         dataflow: DataflowDesc,
         instance: ComputeInstanceId,
     ) -> Result<(), AdapterError> {
-        self.ship_dataflows_fallible(vec![dataflow], instance).await
+        self.ship_dataflows(vec![dataflow], instance).await
     }
 
     /// Finalizes a list of dataflows and then broadcasts it to all workers.
     ///
     /// Returns an error on failure. DO NOT call this for DDL. Instead, use the non-fallible version
-    /// [`Self::ship_dataflows`].
-    async fn ship_dataflows_fallible(
+    /// [`Self::must_ship_dataflows`].
+    async fn ship_dataflows(
         &mut self,
         dataflows: Vec<DataflowDesc>,
         instance: ComputeInstanceId,
@@ -128,7 +140,7 @@ impl Coordinator {
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
         for dataflow in dataflows.into_iter() {
             output_ids.extend(dataflow.export_ids());
-            let mut plan = self.finalize_dataflow_fallible(dataflow, instance)?;
+            let mut plan = self.finalize_dataflow(dataflow, instance)?;
             // If the only outputs of the dataflow are sinks, we might
             // be able to turn off the computation early, if they all
             // have non-trivial `up_to`s.
@@ -169,7 +181,7 @@ impl Coordinator {
     /// Panics if as_of is < the `since` frontiers.
     ///
     /// Panics if the dataflow descriptions contain an invalid plan.
-    pub(crate) fn finalize_dataflow(
+    pub(crate) fn must_finalize_dataflow(
         &self,
         dataflow: DataflowDesc,
         compute_instance: ComputeInstanceId,
@@ -178,7 +190,7 @@ impl Coordinator {
         // before calling this function. We don't have plumbing yet to rollback catalog
         // operations if this function fails, and environmentd will be in an unsafe
         // state if we do not correctly clean up the catalog.
-        self.finalize_dataflow_fallible(dataflow, compute_instance)
+        self.finalize_dataflow(dataflow, compute_instance)
             .expect("Dataflow planning failed; unrecoverable error")
     }
 
@@ -193,12 +205,12 @@ impl Coordinator {
     /// frontiers of dataflow inputs (sources and imported arrangements).
     ///
     /// This method will return an error if the finalization fails. DO NOT call this
-    /// method for DDL. Instead, use the non-fallible version [`Self::finalize_dataflow`].
+    /// method for DDL. Instead, use the non-fallible version [`Self::must_finalize_dataflow`].
     ///
     /// # Panics
     ///
     /// Panics if as_of is < the `since` frontiers.
-    pub(crate) fn finalize_dataflow_fallible(
+    pub(crate) fn finalize_dataflow(
         &self,
         mut dataflow: DataflowDesc,
         compute_instance: ComputeInstanceId,
@@ -771,7 +783,7 @@ fn eval_unmaterializable_func(
 impl Coordinator {
     #[allow(dead_code)]
     async fn verify_ship_dataflow_no_error(&mut self) {
-        // ship_dataflow, ship_dataflows, and finalize_dataflow are not allowed
+        // must_ship_dataflow, must_ship_dataflows, and must_finalize_dataflow are not allowed
         // to have a `Result` return because these functions are called after
         // `catalog_transact`, after which no errors are allowed. This test exists to
         // prevent us from incorrectly teaching those functions how to return errors
@@ -782,11 +794,11 @@ impl Coordinator {
         let compute_instance = ComputeInstanceId::User(1);
 
         let df = DataflowDesc::new("".into());
-        let _: () = self.ship_dataflow(df.clone(), compute_instance).await;
+        let _: () = self.must_ship_dataflow(df.clone(), compute_instance).await;
         let _: () = self
-            .ship_dataflows(vec![df.clone()], compute_instance)
+            .must_ship_dataflows(vec![df.clone()], compute_instance)
             .await;
         let _: DataflowDescription<mz_compute_client::plan::Plan> =
-            self.finalize_dataflow(df, compute_instance);
+            self.must_finalize_dataflow(df, compute_instance);
     }
 }

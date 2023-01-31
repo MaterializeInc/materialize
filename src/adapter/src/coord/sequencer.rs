@@ -1581,7 +1581,7 @@ impl Coordinator {
                 )
                 .await;
 
-                self.ship_dataflow(df, cluster_id).await;
+                self.must_ship_dataflow(df, cluster_id).await;
 
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
@@ -1652,7 +1652,7 @@ impl Coordinator {
             .await
         {
             Ok(df) => {
-                self.ship_dataflow(df, cluster_id).await;
+                self.must_ship_dataflow(df, cluster_id).await;
                 self.set_index_options(id, options).expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex)
             }
@@ -2657,7 +2657,7 @@ impl Coordinator {
             },
         );
 
-        match self.ship_dataflow_fallible(dataflow, cluster_id).await {
+        match self.ship_dataflow(dataflow, cluster_id).await {
             Ok(_) => {}
             Err(e) => {
                 self.active_conns
