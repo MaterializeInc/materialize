@@ -14,7 +14,7 @@
 //!
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::str;
@@ -463,7 +463,7 @@ where
         VERSION_SSL => FrontendStartupMessage::SslRequest,
         VERSION_GSSENC => FrontendStartupMessage::GssEncRequest,
         _ => {
-            let mut params = HashMap::new();
+            let mut params = BTreeMap::new();
             while buf.peek_byte()? != 0 {
                 let name = buf.read_cstr()?.to_owned();
                 let value = buf.read_cstr()?.to_owned();

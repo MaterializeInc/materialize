@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::FronteggAppPassword;
 use crate::{configuration::ValidProfile, utils::RequestBuilderExt};
@@ -19,7 +19,7 @@ pub(crate) async fn list_passwords(
     client: &Client,
     valid_profile: &ValidProfile<'_>,
 ) -> Result<Vec<FronteggAppPassword>> {
-    let mut body = HashMap::new();
+    let mut body = BTreeMap::new();
     body.insert("description", &"App password for the CLI");
 
     client

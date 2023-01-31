@@ -189,7 +189,8 @@ where
 
             let mut work = 0;
             let start_time = Instant::now();
-            let mut handle = ConsolidateBuffer::new(updates_output.activate(), 0);
+            let mut output = updates_output.activate();
+            let mut handle = ConsolidateBuffer::new(&mut output, 0);
             while !pending_work.is_empty() && !yield_fn(start_time, work) {
                 let done = pending_work.front_mut().unwrap().do_work(
                     &mut work,

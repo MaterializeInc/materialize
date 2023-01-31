@@ -96,24 +96,26 @@ pub fn construct<A: Allocate>(
             let mut messages_received_data: BTreeMap<_, Vec<Diff>> = BTreeMap::new();
             let mut schedules_data: BTreeMap<_, Vec<(isize, Diff)>> = BTreeMap::new();
             move |_frontiers| {
-                let operates = operates_out.activate();
-                let channels = channels_out.activate();
-                let addresses = addresses_out.activate();
-                let parks = parks_out.activate();
-                let messages_sent = messages_sent_out.activate();
-                let messages_received = messages_received_out.activate();
-                let schedules_duration = schedules_duration_out.activate();
-                let schedules_histogram = schedules_histogram_out.activate();
+                let mut operates = operates_out.activate();
+                let mut channels = channels_out.activate();
+                let mut addresses = addresses_out.activate();
+                let mut parks = parks_out.activate();
+                let mut messages_sent = messages_sent_out.activate();
+                let mut messages_received = messages_received_out.activate();
+                let mut schedules_duration = schedules_duration_out.activate();
+                let mut schedules_histogram = schedules_histogram_out.activate();
 
-                let mut operates_session = ConsolidateBuffer::new(operates, 0);
-                let mut channels_session = ConsolidateBuffer::new(channels, 1);
-                let mut addresses_session = ConsolidateBuffer::new(addresses, 2);
-                let mut parks_session = ConsolidateBuffer::new(parks, 3);
-                let mut messages_sent_session = ConsolidateBuffer::new(messages_sent, 4);
-                let mut messages_received_session = ConsolidateBuffer::new(messages_received, 5);
-                let mut schedules_duration_session = ConsolidateBuffer::new(schedules_duration, 6);
+                let mut operates_session = ConsolidateBuffer::new(&mut operates, 0);
+                let mut channels_session = ConsolidateBuffer::new(&mut channels, 1);
+                let mut addresses_session = ConsolidateBuffer::new(&mut addresses, 2);
+                let mut parks_session = ConsolidateBuffer::new(&mut parks, 3);
+                let mut messages_sent_session = ConsolidateBuffer::new(&mut messages_sent, 4);
+                let mut messages_received_session =
+                    ConsolidateBuffer::new(&mut messages_received, 5);
+                let mut schedules_duration_session =
+                    ConsolidateBuffer::new(&mut schedules_duration, 6);
                 let mut schedules_histogram_session =
-                    ConsolidateBuffer::new(schedules_histogram, 7);
+                    ConsolidateBuffer::new(&mut schedules_histogram, 7);
 
                 input.for_each(|cap, data| {
                     data.swap(&mut demux_buffer);

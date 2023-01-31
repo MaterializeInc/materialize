@@ -42,7 +42,7 @@ ORDER BY t.b LIMIT 10 OFFSET 1);
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR VIEW test1
 ----
-Explained Query:
+materialize.public.test1:
   Return // { arity: 4 }
     Threshold // { arity: 4 }
       Union // { arity: 4 }

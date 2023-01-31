@@ -2722,6 +2722,11 @@ impl Coordinator {
                     trace_plan(&raw_plan);
                 });
 
+                let explainee_id = match explainee {
+                    Explainee::Dataflow(id) => id,
+                    Explainee::Query => GlobalId::Explain,
+                };
+
                 // run optimization pipeline
                 let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {})?;
 
@@ -2732,8 +2737,7 @@ impl Coordinator {
                         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
                         let mut dataflow = DataflowDesc::new("explanation".to_string());
                         self.dataflow_builder(cluster).import_view_into_dataflow(
-                            // TODO: If explaining a view, pipe the actual id of the view.
-                            &GlobalId::Explain,
+                            &explainee_id,
                             &optimized_plan,
                             &mut dataflow,
                         )?;

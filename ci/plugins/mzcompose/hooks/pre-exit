@@ -24,6 +24,10 @@ buildkite-agent artifact upload services.log
 
 buildkite-agent artifact upload /var/log/dmesg
 
+# shellcheck disable=SC2024
+sudo journalctl --merge > journalctl-merge.log
+buildkite-agent artifact upload journalctl-merge.log
+
 netstat -ant > netstat-ant.log
 buildkite-agent artifact upload netstat-ant.log
 

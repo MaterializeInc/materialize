@@ -966,7 +966,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     Some(item) => item,
                     None => {
                         if self.status.is_ok() {
-                            self.status = Err(sql_err!("invalid id {}", &gid));
+                            self.status = Err(PlanError::InvalidId(gid));
                         }
                         return ResolvedObjectName::Error;
                     }

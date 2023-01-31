@@ -22,6 +22,8 @@ use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
 use timely::dataflow::operators::to_stream::Event;
+use timely::dataflow::operators::Capability;
+use timely::progress::Antichain;
 use timely::scheduling::SyncActivator;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -32,7 +34,7 @@ use tokio_postgres::Client;
 use tokio_postgres::SimpleQueryMessage;
 use tracing::{error, info, warn};
 
-use mz_expr::{MirScalarExpr, PartitionId};
+use mz_expr::MirScalarExpr;
 use mz_ore::display::DisplayExt;
 use mz_ore::task;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -201,15 +203,13 @@ pub struct PostgresSourceReader {
     // the `PostgresSourceReader`s will actually produce data.
     active_read_worker: bool,
 
-    // The non-active reader (see above `active_read_worker`) has to report back
-    // that is is not consuming from the one [`PartitionId:None`] partition.
-    // Before it can return a [`NextMessage::Finished`]. This is keeping track
-    // of that.
-    reported_unconsumed_partitions: bool,
-
     /// The lsn we last emitted data at. Used to fabricate timestamps for errors. This should
     /// ideally go away and only emit errors that we can associate with source timestamps
     last_lsn: PgLsn,
+
+    /// Capabilities used to produce messages
+    data_capability: Capability<MzOffset>,
+    upper_capability: Capability<MzOffset>,
 }
 
 /// An OffsetCommitter for postgres, that sends
@@ -260,31 +260,25 @@ impl SourceConnectionBuilder for PostgresSourceConnection {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        start_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        mut data_capability: Capability<MzOffset>,
+        mut upper_capability: Capability<MzOffset>,
+        resume_upper: Antichain<MzOffset>,
         _encoding: SourceDataEncoding,
         metrics: SourceBaseMetrics,
         connection_context: ConnectionContext,
     ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error> {
         let active_read_worker =
-            crate::source::responsible_for(&source_id, worker_id, worker_count, &PartitionId::None);
+            crate::source::responsible_for(&source_id, worker_id, worker_count, ());
 
         // TODO: figure out the best default here; currently this is optimized
         // for the speed to pass pg-cdc-resumption tests on a local machine.
         let (dataflow_tx, dataflow_rx) = tokio::sync::mpsc::channel(50_000);
 
-        // Pick out the partition we care about
-        // TODO(petrosagg): add an associated type to SourceReader so that each source can define
-        // its own gauge type
-        let start_offset = start_offsets
-            .into_iter()
-            .find_map(|(pid, offset)| {
-                if pid == PartitionId::None {
-                    offset
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_default();
+        // TODO(petrosagg): handle the empty frontier correctly. Currenty the framework code never
+        // constructs a reader when the resumption frontier is the empty antichain
+        let start_offset = resume_upper.into_option().unwrap();
+        data_capability.downgrade(&start_offset);
+        upper_capability.downgrade(&start_offset);
 
         let resume_lsn = Arc::new(AtomicU64::new(start_offset.offset));
 
@@ -339,8 +333,9 @@ impl SourceConnectionBuilder for PostgresSourceConnection {
             PostgresSourceReader {
                 receiver_stream: dataflow_rx,
                 active_read_worker,
-                reported_unconsumed_partitions: false,
                 last_lsn: start_offset.offset.into(),
+                data_capability,
+                upper_capability,
             },
             PgOffsetCommitter {
                 logger: LogCommitter {
@@ -357,19 +352,12 @@ impl SourceConnectionBuilder for PostgresSourceConnection {
 impl SourceReader for PostgresSourceReader {
     type Key = ();
     type Value = Row;
-    // Postgres can produce deletes that cause retractions
     type Time = MzOffset;
     type Diff = Diff;
 
     // TODO(guswynn): use `next` instead of using a channel
-    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Diff> {
+    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Time, Self::Diff> {
         if !self.active_read_worker {
-            if !self.reported_unconsumed_partitions {
-                self.reported_unconsumed_partitions = true;
-                return NextMessage::Ready(SourceMessageType::DropPartitionCapabilities(vec![
-                    PartitionId::None,
-                ]));
-            }
             return NextMessage::Finished;
         }
 
@@ -383,35 +371,35 @@ impl SourceReader for PostgresSourceReader {
                 end,
             })) => {
                 self.last_lsn = lsn;
+                let msg = SourceMessage {
+                    output,
+                    upstream_time_millis: None,
+                    key: (),
+                    value,
+                    headers: None,
+                };
+
+                let ts = lsn.into();
+                let cap = self.data_capability.delayed(&ts);
+                let next_ts = ts + 1;
+                self.upper_capability.downgrade(&next_ts);
                 if end {
-                    let msg = SourceMessage {
-                        output,
-                        upstream_time_millis: None,
-                        key: (),
-                        value,
-                        headers: None,
-                    };
-                    let ts = (PartitionId::None, lsn.into());
-                    NextMessage::Ready(SourceMessageType::Finalized(Ok(msg), ts, diff))
-                } else {
-                    let msg = SourceMessage {
-                        output,
-                        upstream_time_millis: None,
-                        key: (),
-                        value,
-                        headers: None,
-                    };
-                    let ts = (PartitionId::None, lsn.into());
-                    NextMessage::Ready(SourceMessageType::InProgress(Ok(msg), ts, diff))
+                    self.data_capability.downgrade(&next_ts);
                 }
+                NextMessage::Ready(SourceMessageType::Message(Ok(msg), cap, diff))
             }
             Some(Some(InternalMessage::Status(update))) => {
                 NextMessage::Ready(SourceMessageType::SourceStatus(update))
             }
             Some(Some(InternalMessage::Err(err))) => {
                 // XXX(petrosagg): we are fabricating a timestamp here!!
-                let non_definite_ts = (PartitionId::None, MzOffset::from(self.last_lsn) + 1);
-                NextMessage::Ready(SourceMessageType::Finalized(Err(err), non_definite_ts, 1))
+                let non_definite_ts = MzOffset::from(self.last_lsn) + 1;
+
+                let cap = self.data_capability.delayed(&non_definite_ts);
+                let next_ts = non_definite_ts + 1;
+                self.data_capability.downgrade(&next_ts);
+                self.upper_capability.downgrade(&next_ts);
+                NextMessage::Ready(SourceMessageType::Message(Err(err), cap, 1))
             }
             None => NextMessage::Pending,
             Some(None) => NextMessage::Finished,
@@ -422,15 +410,17 @@ impl SourceReader for PostgresSourceReader {
 }
 
 #[async_trait::async_trait]
-impl OffsetCommitter for PgOffsetCommitter {
-    async fn commit_offsets(
-        &self,
-        offsets: BTreeMap<PartitionId, MzOffset>,
-    ) -> Result<(), anyhow::Error> {
-        // We assume there is only a single partition here.
-        self.resume_lsn
-            .store(offsets[&PartitionId::None].offset, Ordering::SeqCst);
-        self.logger.commit_offsets(offsets).await?;
+impl OffsetCommitter<MzOffset> for PgOffsetCommitter {
+    async fn commit_offsets(&self, frontier: Antichain<MzOffset>) -> Result<(), anyhow::Error> {
+        if let Some(offset) = frontier.as_option() {
+            // TODO(petrosagg): this minus one is very suspicious. It is replicating the previous
+            // behaviour where the commit offset was calculated by calling
+            // OffsetAntichain::as_data_offsets, which subtracted one. Investigate if it's truly
+            // needed
+            self.resume_lsn
+                .store(offset.offset.saturating_sub(1), Ordering::SeqCst);
+        }
+        self.logger.commit_offsets(frontier).await?;
 
         Ok(())
     }

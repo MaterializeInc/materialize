@@ -112,8 +112,8 @@ pub fn construct<A: Allocate>(
             let mut buffer = Vec::new();
             flatten.build(move |_capability| {
                 move |_frontiers| {
-                    let updates = updates_out.activate();
-                    let mut updates_session = ConsolidateBuffer::new(updates, 0);
+                    let mut updates = updates_out.activate();
+                    let mut updates_session = ConsolidateBuffer::new(&mut updates, 0);
 
                     input.for_each(|cap, data| {
                         data.swap(&mut buffer);

@@ -159,7 +159,7 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 VIEW ov
 ----
-Explained Query:
+materialize.public.ov:
   TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 monotonic=false
     Get materialize.public.t
 
