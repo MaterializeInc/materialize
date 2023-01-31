@@ -17,7 +17,6 @@ use async_trait::async_trait;
 use futures::future;
 use timely::communication::initialize::WorkerGuards;
 use timely::execute::execute_from;
-use timely::scheduling::SyncActivator;
 use timely::WorkerConfig;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
@@ -33,7 +32,7 @@ use mz_service::local::LocalClient;
 
 use crate::communication::initialize_networking;
 
-type PartitionedClient<C, R> = Partitioned<LocalClient<C, R, SyncActivator>, C, R>;
+type PartitionedClient<C, R, A> = Partitioned<LocalClient<C, R, A>, C, R>;
 
 /// Configures a cluster server.
 #[derive(Debug)]
@@ -52,7 +51,7 @@ where
     /// The actual client to talk to the cluster
     inner: Option<Client>,
     /// The running timely instance
-    timely_container: TimelyContainerRef<C, R>,
+    timely_container: TimelyContainerRef<C, R, Worker::Activatable>,
     /// Handle to the persist infrastructure.
     persist_clients: Arc<PersistClientCache>,
     /// The handle to the Tokio runtime.
@@ -61,7 +60,7 @@ where
 }
 
 /// Metadata about timely workers in this process.
-pub struct TimelyContainer<C, R> {
+pub struct TimelyContainer<C, R, A> {
     /// The current timely config in use
     config: TimelyConfig,
     /// Channels over which to send endpoints for wiring up a new Client
@@ -69,7 +68,7 @@ pub struct TimelyContainer<C, R> {
         crossbeam_channel::Sender<(
             crossbeam_channel::Receiver<C>,
             mpsc::UnboundedSender<R>,
-            crossbeam_channel::Sender<SyncActivator>,
+            crossbeam_channel::Sender<A>,
         )>,
     >,
     /// Thread guards that keep worker threads alive
@@ -77,7 +76,7 @@ pub struct TimelyContainer<C, R> {
 }
 
 /// Threadsafe reference to an optional TimelyContainer
-pub type TimelyContainerRef<C, R> = Arc<tokio::sync::Mutex<Option<TimelyContainer<C, R>>>>;
+pub type TimelyContainerRef<C, R, A> = Arc<tokio::sync::Mutex<Option<TimelyContainer<C, R, A>>>>;
 
 /// Initiates a timely dataflow computation, processing cluster commands.
 pub fn serve<Worker, C, R>(
@@ -85,8 +84,8 @@ pub fn serve<Worker, C, R>(
     worker_config: Worker,
 ) -> Result<
     (
-        TimelyContainerRef<C, R>,
-        impl Fn() -> Box<ClusterClient<PartitionedClient<C, R>, Worker, C, R>>,
+        TimelyContainerRef<C, R, Worker::Activatable>,
+        impl Fn() -> Box<ClusterClient<PartitionedClient<C, R, Worker::Activatable>, Worker, C, R>>,
     ),
     Error,
 >
@@ -117,7 +116,7 @@ where
     Ok((timely_container, client_builder))
 }
 
-impl<Worker, C, R> ClusterClient<PartitionedClient<C, R>, Worker, C, R>
+impl<Worker, C, R> ClusterClient<PartitionedClient<C, R, Worker::Activatable>, Worker, C, R>
 where
     C: Send + 'static,
     R: Send + 'static,
@@ -125,7 +124,7 @@ where
     Worker: crate::types::AsRunnableWorker<C, R> + Clone + Send + Sync + 'static,
 {
     fn new(
-        timely_container: TimelyContainerRef<C, R>,
+        timely_container: TimelyContainerRef<C, R, Worker::Activatable>,
         persist_clients: Arc<PersistClientCache>,
         tokio_handle: tokio::runtime::Handle,
         worker_config: Worker,
@@ -145,7 +144,7 @@ where
         epoch: ClusterStartupEpoch,
         persist_clients: Arc<PersistClientCache>,
         tokio_executor: Handle,
-    ) -> Result<TimelyContainer<C, R>, Error> {
+    ) -> Result<TimelyContainer<C, R, Worker::Activatable>, Error> {
         info!("Building timely container with config {config:?}");
         let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
             .map(|_| crossbeam_channel::unbounded())
@@ -276,19 +275,21 @@ impl<Client: Debug, Worker: crate::types::AsRunnableWorker<C, R>, C, R> Debug
 }
 
 #[async_trait]
-impl<Worker, C, R> GenericClient<C, R> for ClusterClient<PartitionedClient<C, R>, Worker, C, R>
+impl<Worker, C, R> GenericClient<C, R>
+    for ClusterClient<PartitionedClient<C, R, Worker::Activatable>, Worker, C, R>
 where
     C: Send + Debug + crate::types::TryIntoTimelyConfig + 'static,
     R: Send + Debug + 'static,
     (C, R): Partitionable<C, R>,
     Worker: crate::types::AsRunnableWorker<C, R> + Send + Sync + Clone + 'static,
+    Worker::Activatable: Send + Sync + 'static + Debug,
 {
     async fn send(&mut self, cmd: C) -> Result<(), Error> {
         // Changing this debug statement requires changing the replica-isolation test
         tracing::debug!("ClusterClient send={:?}", &cmd);
         match cmd.try_into_timely_config() {
             Ok((config, epoch)) => self.build(config, epoch).await,
-            Err(cmd) => self.inner.as_mut().expect("intialized").send(cmd).await,
+            Err(cmd) => self.inner.as_mut().expect("initialized").send(cmd).await,
         }
     }
 

@@ -43,6 +43,7 @@ use tokio_stream::StreamMap;
 use tracing::{debug, info};
 
 use mz_build_info::BuildInfo;
+use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::soft_assert;
@@ -225,7 +226,7 @@ pub trait StorageController: Debug + Send {
     /// In the future, this API will be adjusted to support active replication
     /// of storage instances (i.e., multiple replicas attached to a given
     /// storage instance).
-    fn connect_replica(&mut self, id: StorageInstanceId, addr: String);
+    fn connect_replica(&mut self, id: StorageInstanceId, location: ClusterReplicaLocation);
 
     /// Acquire a mutable reference to the collection state, should it exist.
     fn collection_mut(
@@ -946,6 +947,7 @@ where
             self.build_info,
             Arc::clone(&self.persist),
             self.metrics.for_instance(id),
+            self.state.envd_epoch,
         );
         if self.state.initialized {
             client.send(StorageCommand::InitializationComplete);
@@ -962,13 +964,13 @@ where
         assert!(client.is_some(), "storage instance {id} does not exist");
     }
 
-    fn connect_replica(&mut self, id: StorageInstanceId, addr: String) {
+    fn connect_replica(&mut self, id: StorageInstanceId, location: ClusterReplicaLocation) {
         let client = self
             .state
             .clients
             .get_mut(&id)
             .unwrap_or_else(|| panic!("instance {id} does not exist"));
-        client.connect(addr);
+        client.connect(location);
     }
 
     #[tracing::instrument(level = "debug", skip_all)]

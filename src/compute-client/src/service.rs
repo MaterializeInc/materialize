@@ -24,7 +24,6 @@ use timely::PartialOrder;
 use tonic::{Request, Status, Streaming};
 use uuid::Uuid;
 
-use mz_cluster_client::client::TimelyConfig;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
@@ -236,18 +235,14 @@ where
         //  * Forward `CreateTimely` commands to all shards.
         //  * Forward all other commands to the first shard only.
         match command {
-            ComputeCommand::CreateTimely { config, epoch } => (0..self.parts)
-                .into_iter()
-                .map(|part| {
-                    Some(ComputeCommand::CreateTimely {
-                        config: TimelyConfig {
-                            process: part,
-                            ..config.clone()
-                        },
-                        epoch,
-                    })
-                })
-                .collect(),
+            ComputeCommand::CreateTimely { config, epoch } => {
+                let timely_cmds = config.split_command(self.parts);
+
+                timely_cmds
+                    .into_iter()
+                    .map(|config| Some(ComputeCommand::CreateTimely { config, epoch }))
+                    .collect()
+            }
             command => {
                 let mut r = vec![None; self.parts];
                 r[0] = Some(command);
