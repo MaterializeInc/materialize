@@ -85,16 +85,53 @@ where
 
 /// Maintained state for partitioned compute clients.
 ///
-/// This helper type unifies the responses of multiple partitioned
-/// workers in order to present as a single worker.
+/// This helper type unifies the responses of multiple partitioned workers in order to present as a
+/// single worker:
+///
+///   * It emits `FrontierUppers` responses reporting the minimum/meet of frontiers reported by the
+///     individual workers.
+///   * It emits `PeekResponse`s and `SubscribeResponse`s reporting the union of the responses
+///     received from the workers.
+///
+/// In the compute communication stack, this client is instantiated several times:
+///
+///   * One instance on the controller side, dispatching between cluster processes.
+///   * One instance in each cluster process, dispatching between timely worker threads.
+///
+/// Note that because compute commands, except `CreateTimely`, are only sent to the first process,
+/// the cluster-side instances of `PartitionedComputeState` are not guaranteed to see all compute
+/// commands. Or more specifically: The instance running inside process 0 sees all commands,
+/// whereas the instances running inside the other processes only see `CreateTimely`. The
+/// `PartitionedComputeState` implementation must be able to cope with this limited visiblity. It
+/// does so by performing most of its state management based on observed compute responses rather
+/// than commands.
 #[derive(Debug)]
 pub struct PartitionedComputeState<T> {
     /// Number of partitions the state machine represents.
     parts: usize,
-    /// Upper frontiers for indexes and sinks, both unioned across all partitions and from each
-    /// individual partition.
+    /// Upper frontiers for indexes and sinks, both collected as a `MutableAntichain` across all
+    /// partitions and individually listed for each partition.
+    ///
+    /// Frontier tracking for a collection is initialized when the first `FrontierUppers` response
+    /// for that collection is received. Frontier tracking is ceased when all shards have reported
+    /// advancement to the empty frontier.
+    ///
+    /// The compute protocol requires that shards always emit a `FrontierUppers` response reporting
+    /// the empty frontier when a collection is dropped. It further requires that no further
+    /// `FrontierUppers` responses are emitted for a collection after the empty frontier was
+    /// reported. These properties ensure that a) we always cease frontier tracking for collections
+    /// that have been dropped and b) frontier tracking for a collection is not re-initialized
+    /// after it was ceased.
     uppers: BTreeMap<GlobalId, (MutableAntichain<T>, Vec<Antichain<T>>)>,
     /// Pending responses for a peek; returnable once all are available.
+    ///
+    /// Tracking of responses for a peek is initialized when the first `PeekResponse` for that peek
+    /// is received. Once all shards have provided a `PeekResponse`, a unified peek response is
+    /// emitted and the peek tracking state is dropped again.
+    ///
+    /// The compute protocol requires that exactly one response is emitted for each peek. This
+    /// property ensures that a) we can eventually drop the tracking state maintained for a peek
+    /// and b) we won't re-initialize tracking for a peek we have already served.
     peek_responses: BTreeMap<Uuid, BTreeMap<usize, PeekResponse>>,
     /// Tracks in-progress `SUBSCRIBE`s, and the stashed rows we are holding
     /// back until their timestamps are complete.
@@ -143,11 +180,8 @@ where
         if let ComputeCommand::CreateTimely { .. } = command {
             self.reset();
         } else {
-            // Note that we are not guaranteed to observe other compute commands than
-            // `CreateTimely`. The `Partitioned` compute client is used by `clusterd` processes,
-            // and in a multi-process replica only the first process receives all compute commands.
-            // We should therefore not add any logic here that relies on observing commands other
-            // than `CreateTimely`.
+            // We are not guaranteed to observe other compute commands than `CreateTimely`. We must
+            // therefore not add any logic here that relies on doing so.
         }
     }
 
@@ -179,6 +213,10 @@ where
 {
     fn split_command(&mut self, command: ComputeCommand<T>) -> Vec<Option<ComputeCommand<T>>> {
         self.observe_command(&command);
+
+        // As specified by the compute protocol:
+        //  * Forward `CreateTimely` commands to all shards.
+        //  * Forward all other commands to the first shard only.
         match command {
             ComputeCommand::CreateTimely { config, epoch } => (0..self.parts)
                 .into_iter()
