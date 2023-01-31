@@ -19,7 +19,7 @@ use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter};
+use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, EvalError, Id, JoinInputMapper, LocalId,
     MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
@@ -929,7 +929,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         expr: &MirRelationExpr,
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
         debug_info: LirDebugInfo<'_>,
-    ) -> Result<(Self, AvailableCollections), ()> {
+    ) -> Result<(Self, AvailableCollections), String> {
         // We don't want to trace recursive calls, which is why the public `from_mir`
         // is annotated and delegates the work to a private (recursive) from_mir_inner.
         Plan::from_mir_inner(expr, arrangements, debug_info)
@@ -939,7 +939,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         expr: &MirRelationExpr,
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
         debug_info: LirDebugInfo<'_>,
-    ) -> Result<(Self, AvailableCollections), ()> {
+    ) -> Result<(Self, AvailableCollections), String> {
         // This function is recursive and can overflow its stack, so grow it if
         // needed. The growth here is unbounded. Our general solution for this problem
         // is to use [`ore::stack::RecursionGuard`] to additionally limit the stack
@@ -956,7 +956,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         expr: &MirRelationExpr,
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
         debug_info: LirDebugInfo<'_>,
-    ) -> Result<(Self, AvailableCollections), ()> {
+    ) -> Result<(Self, AvailableCollections), String> {
         // Extract a maximally large MapFilterProject from `expr`.
         // We will then try and push this in to the resulting expression.
         //
@@ -1236,7 +1236,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         (JoinPlan::Delta(djp), missing)
                     }
                     // Other plans are errors, and should be reported as such.
-                    _ => return Err(()),
+                    Unimplemented => return Err("unimplemented join".to_string()),
                 };
                 // The renderer will expect certain arrangements to exist; if any of those are not available, the join planning functions above should have returned them in
                 // `missing`. We thus need to plan them here so they'll exist.
@@ -1574,7 +1574,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     )]
     pub fn finalize_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
-    ) -> Result<DataflowDescription<Self>, ()> {
+    ) -> Result<DataflowDescription<Self>, String> {
         // Collect available arrangements by identifier.
         let mut arrangements = BTreeMap::new();
         // Sources might provide arranged forms of their data, in the future.

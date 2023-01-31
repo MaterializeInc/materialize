@@ -10,7 +10,7 @@
 //! Various utility methods used by the [`Coordinator`]. Ideally these are all
 //! put in more meaningfully named modules.
 
-use mz_repr::ScalarType;
+use mz_repr::{GlobalId, ScalarType};
 use mz_sql::names::Aug;
 use mz_sql::plan::StatementDesc;
 use mz_sql_parser::ast::{Raw, Statement};
@@ -155,5 +155,16 @@ impl Coordinator {
         }
 
         session.clear_transaction()
+    }
+
+    /// Handle removing metadata associated with a SUBSCRIBE query.
+    pub(crate) fn remove_subscribe(&mut self, sink_id: &GlobalId) {
+        if let Some(pending_subscribe) = self.pending_subscribes.remove(sink_id) {
+            self.metrics
+                .active_subscribes
+                .with_label_values(&[pending_subscribe.session_type])
+                .dec();
+        }
+        // Note: Drop sinks are removed at commit time.
     }
 }

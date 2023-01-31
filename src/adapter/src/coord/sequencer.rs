@@ -1584,7 +1584,7 @@ impl Coordinator {
                 )
                 .await;
 
-                self.ship_dataflow(df, cluster_id).await;
+                self.must_ship_dataflow(df, cluster_id).await;
 
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
@@ -1655,7 +1655,7 @@ impl Coordinator {
             .await
         {
             Ok(df) => {
-                self.ship_dataflow(df, cluster_id).await;
+                self.must_ship_dataflow(df, cluster_id).await;
                 self.set_index_options(id, options).expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex)
             }
@@ -2635,14 +2635,6 @@ impl Coordinator {
         };
 
         let (&sink_id, sink_desc) = dataflow.sink_exports.iter().next().unwrap();
-        self.active_conns
-            .get_mut(&session.conn_id())
-            .expect("must exist for active sessions")
-            .drop_sinks
-            .push(ComputeSinkId {
-                cluster_id,
-                global_id: sink_id,
-            });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
         let session_type = metrics::session_type_label_value(session);
@@ -2659,14 +2651,29 @@ impl Coordinator {
                 arity,
             },
         );
-        self.ship_dataflow(dataflow, cluster_id).await;
 
+        match self.ship_dataflow(dataflow, cluster_id).await {
+            Ok(_) => {}
+            Err(e) => {
+                self.remove_subscribe(&sink_id);
+                return Err(e);
+            }
+        };
         if let Some(target) = target_replica {
             self.controller
                 .compute
                 .set_subscribe_target_replica(cluster_id, sink_id, target)
                 .unwrap();
         }
+
+        self.active_conns
+            .get_mut(&session.conn_id())
+            .expect("must exist for active sessions")
+            .drop_sinks
+            .push(ComputeSinkId {
+                cluster_id,
+                global_id: sink_id,
+            });
 
         let resp = ExecuteResponse::Subscribing { rx };
         match copy_to {
