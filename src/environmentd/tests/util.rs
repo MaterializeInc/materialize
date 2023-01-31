@@ -103,7 +103,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task;
-use mz_ore::tracing::TracingHandle;
+use mz_ore::tracing::{TracingHandle, TracingConfig, StderrLogConfig, StderrLogFormat, OpenTelemetryConfig, TracingGuard};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::PersistLocation;
@@ -111,6 +111,7 @@ use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
+use tracing_subscriber::filter::Targets;
 
 pub static KAFKA_ADDRS: Lazy<String> =
     Lazy::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
@@ -128,6 +129,7 @@ pub struct Config {
     default_cluster_replica_size: String,
     builtin_cluster_replica_size: String,
     propagate_crashes: bool,
+    enable_tracing: bool,
 }
 
 impl Default for Config {
@@ -144,6 +146,7 @@ impl Default for Config {
             default_cluster_replica_size: "1".to_string(),
             builtin_cluster_replica_size: "1".to_string(),
             propagate_crashes: false,
+            enable_tracing: false,
         }
     }
 }
@@ -216,6 +219,11 @@ impl Config {
         self.propagate_crashes = propagate_crashes;
         self
     }
+
+    pub fn with_enable_tracing(mut self, enable_tracing: bool) -> Self {
+        self.enable_tracing = enable_tracing;
+        self
+    }
 }
 
 pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
@@ -277,6 +285,33 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     let postgres_factory = StashFactory::new(&metrics_registry);
     let secrets_controller = Arc::clone(&orchestrator);
     let connection_context = ConnectionContext::for_tests(orchestrator.reader());
+    let (tracing_handle, tracing_guard) = if config.enable_tracing {
+        let config = TracingConfig::<fn(&tracing::Metadata) -> sentry_tracing::EventFilter> {
+            service_name: "environmentd",
+            stderr_log: StderrLogConfig {
+                format: StderrLogFormat::Json,
+                filter: Targets::default(),
+            },
+            opentelemetry: Some(OpenTelemetryConfig {
+                endpoint: "http://fake_address_for_testing:8080".to_string(),
+                headers: http::HeaderMap::new(),
+                filter: Targets::default().with_default(tracing_core::Level::DEBUG),
+                resource: opentelemetry::sdk::resource::Resource::default(),
+                start_enabled: true,
+            }),
+            #[cfg(feature = "tokio-console")]
+            tokio_console: None,
+            sentry: None,
+            build_version: &mz_environmentd::BUILD_INFO.version,
+            build_sha: &mz_environmentd::BUILD_INFO.sha,
+            build_time: &mz_environmentd::BUILD_INFO.time,
+        };
+        let (tracing_handle, tracing_guard) = runtime.block_on(mz_ore::tracing::configure(config))?;
+        (tracing_handle, Some(tracing_guard))
+    } else {
+        (TracingHandle::disabled(), None)
+    };
+
     let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         adapter_stash_url,
         controller: ControllerConfig {
@@ -315,7 +350,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         bootstrap_system_parameters: Default::default(),
         availability_zones: Default::default(),
         connection_context,
-        tracing_handle: TracingHandle::disabled(),
+        tracing_handle,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
         segment_api_key: None,
         egress_ips: vec![],
@@ -330,6 +365,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         runtime,
         metrics_registry,
         _temp_dir: temp_dir,
+        _tracing_guard: tracing_guard,
     };
     Ok(server)
 }
@@ -339,6 +375,7 @@ pub struct Server {
     pub runtime: Arc<Runtime>,
     _temp_dir: Option<TempDir>,
     pub metrics_registry: MetricsRegistry,
+    pub _tracing_guard: Option<TracingGuard>,
 }
 
 impl Server {
