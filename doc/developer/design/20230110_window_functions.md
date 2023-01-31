@@ -182,6 +182,10 @@ We could do the idiom recognition in the rendering instead of the MIR-to-LIR low
 - We want EXPLAIN PHYSICAL PLAN to show how we'll execute a window function.
 - We need to know the type of the ORDER BY columns, which we don't know in LIR. (Although we could add extra type info to window function calls.)
 
+### Use WITH MUTUALLY RECURSIVE
+
+We are [in the process of adding support for recursive SQL queries](https://github.com/MaterializeInc/materialize/issues/17012). We could implement prefix sum using that instead of custom rendering code. In this case, all the window function handling could happen in the HIR-to-MIR lowering, by translating to a MIR expression that has `LetRec`.
+
 ### Representing window functions in each of the IRs
 
 There are several options for how to represent window functions in HIR, MIR, and LIR. For each of the IRs, I can see 3 options:
