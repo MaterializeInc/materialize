@@ -304,7 +304,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // Start compute server.
     let (_compute_server, compute_client) =
-        mz_compute::server::serve(mz_compute::server::Config {
+        mz_compute::server::serve(mz_cluster::server::ClusterConfig {
             metrics_registry,
             persist_clients,
         })?;

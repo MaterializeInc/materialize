@@ -16,6 +16,7 @@ mz-alloc = { path = "../alloc" }
 mz-build-info = { path = "../build-info" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-compute = { path = "../compute" }
+mz-cluster = { path = "../cluster" }
 mz-compute-client = { path = "../compute-client" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }

@@ -79,3 +79,6 @@
 
 #![warn(missing_docs)]
 
+pub mod communication;
+pub mod server;
+pub mod types;
