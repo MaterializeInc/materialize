@@ -2275,3 +2275,37 @@ fn test_isolation_level_notice() {
         })
         .unwrap();
 }
+
+#[test]
+fn test_emit_tracing_notice() {
+    let config = util::Config::default().with_enable_tracing(true);
+    let server = util::start_server(config).unwrap();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    client
+        .execute("SET emit_trace_id_notice = true", &[])
+        .unwrap();
+    let _row = client.query_one("SELECT 1;", &[]).unwrap();
+
+    let tracing_re = Regex::new("trace id: (.*)").unwrap();
+    match rx.try_next() {
+        Ok(Some(msg)) => {
+            // assert the NOTICE we recieved contained a trace_id
+            let captures = tracing_re.captures(msg.message()).expect("no matches?");
+            let trace_id = captures.get(1).expect("trace_id not captured?").as_str();
+
+            assert!(trace_id.is_ascii());
+            assert_eq!(trace_id.len(), 32);
+        }
+        x => panic!("failed to read message from channel, {:?}", x),
+    }
+}
