@@ -151,9 +151,13 @@ mod read_policy;
 mod sequencer;
 mod sql;
 
-// TODO: We can have only two consts here, instead of three,
-// once there exists a `const` way to convert between a `Timestamp`
-// and a `Duration`
+// TODO: We can have only two consts here, instead of three, once there exists a `const` way to
+// convert between a `Timestamp` and a `Duration`, and unwrap a result in const contexts. Currently 
+// unstable compiler features that would allow this are:
+// * `const_option`: https://github.com/rust-lang/rust/issues/67441
+// * `const_result`: https://github.com/rust-lang/rust/issues/82814
+// * `const_num_from_num`: https://github.com/rust-lang/rust/issues/87852
+// * `const_precise_live_drops`: https://github.com/rust-lang/rust/issues/73255
 
 /// `DEFAULT_LOGICAL_COMPACTION_WINDOW`, in milliseconds.
 /// The default is set to a second to track the default timestamp frequency for sources.
