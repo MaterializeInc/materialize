@@ -21,11 +21,11 @@ use mz_repr::{Datum, GlobalId, Row};
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 
-/// A description of a pending subscribe from coord's perspective
-pub struct PendingSubscribe {
+/// A description of an active subscribe from coord's perspective
+pub struct ActiveSubscribe {
     /// The type of the session that created the subscribe.
     pub session_type: &'static str,
-    /// The connection id of the session that created the subsribe.
+    /// The connection id of the session that created the subscribe.
     pub conn_id: ConnectionId,
     /// Channel to send responses to the client.
     ///
@@ -37,11 +37,11 @@ pub struct PendingSubscribe {
     pub arity: usize,
     /// The cluster that the subscribe is running on.
     pub cluster_id: ClusterId,
-    /// All `GlobalId`s that the subscribe rely on.
+    /// All `GlobalId`s that the subscribe depend on.
     pub depends_on: BTreeSet<GlobalId>,
 }
 
-impl PendingSubscribe {
+impl ActiveSubscribe {
     /// Process a subscribe response
     ///
     /// Returns `true` if the sink should be removed.

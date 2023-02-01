@@ -206,19 +206,19 @@ impl Coordinator {
             .chain(indexes_to_drop.iter().map(|(_, id)| id))
             .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
             .collect();
-        for (sink_id, pending_subscribe) in &self.pending_subscribes {
-            if let Some(id) = pending_subscribe
+        for (sink_id, active_subscribe) in &self.active_subscribes {
+            if let Some(id) = active_subscribe
                 .depends_on
                 .iter()
                 .find(|id| removed_relations.contains(id))
             {
-                let conn_id = pending_subscribe.conn_id;
+                let conn_id = active_subscribe.conn_id;
                 let entry = self.catalog.get_entry(id);
                 let name = self.catalog.resolve_full_name(entry.name(), Some(conn_id));
                 subscribe_sinks_to_drop.push((
                     (conn_id, name.to_string()),
                     ComputeSinkId {
-                        cluster_id: pending_subscribe.cluster_id,
+                        cluster_id: active_subscribe.cluster_id,
                         global_id: *sink_id,
                     },
                 ));
