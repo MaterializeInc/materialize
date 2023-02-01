@@ -152,7 +152,7 @@ mod sequencer;
 mod sql;
 
 // TODO: We can have only two consts here, instead of three, once there exists a `const` way to
-// convert between a `Timestamp` and a `Duration`, and unwrap a result in const contexts. Currently 
+// convert between a `Timestamp` and a `Duration`, and unwrap a result in const contexts. Currently
 // unstable compiler features that would allow this are:
 // * `const_option`: https://github.com/rust-lang/rust/issues/67441
 // * `const_result`: https://github.com/rust-lang/rust/issues/82814
