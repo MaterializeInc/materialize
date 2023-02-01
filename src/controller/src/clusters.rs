@@ -131,9 +131,12 @@ pub enum ClusterRole {
 /// The location of an unmanaged replica.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UnmanagedReplicaLocation {
-    /// The network address of the storagectl endpoints for the first process in
+    /// The network addresses of the storagectl endpoints for each process in
     /// the replica.
-    pub storagectl_addr: String,
+    pub storagectl_addrs: Vec<String>,
+    /// The network addresses of the storage (Timely) endpoints for
+    /// each process in the replica.
+    pub storage_addrs: Vec<String>,
     /// The network addresses of the computectl endpoints for each process in
     /// the replica.
     pub computectl_addrs: Vec<String>,
@@ -222,16 +225,24 @@ where
                 match config.location {
                     // This branch doesn't do any async work, so there is a slight performance
                     // opportunity to serially process it, but it makes the code worse to read.
-                    ReplicaLocation::Unmanaged(u) => {
+                    ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
+                        storagectl_addrs,
+                        storage_addrs,
+                        computectl_addrs,
+                        compute_addrs,
+                        workers,
+                    }) => {
                         let compute_location = ClusterReplicaLocation {
-                            ctl_addrs: u.computectl_addrs,
-                            dataflow_addrs: u.compute_addrs,
-                            workers: u.workers,
+                            ctl_addrs: computectl_addrs,
+                            dataflow_addrs: compute_addrs,
+                            workers,
                         };
-
-                        // This is not correct, and will be fixed in a later
-                        // commit.
-                        let storage_location = compute_location.clone();
+                        let storage_location = ClusterReplicaLocation {
+                            ctl_addrs: storagectl_addrs,
+                            dataflow_addrs: storage_addrs,
+                            // Storage and compute on the same replica have linked sizes.
+                            workers,
+                        };
 
                         Ok::<_, anyhow::Error>((
                             cluster_id,
@@ -425,6 +436,13 @@ where
                             name: "storagectl".into(),
                             port_hint: 2100,
                         },
+                        // To simplify the changes to tests, the port
+                        // chosen here is _after_ the compute ones.
+                        // TODO(petrosagg): fix the numerical ordering here
+                        ServicePort {
+                            name: "storage".into(),
+                            port_hint: 2103,
+                        },
                         ServicePort {
                             name: "computectl".into(),
                             port_hint: 2101,
@@ -432,10 +450,6 @@ where
                         ServicePort {
                             name: "compute".into(),
                             port_hint: 2102,
-                        },
-                        ServicePort {
-                            name: "storage".into(),
-                            port_hint: 2103,
                         },
                         ServicePort {
                             name: "internal-http".into(),

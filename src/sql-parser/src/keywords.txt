@@ -25,7 +25,6 @@
 
 Access
 Acks
-Address
 Addresses
 All
 Alter
@@ -323,6 +322,7 @@ Ssl
 Start
 Stdin
 Stdout
+Storage
 Storagectl
 Strategy
 String

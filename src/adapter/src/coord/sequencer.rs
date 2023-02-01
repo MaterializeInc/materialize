@@ -840,14 +840,16 @@ impl Coordinator {
             // the lowest number of configured replicas for this cluster.
             let (compute, location) = match replica_config {
                 mz_sql::plan::ReplicaConfig::Unmanaged {
-                    storagectl_addr,
+                    storagectl_addrs,
+                    storage_addrs,
                     computectl_addrs,
                     compute_addrs,
                     workers,
                     compute,
                 } => {
                     let location = SerializedReplicaLocation::Unmanaged {
-                        storagectl_addr,
+                        storagectl_addrs,
+                        storage_addrs,
                         computectl_addrs,
                         compute_addrs,
                         workers,
@@ -965,14 +967,16 @@ impl Coordinator {
         // Choose default AZ if necessary
         let (compute, location) = match config {
             mz_sql::plan::ReplicaConfig::Unmanaged {
-                storagectl_addr,
+                storagectl_addrs,
+                storage_addrs,
                 computectl_addrs,
                 compute_addrs,
                 workers,
                 compute,
             } => {
                 let location = SerializedReplicaLocation::Unmanaged {
-                    storagectl_addr,
+                    storagectl_addrs,
+                    storage_addrs,
                     computectl_addrs,
                     compute_addrs,
                     workers,
