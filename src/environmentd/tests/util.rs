@@ -302,9 +302,9 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             #[cfg(feature = "tokio-console")]
             tokio_console: None,
             sentry: None,
-            build_version: &mz_environmentd::BUILD_INFO.version,
-            build_sha: &mz_environmentd::BUILD_INFO.sha,
-            build_time: &mz_environmentd::BUILD_INFO.time,
+            build_version: mz_environmentd::BUILD_INFO.version,
+            build_sha: mz_environmentd::BUILD_INFO.sha,
+            build_time: mz_environmentd::BUILD_INFO.time,
         };
         let (tracing_handle, tracing_guard) = runtime.block_on(mz_ore::tracing::configure(config))?;
         (tracing_handle, Some(tracing_guard))
