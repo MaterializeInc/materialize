@@ -11,13 +11,10 @@ use semver::Version;
 use std::collections::BTreeMap;
 
 use mz_ore::collections::CollectionExt;
-use mz_sql::ast::{
-    display::AstDisplay, CreateSourceStatement, CreateSourceSubsource, CreateSubsourceOptionName,
-    CreateSubsourceStatement, DeferredObjectName, Raw, RawObjectName, ReferencedSubsources,
-    Statement, UnresolvedObjectName,
-};
+use mz_sql::ast::display::AstDisplay;
+use mz_sql::ast::{Raw, Statement};
 
-use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem, SYSTEM_CONN_ID};
+use crate::catalog::{Catalog, SerializedCatalogItem};
 
 use super::storage::Transaction;
 
@@ -62,12 +59,9 @@ pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> 
     // it. You probably should be adding a basic AST migration above, unless
     // you are really certain you want one of these crazy migrations.
     let cat = Catalog::load_catalog_items(&mut tx, catalog)?;
-    let conn_cat = cat.for_system_session();
+    let _conn_cat = cat.for_system_session();
 
-    rewrite_items(&mut tx, |item| {
-        deferred_object_name_rewrite(&conn_cat, item)?;
-        Ok(())
-    })?;
+    rewrite_items(&mut tx, |_item| Ok(()))?;
     tx.commit().await.map_err(|e| e.into())
 }
 
@@ -96,7 +90,12 @@ pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> 
 // adding "progress" subsources.
 // TODO: delete in version v0.45 (released in v0.43 + 1 additional release)
 fn subsource_type_option_rewrite(stmt: &mut mz_sql::ast::Statement<Raw>) {
-    if let Statement::CreateSubsource(CreateSubsourceStatement { with_options, .. }) = stmt {
+    use mz_sql::ast::CreateSubsourceOptionName;
+
+    if let Statement::CreateSubsource(mz_sql::ast::CreateSubsourceStatement {
+        with_options, ..
+    }) = stmt
+    {
         if !with_options.iter().any(|option| {
             matches!(
                 option.name,
@@ -116,44 +115,3 @@ fn subsource_type_option_rewrite(stmt: &mut mz_sql::ast::Statement<Raw>) {
 // ****************************************************************************
 // Semantic migrations -- Weird migrations that require access to the catalog
 // ****************************************************************************
-
-// Rewrites all subsource references to be qualified by their IDs, which is the
-// mechanism by which `DeferredObjectName` differentiates between user input and
-// created objects.
-fn deferred_object_name_rewrite(
-    cat: &ConnCatalog,
-    stmt: &mut mz_sql::ast::Statement<Raw>,
-) -> Result<(), anyhow::Error> {
-    if let Statement::CreateSource(CreateSourceStatement {
-        referenced_subsources: Some(ReferencedSubsources::Subset(create_source_subsources)),
-        ..
-    }) = stmt
-    {
-        for CreateSourceSubsource { subsource, .. } in create_source_subsources {
-            let object_name = subsource
-                .as_mut()
-                .expect("subsources must be named during purification");
-            let name: UnresolvedObjectName = match object_name {
-                DeferredObjectName::Deferred(name) => name.clone(),
-                DeferredObjectName::Named(..) => continue,
-            };
-
-            let partial_subsource_name =
-                mz_sql::normalize::unresolved_object_name(name.clone()).expect("resolvable");
-            let qualified_subsource_name = cat
-                .resolve_item_name(&partial_subsource_name)
-                .expect("known to exist");
-            let entry = cat
-                .state
-                .try_get_entry_in_schema(qualified_subsource_name, SYSTEM_CONN_ID)
-                .expect("known to exist");
-            let id = entry.id();
-
-            *subsource = Some(DeferredObjectName::Named(RawObjectName::Id(
-                id.to_string(),
-                name,
-            )));
-        }
-    }
-    Ok(())
-}

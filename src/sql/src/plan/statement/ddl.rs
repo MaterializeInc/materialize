@@ -847,25 +847,8 @@ pub fn plan_create_source(
                 let name = subsource.reference.clone();
 
                 let target = match &subsource.subsource {
-                    Some(subsource) => match subsource {
-                        DeferredObjectName::Named(target) => target.clone(),
-                        DeferredObjectName::Deferred(name) => {
-                            // TODO: remove this after the next release, we need
-                            // it only so we can load the catalog to do the
-                            // proper rewrite.
-                            let partial_subsource_name =
-                                normalize::unresolved_object_name(name.clone())?;
-                            let item = scx.catalog.resolve_item(&partial_subsource_name).unwrap();
-
-                            ResolvedObjectName::Object {
-                                id: item.id(),
-                                qualifiers: item.name().qualifiers.clone(),
-                                full_name: scx.catalog.resolve_full_name(item.name()),
-                                print_id: true,
-                            }
-                        }
-                    },
-                    None => {
+                    Some(DeferredObjectName::Named(target)) => target.clone(),
+                    _ => {
                         sql_bail!("[internal error] subsources must be named during purification")
                     }
                 };
