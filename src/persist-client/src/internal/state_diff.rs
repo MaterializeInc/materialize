@@ -105,7 +105,7 @@ impl<T: Timestamp + Codec64> StateDiff<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
-    pub fn from_diff<K, V, D>(from: &State<K, V, T, D>, to: &State<K, V, T, D>) -> Self {
+    pub fn from_diff(from: &State<T>, to: &State<T>) -> Self {
         // Deconstruct from and to so we get a compile failure if new
         // fields are added.
         let State {
@@ -123,7 +123,6 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                     writers: from_writers,
                     trace: from_trace,
                 },
-            _phantom: _,
         } = from;
         let State {
             applier_version: to_applier_version,
@@ -140,7 +139,6 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                     writers: to_writers,
                     trace: to_trace,
                 },
-            _phantom: _,
         } = to;
         assert_eq!(from_shard_id, to_shard_id);
 
@@ -175,9 +173,9 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     #[allow(dead_code)]
     pub fn validate_roundtrip<K, V, D>(
         metrics: &Metrics,
-        from_state: &State<K, V, T, D>,
+        from_state: &crate::internal::state::TypedState<K, V, T, D>,
         diff: &Self,
-        to_state: &State<K, V, T, D>,
+        to_state: &crate::internal::state::TypedState<K, V, T, D>,
     ) -> Result<(), String>
     where
         K: mz_persist_types::Codec + std::fmt::Debug,
@@ -218,7 +216,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     }
 }
 
-impl<K, V, T: Timestamp + Lattice + Codec64, D> State<K, V, T, D> {
+impl<T: Timestamp + Lattice + Codec64> State<T> {
     pub fn apply_encoded_diffs<'a, I: IntoIterator<Item = &'a VersionedData>>(
         &mut self,
         cfg: &PersistConfig,
@@ -243,7 +241,7 @@ impl<K, V, T: Timestamp + Lattice + Codec64, D> State<K, V, T, D> {
     }
 }
 
-impl<K, V, T: Timestamp + Lattice, D> State<K, V, T, D> {
+impl<T: Timestamp + Lattice> State<T> {
     pub fn apply_diffs<I: IntoIterator<Item = StateDiff<T>>>(
         &mut self,
         metrics: &Metrics,
@@ -977,6 +975,7 @@ mod tests {
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
 
+    use crate::internal::state::TypedState;
     use crate::ShardId;
 
     use super::*;
@@ -1049,7 +1048,7 @@ mod tests {
         ];
 
         let cfg = PersistConfig::new_for_tests();
-        let state = State::<(), (), u64, i64>::new(
+        let state = TypedState::<(), (), u64, i64>::new(
             cfg.build_version.clone(),
             ShardId([0u8; 16]),
             cfg.hostname.clone(),
