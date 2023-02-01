@@ -397,10 +397,18 @@ where
         };
         tokio::pin!(offset_commit_loop);
 
+        let mut batch = Vec::new();
         loop {
             tokio::select! {
                 _ = source_stream.as_mut().peek() => {
                     let timer = Instant::now();
+
+                    // We stash a capability here to try and coalesce multiple messages emitted by
+                    // the source at the same timestamp. Ideally this should be performed by the
+                    // source implementation itself, presenting directly timely friendly batches,
+                    // but we're not there yet. The `SourceReader::get_next_message` API forces
+                    // processing at a message-at-a-time granularity so we need to do batching here
+                    let mut emit_cap = None;
 
                     // We want to efficiently batch up messages that are ready. To do that we will
                     // activate the output handle here and then drain the currently available
@@ -436,9 +444,18 @@ where
                                     source_statistics.inc_bytes_received_by(key_len + value_len);
                                 }
 
-                                output
-                                    .session(&cap)
-                                    .give((message, cap.time().clone(), diff));
+                                let time = cap.time().clone();
+                                match emit_cap.as_mut() {
+                                    // If cap is not beyond emit_cap we can't re-use emit_cap so
+                                    // flush the current batch
+                                    Some(emit_cap) => if !PartialOrder::less_equal(emit_cap, &cap) {
+                                        output.session(&emit_cap).give_container(&mut batch);
+                                        batch.clear();
+                                        *emit_cap = cap;
+                                    },
+                                    None => emit_cap = Some(cap),
+                                };
+                                batch.push((message, time, diff));
                             }
                             Some(Some(SourceMessageType::SourceStatus(new_status))) => {
                                 prev_status = new_status.clone();
@@ -446,11 +463,20 @@ where
                             }
                             Some(None) => {
                                 trace!("timely-{worker_id} source({id}): source ended, dropping capabilities");
+                                if let Some(emit_cap) = emit_cap.take() {
+                                    output.session(&emit_cap).give_container(&mut batch);
+                                    batch.clear();
+                                }
                                 return;
                             }
                             None => break,
                         }
                     }
+                    if let Some(emit_cap) = emit_cap.take() {
+                        output.session(&emit_cap).give_container(&mut batch);
+                        batch.clear();
+                    }
+                    assert!(batch.is_empty());
                     // Now we drop the activated output handle to force timely to emit any pending
                     // batch. It's crucial that this happens before our attempt to yield otherwise
                     // the buffer would get stuck in this operator.
@@ -969,10 +995,11 @@ where
                 _ = work_to_do.notified(), if timestamper.initialized() => {
                     // Drain all messages that can be reclocked from all the batches
                     let total_buffered: usize = untimestamped_batches.iter().map(|b| b.len()).sum();
+                    let reclock_source_upper = timestamper.source_upper();
                     let msgs = untimestamped_batches
                         .iter_mut()
                         .flat_map(|batch| batch.drain_filter_swapping(|(_, ts, _)| {
-                            !timestamper.source_upper().less_equal(ts)
+                            !reclock_source_upper.less_equal(ts)
                         }))
                         .map(|(data, time, diff)| ((data, time.clone(), diff), time));
 
@@ -1030,7 +1057,7 @@ where
                     // We must downgrade our capability to the meet of the timestamper frontier and
                     // the source frontier because it's only when both advance past some time `t`
                     // that we are guaranteed that we'll not need to produce more data at time `t`.
-                    let mut ready_upper = timestamper.source_upper();
+                    let mut ready_upper = reclock_source_upper;
                     ready_upper.extend(source_upper.frontier().iter().cloned());
 
                     let into_ready_upper = timestamper
