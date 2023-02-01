@@ -116,7 +116,7 @@ use mz_storage_client::types::connections::ConnectionContext;
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 use crate::server::ListenerHandle;
 
-mod http;
+pub mod http;
 mod server;
 mod telemetry;
 
