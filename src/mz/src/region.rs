@@ -310,7 +310,7 @@ pub(crate) fn print_environment_status(
     ))
     .with_context(|| "Parsing URL.")?;
 
-    url.set_username(&valid_profile.profile.get_email())
+    url.set_username(valid_profile.profile.get_email())
         .unwrap();
     url.set_path("materialize");
     url.set_query(Some("sslmode=require"));
