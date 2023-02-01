@@ -20,14 +20,14 @@ installing Apple's developer tools, which includes a C compiler. Then it's a
 cinch to install CMake:
 
 ```
-brew install cmake
+brew install cmake postgresql
 ```
 
 On Debian-based Linux variants, it's even easier:
 
 ```shell
 sudo apt update
-sudo apt install build-essential cmake
+sudo apt install build-essential cmake postgresql-client
 ```
 
 On other platforms, you'll have to figure out how to get these tools yourself.
