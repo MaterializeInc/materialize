@@ -120,8 +120,6 @@ where
     ///
     /// This method is most efficient when the to be reclocked iterator presents data in contiguous
     /// runs with the same `FromTime`.
-    // This is dead code until we get rid of the compatibility layer
-    #[allow(dead_code)]
     pub fn reclock<'a, M: 'a>(
         &'a self,
         batch: impl IntoIterator<Item = (M, FromTime)> + 'a,
@@ -143,7 +141,7 @@ where
     }
 
     /// Reclocks a single `FromTime` timestamp into the `IntoTime` time domain.
-    fn reclock_time(
+    pub fn reclock_time(
         &self,
         src_ts: &FromTime,
     ) -> Result<Antichain<IntoTime>, ReclockError<FromTime>> {
@@ -267,7 +265,7 @@ where
     }
 
     /// Reclocks a single `FromTime` timestamp into a totally ordered `IntoTime` time domain.
-    fn reclock_time_total(&self, src_ts: &FromTime) -> Result<IntoTime, ReclockError<FromTime>>
+    pub fn reclock_time_total(&self, src_ts: &FromTime) -> Result<IntoTime, ReclockError<FromTime>>
     where
         IntoTime: TotalOrder,
     {
