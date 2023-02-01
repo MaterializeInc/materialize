@@ -103,7 +103,10 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task;
-use mz_ore::tracing::{TracingHandle, TracingConfig, StderrLogConfig, StderrLogFormat, OpenTelemetryConfig, TracingGuard};
+use mz_ore::tracing::{
+    OpenTelemetryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingGuard,
+    TracingHandle,
+};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::PersistLocation;
@@ -306,7 +309,8 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             build_sha: mz_environmentd::BUILD_INFO.sha,
             build_time: mz_environmentd::BUILD_INFO.time,
         };
-        let (tracing_handle, tracing_guard) = runtime.block_on(mz_ore::tracing::configure(config))?;
+        let (tracing_handle, tracing_guard) =
+            runtime.block_on(mz_ore::tracing::configure(config))?;
         (tracing_handle, Some(tracing_guard))
     } else {
         (TracingHandle::disabled(), None)
