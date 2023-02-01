@@ -50,6 +50,7 @@ pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> 
     // First, do basic AST -> AST transformations.
     rewrite_items(&mut tx, |stmt| {
         subsource_type_option_rewrite(stmt);
+        csr_url_path_rewrite(stmt);
         Ok(())
     })?;
 
@@ -108,6 +109,32 @@ fn subsource_type_option_rewrite(stmt: &mut mz_sql::ast::Statement<Raw>) {
                     mz_sql::ast::Value::Boolean(true),
                 )),
             });
+        }
+    }
+}
+
+// Remove any present CSR URL paths because we now error on them. We clear them
+// during planning, so this doesn't affect planning.
+// TODO: Released in version 0.43; delete at any later release.
+fn csr_url_path_rewrite(stmt: &mut mz_sql::ast::Statement<Raw>) {
+    use mz_sql::ast::{CreateConnection, CsrConnectionOptionName, Value, WithOptionValue};
+
+    if let Statement::CreateConnection(mz_sql::ast::CreateConnectionStatement {
+        connection: CreateConnection::Csr { with_options },
+        ..
+    }) = stmt
+    {
+        for opt in with_options.iter_mut() {
+            if opt.name != CsrConnectionOptionName::Url {
+                continue;
+            }
+            let Some(WithOptionValue::Value(Value::String(value))) = opt.value.as_mut() else {
+                continue;
+            };
+            if let Ok(mut url) = reqwest::Url::parse(value) {
+                url.set_path("");
+                *value = url.to_string();
+            }
         }
     }
 }
