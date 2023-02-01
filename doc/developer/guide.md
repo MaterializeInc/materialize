@@ -20,14 +20,14 @@ installing Apple's developer tools, which includes a C compiler. Then it's a
 cinch to install CMake:
 
 ```
-brew install cmake
+brew install cmake postgresql
 ```
 
 On Debian-based Linux variants, it's even easier:
 
 ```shell
 sudo apt update
-sudo apt install build-essential cmake
+sudo apt install build-essential cmake postgresql-client
 ```
 
 On other platforms, you'll have to figure out how to get these tools yourself.
@@ -100,7 +100,7 @@ documentation. Then please update this guide with the new instructions!
 You will need JDK 8 or 11. The easiest way to install this is via Homebrew:
 
 ```shell
-brew install --cask homebrew/cask-versions/temurin8
+brew install --cask homebrew/cask-versions/temurin11
 ```
 
 Then, download and extract the Confluent Platform tarball:
@@ -120,7 +120,7 @@ If you have multiple JDKs installed and your current JAVA_HOME points to an inco
 you can explicitly run confluent with JDK 8 or 11:
 
 ```
-JAVA_HOME=$(/usr/libexec/java_home -v 1.8) confluent local services start
+JAVA_HOME=$(/usr/libexec/java_home -v 1.11) confluent local services start
 ```
 
 #### Linux
@@ -132,7 +132,7 @@ Confluent Platform:
 curl http://packages.confluent.io/deb/6.0/archive.key | sudo apt-key add -
 sudo add-apt-repository "deb [arch=amd64] https://packages.confluent.io/deb/6.0 stable main"
 sudo apt update
-sudo apt install openjdk-8-jre-headless confluent-community-2.13
+sudo apt install openjdk-11-jre-headless confluent-community-2.13
 echo export CONFLUENT_HOME=/ >> ~/.bashrc
 source ~/.bashrc
 confluent local services start
