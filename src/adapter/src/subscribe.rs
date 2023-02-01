@@ -9,26 +9,36 @@
 
 //! Implementations around supporting the SUBSCRIBE protocol with the dataflow layer
 
+use std::collections::BTreeSet;
+
 use tokio::sync::mpsc;
 
 use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
+use mz_controller::clusters::ClusterId;
 use mz_repr::adt::numeric;
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, GlobalId, Row};
 
+use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
 
 /// A description of a pending subscribe from coord's perspective
 pub struct PendingSubscribe {
     /// The type of the session that created the subscribe.
     pub session_type: &'static str,
-    /// Channel to send responses to the client
+    /// The connection id of the session that created the subsribe.
+    pub conn_id: ConnectionId,
+    /// Channel to send responses to the client.
     ///
     /// The responses have the form `PeekResponseUnary` but should perhaps become `TailResponse`.
     pub channel: mpsc::UnboundedSender<PeekResponseUnary>,
-    /// Whether progress information should be emitted
+    /// Whether progress information should be emitted.
     pub emit_progress: bool,
-    /// Number of columns in the output
+    /// Number of columns in the output.
     pub arity: usize,
+    /// The cluster that the subscribe is running on.
+    pub cluster_id: ClusterId,
+    /// All `GlobalId`s that the subscribe rely on.
+    pub depends_on: BTreeSet<GlobalId>,
 }
 
 impl PendingSubscribe {

@@ -10,7 +10,7 @@
 //! This module encapsulates all of the [`Coordinator`]'s logic for creating, dropping,
 //! and altering objects.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use itertools::Itertools;
@@ -42,7 +42,7 @@ use crate::session::vars::SystemVars;
 use crate::session::Session;
 use crate::telemetry::SegmentClientExt;
 use crate::util::ComputeSinkId;
-use crate::{catalog, AdapterError};
+use crate::{catalog, AdapterError, AdapterNotice};
 
 /// State provided to a catalog transaction closure.
 pub struct CatalogTxn<'a, T> {
@@ -87,6 +87,7 @@ impl Coordinator {
         let mut log_sources_to_drop = vec![];
         let mut tables_to_drop = vec![];
         let mut storage_sinks_to_drop = vec![];
+        let mut subscribe_sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
@@ -197,6 +198,33 @@ impl Coordinator {
             }
         }
 
+        let removed_relations: BTreeSet<_> = sources_to_drop
+            .iter()
+            .chain(log_sources_to_drop.iter().map(|(_, id)| id))
+            .chain(tables_to_drop.iter())
+            .chain(storage_sinks_to_drop.iter())
+            .chain(indexes_to_drop.iter().map(|(_, id)| id))
+            .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
+            .collect();
+        for (sink_id, pending_subscribe) in &self.pending_subscribes {
+            if let Some(id) = pending_subscribe
+                .depends_on
+                .iter()
+                .find(|id| removed_relations.contains(id))
+            {
+                let conn_id = pending_subscribe.conn_id;
+                let entry = self.catalog.get_entry(id);
+                let name = self.catalog.resolve_full_name(entry.name(), Some(conn_id));
+                subscribe_sinks_to_drop.push((
+                    (conn_id, name.to_string()),
+                    ComputeSinkId {
+                        cluster_id: pending_subscribe.cluster_id,
+                        global_id: *sink_id,
+                    },
+                ));
+            }
+        }
+
         timelines_to_drop = self.remove_storage_ids_from_timeline(
             sources_to_drop
                 .iter()
@@ -265,6 +293,22 @@ impl Coordinator {
             }
             if !storage_sinks_to_drop.is_empty() {
                 self.drop_storage_sinks(storage_sinks_to_drop);
+            }
+            if !subscribe_sinks_to_drop.is_empty() {
+                let (dropped_metadata, subscribe_sinks_to_drop): (Vec<_>, BTreeSet<_>) =
+                    subscribe_sinks_to_drop.into_iter().unzip();
+                for (conn_id, dropped_name) in dropped_metadata {
+                    if let Some(conn_meta) = self.active_conns.get_mut(&conn_id) {
+                        conn_meta
+                            .drop_sinks
+                            .retain(|sink| !subscribe_sinks_to_drop.contains(sink));
+                        // Send notice on a best effort basis.
+                        let _ = conn_meta
+                            .notice_tx
+                            .send(AdapterNotice::DroppedSubscribe { dropped_name });
+                    }
+                }
+                self.drop_compute_sinks(subscribe_sinks_to_drop);
             }
             if !indexes_to_drop.is_empty() {
                 self.drop_indexes(indexes_to_drop);
@@ -345,7 +389,7 @@ impl Coordinator {
         self.controller.storage.drop_sources(sources).unwrap();
     }
 
-    pub(crate) fn drop_compute_sinks(&mut self, sinks: Vec<ComputeSinkId>) {
+    pub(crate) fn drop_compute_sinks(&mut self, sinks: impl IntoIterator<Item = ComputeSinkId>) {
         let by_cluster = sinks
             .into_iter()
             .map(

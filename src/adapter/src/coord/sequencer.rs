@@ -2646,9 +2646,12 @@ impl Coordinator {
             sink_id,
             PendingSubscribe {
                 session_type,
+                conn_id: session.conn_id(),
                 channel: tx,
                 emit_progress,
                 arity,
+                cluster_id,
+                depends_on: depends_on.into_iter().collect(),
             },
         );
 

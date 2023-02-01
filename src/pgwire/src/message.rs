@@ -417,6 +417,7 @@ impl ErrorResponse {
             AdapterNotice::EqualSubscribeBounds { .. } => SqlState::WARNING,
             AdapterNotice::QueryTrace { .. } => SqlState::WARNING,
             AdapterNotice::UnimplementedIsolationLevel { .. } => SqlState::WARNING,
+            AdapterNotice::DroppedSubscribe { .. } => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -572,6 +573,7 @@ impl Severity {
             AdapterNotice::EqualSubscribeBounds { .. } => Severity::Notice,
             AdapterNotice::QueryTrace { .. } => Severity::Notice,
             AdapterNotice::UnimplementedIsolationLevel { .. } => Severity::Notice,
+            AdapterNotice::DroppedSubscribe { .. } => Severity::Notice,
         }
     }
 }
