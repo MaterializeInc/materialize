@@ -77,6 +77,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -87,8 +88,6 @@
 //! small to warrant their own crate.
 
 #![warn(missing_docs, missing_debug_implementations)]
-// Disallow usage of `Hash*` types from std.
-#![warn(clippy::disallowed_types)]
 #![cfg_attr(nightly_doc_features, feature(doc_cfg))]
 
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "test")))]
