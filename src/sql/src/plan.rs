@@ -280,7 +280,8 @@ pub struct ComputeReplicaConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ReplicaConfig {
     Unmanaged {
-        storagectl_addr: String,
+        storagectl_addrs: Vec<String>,
+        storage_addrs: Vec<String>,
         computectl_addrs: Vec<String>,
         compute_addrs: Vec<String>,
         workers: usize,

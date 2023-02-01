@@ -19,7 +19,8 @@ one
 
 > CREATE CLUSTER clusterd1 REPLICAS (
     r1 (
-      STORAGECTL ADDRESS 'clusterd1:2100',
+      STORAGECTL ADDRESSES ['clusterd1:2100'],
+      STORAGE ADDRESSES ['clusterd1:2103'],
       COMPUTECTL ADDRESSES ['clusterd1:2101'],
       COMPUTE ADDRESSES ['clusterd1:2102']
     )

@@ -2491,7 +2491,8 @@ generate_extracted_config!(
     ReplicaOption,
     (Size, String),
     (AvailabilityZone, String),
-    (StoragectlAddress, String),
+    (StoragectlAddresses, Vec<String>),
+    (StorageAddresses, Vec<String>),
     (ComputectlAddresses, Vec<String>),
     (ComputeAddresses, Vec<String>),
     (Workers, u16),
@@ -2507,7 +2508,8 @@ fn plan_replica_config(
     let ReplicaOptionExtracted {
         size,
         availability_zone,
-        storagectl_address,
+        storagectl_addresses,
+        storage_addresses,
         computectl_addresses,
         compute_addresses,
         workers,
@@ -2538,31 +2540,45 @@ fn plan_replica_config(
     match (
         size,
         availability_zone,
-        storagectl_address,
+        storagectl_addresses,
+        storage_addresses,
         computectl_addresses,
         compute_addresses,
         workers,
     ) {
         // Common cases we expect end users to hit.
-        (None, _, None, None, None, None) => {
+        (None, _, None, None, None, None, None) => {
             // We don't mention the unmanaged options in the error message
             // because they are only available in unsafe mode.
             sql_bail!("SIZE option must be specified");
         }
-        (Some(size), availability_zone, None, None, None, None) => Ok(ReplicaConfig::Managed {
-            size,
-            availability_zone,
-            compute,
-        }),
+        (Some(size), availability_zone, None, None, None, None, None) => {
+            Ok(ReplicaConfig::Managed {
+                size,
+                availability_zone,
+                compute,
+            })
+        }
 
-        (None, None, storagectl_address, computectl_addresses, compute_addresses, workers) => {
+        (
+            None,
+            None,
+            storagectl_addresses,
+            storage_addresses,
+            computectl_addresses,
+            compute_addresses,
+            workers,
+        ) => {
             scx.require_unsafe_mode("unmanaged cluster replicas")?;
 
             // When manually testing Materialize in unsafe mode, it's easy to
             // accidentally omit one of these options, so we try to produce
             // helpful error messages.
-            let Some(storagectl_addr) = storagectl_address else {
-                sql_bail!("missing STORAGECTL ADDRESS option");
+            let Some(storagectl_addrs) = storagectl_addresses else {
+                sql_bail!("missing STORAGECTL ADDRESSES option");
+            };
+            let Some(storage_addrs) = storage_addresses else {
+                sql_bail!("missing STORAGE ADDRESSES option");
             };
             let Some(computectl_addrs) = computectl_addresses else {
                 sql_bail!("missing COMPUTECTL ADDRESSES option");
@@ -2575,13 +2591,22 @@ fn plan_replica_config(
             if computectl_addrs.len() != compute_addrs.len() {
                 sql_bail!("COMPUTECTL ADDRESSES and COMPUTE ADDRESSES must have the same length");
             }
+            if storagectl_addrs.len() != storage_addrs.len() {
+                sql_bail!("STORAGECTL ADDRESSES and STORAGE ADDRESSES must have the same length");
+            }
+            if storagectl_addrs.len() != computectl_addrs.len() {
+                sql_bail!(
+                    "COMPUTECTL ADDRESSES and STORAGECTL ADDRESSES must have the same length"
+                );
+            }
 
             if workers == 0 {
                 sql_bail!("WORKERS must be greater than 0");
             }
 
             Ok(ReplicaConfig::Unmanaged {
-                storagectl_addr,
+                storagectl_addrs,
+                storage_addrs,
                 computectl_addrs,
                 compute_addrs,
                 workers: workers.into(),

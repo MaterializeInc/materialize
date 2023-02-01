@@ -92,7 +92,8 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
         """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESS 'clusterd1:2100',
+            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
             COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
             COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
             WORKERS 2
@@ -106,7 +107,8 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("clusterd4")
     c.sql(
         """CREATE CLUSTER REPLICA cluster1.replica2
-            STORAGECTL ADDRESS 'clusterd3:2100',
+            STORAGECTL ADDRESSES ['clusterd3:2100', 'clusterd4:2100'],
+            STORAGE ADDRESSES ['clusterd3:2103', 'clusterd4:2103'],
             COMPUTECTL ADDRESSES ['clusterd3:2101', 'clusterd4:2101'],
             COMPUTE ADDRESSES ['clusterd3:2102', 'clusterd4:2102'],
             WORKERS 2
@@ -135,7 +137,8 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
         """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESS 'clusterd1:2100',
+            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
             COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
             COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
             WORKERS 2
@@ -147,7 +150,8 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     # Note the different WORKERS argument
     c.sql(
         """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESS 'clusterd1:2100',
+            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
             COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
             COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
             WORKERS 1
@@ -239,7 +243,8 @@ def workflow_test_github_15531(c: Composition) -> None:
     c.sql(
         """
         CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESS 'clusterd1:2100',
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
             COMPUTECTL ADDRESSES ['clusterd1:2101'],
             COMPUTE ADDRESSES ['clusterd1:2102'],
             WORKERS 2
@@ -321,7 +326,8 @@ def workflow_test_github_15535(c: Composition) -> None:
     c.sql(
         """
         CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESS 'clusterd1:2100',
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
             COMPUTECTL ADDRESSES ['clusterd1:2101'],
             COMPUTE ADDRESSES ['clusterd1:2102'],
             WORKERS 2
@@ -385,13 +391,15 @@ def workflow_test_github_15799(c: Composition) -> None:
         """
         CREATE CLUSTER cluster1 REPLICAS (
             logging_on (
-                STORAGECTL ADDRESS 'clusterd1:2100',
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
                 COMPUTECTL ADDRESSES ['clusterd1:2101'],
                 COMPUTE ADDRESSES ['clusterd1:2102'],
                 WORKERS 2
             ),
             logging_off (
-                STORAGECTL ADDRESS 'clusterd2:2100',
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
                 COMPUTECTL ADDRESSES ['clusterd2:2101'],
                 COMPUTE ADDRESSES ['clusterd2:2102'],
                 WORKERS 2,
@@ -431,7 +439,8 @@ def workflow_test_github_15930(c: Composition) -> None:
             """
             CREATE CLUSTER cluster1 REPLICAS (
                 logging_on (
-                    STORAGECTL ADDRESS 'clusterd1:2100',
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
                     COMPUTECTL ADDRESSES ['clusterd1:2101'],
                     COMPUTE ADDRESSES ['clusterd1:2102'],
                     WORKERS 2
@@ -687,13 +696,15 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
         CREATE CLUSTER cluster1 REPLICAS (
             replica1 (
-                STORAGECTL ADDRESS 'clusterd1:2100',
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
                 COMPUTECTL ADDRESSES ['clusterd1:2101'],
                 COMPUTE ADDRESSES ['clusterd1:2102'],
                 WORKERS 2
             ),
             replica2 (
-                STORAGECTL ADDRESS 'clusterd2:2100',
+                STORAGECTL ADDRESSES ['clusterd2:2100'],
+                STORAGE ADDRESSES ['clusterd2:2103'],
                 COMPUTECTL ADDRESSES ['clusterd2:2101'],
                 COMPUTE ADDRESSES ['clusterd2:2102'],
                 WORKERS 2

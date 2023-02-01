@@ -629,7 +629,13 @@ where
                 for id in dropped_ids {
                     let (_, shard_frontiers) = match self.uppers.get_mut(&id) {
                         Some(value) => value,
-                        None => panic!("Reference to absent collection: {id}"),
+                        None => {
+                            // Storage state can end up sending us these before we have populated
+                            // this state, because it reconciles it state as soon as we connect,
+                            // so we can just ignore `DroppedIds` for collections we are _currently
+                            // in the process of recreating_.
+                            continue;
+                        }
                     };
                     let prev = shard_frontiers[shard_id].take();
                     assert!(

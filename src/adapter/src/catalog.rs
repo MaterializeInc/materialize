@@ -3980,12 +3980,14 @@ impl Catalog {
     ) -> Result<ReplicaLocation, AdapterError> {
         let location = match location {
             SerializedReplicaLocation::Unmanaged {
-                storagectl_addr,
+                storagectl_addrs,
+                storage_addrs,
                 computectl_addrs,
                 compute_addrs,
                 workers,
             } => ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
-                storagectl_addr,
+                storagectl_addrs,
+                storage_addrs,
                 computectl_addrs,
                 compute_addrs,
                 workers,
@@ -6041,7 +6043,8 @@ impl From<ReplicaConfig> for SerializedReplicaConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SerializedReplicaLocation {
     Unmanaged {
-        storagectl_addr: String,
+        storagectl_addrs: Vec<String>,
+        storage_addrs: Vec<String>,
         computectl_addrs: Vec<String>,
         compute_addrs: Vec<String>,
         workers: usize,
@@ -6059,12 +6062,14 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
     fn from(loc: ReplicaLocation) -> Self {
         match loc {
             ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
-                storagectl_addr,
+                storagectl_addrs,
+                storage_addrs,
                 computectl_addrs,
                 compute_addrs,
                 workers,
             }) => Self::Unmanaged {
-                storagectl_addr,
+                storagectl_addrs,
+                storage_addrs,
                 computectl_addrs,
                 compute_addrs,
                 workers,

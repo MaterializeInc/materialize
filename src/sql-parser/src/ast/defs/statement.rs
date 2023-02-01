@@ -1241,8 +1241,10 @@ pub enum ReplicaOptionName {
     Size,
     /// The `AVAILABILITY ZONE [[=] <id>]` option.
     AvailabilityZone,
-    /// The `STORAGECTL ADDRESS` option.
-    StoragectlAddress,
+    /// The `STORAGE ADDRESSES` option.
+    StorageAddresses,
+    /// The `STORAGECTL ADDRESSES` option.
+    StoragectlAddresses,
     /// The `COMPUTECTL ADDRESSES` option.
     ComputectlAddresses,
     /// The `COMPUTE ADDRESSES` option.
@@ -1262,7 +1264,8 @@ impl AstDisplay for ReplicaOptionName {
         match self {
             ReplicaOptionName::Size => f.write_str("SIZE"),
             ReplicaOptionName::AvailabilityZone => f.write_str("AVAILABILITY ZONE"),
-            ReplicaOptionName::StoragectlAddress => f.write_str("STORAGECTL ADDRESS"),
+            ReplicaOptionName::StorageAddresses => f.write_str("STORAGE ADDRESSES"),
+            ReplicaOptionName::StoragectlAddresses => f.write_str("STORAGECTL ADDRESSES"),
             ReplicaOptionName::ComputectlAddresses => f.write_str("COMPUTECTL ADDRESSES"),
             ReplicaOptionName::ComputeAddresses => f.write_str("COMPUTE ADDRESSES"),
             ReplicaOptionName::Workers => f.write_str("WORKERS"),
