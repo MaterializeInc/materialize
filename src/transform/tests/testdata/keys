@@ -63,7 +63,7 @@ steps format=types
 | | keys = ((#0), (#1))
 
 ====
-No change: TopKElision, NonNullRequirements { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }
+No change: Normalize { normalize_lets: NormalizeLets { inline_mfp: false } }, TopKElision, NonNullRequirements { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }
 ====
 Applied Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, FlatMapToMap, Join, NormalizeLets { inline_mfp: false }, Reduce, UnionNegate, UnionBranchCancellation, NormalizeLets { inline_mfp: false }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }:
 %0 =

@@ -51,7 +51,7 @@ impl Fusion {
     /// The return value indicates a changed expression, on which we should
     /// re-execute the transform (e.g. due to a `Negate` elision leaving an
     /// as-yet-unexplored expression).
-    fn action(expr: &mut MirRelationExpr) {
+    pub(crate) fn action(expr: &mut MirRelationExpr) {
         match expr {
             MirRelationExpr::Filter { .. } => filter::Filter::action(expr),
             MirRelationExpr::Map { .. } => map::Map::action(expr),
