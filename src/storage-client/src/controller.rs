@@ -1152,8 +1152,8 @@ where
                 );
 
                 let (write, since_handle) = this
-                    .acquire_data_handles(
-                        id,
+                    .open_data_handles(
+                        format!("controller data {}", id).as_str(),
                         metadata.data_shard.clone(),
                         metadata.relation_desc.clone(),
                         persist_client,
@@ -2085,9 +2085,9 @@ where
     ///
     /// This will `halt!` the process if we cannot successfully acquire a
     /// critical handle with our current epoch.
-    async fn acquire_data_handles(
+    async fn open_data_handles(
         &self,
-        id: GlobalId,
+        purpose: &str,
         shard: ShardId,
         relation_desc: RelationDesc,
         persist_client: &PersistClient,
@@ -2095,12 +2095,10 @@ where
         WriteHandle<SourceData, (), T, Diff>,
         SinceHandle<SourceData, (), T, Diff, PersistEpoch>,
     ) {
-        let purpose = format!("controller data {}", id);
-
         let write = persist_client
             .open_writer(
                 shard,
-                &purpose,
+                purpose,
                 Arc::new(relation_desc),
                 Arc::new(UnitSchema),
             )
@@ -2109,32 +2107,37 @@ where
 
         // Construct the handle in a separate block to ensure all error paths are diverging
         let since_handle = {
+            // This block's aim is to ensure the handle is in terms of our epoch
+            // by the time we return it.
             let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
-                .open_critical_since(shard, PersistClient::CONTROLLER_CRITICAL_SINCE, &purpose)
+                .open_critical_since(shard, PersistClient::CONTROLLER_CRITICAL_SINCE, purpose)
                 .await
                 .expect("invalid persist usage");
 
             let since = handle.since().clone();
 
-            // We should only continue if we can fence out any other processes
             let our_epoch = self.state.envd_epoch;
-            loop {
-                let their_epoch: PersistEpoch = handle.opaque().clone();
 
-                let should_exchange = their_epoch.0.map(|e| e < our_epoch).unwrap_or(true);
-                if should_exchange {
-                    let fenced_others = handle
+            loop {
+                let current_epoch: PersistEpoch = handle.opaque().clone();
+
+                // Ensure the current epoch is <= our epoch.
+                let unchecked_success = current_epoch.0.map(|e| e <= our_epoch).unwrap_or(true);
+
+                if unchecked_success {
+                    // Update the handle's state so that it is in terms of our epoch.
+                    let checked_success = handle
                         .compare_and_downgrade_since(
-                            &their_epoch,
+                            &current_epoch,
                             (&PersistEpoch::from(our_epoch), &since),
                         )
                         .await
                         .is_ok();
-                    if fenced_others {
+                    if checked_success {
                         break handle;
                     }
                 } else {
-                    mz_ore::halt!("fenced by envd @ {their_epoch:?}. ours = {our_epoch}");
+                    mz_ore::halt!("fenced by envd @ {current_epoch:?}. ours = {our_epoch}");
                 }
             }
         };
@@ -2364,7 +2367,12 @@ where
                 // because we're not the leader anymore. But that's fine, we
                 // already updated all the persistent state (in stash).
                 let (write, since_handle) = self
-                    .acquire_data_handles(id, data_shard, relation_desc, &persist_client)
+                    .open_data_handles(
+                        format!("controller data {}", id).as_str(),
+                        data_shard,
+                        relation_desc,
+                        &persist_client,
+                    )
                     .await;
 
                 self.state.persist_write_handles.update(id, write);
@@ -2399,22 +2407,17 @@ where
             .unwrap();
 
         for (shard_id, shard_purpose) in shards {
-            let mut critical_since_handle: SinceHandle<
-                crate::types::sources::SourceData,
-                (),
-                T,
-                Diff,
-                PersistEpoch,
-            > = persist_client
-                .open_critical_since(
-                    *shard_id,
-                    PersistClient::CONTROLLER_CRITICAL_SINCE,
+            let (mut write, mut critical_since_handle) = self
+                .open_data_handles(
                     shard_purpose.as_str(),
+                    *shard_id,
+                    RelationDesc::empty(),
+                    &persist_client,
                 )
-                .await
-                .expect("invalid persist usage");
+                .await;
 
             let our_epoch = PersistEpoch::from(self.state.envd_epoch);
+
             match critical_since_handle
                 .compare_and_downgrade_since(&our_epoch, (&our_epoch, &Antichain::new()))
                 .await
@@ -2422,16 +2425,6 @@ where
                 Ok(_) => info!("successfully finalized read handle for shard {shard_id:?}"),
                 Err(e) => mz_ore::halt!("fenced by envd @ {e:?}. ours = {our_epoch:?}"),
             }
-
-            let mut write = persist_client
-                .open_writer(
-                    *shard_id,
-                    shard_purpose.as_str(),
-                    Arc::new(RelationDesc::empty()),
-                    Arc::new(UnitSchema),
-                )
-                .await
-                .expect("invalid persist usage");
 
             if write.upper().is_empty() {
                 info!("write handle for shard {:?} already finalized", shard_id);
