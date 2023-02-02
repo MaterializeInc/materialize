@@ -910,7 +910,7 @@ where
     }
 
     fn update_configuration(&mut self, config_params: StorageParameters) {
-        // TODO(#16753): apply config to `self.persist`
+        config_params.persist.apply(self.persist.cfg());
 
         for client in self.state.clients.values_mut() {
             client.send(StorageCommand::UpdateConfiguration(config_params.clone()));

@@ -208,7 +208,15 @@ impl ConsensusKnobs for PersistConfig {
 /// compaction call. However, it should _never_ require a process restart for an
 /// update of these to take effect.
 ///
-/// These are hooked up to LaunchDarkly.
+/// These are hooked up to LaunchDarkly. Specifically, LaunchDarkly configs are
+/// serialized into a [PersistParameters]. In environmentd, these are applied
+/// directly via [PersistParameters::apply] to the [PersistConfig] in
+/// [crate::cache::PersistClientCache]. There is one `PersistClientCache` per
+/// process, and every `PersistConfig` shares the same `Arc<DynamicConfig>`, so
+/// this affects all [DynamicConfig] usage in the process. The
+/// `PersistParameters` is also sent via the compute and storage command
+/// streams, which then apply it to all computed/storaged/clusterd processes as
+/// well.
 #[derive(Debug)]
 pub struct DynamicConfig {
     batch_builder_max_outstanding_parts: AtomicUsize,
