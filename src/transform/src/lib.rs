@@ -329,7 +329,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::projection_extraction::ProjectionExtraction),
                 Box::new(crate::projection_lifting::ProjectionLifting::default()),
                 Box::new(crate::fusion::Fusion),
-                Box::new(crate::fusion::flatmap_to_map::FlatMapToMap),
+                Box::new(crate::canonicalization::FlatMapToMap),
                 Box::new(crate::fusion::join::Join),
                 Box::new(crate::normalize_lets::NormalizeLets::new(false)),
                 Box::new(crate::fusion::reduce::Reduce),

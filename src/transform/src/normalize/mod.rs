@@ -65,7 +65,7 @@ impl crate::Transform for Normalize {
         relation.try_visit_mut_post::<_, crate::TransformError>(
             &mut |expr: &mut MirRelationExpr| {
                 // (a) Might enable Map fusion in the next step.
-                crate::fusion::flatmap_to_map::FlatMapToMap::action(expr);
+                crate::canonicalization::FlatMapToMap::action(expr);
                 // (b) Fuse various like-kinded operators.
                 crate::fusion::Fusion::action(expr);
                 // (c) Fuse join trees (might lift in-between Filters).
