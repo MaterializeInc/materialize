@@ -30,6 +30,7 @@ from kubernetes.client import (
 
 from materialize import ROOT
 from materialize.cloudtest.k8s import K8sConfigMap, K8sService, K8sStatefulSet
+from materialize.mzcompose.services import Cockroach
 
 
 class CockroachConfigMap(K8sConfigMap):
@@ -80,7 +81,7 @@ class CockroachStatefulSet(K8sStatefulSet):
 
         container = V1Container(
             name="cockroach",
-            image="cockroachdb/cockroach:v22.2.0",
+            image=f"cockroachdb/cockroach:{Cockroach.DEFAULT_COCKROACH_TAG}",
             args=["start-single-node", "--insecure"],
             ports=ports,
             volume_mounts=volume_mounts,
