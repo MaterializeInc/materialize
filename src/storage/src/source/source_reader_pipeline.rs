@@ -37,7 +37,7 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
@@ -363,7 +363,7 @@ where
             )
             .expect("Failed to create source");
 
-        let source_stream = source_reader.into_stream(timestamp_interval);
+        let source_stream = source_reader.into_stream(timestamp_interval).peekable();
         tokio::pin!(source_stream);
         tokio::pin!(resume_uppers);
 
@@ -375,8 +375,6 @@ where
             update: HealthStatus::Starting,
             should_halt: false,
         };
-
-        let mut timer = Instant::now();
 
         // We want to commit offsets concurrently with ingestion so that a slow commit
         // implementation doesn't stall the operator and prevent it from reading more data. For
@@ -399,58 +397,94 @@ where
         };
         tokio::pin!(offset_commit_loop);
 
+        let mut batch = Vec::new();
         loop {
             tokio::select! {
-                message = source_stream.next() => match message {
-                    Some(SourceMessageType::Message(message, cap, diff)) => {
-                        let new_status = match message {
-                            Ok(_) => HealthStatus::Running,
-                            Err(ref error) => {
-                                HealthStatus::StalledWithError(error.inner.to_string())
+                _ = source_stream.as_mut().peek() => {
+                    let timer = Instant::now();
+
+                    // We stash a capability here to try and coalesce multiple messages emitted by
+                    // the source at the same timestamp. Ideally this should be performed by the
+                    // source implementation itself, presenting directly timely friendly batches,
+                    // but we're not there yet. The `SourceReader::get_next_message` API forces
+                    // processing at a message-at-a-time granularity so we need to do batching here
+                    let mut emit_cap = None;
+
+                    // We want to efficiently batch up messages that are ready. To do that we will
+                    // activate the output handle here and then drain the currently available
+                    // messages until we either run out of messages or run out of time.
+                    let mut output = output.activate();
+                    while timer.elapsed() < YIELD_INTERVAL {
+                        match source_stream.next().now_or_never() {
+                            Some(Some(SourceMessageType::Message(message, cap, diff))) => {
+                                let new_status = match message {
+                                    Ok(_) => HealthStatus::Running,
+                                    Err(ref error) => {
+                                        HealthStatus::StalledWithError(error.inner.to_string())
+                                    }
+                                };
+
+                                let new_status_update = HealthStatusUpdate {
+                                    update: new_status,
+                                    should_halt: false,
+                                };
+
+                                if prev_status != new_status_update {
+                                    prev_status = new_status_update.clone();
+                                    health_output
+                                        .activate()
+                                        .session(&health_cap)
+                                        .give((worker_id, new_status_update));
+                                }
+
+                                if let Ok(message) = &message {
+                                    source_statistics.inc_messages_received_by(1);
+                                    let key_len = u64::cast_from(message.key.len().unwrap_or(0));
+                                    let value_len = u64::cast_from(message.value.len().unwrap_or(0));
+                                    source_statistics.inc_bytes_received_by(key_len + value_len);
+                                }
+
+                                let time = cap.time().clone();
+                                match emit_cap.as_mut() {
+                                    // If cap is not beyond emit_cap we can't re-use emit_cap so
+                                    // flush the current batch
+                                    Some(emit_cap) => if !PartialOrder::less_equal(emit_cap, &cap) {
+                                        output.session(&emit_cap).give_container(&mut batch);
+                                        batch.clear();
+                                        *emit_cap = cap;
+                                    },
+                                    None => emit_cap = Some(cap),
+                                };
+                                batch.push((message, time, diff));
                             }
-                        };
-
-                        let new_status_update = HealthStatusUpdate {
-                            update: new_status,
-                            should_halt: false,
-                        };
-
-                        if prev_status != new_status_update {
-                            prev_status = new_status_update.clone();
-                            health_output
-                                .activate()
-                                .session(&health_cap)
-                                .give((worker_id, new_status_update));
-                        }
-
-                        if let Ok(message) = &message {
-                            source_statistics.inc_messages_received_by(1);
-                            let key_len = u64::cast_from(message.key.len().unwrap_or(0));
-                            let value_len = u64::cast_from(message.value.len().unwrap_or(0));
-                            source_statistics.inc_bytes_received_by(key_len + value_len);
-                        }
-
-                        {
-                            output
-                                .activate()
-                                .session(&cap)
-                                .give((message, cap.time().clone(), diff));
-                        }
-
-                        if timer.elapsed() > YIELD_INTERVAL {
-                            timer = Instant::now();
-                            tokio::task::yield_now().await;
+                            Some(Some(SourceMessageType::SourceStatus(new_status))) => {
+                                prev_status = new_status.clone();
+                                health_output.activate().session(&health_cap).give((worker_id, new_status));
+                            }
+                            Some(None) => {
+                                trace!("timely-{worker_id} source({id}): source ended, dropping capabilities");
+                                if let Some(emit_cap) = emit_cap.take() {
+                                    output.session(&emit_cap).give_container(&mut batch);
+                                    batch.clear();
+                                }
+                                return;
+                            }
+                            None => break,
                         }
                     }
-                    Some(SourceMessageType::SourceStatus(new_status)) => {
-                        prev_status = new_status.clone();
-                        health_output.activate().session(&health_cap).give((worker_id, new_status));
+                    if let Some(emit_cap) = emit_cap.take() {
+                        output.session(&emit_cap).give_container(&mut batch);
+                        batch.clear();
                     }
-                    None => {
-                        trace!("timely-{worker_id} source({id}): source ended, dropping capabilities");
-                        return;
+                    assert!(batch.is_empty());
+                    // Now we drop the activated output handle to force timely to emit any pending
+                    // batch. It's crucial that this happens before our attempt to yield otherwise
+                    // the buffer would get stuck in this operator.
+                    drop(output);
+                    if timer.elapsed() > YIELD_INTERVAL {
+                        tokio::task::yield_now().await;
                     }
-                },
+                }
                 // This future is not cancel safe but we are only passing a reference to it in the
                 // select! loop so the future stays on the stack and never gets cancelled until the
                 // end of the function.
@@ -959,18 +993,33 @@ where
                     }
                 },
                 _ = work_to_do.notified(), if timestamper.initialized() => {
-                    // The frontier at which we can retire work is the minimum of the timestamper
-                    // upper and the source data upper
-                    let mut ready_upper = timestamper.source_upper();
-                    ready_upper.extend(source_upper.frontier().iter().cloned());
-
                     // Drain all messages that can be reclocked from all the batches
                     let total_buffered: usize = untimestamped_batches.iter().map(|b| b.len()).sum();
+                    let reclock_source_upper = timestamper.source_upper();
+
+                    // This is another subtle point. Normally we would be free to emit the
+                    // untimestamped messages in any order so long as the frontiers are respected.
+                    // Unfortunately, downstream decoding operators rely on the messages being
+                    // presented at the exact order produced even if the messages happen at the
+                    // same timestamp. This should be fixed, but until this happens we need to
+                    // preserve the order here.
+                    //
+                    // We will treat the vector of untimestamped batches as a flat list of messages
+                    // and we will compute the size of the reclockable prefix. The messages in this
+                    // prefix can be reclocked immediately and emitted in the original order.
+                    let mut reclockable_count = untimestamped_batches
+                        .iter()
+                        .flatten()
+                        .take_while(|(_, ts, _)| !reclock_source_upper.less_equal(ts))
+                        .count();
+
                     let msgs = untimestamped_batches
                         .iter_mut()
-                        .flat_map(|batch| batch.drain_filter_swapping(|(_, ts, _)| {
-                            !ready_upper.less_equal(ts)
-                        }))
+                        .flat_map(|batch| {
+                            let drain_count = std::cmp::min(batch.len(), reclockable_count);
+                            reclockable_count = reclockable_count.saturating_sub(drain_count);
+                            batch.drain(0..drain_count)
+                        })
                         .map(|(data, time, diff)| ((data, time.clone(), diff), time));
 
                     // Accumulate updates to bytes_read for Prometheus metrics collection
@@ -1024,7 +1073,11 @@ where
                     );
 
 
-                    // And downgrade our capability to the reclocked source upper
+                    // We must downgrade our capability to the meet of the timestamper frontier and
+                    // the source frontier because it's only when both advance past some time `t`
+                    // that we are guaranteed that we'll not need to produce more data at time `t`.
+                    let mut ready_upper = reclock_source_upper;
+                    ready_upper.extend(source_upper.frontier().iter().cloned());
 
                     let into_ready_upper = timestamper
                         .reclock_frontier(ready_upper.borrow())

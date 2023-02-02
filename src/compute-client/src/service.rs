@@ -133,13 +133,30 @@ pub struct PartitionedComputeState<T> {
     /// property ensures that a) we can eventually drop the tracking state maintained for a peek
     /// and b) we won't re-initialize tracking for a peek we have already served.
     peek_responses: BTreeMap<Uuid, BTreeMap<usize, PeekResponse>>,
-    /// Tracks in-progress `SUBSCRIBE`s, and the stashed rows we are holding
-    /// back until their timestamps are complete.
+    /// Tracks in-progress `SUBSCRIBE`s, and the stashed rows we are holding back until their
+    /// timestamps are complete.
     ///
     /// The updates may be `Err` if any of the batches have reported an error, in which case the
     /// subscribe is permanently borked.
-    pending_subscribes:
-        BTreeMap<GlobalId, Option<(MutableAntichain<T>, Result<Vec<(T, Row, Diff)>, String>)>>,
+    ///
+    /// Tracking of a subscribe is initialized when the first `SubscribeResponse` for that
+    /// subscribe is received. Once all shards have emitted an "end-of-subscribe" response the
+    /// subscribe tracking state is dropped again.
+    ///
+    /// The compute protocol requires that for a subscribe that shuts down an end-of-subscribe
+    /// response is emitted:
+    ///
+    ///   * Either a `Batch` response reporting advancement to the empty frontier...
+    ///   * ... or a `DroppedAt` response reporting that the subscribe was dropped before
+    ///     completing.
+    ///
+    /// The compute protocol further requires that no further `SubscribeResponse`s are emitted for
+    /// a subscribe after an end-of-subscribe was reported.
+    ///
+    /// These two properties ensure that a) once a subscribe has shut down, we can eventually drop
+    /// the tracking state maintained for it and b) we won't re-initialize tracking for a subscribe
+    /// we have already dropped.
+    pending_subscribes: BTreeMap<GlobalId, PendingSubscribe<T>>,
 }
 
 impl<T> Partitionable<ComputeCommand<T>, ComputeResponse<T>>
@@ -310,50 +327,36 @@ where
                 }
             }
             ComputeResponse::SubscribeResponse(id, response) => {
-                let maybe_entry = self.pending_subscribes.entry(id).or_insert_with(|| {
-                    let mut frontier = MutableAntichain::new();
-                    // TODO(benesch): fix this dangerous use of `as`.
-                    #[allow(clippy::as_conversions)]
-                    frontier.update_iter(std::iter::once((T::minimum(), self.parts as i64)));
-                    Some((frontier, Ok(Vec::new())))
-                });
+                // Initialize tracking for this subscribe, if necessary.
+                let entry = self
+                    .pending_subscribes
+                    .entry(id)
+                    .or_insert_with(|| PendingSubscribe::new(self.parts));
 
-                let entry = match maybe_entry {
-                    None => {
-                        // This subscribe has been dropped;
-                        // we should permanently block
-                        // any messages from it
-                        return None;
-                    }
-                    Some(entry) => entry,
-                };
+                let emit_response = match response {
+                    SubscribeResponse::Batch(batch) => {
+                        let frontiers = &mut entry.frontiers;
+                        let old_frontier = frontiers.frontier().to_owned();
+                        frontiers.update_iter(batch.lower.into_iter().map(|t| (t, -1)));
+                        frontiers.update_iter(batch.upper.into_iter().map(|t| (t, 1)));
+                        let new_frontier = frontiers.frontier().to_owned();
 
-                match response {
-                    SubscribeResponse::Batch(SubscribeBatch {
-                        lower,
-                        upper,
-                        mut updates,
-                    }) => {
-                        let old_frontier = entry.0.frontier().to_owned();
-                        entry.0.update_iter(lower.iter().map(|t| (t.clone(), -1)));
-                        entry.0.update_iter(upper.iter().map(|t| (t.clone(), 1)));
-                        let new_frontier = entry.0.frontier().to_owned();
-                        match (&mut entry.1, &mut updates) {
+                        match (&mut entry.stashed_updates, batch.updates) {
                             (Err(_), _) => {
                                 // Subscribe is borked; nothing to do.
                                 // TODO: Consider refreshing error?
                             }
                             (_, Err(text)) => {
-                                entry.1 = Err(text.clone());
+                                entry.stashed_updates = Err(text);
                             }
                             (Ok(stashed_updates), Ok(updates)) => {
-                                stashed_updates.append(updates);
+                                stashed_updates.extend(updates);
                             }
                         }
 
                         // If the frontier has advanced, it is time to announce a thing.
                         if old_frontier != new_frontier {
-                            let updates = match &mut entry.1 {
+                            let updates = match &mut entry.stashed_updates {
                                 Ok(stashed_updates) => {
                                     consolidate_updates(stashed_updates);
                                     let mut ship = Vec::new();
@@ -365,7 +368,7 @@ where
                                             ship.push((time, data, diff));
                                         }
                                     }
-                                    entry.1 = Ok(keep);
+                                    entry.stashed_updates = Ok(keep);
                                     Ok(ship)
                                 }
                                 Err(text) => Err(text.clone()),
@@ -383,14 +386,57 @@ where
                         }
                     }
                     SubscribeResponse::DroppedAt(frontier) => {
-                        *maybe_entry = None;
-                        Some(Ok(ComputeResponse::SubscribeResponse(
-                            id,
-                            SubscribeResponse::DroppedAt(frontier),
-                        )))
+                        entry
+                            .frontiers
+                            .update_iter(frontier.iter().map(|t| (t.clone(), -1)));
+
+                        if entry.dropped {
+                            None
+                        } else {
+                            entry.dropped = true;
+                            Some(Ok(ComputeResponse::SubscribeResponse(
+                                id,
+                                SubscribeResponse::DroppedAt(frontier),
+                            )))
+                        }
                     }
+                };
+
+                if entry.frontiers.frontier().is_empty() {
+                    // All shards have reported advancement to the empty frontier or dropping, so
+                    // we do not expect further updates for this subscribe.
+                    self.pending_subscribes.remove(&id);
                 }
+
+                emit_response
             }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PendingSubscribe<T> {
+    /// The subscribe frontiers of the partitioned shards.
+    frontiers: MutableAntichain<T>,
+    /// The updates we are holding back until their timestamps are complete.
+    stashed_updates: Result<Vec<(T, Row, Diff)>, String>,
+    /// Whether we have already emitted a `DroppedAt` response for this subscribe.
+    ///
+    /// This field is used to ensure we emit such a response only once.
+    dropped: bool,
+}
+
+impl<T: timely::progress::Timestamp> PendingSubscribe<T> {
+    fn new(parts: usize) -> Self {
+        let mut frontiers = MutableAntichain::new();
+        // TODO(benesch): fix this dangerous use of `as`.
+        #[allow(clippy::as_conversions)]
+        frontiers.update_iter([(T::minimum(), parts as i64)]);
+
+        Self {
+            frontiers,
+            stashed_updates: Ok(Vec::new()),
+            dropped: false,
         }
     }
 }

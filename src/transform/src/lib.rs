@@ -112,6 +112,7 @@ pub mod literal_lifting;
 pub mod monotonic;
 pub mod nonnull_requirements;
 pub mod nonnullable;
+pub mod normalize;
 pub mod normalize_lets;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
@@ -397,6 +398,7 @@ impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     pub fn logical_optimizer() -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
+            Box::new(crate::normalize::Normalize::new()),
             // 1. Structure-agnostic cleanup
             Box::new(crate::topk_elision::TopKElision),
             Box::new(crate::nonnull_requirements::NonNullRequirements::default()),

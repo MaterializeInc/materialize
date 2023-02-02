@@ -75,7 +75,7 @@ impl CanonicalizeMfp {
             }
             if !filter.is_empty() {
                 *relation = relation.take_dangerous().filter(filter);
-                crate::fusion::filter::Filter.action(relation);
+                crate::fusion::filter::Filter::action(relation);
             }
             if project.len() != total_arity || !project.iter().enumerate().all(|(i, o)| i == *o) {
                 *relation = relation.take_dangerous().project(project);
