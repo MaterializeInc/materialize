@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::{AsCollection, Collection, Hashable};
+use timely::dataflow::operators::{Concat, OkErr};
 use timely::dataflow::Scope;
 
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
@@ -25,7 +26,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistLocation, ShardId};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::source::persist_source;
-use mz_storage_client::types::errors::DataflowError;
+use mz_storage_client::types::errors::{DataflowError, EnvelopeError};
 use mz_storage_client::types::sinks::{
     MetadataFilled, SinkEnvelope, StorageSinkConnection, StorageSinkDesc,
 };
@@ -67,8 +68,15 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
     );
     needed_tokens.push(source_token);
 
-    let ok_collection =
+    let (ok_collection, envelope_errors) =
         apply_sink_envelope(sink_id, sink, &sink_render, ok_collection.as_collection());
+    let err_collection = err_collection
+        .concat(
+            &envelope_errors
+                .map(|err| DataflowError::EnvelopeError(Box::new(EnvelopeError::Flat(err))))
+                .inner,
+        )
+        .as_collection();
 
     let healthchecker_args = HealthcheckerArgs {
         persist_clients: Arc::clone(&storage_state.persist_clients),
@@ -82,7 +90,7 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
         sink,
         sink_id,
         ok_collection,
-        err_collection.as_collection(),
+        err_collection,
         healthchecker_args,
     );
 
@@ -101,10 +109,14 @@ fn apply_sink_envelope<G>(
     sink: &StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
     sink_render: &Box<dyn SinkRender<G>>,
     collection: Collection<G, Row, Diff>,
-) -> Collection<G, (Option<Row>, Option<Row>), Diff>
+) -> (
+    Collection<G, (Option<Row>, Option<Row>), Diff>,
+    Collection<G, String, Diff>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let scope = collection.scope();
     // Some connections support keys - extract them.
     let keyed = if sink_render.uses_keys() {
         let user_key_indices = sink_render
@@ -159,7 +171,7 @@ where
     //   It then renders those as Avro.
     // * Upsert" does the same, except at the last step, it renders the diff pair in upsert format.
     //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
-    let collection = match sink.envelope {
+    match sink.envelope {
         Some(SinkEnvelope::Debezium) => {
             let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
 
@@ -184,22 +196,28 @@ where
                     (k, Some(row_buf.clone()))
                 })
             });
-            collection
+            (
+                collection,
+                timely::dataflow::operators::generic::operator::empty(&scope).as_collection(),
+            )
         }
         Some(SinkEnvelope::Upsert) => {
             let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
 
             let from = sink.from;
-            let collection = combined.map(move |(k, v)| {
-                let v = upsert_format(v, sink_id, from);
-                (k, v)
+            let (ok_stream, err_stream) = combined.inner.ok_err(move |((k, v), t, r)| {
+                match upsert_format(v, sink_id, from) {
+                    Ok(v) => Ok(((k, v), t, r)),
+                    Err(err) => Err((err, t, r)),
+                }
             });
-            collection
+            (ok_stream.as_collection(), err_stream.as_collection())
         }
-        None => keyed.map(|(key, value)| (key, Some(value))),
-    };
-
-    collection
+        None => (
+            keyed.map(|(key, value)| (key, Some(value))),
+            timely::dataflow::operators::generic::operator::empty(&scope).as_collection(),
+        ),
+    }
 }
 
 /// Args for creating a healthchecker.  Not done inline because it requires async.
