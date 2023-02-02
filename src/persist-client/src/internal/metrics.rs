@@ -21,6 +21,7 @@ use mz_ore::metrics::{
     ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
     DeleteOnDropGauge, GaugeVecExt, IntCounter, MetricsRegistry, UIntGauge,
 };
+use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, Consensus, ExternalError, SeqNo, VersionedData,
 };
@@ -28,7 +29,7 @@ use mz_persist::metrics::{PostgresConsensusMetrics, S3BlobMetrics};
 use mz_persist::retry::RetryStream;
 use mz_persist_types::Codec64;
 use prometheus::core::{AtomicI64, AtomicU64};
-use prometheus::{CounterVec, Gauge, GaugeVec, IntCounterVec};
+use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
 
 use crate::{PersistConfig, ShardId};
@@ -147,6 +148,7 @@ struct MetricsVecs {
     external_consensus_truncated_count: IntCounter,
     external_blob_delete_noop_count: IntCounter,
     external_rtt_latency: GaugeVec,
+    external_op_latency: HistogramVec,
 
     retry_started: IntCounterVec,
     retry_finished: IntCounterVec,
@@ -241,6 +243,14 @@ impl MetricsVecs {
                 name: "mz_persist_external_rtt_latency",
                 help: "roundtrip-time to external service as seen by this process",
                 var_labels: ["external"],
+            )),
+            external_op_latency: registry.register(metric!(
+                name: "mz_persist_external_op_latency",
+                help: "rountrip latency observed by individual performance-critical operations",
+                var_labels: ["op"],
+                // NB: If we end up overrunning metrics quotas, we could plausibly cut this
+                // down by switching to a factor of 4 between buckets (vs. the standard 2).
+                buckets: histogram_seconds_buckets(0.000_500, 32.0),
             )),
 
             retry_started: registry.register(metric!(
@@ -402,10 +412,10 @@ impl MetricsVecs {
 
     fn blob_metrics(&self) -> BlobMetrics {
         BlobMetrics {
-            set: self.external_op_metrics("blob_set"),
-            get: self.external_op_metrics("blob_get"),
-            list_keys: self.external_op_metrics("blob_list_keys"),
-            delete: self.external_op_metrics("blob_delete"),
+            set: self.external_op_metrics("blob_set", true),
+            get: self.external_op_metrics("blob_get", true),
+            list_keys: self.external_op_metrics("blob_list_keys", false),
+            delete: self.external_op_metrics("blob_delete", false),
             delete_noop: self.external_blob_delete_noop_count.clone(),
             rtt_latency: self.external_rtt_latency.with_label_values(&["blob"]),
         }
@@ -413,10 +423,10 @@ impl MetricsVecs {
 
     fn consensus_metrics(&self) -> ConsensusMetrics {
         ConsensusMetrics {
-            head: self.external_op_metrics("consensus_head"),
-            compare_and_set: self.external_op_metrics("consensus_cas"),
-            scan: self.external_op_metrics("consensus_scan"),
-            truncate: self.external_op_metrics("consensus_truncate"),
+            head: self.external_op_metrics("consensus_head", false),
+            compare_and_set: self.external_op_metrics("consensus_cas", true),
+            scan: self.external_op_metrics("consensus_scan", false),
+            truncate: self.external_op_metrics("consensus_truncate", false),
             truncated_count: self.external_consensus_truncated_count.clone(),
             cas_mismatch_versions_count: self
                 .external_consensus_cas_mismatch_versions_count
@@ -428,13 +438,18 @@ impl MetricsVecs {
         }
     }
 
-    fn external_op_metrics(&self, op: &str) -> ExternalOpMetrics {
+    fn external_op_metrics(&self, op: &str, latency_histogram: bool) -> ExternalOpMetrics {
         ExternalOpMetrics {
             started: self.external_op_started.with_label_values(&[op]),
             succeeded: self.external_op_succeeded.with_label_values(&[op]),
             failed: self.external_op_failed.with_label_values(&[op]),
             bytes: self.external_op_bytes.with_label_values(&[op]),
             seconds: self.external_op_seconds.with_label_values(&[op]),
+            seconds_histogram: if latency_histogram {
+                Some(self.external_op_latency.with_label_values(&[op]))
+            } else {
+                None
+            },
             alerts_metrics: Arc::clone(&self.alerts_metrics),
         }
     }
@@ -1359,6 +1374,7 @@ pub struct ExternalOpMetrics {
     failed: IntCounter,
     bytes: IntCounter,
     seconds: Counter,
+    seconds_histogram: Option<Histogram>,
     alerts_metrics: Arc<AlertsMetrics>,
 }
 
@@ -1376,7 +1392,11 @@ impl ExternalOpMetrics {
         self.started.inc();
         let start = Instant::now();
         let res = op_fn().await;
-        self.seconds.inc_by(start.elapsed().as_secs_f64());
+        let elapsed_seconds = start.elapsed().as_secs_f64();
+        self.seconds.inc_by(elapsed_seconds);
+        if let Some(h) = &self.seconds_histogram {
+            h.observe(elapsed_seconds);
+        }
         match res.as_ref() {
             Ok(_) => self.succeeded.inc(),
             Err(err) => {
