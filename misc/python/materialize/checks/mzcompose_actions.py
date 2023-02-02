@@ -104,7 +104,6 @@ class StartClusterdCompute(MzcomposeAction):
                         "--secrets-reader=process",
                         "--secrets-reader-process-dir=/mzdata/secrets",
                     ],
-                    storage_workers=None,
                 )
             else:
                 clusterd = Clusterd(

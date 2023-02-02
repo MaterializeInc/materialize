@@ -140,11 +140,6 @@ struct Args {
     )]
     internal_http_listen_addr: SocketAddr,
 
-    // === Storage options. ===
-    /// Number of dataflow worker threads.
-    #[clap(long, env = "STORAGE_WORKERS", value_name = "N", default_value = "1")]
-    storage_workers: usize,
-
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
     ///
