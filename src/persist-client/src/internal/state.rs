@@ -935,6 +935,41 @@ impl<K, V, T: PartialEq, D> PartialEq for State<K, V, T, D> {
 
 impl<K, V, T, D> State<K, V, T, D>
 where
+    K: Codec,
+    V: Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Codec64,
+{
+    pub fn clone_apply<R, E, WorkFn>(
+        &self,
+        cfg: &PersistConfig,
+        work_fn: &mut WorkFn,
+    ) -> ControlFlow<E, (R, Self)>
+    where
+        WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
+    {
+        let mut new_state = State {
+            applier_version: cfg.build_version.clone(),
+            shard_id: self.shard_id,
+            seqno: self.seqno.next(),
+            walltime_ms: (cfg.now)(),
+            hostname: cfg.hostname.clone(),
+            collections: self.collections.clone(),
+            _phantom: PhantomData,
+        };
+        // Make sure walltime_ms is strictly increasing, in case clocks are
+        // offset.
+        if new_state.walltime_ms <= self.walltime_ms {
+            new_state.walltime_ms = self.walltime_ms + 1;
+        }
+
+        let work_ret = work_fn(new_state.seqno, cfg, &mut new_state.collections)?;
+        Continue((work_ret, new_state))
+    }
+}
+
+impl<K, V, T, D> State<K, V, T, D>
+where
     T: Timestamp + Lattice + Codec64,
 {
     pub fn shard_id(&self) -> ShardId {
@@ -1072,33 +1107,6 @@ where
     /// Return the number of gc-ineligible state versions.
     pub fn seqnos_held(&self) -> usize {
         usize::cast_from(self.seqno.0.saturating_sub(self.seqno_since().0))
-    }
-
-    pub fn clone_apply<R, E, WorkFn>(
-        &self,
-        cfg: &PersistConfig,
-        work_fn: &mut WorkFn,
-    ) -> ControlFlow<E, (R, Self)>
-    where
-        WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
-    {
-        let mut new_state = State {
-            applier_version: cfg.build_version.clone(),
-            shard_id: self.shard_id,
-            seqno: self.seqno.next(),
-            walltime_ms: (cfg.now)(),
-            hostname: cfg.hostname.clone(),
-            collections: self.collections.clone(),
-            _phantom: PhantomData,
-        };
-        // Make sure walltime_ms is strictly increasing, in case clocks are
-        // offset.
-        if new_state.walltime_ms <= self.walltime_ms {
-            new_state.walltime_ms = self.walltime_ms + 1;
-        }
-
-        let work_ret = work_fn(new_state.seqno, cfg, &mut new_state.collections)?;
-        Continue((work_ret, new_state))
     }
 
     /// Expire all readers and writers up to the given walltime_ms.
