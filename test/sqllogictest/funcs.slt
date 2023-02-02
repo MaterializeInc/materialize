@@ -664,6 +664,11 @@ SELECT trim('xy' FROM 'yxytrimyxy');
 trim
 
 query T
+SELECT trim(BOTH 'xy' FROM 'yxytrimyxy');
+----
+trim
+
+query T
 SELECT trim(TRAILING FROM 'yxytrimyxy  ');
 ----
 yxytrimyxy
@@ -674,7 +679,17 @@ SELECT trim(FROM '  yxytrimyxy  ');
 yxytrimyxy
 
 query T
+SELECT trim(BOTH FROM '  yxytrimyxy  ');
+----
+yxytrimyxy
+
+query T
 SELECT trim('   yxytrimyxy  ');
+----
+yxytrimyxy
+
+query T
+SELECT trim(BOTH '   yxytrimyxy  ');
 ----
 yxytrimyxy
 
