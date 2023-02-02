@@ -87,6 +87,13 @@ These either operate on an entire partition, e.g., ROW_NUMBER, or grab a value f
 
 ##### 1.a. LAG/LEAD
 
+For example: For each city, compute the ratio of population of the city vs. the next biggest city in the same state:
+
+```sql
+SELECT name, pop, CAST(pop AS float) / LAG(pop) OVER (PARTITION BY state ORDER BY pop)
+FROM cities;
+```
+
 For LAG/LEAD with an offset of 1, the sum function will just remember the previous value if it exists, and None if it does not. (And we can have a similar one for LEAD.) This has the following properties:
 
 - It's associative.
@@ -99,11 +106,32 @@ For LAG/LEAD with *k > 1* (which computes the given expression not for the previ
 
 ##### 1.b. ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE
 
+For example: List the two biggest cities of each state:
+(Note that we can't directly write `ROW_NUMBER() <= 2`, because window functions are not allowed in WHERE clause.)
+
+```sql
+SELECT state, name
+FROM (
+  SELECT state, name, ROW_NUMBER()
+    OVER (PARTITION BY state ORDER BY pop) as row_num
+  FROM cities
+)
+WHERE row_num <= 2;
+```
+
 There is the **TopK** special case, i.e., where the user specifies `ROW_NUMBER() <= k` (or similar). We want to transform this pattern to our efficient TopK implementation, rather than using prefix sum. This should probably be an MIR transform. This way we can rely on MirScalarExpr canonicalization when detecting different variations of `rownum <= k`, e.g., `k >= rownum`, `rownum < k+1`, `rownum - 1 < k`.
 
 In most situations other than TopK, these functions cannot be implemented efficiently in a streaming setting, because small input changes often lead to big output changes. However, as noted in the [Goals](#Goals) section, there are some special cases where small input changes will lead to small output changes. These will be possible to support efficiently by performing a Prefix Sum with an appropriate sum function.
 
 #### 2. Window aggregations
+
+For example: Compute a rolling average for each user's transaction costs on windows of 5 adjacent transactions (e.g., to have a smoother curve when we want to plot it):
+```sql
+SELECT user_id, tx_id, AVG(cost) OVER
+(PARTITION BY user_id ORDER BY timestamp ASC
+   ROWS BETWEEN 5 PRECEDING AND CURRENT ROW)
+FROM transactions;
+```
 
 These operate on so-called **frames**, i.e., a certain subset of a window partition. Frames are specified in relation to the current row. For example, "sum up column `x` for the preceding 5 rows from the current row". For all the frame options, see https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-WINDOW-FUNCTIONS
 
@@ -143,7 +171,17 @@ To have better performance (and to support non-invertible aggregations, e.g., mi
 
 #### 3. FIRST_VALUE / LAST_VALUE / NTH_VALUE
 
-These also operate based on a **frame**, similarly to window aggregations (see above). They can be similarly implemented to window aggregations, i.e., we could “sum” up the relevant interval (that is not necessarily a prefix) with an appropriate sum function.
+For example: For each city, compute how many times it is smaller than the biggest city in the same state:
+```sql
+SELECT state, name, pop,
+       CAST(FIRST_VALUE(pop)
+              OVER (PARTITION BY state ORDER BY pop DESC)
+            AS float
+       ) / pop
+FROM cities;
+```
+
+These also operate based on a **frame**, similarly to window aggregations. (The above example query doesn't specify a frame, therefore it uses the default frame: from the beginning of the partition to the current row) They can be similarly implemented to window aggregations, i.e., we could “sum” up the relevant interval (that is not necessarily a prefix) with an appropriate sum function.
 
 Alternatively, we could make these a bit faster (except for NTH_VALUE) if we just find the index of the relevant end of the interval (i.e., left end for FIRST_VALUE), and then self-join.
 
