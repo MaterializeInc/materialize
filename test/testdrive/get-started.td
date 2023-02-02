@@ -15,6 +15,7 @@
 name          type           size
 ----------------------------------
 demo          load-generator ${arg.default-storage-size}
+demo_progress subsource      <null>
 accounts      subsource      <null>
 auctions      subsource      <null>
 bids          subsource      <null>

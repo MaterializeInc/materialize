@@ -248,7 +248,6 @@ nonpk_table           subsource <null>
 nulls_table           subsource <null>
 pk_table              subsource <null>
 "space table"         subsource <null>
-test_slot_source_progress subsource <null>
 trailing_space_nopk   subsource <null>
 trailing_space_pk     subsource <null>
 types_table           subsource <null>
@@ -602,6 +601,7 @@ $ set-regex match=\d+ replacement=<NUMBER>
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
 another_enum_table      subsource <null>
 enum_source             postgres  <NUMBER>
+enum_source_progress    subsource <null>
 enum_table              subsource <null>
 
 $ unset-regex

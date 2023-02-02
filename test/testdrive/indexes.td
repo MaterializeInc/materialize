@@ -56,7 +56,9 @@ index_position
 position         name
 ----------------------
 1                a
+1                partition
 2                b
+2                offset
 
 # Views do not have indexes automatically created
 > CREATE VIEW data_view as SELECT * from data
