@@ -138,3 +138,13 @@ true
 
 ! SELECT * FROM mz_internal.mz_active_peeks AS OF 0
 contains: Timestamp (0) is not valid for all inputs
+
+# Test that logged subscribe frontiers advance beyond 0.
+
+$ set-regex match=\d{13} replacement=<TIMESTAMP>
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT true FROM mz_internal.mz_compute_frontiers WHERE export_id LIKE 't%' AND time > 0)
+> FETCH 1 c WITH (timeout='5s');
+<TIMESTAMP> 1 true
+> COMMIT

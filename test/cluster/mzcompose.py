@@ -476,11 +476,19 @@ def workflow_test_github_15930(c: Composition) -> None:
             """
         )
 
+        cursor = c.sql_cursor()
+        cursor.execute("SET cluster = cluster1;")
+        cursor.execute("BEGIN;")
+        cursor.execute("DECLARE c CURSOR FOR SUBSCRIBE t;")
+        cursor.execute("FETCH ALL c;")
+
         # Restart environmentd to trigger yet another reconciliation on clusterd.
         c.kill("materialized")
         c.up("materialized")
 
-        # verify yet again that we can query the introspection source and now the table.
+        # Verify yet again that we can query the introspection source and now the table.
+        # The subscribe should have been dropped during reconciliation, so we expect to not find a
+        # frontier entry for it.
         c.testdrive(
             input=dedent(
                 """
