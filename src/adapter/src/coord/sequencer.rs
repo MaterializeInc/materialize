@@ -2641,14 +2641,6 @@ impl Coordinator {
             .iter()
             .next()
             .expect("subscribes have a single sink export");
-        self.active_conns
-            .get_mut(&session.conn_id())
-            .expect("must exist for active sessions")
-            .drop_sinks
-            .push(ComputeSinkId {
-                cluster_id,
-                global_id: sink_id,
-            });
         let arity = sink_desc.from_desc.arity();
         let (tx, rx) = mpsc::unbounded_channel();
         let session_type = metrics::session_type_label_value(session);
