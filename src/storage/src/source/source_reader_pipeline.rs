@@ -929,7 +929,8 @@ where
         let mut source_upper = MutableAntichain::new_bottom(FromTime::minimum());
 
         // Stash of batches that have not yet been timestamped.
-        let mut untimestamped_batches: Vec<Vec<(Result<SourceMessage<K, V>, SourceReaderError>, FromTime, D)>> = Vec::new();
+        type Batch<K, V, T, D> = Vec<(Result<SourceMessage<K, V>, SourceReaderError>, T, D)>;
+        let mut untimestamped_batches: Vec<(FromTime, Batch<K, V, FromTime, D>)> = Vec::new();
 
         // Stash of reclock updates that are still beyond the upper frontier
         let mut remap_updates_stash = vec![];
@@ -988,13 +989,13 @@ where
                         );
                         work_to_do.notify_one();
                     }
-                    Event::Messages(_time, batch) => {
-                        untimestamped_batches.push(batch)
+                    Event::Messages(time, batch) => {
+                        untimestamped_batches.push((time, batch))
                     }
                 },
                 _ = work_to_do.notified(), if timestamper.initialized() => {
                     // Drain all messages that can be reclocked from all the batches
-                    let total_buffered: usize = untimestamped_batches.iter().map(|b| b.len()).sum();
+                    let total_buffered: usize = untimestamped_batches.iter().map(|(_, b)| b.len()).sum();
                     let reclock_source_upper = timestamper.source_upper();
 
                     // This is another subtle point. Normally we would be free to emit the
@@ -1009,13 +1010,13 @@ where
                     // prefix can be reclocked immediately and emitted in the original order.
                     let mut reclockable_count = untimestamped_batches
                         .iter()
-                        .flatten()
+                        .flat_map(|(_, batch)| batch)
                         .take_while(|(_, ts, _)| !reclock_source_upper.less_equal(ts))
                         .count();
 
                     let msgs = untimestamped_batches
                         .iter_mut()
-                        .flat_map(|batch| {
+                        .flat_map(|(_, batch)| {
                             let drain_count = std::cmp::min(batch.len(), reclockable_count);
                             reclockable_count = reclockable_count.saturating_sub(drain_count);
                             batch.drain(0..drain_count)
@@ -1045,7 +1046,7 @@ where
                         total_processed += 1;
                     }
                     // The loop above might have completely emptied batches. We can now remove them
-                    untimestamped_batches.retain(|batch| !batch.is_empty());
+                    untimestamped_batches.retain(|(_, batch)| !batch.is_empty());
 
                     let total_skipped = total_buffered - total_processed;
                     trace!(
@@ -1073,11 +1074,15 @@ where
                     );
 
 
-                    // We must downgrade our capability to the meet of the timestamper frontier and
-                    // the source frontier because it's only when both advance past some time `t`
-                    // that we are guaranteed that we'll not need to produce more data at time `t`.
+                    // We must downgrade our capability to the meet of the timestamper frontier,
+                    // the source frontier, and the lower timestamp of all the pending batches
+                    // because it's only when both advance past some time `t` that we are
+                    // guaranteed that we'll not need to produce more data at time `t`.
                     let mut ready_upper = reclock_source_upper;
-                    ready_upper.extend(source_upper.frontier().iter().cloned());
+                    ready_upper.extend(
+                        source_upper.frontier().iter().cloned()
+                        .chain(untimestamped_batches.iter().map(|(time, _)| time.clone()))
+                    );
 
                     let into_ready_upper = timestamper
                         .reclock_frontier(ready_upper.borrow())
