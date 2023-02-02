@@ -30,14 +30,15 @@ impl crate::Transform for FlatMapToMap {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let result = relation.try_visit_mut_post(&mut |e| Ok(self.action(e)));
+        relation.visit_mut_post(&mut Self::action)?;
         mz_repr::explain_new::trace_plan(&*relation);
-        result
+        Ok(())
     }
 }
 
 impl FlatMapToMap {
-    fn action(&self, relation: &mut MirRelationExpr) {
+    /// Turns `FlatMap` into `Map` if only one row is produced by flatmap.
+    pub fn action(relation: &mut MirRelationExpr) {
         if let MirRelationExpr::FlatMap { func, exprs, .. } = relation {
             if let TableFunc::Wrap { width, .. } = func {
                 if *width >= exprs.len() {
