@@ -281,7 +281,7 @@ pub(crate) fn print_region_enabled(cloud_provider_and_region: &CloudProviderAndR
 /// Healthy:                {yes/no}
 /// SQL address:            foo.materialize.cloud:6875
 /// HTTPS address:          <https://foo.materialize.cloud>
-/// Connection string:      postgres://<user>@<address>/materialize?sslmode=require
+/// Connection string:      postgres://{user}@{address}/materialize?sslmode=require
 pub(crate) fn print_environment_status(
     valid_profile: &ValidProfile,
     environment: Environment,
@@ -310,8 +310,7 @@ pub(crate) fn print_environment_status(
     ))
     .with_context(|| "Parsing URL.")?;
 
-    url.set_username(valid_profile.profile.get_email())
-        .unwrap();
+    url.set_username(valid_profile.profile.get_email()).unwrap();
     url.set_path("materialize");
     url.set_query(Some("sslmode=require"));
 
