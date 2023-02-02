@@ -75,8 +75,7 @@ impl SynchronizedParameters {
             .map(|var| {
                 let name = var.name().to_string();
                 let value = var.value();
-                // This will never panic because both the name and the value come from a `Var` instance.
-                let is_default = self.system_vars.is_default(&name, &value).unwrap();
+                let is_default = self.system_vars.is_default(&name, &value).expect("This will never panic because both the name and the value come from a `Var` instance");
                 ModifiedParameter {
                     name,
                     value,

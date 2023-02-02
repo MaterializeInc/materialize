@@ -592,7 +592,7 @@ impl CatalogState {
             if let Some(cluster_id) = item.cluster_id() {
                 self.clusters_by_id
                     .get_mut(&cluster_id)
-                    .unwrap()
+                    .expect("catalog out of sync")
                     .bound_objects
                     .insert(id);
             };
@@ -639,7 +639,7 @@ impl CatalogState {
 
     #[tracing::instrument(level = "trace", skip(self))]
     fn drop_item(&mut self, id: GlobalId) {
-        let metadata = self.entry_by_id.remove(&id).unwrap();
+        let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
         if !metadata.item.is_placeholder() {
             info!(
                 "drop {} {} ({})",
@@ -670,7 +670,7 @@ impl CatalogState {
                 assert!(
                     self.clusters_by_id
                         .get_mut(&cluster_id)
-                        .unwrap()
+                        .expect("catalog out of sync")
                         .bound_objects
                         .remove(&id),
                     "catalog out of sync"
@@ -786,7 +786,10 @@ impl CatalogState {
                 .collect(),
             config,
         };
-        let cluster = self.clusters_by_id.get_mut(&cluster_id).unwrap();
+        let cluster = self
+            .clusters_by_id
+            .get_mut(&cluster_id)
+            .expect("catalog out of sync");
         assert!(cluster
             .replica_id_by_name
             .insert(replica_name, replica_id)
@@ -1827,7 +1830,9 @@ impl CatalogItem {
         rename_self: bool,
     ) -> Result<CatalogItem, String> {
         let do_rewrite = |create_sql: String| -> Result<String, String> {
-            let mut create_stmt = mz_sql::parse::parse(&create_sql).unwrap().into_element();
+            let mut create_stmt = mz_sql::parse::parse(&create_sql)
+                .expect("invalid create sql persisted to catalog")
+                .into_element();
             if rename_self {
                 mz_sql::ast::transform::create_stmt_rename(&mut create_stmt, to_item_name.clone());
             }
@@ -2109,7 +2114,9 @@ impl CatalogItemRebuilder {
         } else {
             let create_sql = entry.create_sql().to_string();
             assert_ne!(create_sql.to_lowercase(), CREATE_SQL_TODO.to_lowercase());
-            let mut create_stmt = mz_sql::parse::parse(&create_sql).unwrap().into_element();
+            let mut create_stmt = mz_sql::parse::parse(&create_sql)
+                .expect("invalid create sql persisted to catalog")
+                .into_element();
             mz_sql::ast::transform::create_stmt_replace_ids(&mut create_stmt, ancestor_ids);
             Self::Object(id, create_stmt.to_ast_string_stable())
         }
@@ -2821,7 +2828,9 @@ impl Catalog {
                         Op::UpdateSystemConfiguration { name, value }
                     }))
                     .collect::<Vec<_>>();
-                self.transact(boot_ts, None, ops, |_| Ok(())).await.unwrap();
+                self.transact(boot_ts, None, ops, |_| Ok(()))
+                    .await
+                    .unwrap_or_terminate("cannot fail to transact");
                 tracing::info!("parameter sync on boot: end sync");
             } else {
                 tracing::info!("parameter sync on boot: skipping sync as config has synced once");
@@ -3256,7 +3265,7 @@ impl Catalog {
             // the only goal is to produce a nicer error message; we'll bail out
             // safely even if the error message we're sniffing out changes.
             static LOGGING_ERROR: Lazy<Regex> =
-                Lazy::new(|| Regex::new("mz_catalog.[^']*").unwrap());
+                Lazy::new(|| Regex::new("mz_catalog.[^']*").expect("valid regex"));
 
             let item = match c.deserialize_item(id, d_c) {
                 Ok(item) => item,
@@ -3314,11 +3323,13 @@ impl Catalog {
         Fut: Future<Output = T>,
     {
         Stash::with_debug_stash(move |stash| async move {
-            let catalog = Self::open_debug_stash(stash, now).await.unwrap();
+            let catalog = Self::open_debug_stash(stash, now)
+                .await
+                .expect("unable to open debug stash");
             f(catalog).await
         })
         .await
-        .unwrap()
+        .expect("unable to open debug stash")
     }
 
     /// Opens a debug postgres catalog at `url`.
@@ -3331,7 +3342,8 @@ impl Catalog {
         schema: Option<String>,
         now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
-        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
+        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new())
+            .expect("unable to create TLS connector");
         let factory = StashFactory::new(&MetricsRegistry::new());
         let stash = factory.open(url, schema, tls).await?;
         Self::open_debug_stash(stash, now).await
@@ -3820,7 +3832,7 @@ impl Catalog {
                 let logging = &cluster
                     .replicas_by_id
                     .get(replica_id)
-                    .unwrap()
+                    .expect("catalog out of sync")
                     .config
                     .compute
                     .logging;
@@ -4011,7 +4023,11 @@ impl Catalog {
                 }
 
                 ReplicaLocation::Managed(ManagedReplicaLocation {
-                    allocation: cluster_replica_sizes.0.get(&size).unwrap().clone(),
+                    allocation: cluster_replica_sizes
+                        .0
+                        .get(&size)
+                        .expect("catalog out of sync")
+                        .clone(),
                     availability_zone,
                     size,
                     az_user_specified,
@@ -4226,7 +4242,7 @@ impl Catalog {
                     // and context, we need to parse and rewrite the with options in that statement.
                     // (And then make any other changes to the source definition to match.)
                     let mut stmt = mz_sql::parse::parse(&old_sink.create_sql)
-                        .unwrap()
+                        .expect("invalid create sql persisted to catalog")
                         .into_element();
 
                     let create_stmt = match &mut stmt {
@@ -4328,7 +4344,7 @@ impl Catalog {
                     // and context, we need to parse and rewrite the with options in that statement.
                     // (And then make any other changes to the source definition to match.)
                     let mut stmt = mz_sql::parse::parse(&old_source.create_sql)
-                        .unwrap()
+                        .expect("invalid create sql persisted to catalog")
                         .into_element();
 
                     let create_stmt = match &mut stmt {
@@ -5205,7 +5221,10 @@ impl Catalog {
                         state.get_database(&database_id).name,
                         schema_name
                     );
-                    let db = state.database_by_id.get_mut(&database_id).unwrap();
+                    let db = state
+                        .database_by_id
+                        .get_mut(&database_id)
+                        .expect("catalog out of sync");
                     db.schemas_by_id.insert(
                         id.clone(),
                         Schema {
@@ -5309,7 +5328,7 @@ impl Catalog {
                 }
 
                 Action::DropDatabase { id } => {
-                    let db = state.database_by_id.get(&id).unwrap();
+                    let db = state.database_by_id.get(&id).expect("catalog out of sync");
                     state.database_by_name.remove(db.name());
                     state.database_by_id.remove(&id);
                 }
@@ -5318,8 +5337,14 @@ impl Catalog {
                     database_id,
                     schema_id,
                 } => {
-                    let db = state.database_by_id.get_mut(&database_id).unwrap();
-                    let schema = db.schemas_by_id.get(&schema_id).unwrap();
+                    let db = state
+                        .database_by_id
+                        .get_mut(&database_id)
+                        .expect("catalog out of sync");
+                    let schema = db
+                        .schemas_by_id
+                        .get(&schema_id)
+                        .expect("catalog out of sync");
                     db.schemas_by_name.remove(&schema.name.schema);
                     db.schemas_by_id.remove(&schema_id);
                 }
@@ -5362,8 +5387,14 @@ impl Catalog {
                         .clusters_by_id
                         .get_mut(&cluster_id)
                         .expect("can only drop replicas from known instances");
-                    let replica = cluster.replicas_by_id.remove(&replica_id).unwrap();
-                    cluster.replica_id_by_name.remove(&replica.name).unwrap();
+                    let replica = cluster
+                        .replicas_by_id
+                        .remove(&replica_id)
+                        .expect("catalog out of sync");
+                    cluster
+                        .replica_id_by_name
+                        .remove(&replica.name)
+                        .expect("catalog out of sync");
                     let persisted_log_ids = replica.config.compute.logging.source_and_view_ids();
                     assert!(cluster.replica_id_by_name.len() == cluster.replicas_by_id.len());
 
@@ -5382,7 +5413,7 @@ impl Catalog {
                     to_name,
                     to_item,
                 } => {
-                    let old_entry = state.entry_by_id.remove(&id).unwrap();
+                    let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
                     info!(
                         "update {} {} ({})",
                         old_entry.item_type(),
@@ -5439,7 +5470,7 @@ impl Catalog {
                 }
 
                 Action::UpdateRotatedKeys { id, new_item } => {
-                    let old_entry = state.entry_by_id.remove(&id).unwrap();
+                    let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
                     info!(
                         "update {} {} ({})",
                         old_entry.item_type(),
@@ -6615,7 +6646,7 @@ mod tests {
         Stash::with_debug_stash(move |stash| async move {
             let mut catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
                 .await
-                .unwrap();
+                .expect("unable to open debug catalog");
             assert_eq!(catalog.transient_revision(), 1);
             catalog
                 .transact(
@@ -6629,7 +6660,7 @@ mod tests {
                     |_catalog| Ok(()),
                 )
                 .await
-                .unwrap();
+                .expect("failed to transact");
             assert_eq!(catalog.transient_revision(), 2);
             drop(catalog);
 
@@ -6645,7 +6676,7 @@ mod tests {
             */
         })
         .await
-        .unwrap()
+        .expect("unable to open debug stash");
     }
 
     #[tokio::test]
@@ -6698,7 +6729,7 @@ mod tests {
             session
                 .vars_mut()
                 .set("search_path", "pg_catalog", false)
-                .unwrap();
+                .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
                 conn_catalog.effective_search_path(false),
@@ -6725,7 +6756,7 @@ mod tests {
             session
                 .vars_mut()
                 .set("search_path", "mz_catalog", false)
-                .unwrap();
+                .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
                 conn_catalog.effective_search_path(false),
@@ -6752,7 +6783,7 @@ mod tests {
             session
                 .vars_mut()
                 .set("search_path", "mz_temp", false)
-                .unwrap();
+                .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
                 conn_catalog.effective_search_path(false),
@@ -6874,18 +6905,26 @@ mod tests {
             item_namespace: ItemNamespace,
         ) -> GlobalId {
             let id = match item_namespace {
-                ItemNamespace::User => catalog.allocate_user_id().await.unwrap(),
-                ItemNamespace::System => catalog.allocate_system_id().await.unwrap(),
+                ItemNamespace::User => catalog
+                    .allocate_user_id()
+                    .await
+                    .expect("cannot fail to allocate user ids"),
+                ItemNamespace::System => catalog
+                    .allocate_system_id()
+                    .await
+                    .expect("cannot fail to allocate system ids"),
             };
-            let oid = catalog.allocate_oid().unwrap();
+            let oid = catalog
+                .allocate_oid()
+                .expect("cannot fail to allocate oids");
             let database_id = catalog
                 .resolve_database(DEFAULT_DATABASE_NAME)
-                .unwrap()
+                .expect("failed to resolve default database")
                 .id();
             let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
             let schema_spec = catalog
                 .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, SYSTEM_CONN_ID)
-                .unwrap()
+                .expect("failed to resolve default schemazs")
                 .id
                 .clone();
             catalog
@@ -6907,7 +6946,7 @@ mod tests {
                     |_| Ok(()),
                 )
                 .await
-                .unwrap();
+                .expect("failed to transact");
             id
         }
 
@@ -7345,7 +7384,7 @@ mod tests {
                 let migration_metadata = catalog
                     .generate_builtin_migration_metadata(migrated_ids, id_fingerprint_map)
                     .await
-                    .unwrap();
+                    .expect("failed to generate builtin migration metadata");
 
                 assert_eq!(
                     convert_id_vec_to_name_vec(migration_metadata.previous_sink_ids, &name_mapping),

@@ -152,7 +152,11 @@ impl<T: TimestampManipulation> Session<T> {
     /// Returns the current transaction's PlanContext. Panics if there is not a
     /// current transaction.
     pub fn pcx(&self) -> &PlanContext {
-        &self.transaction().inner().unwrap().pcx
+        &self
+            .transaction()
+            .inner()
+            .expect("no active transaction")
+            .pcx
     }
 
     /// Reports whether the session is a system session.
@@ -373,12 +377,13 @@ impl<T: TimestampManipulation> Session<T> {
     ///
     /// This method is cancel safe.
     pub async fn recv_notice(&mut self) -> AdapterNotice {
-        // Unwrap is safe because the Session also holds a sender, so recv won't
-        // ever return None.
-        //
         // This method is cancel safe because recv is cancel safe.
         loop {
-            let notice = self.notices_rx.recv().await.unwrap();
+            let notice = self
+                .notices_rx
+                .recv()
+                .await
+                .expect("Session also holds a sender, so recv won't ever return None");
             match self.notice_filter(notice) {
                 Some(notice) => return notice,
                 None => continue,

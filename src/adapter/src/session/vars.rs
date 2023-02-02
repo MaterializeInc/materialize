@@ -1884,7 +1884,7 @@ impl Value for Duration {
 #[test]
 fn test_value_duration() {
     fn inner(t: &'static str, e: Duration, expected_format: Option<&'static str>) {
-        let d = Duration::parse(t).unwrap();
+        let d = Duration::parse(t).expect("invalid duration");
         assert_eq!(d, e);
         let mut d_format = d.format();
         d_format.retain(|c| !c.is_whitespace());

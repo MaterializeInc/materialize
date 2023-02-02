@@ -43,6 +43,7 @@ use crate::coord::ddl::CatalogTxn;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
+use crate::util::ResultExt;
 use crate::AdapterError;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
@@ -77,7 +78,11 @@ impl Coordinator {
         &self,
         instance: ComputeInstanceId,
     ) -> DataflowBuilder<mz_repr::Timestamp> {
-        let compute = self.controller.compute.instance_ref(instance).unwrap();
+        let compute = self
+            .controller
+            .compute
+            .instance_ref(instance)
+            .expect("compute instance does not exist");
         DataflowBuilder {
             catalog: self.catalog.state(),
             compute,
@@ -155,7 +160,7 @@ impl Coordinator {
         self.controller
             .active_compute()
             .create_dataflows(instance, dataflow_plans)
-            .unwrap();
+            .unwrap_or_terminate("dataflow creation cannot fail");
         self.initialize_compute_read_policies(
             output_ids,
             instance,
@@ -250,7 +255,8 @@ impl Coordinator {
 
         // Ensure all expressions are normalized before finalizing.
         for build in dataflow.objects_to_build.iter_mut() {
-            mz_transform::normalize_lets::normalize_lets(&mut build.plan.0).unwrap();
+            mz_transform::normalize_lets::normalize_lets(&mut build.plan.0)
+                .unwrap_or_terminate("Normalize failed; unrecoverable error");
         }
 
         mz_compute_client::plan::Plan::finalize_dataflow(dataflow).map_err(AdapterError::Internal)
@@ -263,7 +269,11 @@ impl CatalogTxn<'_, mz_repr::Timestamp> {
         &self,
         instance: ComputeInstanceId,
     ) -> DataflowBuilder<mz_repr::Timestamp> {
-        let compute = self.dataflow_client.compute.instance_ref(instance).unwrap();
+        let compute = self
+            .dataflow_client
+            .compute
+            .instance_ref(instance)
+            .expect("compute instance does not exist");
         DataflowBuilder {
             catalog: self.catalog,
             compute,
@@ -384,7 +394,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                     .catalog
                     .resolve_full_name(on_entry.name(), on_entry.conn_id()),
             )
-            .unwrap()
+            .expect("can only create indexes on items with a valid description")
             .typ()
             .clone();
         let name = index_entry.name().to_string();

@@ -27,7 +27,7 @@ use crate::catalog::BuiltinTableUpdate;
 use crate::coord::timeline::WriteTimestamp;
 use crate::coord::{Coordinator, Message, PendingTxn};
 use crate::session::{Session, WriteOp};
-use crate::util::{ClientTransmitter, CompletedClientTransmitter};
+use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::ExecuteResponse;
 
 /// An operation that is deferred while waiting for a lock.
@@ -308,14 +308,14 @@ impl Coordinator {
             append_fut
                 .await
                 .expect("One-shot dropped while waiting synchronously")
-                .unwrap();
+                .unwrap_or_terminate("cannot fail to apply appends");
             self.group_commit_apply(timestamp, responses, write_lock_guard)
                 .await;
         } else {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             task::spawn(|| "group_commit_apply", async move {
                 if let Ok(response) = append_fut.await {
-                    response.unwrap();
+                    response.unwrap_or_terminate("cannot fail to apply appends");
                     if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
                         timestamp,
                         responses,
