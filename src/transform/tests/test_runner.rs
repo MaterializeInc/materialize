@@ -370,7 +370,8 @@ mod tests {
             "UnionBranchCancellation" => Ok(Box::new(
                 mz_transform::union_cancel::UnionBranchCancellation,
             )),
-            "UnionFusion" => Ok(Box::new(mz_transform::fusion::union::UnionNegate)),
+            "UnionNegateFusion" => Ok(Box::new(mz_transform::compound::UnionNegateFusion)),
+            "UnionFusion" => Ok(Box::new(mz_transform::fusion::union::Union)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name

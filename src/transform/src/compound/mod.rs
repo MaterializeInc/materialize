@@ -13,3 +13,7 @@
 //! Transformations in this module are meant to be revisited in the future, as
 //! the current hypothesis is that a transofrmation should attempt to do two of
 //! the above things (such as `fusion` and `canonicalization`) at the same time.
+
+mod union;
+
+pub use union::UnionNegateFusion;

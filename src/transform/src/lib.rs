@@ -333,7 +333,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::fusion::join::Join),
                 Box::new(crate::normalize_lets::NormalizeLets::new(false)),
                 Box::new(crate::fusion::reduce::Reduce),
-                Box::new(crate::fusion::union::UnionNegate),
+                Box::new(crate::compound::UnionNegateFusion),
                 // This goes after union fusion so we can cancel out
                 // more branches at a time.
                 Box::new(crate::union_cancel::UnionBranchCancellation),
@@ -533,7 +533,7 @@ impl Optimizer {
                     Box::new(crate::redundant_join::RedundantJoin::default()),
                     // Redundant join produces projects that need to be fused.
                     Box::new(crate::fusion::Fusion),
-                    Box::new(crate::fusion::union::UnionNegate),
+                    Box::new(crate::compound::UnionNegateFusion),
                     // This goes after union fusion so we can cancel out
                     // more branches at a time.
                     Box::new(crate::union_cancel::UnionBranchCancellation),
