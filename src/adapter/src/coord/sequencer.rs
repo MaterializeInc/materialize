@@ -2609,7 +2609,7 @@ impl Coordinator {
                     )
                     .expect("subscribes can only be run on items with descs")
                     .into_owned();
-                let sink_id = self.catalog.allocate_user_id().await?;
+                let sink_id = self.allocate_transient_id()?;
                 let sink_desc = make_sink_desc(self, session, from_id, from_desc, &[from_id][..])?;
                 let sink_name = format!("subscribe-{}", sink_id);
                 self.dataflow_builder(cluster_id)
