@@ -53,7 +53,7 @@ pub enum ComputeEvent {
     },
     /// Peek command, true for install and false for retire.
     Peek(Peek, bool),
-    /// Available frontier information for views.
+    /// Available frontier information for dataflow exports.
     Frontier(GlobalId, Timestamp, i64),
     // Available frontier information for source instantiations.
     SourceFrontier(GlobalId, GlobalId, Timestamp, i8),

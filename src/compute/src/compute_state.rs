@@ -698,6 +698,29 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     pub fn process_subscribes(&mut self) {
         let mut subscribe_responses = self.compute_state.subscribe_response_buffer.borrow_mut();
         for (sink_id, mut response) in subscribe_responses.drain(..) {
+            // Update frontier logging for this subscribe.
+            if let Some(prev_frontier) = self.compute_state.reported_frontiers.get_mut(&sink_id) {
+                let new_frontier = match &response {
+                    SubscribeResponse::Batch(b) => b.upper.clone(),
+                    SubscribeResponse::DroppedAt(_) => Antichain::new(),
+                };
+                assert!(PartialOrder::less_equal(prev_frontier, &new_frontier));
+
+                if let Some(logger) = self.compute_state.compute_logger.as_mut() {
+                    if let Some(time) = prev_frontier.get(0) {
+                        logger.log(ComputeEvent::Frontier(sink_id, *time, -1));
+                    }
+                    if let Some(time) = new_frontier.get(0) {
+                        logger.log(ComputeEvent::Frontier(sink_id, *time, 1));
+                    }
+                }
+
+                prev_frontier.clone_from(&new_frontier);
+            } else {
+                // Presumably tracking state for this frontier was already dropped by
+                // `handle_allow_compaction`. There is nothing left to do for logging.
+            }
+
             response
                 .to_error_if_exceeds(usize::try_from(self.compute_state.max_result_size).unwrap());
             self.send_compute_response(ComputeResponse::SubscribeResponse(sink_id, response));
