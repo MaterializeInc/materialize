@@ -96,6 +96,10 @@ pub trait SecretsController: Debug + Send + Sync {
     /// Deletes the specified secret.
     async fn delete(&self, id: GlobalId) -> Result<(), anyhow::Error>;
 
+    /// Lists known secrets. Unrecognized secret objects do not produce an error
+    /// and are ignored.
+    async fn list(&self) -> Result<Vec<GlobalId>, anyhow::Error>;
+
     /// Returns a reader for the secrets managed by this controller.
     fn reader(&self) -> Arc<dyn SecretsReader>;
 }
@@ -140,6 +144,10 @@ impl SecretsController for InMemorySecretsController {
     async fn delete(&self, id: GlobalId) -> Result<(), anyhow::Error> {
         self.data.lock().unwrap().remove(&id);
         Ok(())
+    }
+
+    async fn list(&self) -> Result<Vec<GlobalId>, anyhow::Error> {
+        Ok(self.data.lock().unwrap().keys().cloned().collect())
     }
 
     fn reader(&self) -> Arc<dyn SecretsReader> {

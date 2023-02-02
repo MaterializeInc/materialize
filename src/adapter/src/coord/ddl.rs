@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use fail::fail_point;
 use serde_json::json;
 use timely::progress::Antichain;
 use tracing::Level;
@@ -428,6 +429,7 @@ impl Coordinator {
     }
 
     async fn drop_secrets(&mut self, secrets: Vec<GlobalId>) {
+        fail_point!("drop_secrets");
         for secret in secrets {
             if let Err(e) = self.secrets_controller.delete(secret).await {
                 warn!("Dropping secrets has encountered an error: {}", e);

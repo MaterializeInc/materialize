@@ -42,6 +42,16 @@ impl SecretsController for ProcessOrchestrator {
         Ok(())
     }
 
+    async fn list(&self) -> Result<Vec<GlobalId>, anyhow::Error> {
+        let mut ids = Vec::new();
+        let mut entries = fs::read_dir(&self.secrets_dir).await?;
+        while let Some(dir) = entries.next_entry().await? {
+            let id: GlobalId = dir.file_name().to_string_lossy().parse()?;
+            ids.push(id);
+        }
+        Ok(ids)
+    }
+
     fn reader(&self) -> Arc<dyn SecretsReader> {
         Arc::new(ProcessSecretsReader {
             secrets_dir: self.secrets_dir.clone(),
