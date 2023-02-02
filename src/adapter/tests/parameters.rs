@@ -71,11 +71,9 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
-
-// Disallow usage of `Hash*` types from std.
-#![warn(clippy::disallowed_types)]
 
 use mz_adapter::catalog::Catalog;
 use mz_ore::collections::CollectionExt;

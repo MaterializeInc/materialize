@@ -39,10 +39,9 @@ use crate::{PersistClient, PersistConfig, PersistLocation};
 pub struct PersistClientCache {
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
-    blob_by_uri: BTreeMap<String, Arc<dyn Blob + Send + Sync>>,
-    consensus_by_uri: BTreeMap<String, Arc<dyn Consensus + Send + Sync>>,
+    blob_by_uri: BTreeMap<String, (Arc<JoinHandle<()>>, Arc<dyn Blob + Send + Sync>)>,
+    consensus_by_uri: BTreeMap<String, (Arc<JoinHandle<()>>, Arc<dyn Consensus + Send + Sync>)>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
-    rtt_latency_tasks: Vec<Arc<JoinHandle<()>>>,
 }
 
 impl PersistClientCache {
@@ -55,7 +54,6 @@ impl PersistClientCache {
             blob_by_uri: BTreeMap::new(),
             consensus_by_uri: BTreeMap::new(),
             cpu_heavy_runtime: Arc::new(CpuHeavyRuntime::new()),
-            rtt_latency_tasks: Vec::new(),
         }
     }
 
@@ -94,7 +92,7 @@ impl PersistClientCache {
         consensus_uri: String,
     ) -> Result<Arc<dyn Consensus + Send + Sync>, ExternalError> {
         let consensus = match self.consensus_by_uri.entry(consensus_uri) {
-            Entry::Occupied(x) => Arc::clone(x.get()),
+            Entry::Occupied(x) => Arc::clone(&x.get().1),
             Entry::Vacant(x) => {
                 // Intentionally hold the lock, so we don't double connect under
                 // concurrency.
@@ -108,18 +106,19 @@ impl PersistClientCache {
                         consensus.clone().open()
                     })
                     .await;
-                Arc::clone(x.insert(consensus))
+                let consensus =
+                    Arc::new(MetricsConsensus::new(consensus, Arc::clone(&self.metrics)));
+                let task = Arc::new(
+                    consensus_rtt_latency_task(
+                        Arc::clone(&consensus),
+                        Arc::clone(&self.metrics),
+                        Self::PROMETHEUS_SCRAPE_INTERVAL,
+                    )
+                    .await,
+                );
+                Arc::clone(&x.insert((task, consensus)).1)
             }
         };
-        let consensus = Arc::new(MetricsConsensus::new(consensus, Arc::clone(&self.metrics)));
-        self.rtt_latency_tasks.push(Arc::new(
-            consensus_rtt_latency_task(
-                Arc::clone(&consensus),
-                Arc::clone(&self.metrics),
-                Self::PROMETHEUS_SCRAPE_INTERVAL,
-            )
-            .await,
-        ));
         Ok(consensus)
     }
 
@@ -128,7 +127,7 @@ impl PersistClientCache {
         blob_uri: String,
     ) -> Result<Arc<dyn Blob + Send + Sync>, ExternalError> {
         let blob = match self.blob_by_uri.entry(blob_uri) {
-            Entry::Occupied(x) => Arc::clone(x.get()),
+            Entry::Occupied(x) => Arc::clone(&x.get().1),
             Entry::Vacant(x) => {
                 // Intentionally hold the lock, so we don't double connect under
                 // concurrency.
@@ -142,25 +141,28 @@ impl PersistClientCache {
                     blob.clone().open()
                 })
                 .await;
-                Arc::clone(x.insert(blob))
+                let blob = Arc::new(MetricsBlob::new(blob, Arc::clone(&self.metrics)));
+                let task = Arc::new(
+                    blob_rtt_latency_task(
+                        Arc::clone(&blob),
+                        Arc::clone(&self.metrics),
+                        Self::PROMETHEUS_SCRAPE_INTERVAL,
+                    )
+                    .await,
+                );
+                Arc::clone(&x.insert((task, blob)).1)
             }
         };
-        let blob = Arc::new(MetricsBlob::new(blob, Arc::clone(&self.metrics)));
-        self.rtt_latency_tasks.push(Arc::new(
-            blob_rtt_latency_task(
-                Arc::clone(&blob),
-                Arc::clone(&self.metrics),
-                Self::PROMETHEUS_SCRAPE_INTERVAL,
-            )
-            .await,
-        ));
         Ok(blob)
     }
 }
 
 impl Drop for PersistClientCache {
     fn drop(&mut self) {
-        for task in self.rtt_latency_tasks.iter() {
+        for (task, _) in self.consensus_by_uri.values() {
+            task.abort();
+        }
+        for (task, _) in self.blob_by_uri.values() {
             task.abort();
         }
     }

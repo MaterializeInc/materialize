@@ -13,7 +13,6 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use itertools::Itertools;
 use serde_json::json;
 use timely::progress::Antichain;
 use tracing::Level;
@@ -349,15 +348,17 @@ impl Coordinator {
     }
 
     pub(crate) fn drop_compute_sinks(&mut self, sinks: Vec<ComputeSinkId>) {
-        let by_cluster = sinks
-            .into_iter()
-            .map(
-                |ComputeSinkId {
-                     cluster_id,
-                     global_id,
-                 }| (cluster_id, global_id),
-            )
-            .into_group_map();
+        let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for sink in sinks {
+            if self.drop_compute_read_policy(&sink.global_id) {
+                by_cluster
+                    .entry(sink.cluster_id)
+                    .or_default()
+                    .push(sink.global_id);
+            } else {
+                tracing::error!("Instructed to drop a compute sink that isn't one");
+            }
+        }
         let mut compute = self.controller.active_compute();
         for (cluster_id, ids) in by_cluster {
             // A cluster could have been dropped, so verify it exists.
@@ -388,11 +389,14 @@ impl Coordinator {
                 tracing::error!("Instructed to drop a non-index index");
             }
         }
+        let mut compute = self.controller.active_compute();
         for (cluster_id, ids) in by_cluster {
-            self.controller
-                .active_compute()
-                .drop_collections(cluster_id, ids)
-                .unwrap_or_terminate("cannot fail to drop collections");
+            // A cluster could have been dropped, so verify it exists.
+            if compute.instance_exists(cluster_id) {
+                compute
+                    .drop_collections(cluster_id, ids)
+                    .unwrap_or_terminate("cannot fail to drop collections");
+            }
         }
     }
 

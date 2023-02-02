@@ -95,15 +95,49 @@ pub(super) enum SubscribeTargetError {
 pub(super) struct Instance<T> {
     /// Build info for spawning replicas
     build_info: &'static BuildInfo,
+    /// Whether instance initialization has been completed.
+    initialized: bool,
     /// The replicas of this compute instance.
     replicas: BTreeMap<ReplicaId, Replica<T>>,
-    /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
+    /// Currently installed compute collections.
+    ///
+    /// New entries are added for all collections exported from dataflows created through
+    /// [`ActiveInstance::create_dataflows`].
+    ///
+    /// Entries are removed when two conditions are fulfilled:
+    ///
+    ///  * The collection's read frontier has advanced to the empty frontier, implying that
+    ///    [`ActiveInstance::drop_collections`] was called.
+    ///  * All replicas have reported the empty frontier for the collection, implying that they
+    ///    have stopped reading from the collection's inputs.
+    ///
+    /// Only if both these conditions hold is dropping a collection's state, and the associated
+    /// read holds on its inputs, sound.
     collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// IDs of arranged log sources maintained by this compute instance.
     arranged_logs: BTreeMap<LogVariant, GlobalId>,
     /// Currently outstanding peeks.
+    ///
+    /// New entries are added for all peeks initiated through [`ActiveInstance::peek`].
+    ///
+    /// The entry for a peek is only removed once all replicas have responded to the peek. This is
+    /// currently required to ensure all replicas have stopped reading from the peeked collection's
+    /// inputs before we allow them to compact. #16641 tracks changing this so we only have to wait
+    /// for the first peek response.
     peeks: BTreeMap<Uuid, PendingPeek<T>>,
     /// Currently in-progress subscribes.
+    ///
+    /// New entries are added for all subscribes exported from dataflows created through
+    /// [`ActiveInstance::create_dataflows`].
+    ///
+    /// The entry for a subscribe is removed once at least one replica has reported the subscribe
+    /// to have advanced to the empty frontier or to have been dropped, implying that no further
+    /// updates will be emitted for this subscribe.
+    ///
+    /// Note that subscribes are tracked both in `collections` and `subscribes`. `collections`
+    /// keeps track of the subscribe's upper and since frontiers and ensures appropriate read holds
+    /// on the subscribe's input. `subscribes` is only used to track which updates have been
+    /// emitted, to decide if new ones should be emitted or suppressed.
     subscribes: BTreeMap<GlobalId, ActiveSubscribe<T>>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<T>,
@@ -196,6 +230,7 @@ where
 
         let mut instance = Self {
             build_info,
+            initialized: false,
             replicas: Default::default(),
             collections,
             arranged_logs,
@@ -227,9 +262,14 @@ where
 
     /// Marks the end of any initialization commands.
     ///
-    /// Intended to be called by `Controller`, rather than by other code (to avoid repeated calls).
+    /// Intended to be called by `Controller`, rather than by other code.
+    /// Calling this method repeatedly has no effect.
     pub fn initialization_complete(&mut self) {
-        self.send(ComputeCommand::InitializationComplete);
+        // The compute protocol requires that `InitializationComplete` is sent only once.
+        if !self.initialized {
+            self.send(ComputeCommand::InitializationComplete);
+            self.initialized = true;
+        }
     }
 
     /// Drop this compute instance.
@@ -561,6 +601,13 @@ where
 
             // Initialize tracking of subscribes.
             for subscribe_id in dataflow.subscribe_ids() {
+                // Creating subscribes during initialization is known to be defunct (#16247).
+                // We still do our best to handle this scenario gracefully, so we only log an error
+                // here.
+                if !self.compute.initialized {
+                    tracing::error!("creating subscribes during initialization is not supported");
+                }
+
                 self.compute
                     .subscribes
                     .insert(subscribe_id, ActiveSubscribe::new());

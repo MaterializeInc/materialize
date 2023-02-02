@@ -2900,6 +2900,9 @@ impl CsrConnectionOptionExtracted {
         let _ = url
             .host_str()
             .ok_or_else(|| sql_err!("invalid CONNECTION: URL must specify domain name"))?;
+        if url.path() != "/" {
+            sql_bail!("invalid CONNECTION: URL must have an empty path");
+        }
         let cert = self.ssl_certificate;
         let key = self.ssl_key.map(|secret| secret.into());
         let tls_identity = match (cert, key) {

@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -87,8 +88,6 @@
 
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
-// Disallow usage of `Hash*` types from std.
-#![warn(clippy::disallowed_types)]
 
 use std::error::Error;
 use std::fmt;
@@ -113,6 +112,7 @@ pub mod literal_lifting;
 pub mod monotonic;
 pub mod nonnull_requirements;
 pub mod nonnullable;
+pub mod normalize;
 pub mod normalize_lets;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
@@ -398,6 +398,7 @@ impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     pub fn logical_optimizer() -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
+            Box::new(crate::normalize::Normalize::new()),
             // 1. Structure-agnostic cleanup
             Box::new(crate::topk_elision::TopKElision),
             Box::new(crate::nonnull_requirements::NonNullRequirements::default()),

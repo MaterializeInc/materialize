@@ -22,7 +22,7 @@ impl ComputeMetrics {
     pub fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             command_history_size: registry.register(metric!(
-                name: "mz_compute_comamnd_history_size",
+                name: "mz_compute_command_history_size",
                 help: "The size of the compute command history.",
             )),
             dataflow_count_in_history: registry.register(metric!(

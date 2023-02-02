@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::FromRequestParts;
+use axum::extract::{DefaultBodyLimit, FromRequestParts};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::{routing, Extension, Router};
@@ -45,6 +45,7 @@ use mz_adapter::catalog::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_adapter::session::{ExternalUserMetadata, User};
 use mz_adapter::{AdapterError, Client, SessionClient};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
+use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::result::ResultExt;
 use mz_ore::tracing::TracingHandle;
@@ -59,6 +60,9 @@ mod memory;
 mod probe;
 mod root;
 mod sql;
+
+/// Maximum allowed size for a request.
+pub const MAX_REQUEST_SIZE: usize = u64_to_usize(2 * bytesize::MB);
 
 #[derive(Debug, Clone)]
 pub struct HttpConfig {
@@ -533,7 +537,8 @@ fn base_router(BaseRouterConfig { profiling }: BaseRouterConfig) -> Router {
             "/hierarchical-memory",
             routing::get(memory::handle_hierarchical_memory),
         )
-        .route("/static/*path", routing::get(root::handle_static));
+        .route("/static/*path", routing::get(root::handle_static))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE));
     if profiling {
         router = router.nest("/prof/", mz_prof::http::router(&BUILD_INFO));
     }

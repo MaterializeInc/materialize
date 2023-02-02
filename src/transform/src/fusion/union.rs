@@ -35,9 +35,9 @@ impl crate::Transform for Union {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let result = relation.try_visit_mut_post(&mut |e| Ok(self.action(e)));
+        relation.visit_mut_post(&mut Self::action)?;
         mz_repr::explain_new::trace_plan(&*relation);
-        result
+        Ok(())
     }
 }
 
@@ -47,7 +47,7 @@ impl Union {
     /// The order among children is maintained, and the action should be idempotent.
     /// This action works best if other operators such as `Negate` and other linear
     /// operators are pushed down through other `Union` operators.
-    pub fn action(&self, relation: &mut MirRelationExpr) {
+    pub fn action(relation: &mut MirRelationExpr) {
         if let MirRelationExpr::Union { inputs, .. } = relation {
             let mut list: Vec<MirRelationExpr> = Vec::with_capacity(1 + inputs.len());
             Self::unfold_unions_into(relation.take_dangerous(), &mut list);

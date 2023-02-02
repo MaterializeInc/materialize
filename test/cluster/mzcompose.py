@@ -219,8 +219,8 @@ def workflow_test_github_15531(c: Composition) -> None:
         history_len = None
         dataflow_count = None
         for metric in metrics.splitlines():
-            if metric.startswith("mz_compute_comamnd_history_size"):
-                history_len = int(metric[len("mz_compute_comamnd_history_size") :])
+            if metric.startswith("mz_compute_command_history_size"):
+                history_len = int(metric[len("mz_compute_command_history_size") :])
             elif metric.startswith("mz_compute_dataflow_count_in_history"):
                 dataflow_count = int(
                     metric[len("mz_compute_dataflow_count_in_history") :]

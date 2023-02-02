@@ -663,7 +663,10 @@ impl<T> ComputeInstanceRef<'_, T> {
     }
 }
 
-/// State maintained about individual collections.
+/// State maintained about individual compute collections.
+///
+/// A compute collection is either an index, or a storage sink, or a subscribe, exported by a
+/// compute dataflow.
 #[derive(Debug)]
 pub struct CollectionState<T> {
     /// Whether this collection is a log collection.

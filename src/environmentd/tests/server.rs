@@ -71,6 +71,7 @@
 #![warn(clippy::unused_async)]
 #![warn(clippy::disallowed_methods)]
 #![warn(clippy::disallowed_macros)]
+#![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
@@ -82,6 +83,8 @@ use std::time::Duration;
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
+use http::StatusCode;
+use itertools::Itertools;
 use reqwest::blocking::Client;
 use reqwest::Url;
 use tracing::info;
@@ -716,4 +719,41 @@ fn test_default_cluster_sizes() {
         .unwrap()
         .get(0);
     assert_eq!(builtin_size, "2");
+}
+
+#[test]
+fn test_max_request_size() {
+    let statement = "SELECT $1::text";
+    let statement_size = statement.bytes().count();
+
+    // pgwire
+    {
+        let param_size = mz_pgwire::MAX_REQUEST_SIZE - statement_size + 1;
+        let param = std::iter::repeat("1").take(param_size).join("");
+        let config = util::Config::default()
+            .with_builtin_cluster_replica_size("1".to_string())
+            .with_default_cluster_replica_size("2".to_string());
+        let server = util::start_server(config).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+
+        // The specific error isn't forwarded to the client, the connection is just closed.
+        assert!(client.query(statement, &[&param]).is_err());
+        assert!(client.is_valid(Duration::from_secs(2)).is_err());
+    }
+
+    // http
+    {
+        let param_size = mz_environmentd::http::MAX_REQUEST_SIZE - statement_size + 1;
+        let param = std::iter::repeat("1").take(param_size).join("");
+        let server = util::start_server(util::Config::default()).unwrap();
+        let http_url = Url::parse(&format!(
+            "http://{}/api/sql",
+            server.inner.http_local_addr()
+        ))
+        .unwrap();
+        let json = format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[{param}]}}]}}");
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let res = Client::new().post(http_url).json(&json).send().unwrap();
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
 }

@@ -9,7 +9,7 @@
 
 //! Cluster management.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -319,9 +319,9 @@ where
         &mut self,
         next_replica_id: ReplicaId,
     ) -> Result<(), anyhow::Error> {
-        let desired: HashSet<_> = self.metrics_tasks.keys().copied().collect();
+        let desired: BTreeSet<_> = self.metrics_tasks.keys().copied().collect();
 
-        let actual: HashSet<_> = self
+        let actual: BTreeSet<_> = self
             .orchestrator
             .list_services()
             .await?

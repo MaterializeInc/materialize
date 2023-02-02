@@ -166,10 +166,11 @@ WARN_LINTS = [
     "clippy::transmutes_expressible_as_ptr_casts",
     # Needless async.
     "clippy::unused_async",
-    # Disallow the methods and macros listed in clippy.toml; see that file
-    # for rationale.
+    # Disallow the methods, macros, and types listed in clippy.toml;
+    # see that file for rationale.
     "clippy::disallowed_methods",
     "clippy::disallowed_macros",
+    "clippy::disallowed_types",
     # Implementing `From` gives you `Into` for free, but the reverse is not
     # true.
     "clippy::from_over_into",

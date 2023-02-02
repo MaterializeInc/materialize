@@ -109,7 +109,7 @@ List all the enabled region:
 mz region list
 ```
 
-Check any enabled region's status:
+Check any enabled region's status and addresses:
 
 ```bash
 mz region status aws/us-east-1

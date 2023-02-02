@@ -85,24 +85,78 @@ where
 
 /// Maintained state for partitioned compute clients.
 ///
-/// This helper type unifies the responses of multiple partitioned
-/// workers in order to present as a single worker.
+/// This helper type unifies the responses of multiple partitioned workers in order to present as a
+/// single worker:
+///
+///   * It emits `FrontierUppers` responses reporting the minimum/meet of frontiers reported by the
+///     individual workers.
+///   * It emits `PeekResponse`s and `SubscribeResponse`s reporting the union of the responses
+///     received from the workers.
+///
+/// In the compute communication stack, this client is instantiated several times:
+///
+///   * One instance on the controller side, dispatching between cluster processes.
+///   * One instance in each cluster process, dispatching between timely worker threads.
+///
+/// Note that because compute commands, except `CreateTimely`, are only sent to the first process,
+/// the cluster-side instances of `PartitionedComputeState` are not guaranteed to see all compute
+/// commands. Or more specifically: The instance running inside process 0 sees all commands,
+/// whereas the instances running inside the other processes only see `CreateTimely`. The
+/// `PartitionedComputeState` implementation must be able to cope with this limited visiblity. It
+/// does so by performing most of its state management based on observed compute responses rather
+/// than commands.
 #[derive(Debug)]
 pub struct PartitionedComputeState<T> {
     /// Number of partitions the state machine represents.
     parts: usize,
-    /// Upper frontiers for indexes and sinks, both unioned across all partitions and from each
-    /// individual partition.
+    /// Upper frontiers for indexes and sinks, both collected as a `MutableAntichain` across all
+    /// partitions and individually listed for each partition.
+    ///
+    /// Frontier tracking for a collection is initialized when the first `FrontierUppers` response
+    /// for that collection is received. Frontier tracking is ceased when all shards have reported
+    /// advancement to the empty frontier.
+    ///
+    /// The compute protocol requires that shards always emit a `FrontierUppers` response reporting
+    /// the empty frontier when a collection is dropped. It further requires that no further
+    /// `FrontierUppers` responses are emitted for a collection after the empty frontier was
+    /// reported. These properties ensure that a) we always cease frontier tracking for collections
+    /// that have been dropped and b) frontier tracking for a collection is not re-initialized
+    /// after it was ceased.
     uppers: BTreeMap<GlobalId, (MutableAntichain<T>, Vec<Antichain<T>>)>,
     /// Pending responses for a peek; returnable once all are available.
+    ///
+    /// Tracking of responses for a peek is initialized when the first `PeekResponse` for that peek
+    /// is received. Once all shards have provided a `PeekResponse`, a unified peek response is
+    /// emitted and the peek tracking state is dropped again.
+    ///
+    /// The compute protocol requires that exactly one response is emitted for each peek. This
+    /// property ensures that a) we can eventually drop the tracking state maintained for a peek
+    /// and b) we won't re-initialize tracking for a peek we have already served.
     peek_responses: BTreeMap<Uuid, BTreeMap<usize, PeekResponse>>,
-    /// Tracks in-progress `SUBSCRIBE`s, and the stashed rows we are holding
-    /// back until their timestamps are complete.
+    /// Tracks in-progress `SUBSCRIBE`s, and the stashed rows we are holding back until their
+    /// timestamps are complete.
     ///
     /// The updates may be `Err` if any of the batches have reported an error, in which case the
     /// subscribe is permanently borked.
-    pending_subscribes:
-        BTreeMap<GlobalId, Option<(MutableAntichain<T>, Result<Vec<(T, Row, Diff)>, String>)>>,
+    ///
+    /// Tracking of a subscribe is initialized when the first `SubscribeResponse` for that
+    /// subscribe is received. Once all shards have emitted an "end-of-subscribe" response the
+    /// subscribe tracking state is dropped again.
+    ///
+    /// The compute protocol requires that for a subscribe that shuts down an end-of-subscribe
+    /// response is emitted:
+    ///
+    ///   * Either a `Batch` response reporting advancement to the empty frontier...
+    ///   * ... or a `DroppedAt` response reporting that the subscribe was dropped before
+    ///     completing.
+    ///
+    /// The compute protocol further requires that no further `SubscribeResponse`s are emitted for
+    /// a subscribe after an end-of-subscribe was reported.
+    ///
+    /// These two properties ensure that a) once a subscribe has shut down, we can eventually drop
+    /// the tracking state maintained for it and b) we won't re-initialize tracking for a subscribe
+    /// we have already dropped.
+    pending_subscribes: BTreeMap<GlobalId, PendingSubscribe<T>>,
 }
 
 impl<T> Partitionable<ComputeCommand<T>, ComputeResponse<T>>
@@ -143,11 +197,8 @@ where
         if let ComputeCommand::CreateTimely { .. } = command {
             self.reset();
         } else {
-            // Note that we are not guaranteed to observe other compute commands than
-            // `CreateTimely`. The `Partitioned` compute client is used by `clusterd` processes,
-            // and in a multi-process replica only the first process receives all compute commands.
-            // We should therefore not add any logic here that relies on observing commands other
-            // than `CreateTimely`.
+            // We are not guaranteed to observe other compute commands than `CreateTimely`. We must
+            // therefore not add any logic here that relies on doing so.
         }
     }
 
@@ -179,6 +230,10 @@ where
 {
     fn split_command(&mut self, command: ComputeCommand<T>) -> Vec<Option<ComputeCommand<T>>> {
         self.observe_command(&command);
+
+        // As specified by the compute protocol:
+        //  * Forward `CreateTimely` commands to all shards.
+        //  * Forward all other commands to the first shard only.
         match command {
             ComputeCommand::CreateTimely { config, epoch } => (0..self.parts)
                 .into_iter()
@@ -272,50 +327,36 @@ where
                 }
             }
             ComputeResponse::SubscribeResponse(id, response) => {
-                let maybe_entry = self.pending_subscribes.entry(id).or_insert_with(|| {
-                    let mut frontier = MutableAntichain::new();
-                    // TODO(benesch): fix this dangerous use of `as`.
-                    #[allow(clippy::as_conversions)]
-                    frontier.update_iter(std::iter::once((T::minimum(), self.parts as i64)));
-                    Some((frontier, Ok(Vec::new())))
-                });
+                // Initialize tracking for this subscribe, if necessary.
+                let entry = self
+                    .pending_subscribes
+                    .entry(id)
+                    .or_insert_with(|| PendingSubscribe::new(self.parts));
 
-                let entry = match maybe_entry {
-                    None => {
-                        // This subscribe has been dropped;
-                        // we should permanently block
-                        // any messages from it
-                        return None;
-                    }
-                    Some(entry) => entry,
-                };
+                let emit_response = match response {
+                    SubscribeResponse::Batch(batch) => {
+                        let frontiers = &mut entry.frontiers;
+                        let old_frontier = frontiers.frontier().to_owned();
+                        frontiers.update_iter(batch.lower.into_iter().map(|t| (t, -1)));
+                        frontiers.update_iter(batch.upper.into_iter().map(|t| (t, 1)));
+                        let new_frontier = frontiers.frontier().to_owned();
 
-                match response {
-                    SubscribeResponse::Batch(SubscribeBatch {
-                        lower,
-                        upper,
-                        mut updates,
-                    }) => {
-                        let old_frontier = entry.0.frontier().to_owned();
-                        entry.0.update_iter(lower.iter().map(|t| (t.clone(), -1)));
-                        entry.0.update_iter(upper.iter().map(|t| (t.clone(), 1)));
-                        let new_frontier = entry.0.frontier().to_owned();
-                        match (&mut entry.1, &mut updates) {
+                        match (&mut entry.stashed_updates, batch.updates) {
                             (Err(_), _) => {
                                 // Subscribe is borked; nothing to do.
                                 // TODO: Consider refreshing error?
                             }
                             (_, Err(text)) => {
-                                entry.1 = Err(text.clone());
+                                entry.stashed_updates = Err(text);
                             }
                             (Ok(stashed_updates), Ok(updates)) => {
-                                stashed_updates.append(updates);
+                                stashed_updates.extend(updates);
                             }
                         }
 
                         // If the frontier has advanced, it is time to announce a thing.
                         if old_frontier != new_frontier {
-                            let updates = match &mut entry.1 {
+                            let updates = match &mut entry.stashed_updates {
                                 Ok(stashed_updates) => {
                                     consolidate_updates(stashed_updates);
                                     let mut ship = Vec::new();
@@ -327,7 +368,7 @@ where
                                             ship.push((time, data, diff));
                                         }
                                     }
-                                    entry.1 = Ok(keep);
+                                    entry.stashed_updates = Ok(keep);
                                     Ok(ship)
                                 }
                                 Err(text) => Err(text.clone()),
@@ -345,14 +386,57 @@ where
                         }
                     }
                     SubscribeResponse::DroppedAt(frontier) => {
-                        *maybe_entry = None;
-                        Some(Ok(ComputeResponse::SubscribeResponse(
-                            id,
-                            SubscribeResponse::DroppedAt(frontier),
-                        )))
+                        entry
+                            .frontiers
+                            .update_iter(frontier.iter().map(|t| (t.clone(), -1)));
+
+                        if entry.dropped {
+                            None
+                        } else {
+                            entry.dropped = true;
+                            Some(Ok(ComputeResponse::SubscribeResponse(
+                                id,
+                                SubscribeResponse::DroppedAt(frontier),
+                            )))
+                        }
                     }
+                };
+
+                if entry.frontiers.frontier().is_empty() {
+                    // All shards have reported advancement to the empty frontier or dropping, so
+                    // we do not expect further updates for this subscribe.
+                    self.pending_subscribes.remove(&id);
                 }
+
+                emit_response
             }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PendingSubscribe<T> {
+    /// The subscribe frontiers of the partitioned shards.
+    frontiers: MutableAntichain<T>,
+    /// The updates we are holding back until their timestamps are complete.
+    stashed_updates: Result<Vec<(T, Row, Diff)>, String>,
+    /// Whether we have already emitted a `DroppedAt` response for this subscribe.
+    ///
+    /// This field is used to ensure we emit such a response only once.
+    dropped: bool,
+}
+
+impl<T: timely::progress::Timestamp> PendingSubscribe<T> {
+    fn new(parts: usize) -> Self {
+        let mut frontiers = MutableAntichain::new();
+        // TODO(benesch): fix this dangerous use of `as`.
+        #[allow(clippy::as_conversions)]
+        frontiers.update_iter([(T::minimum(), parts as i64)]);
+
+        Self {
+            frontiers,
+            stashed_updates: Ok(Vec::new()),
+            dropped: false,
         }
     }
 }
