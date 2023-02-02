@@ -307,6 +307,7 @@ pass_secret secret
 kafka_conn  connection
 mv          materialized-view
 source_data source
+source_data_progress source
 snk         sink
 
 > SELECT DISTINCT(TYPE) FROM mz_objects
@@ -332,6 +333,7 @@ mv          materialized-view
 pass_secret secret
 snk         sink
 source_data source
+source_data_progress source
 tbl         table
 v1          view
 v2          view

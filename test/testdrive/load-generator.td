@@ -10,12 +10,13 @@
 > CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > SHOW SOURCES
-accounts      subsource      <null>
-auction_house load-generator ${arg.default-storage-size}
-auctions      subsource      <null>
-bids          subsource      <null>
-organizations subsource      <null>
-users         subsource      <null>
+accounts                subsource      <null>
+auction_house           load-generator ${arg.default-storage-size}
+auction_house_progress  subsource <null>
+auctions                subsource      <null>
+bids                    subsource      <null>
+organizations           subsource      <null>
+users                   subsource      <null>
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
@@ -61,7 +62,7 @@ contains: unsupported max cardinality
 
 # Query automatically generated progress topic
 $ set-regex match=\d+ replacement=<NUMBER>
-> SELECT count FROM auction_house_progress
+> SELECT "offset" FROM auction_house_progress
 <NUMBER>
 
 # Ensure we report the write frontier of the progress subsource

@@ -68,6 +68,7 @@ def workflow_github_17578(c: Composition) -> None:
             with_subsources bids
             with_subsources organizations
             with_subsources users
+            with_subsources with_subsources_progress
             """
         ),
     )
@@ -94,6 +95,7 @@ def workflow_github_17578(c: Composition) -> None:
             with_subsources bids
             with_subsources organizations
             with_subsources users
+            with_subsources with_subsources_progress
             """
         ),
     )
