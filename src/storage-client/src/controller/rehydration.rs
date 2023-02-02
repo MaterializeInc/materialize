@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use mz_persist_types::codec_impls::UnitSchema;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -215,10 +215,16 @@ where
         location: ClusterReplicaLocation,
         envd_epoch: NonZeroI64,
     ) -> RehydrationTaskState<T> {
-        let owned_location = location.clone();
-
         // Reconnect to the storage replica.
-        let client = {
+        let stream = Retry::default()
+            .clamp_backoff(Duration::from_secs(1))
+            .into_retry_stream();
+        tokio::pin!(stream);
+
+        // TODO(guswynn): cluster-unification: share this code with compute, by consolidating
+        // on use of `ReplicaTask`.
+        let (client, timely_command) = loop {
+            let state = stream.next().await.expect("infinite stream");
             // Drain any pending commands, in case we've been told to connect
             // to a new storage replica.
             loop {
@@ -238,63 +244,48 @@ where
                 workers: location.workers,
                 // Overridden by the storage `PartitionedState` implementation.
                 process: 0,
-                addresses: location.dataflow_addrs,
+                addresses: location.dataflow_addrs.clone(),
                 // This value is not currently used by storage, so we just choose
                 // some identifiable value.
                 idle_arrangement_merge_effort: 1337,
             };
+            let dests = location
+                .ctl_addrs
+                .clone()
+                .into_iter()
+                .map(|addr| (addr, self.metrics.clone()))
+                .collect();
+            let version = self.build_info.semver_version();
+            let client = StorageGrpcClient::connect_partitioned(dests, version).await;
 
-            // TODO(guswynn): cluster-unification: share this code with
-            let client = Retry::default()
-                .clamp_backoff(Duration::from_secs(32))
-                .retry_async(|state| {
-                    let dests = location
-                        .ctl_addrs
-                        .clone()
-                        .into_iter()
-                        .map(|addr| (addr, self.metrics.clone()))
-                        .collect();
-                    let version = self.build_info.semver_version();
-
-                    let location = owned_location.clone();
-                    let timely_config = timely_config.clone();
-
-                    async move {
-                        let mut client =
-                            match StorageGrpcClient::connect_partitioned(dests, version).await {
-                                Ok(client) => Ok(client),
-                                Err(e) => {
-                                    if state.i >= mz_service::retry::INFO_MIN_RETRIES {
-                                        tracing::info!(
-                                        "error connecting to {:?} for storage, retrying in {:?}: {e}",
-                                        location,
-                                        state.next_backoff.unwrap()
-                                    );
-                                    } else {
-                                        tracing::debug!(
-                                        "error connecting to {:?} for storage, retrying in {:?}: {e}",
-                                        location,
-                                        state.next_backoff.unwrap()
-                                    );
-                                    }
-                                    Err(e)
-                                }
-                            }?;
-
-                        client
-                            .send(StorageCommand::CreateTimely {
-                                config: timely_config,
-                                epoch: ClusterStartupEpoch::new(envd_epoch, 0),
-                            })
-                            .await?;
-
-                        Ok::<_, anyhow::Error>(client)
+            let client = match client {
+                Ok(client) => client,
+                Err(e) => {
+                    if state.i >= mz_service::retry::INFO_MIN_RETRIES {
+                        tracing::info!(
+                            "error connecting to {:?} for storage, retrying in {:?}: {e}",
+                            location,
+                            state.next_backoff.unwrap()
+                        );
+                    } else {
+                        tracing::debug!(
+                            "error connecting to {:?} for storage, retrying in {:?}: {e}",
+                            location,
+                            state.next_backoff.unwrap()
+                        );
                     }
-                })
-                .await
-                .expect("retry retries forever");
+                    continue;
+                }
+            };
 
-            client
+            let timely_command = StorageCommand::CreateTimely {
+                config: timely_config,
+                // The replica epoch is unused by storage, and won't
+                // be used till multi-replica storage is supported.
+                epoch: ClusterStartupEpoch::new(envd_epoch, 0),
+            };
+
+            break (client, timely_command);
         };
 
         for ingest in self.sources.values_mut() {
@@ -347,6 +338,7 @@ where
 
         // Rehydrate all commands.
         let mut commands = vec![
+            timely_command,
             StorageCommand::UpdateConfiguration(self.config.clone()),
             StorageCommand::CreateSources(self.sources.values().cloned().collect()),
             StorageCommand::CreateSinks(self.sinks.values().cloned().collect()),
@@ -354,7 +346,7 @@ where
         if self.initialized {
             commands.push(StorageCommand::InitializationComplete)
         }
-        self.send_commands(owned_location, client, commands).await
+        self.send_commands(location, client, commands).await
     }
 
     async fn step_pump(
