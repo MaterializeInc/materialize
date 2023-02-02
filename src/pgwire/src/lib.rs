@@ -96,6 +96,7 @@ mod metrics;
 mod protocol;
 mod server;
 
+pub use codec::MAX_REQUEST_SIZE;
 pub use message::Severity;
 pub use metrics::MetricsConfig;
 pub use protocol::match_handshake;
