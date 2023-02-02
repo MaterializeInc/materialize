@@ -13,3 +13,7 @@
 //! 1. Bringing enclosed scalar expressions to a canonical form,
 //! 2. Converting / peeling off part of the enclosing relation expression into
 //!    another relation expression that can represent the same concept.
+
+mod flatmap_to_map;
+
+pub use flatmap_to_map::FlatMapToMap;
