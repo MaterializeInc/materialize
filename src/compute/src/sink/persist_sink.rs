@@ -24,7 +24,6 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::PartialOrder;
-use tokio::sync::Mutex;
 use tracing::trace;
 
 use mz_compute_client::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
@@ -241,7 +240,7 @@ fn mint_batch_descriptions<G>(
     desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_feedback_stream: &Stream<G, ()>,
     as_of: Antichain<Timestamp>,
-    persist_clients: Arc<Mutex<PersistClientCache>>,
+    persist_clients: Arc<PersistClientCache>,
     compute_state: &mut crate::compute_state::ComputeState,
 ) -> (
     Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
@@ -299,8 +298,6 @@ where
         // TODO(aljoscha): We need to figure out what to do with error
         // results from these calls.
         let persist_client = persist_clients
-            .lock()
-            .await
             .open(persist_location)
             .await
             .expect("could not open persist client");
@@ -506,7 +503,7 @@ fn write_batches<G>(
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
-    persist_clients: Arc<Mutex<PersistClientCache>>,
+    persist_clients: Arc<PersistClientCache>,
 ) -> (Stream<G, WriterEnrichedHollowBatch<Timestamp>>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -573,8 +570,6 @@ where
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
         let persist_client = persist_clients
-            .lock()
-            .await
             .open(persist_location)
             .await
             .expect("could not open persist client");
@@ -843,7 +838,7 @@ fn append_batches<G>(
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     batches: &Stream<G, WriterEnrichedHollowBatch<Timestamp>>,
-    persist_clients: Arc<Mutex<PersistClientCache>>,
+    persist_clients: Arc<PersistClientCache>,
 ) -> (Stream<G, ()>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -914,8 +909,6 @@ where
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
         let persist_client = persist_clients
-            .lock()
-            .await
             .open(persist_location)
             .await
             .expect("could not open persist client");

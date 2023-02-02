@@ -3159,7 +3159,7 @@ mod tests {
                 NoTls,
             )
             .await
-            .unwrap();
+            .expect("failed to connect to Postgres");
 
             task::spawn(|| "compare_builtin_postgres", async move {
                 if let Err(e) = connection.await {
@@ -3196,7 +3196,7 @@ mod tests {
                     &[],
                 )
                 .await
-                .unwrap()
+                .expect("pg query failed")
                 .into_iter()
                 .map(|row| {
                     let oid: u32 = row.get("oid");
@@ -3222,7 +3222,7 @@ mod tests {
                     &[],
                 )
                 .await
-                .unwrap()
+                .expect("pg query failed")
                 .into_iter()
                 .map(|row| {
                     let oid: u32 = row.get("oid");
@@ -3246,7 +3246,7 @@ mod tests {
                         schema: Some(PG_CATALOG_SCHEMA.into()),
                         item: item.to_string(),
                     })
-                    .unwrap()
+                    .expect("unable to resolve type")
                     .oid()
             };
 
@@ -3336,7 +3336,7 @@ mod tests {
                                 ty.schema,
                                 SYSTEM_CONN_ID,
                             )
-                            .unwrap();
+                            .expect("unable to resolve schema");
                         let allocated_type = catalog
                             .resolve_entry(
                                 None,
@@ -3348,7 +3348,7 @@ mod tests {
                                 },
                                 SYSTEM_CONN_ID,
                             )
-                            .unwrap();
+                            .expect("unable to resolve type");
                         let ty = if let CatalogItem::Type(ty) = &allocated_type.item {
                             ty
                         } else {
@@ -3464,9 +3464,13 @@ mod tests {
                         schema: Some(view.schema.to_string()),
                         item: view.name.to_string(),
                     })
-                    .unwrap();
+                    .expect("unable to resolve view");
                 let full_name = conn_catalog.resolve_full_name(item.name());
-                for col_type in item.desc(&full_name).unwrap().iter_types() {
+                for col_type in item
+                    .desc(&full_name)
+                    .expect("invalid item type")
+                    .iter_types()
+                {
                     match &col_type.scalar_type {
                         typ @ ScalarType::UInt16
                         | typ @ ScalarType::UInt32

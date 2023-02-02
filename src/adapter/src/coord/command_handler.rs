@@ -525,7 +525,7 @@ impl Coordinator {
                 .iter()
                 .position(|ready| matches!(ready, Deferred::Plan(ready) if ready.session.conn_id() == conn_id))
             {
-                let ready = self.write_lock_wait_group.remove(idx).unwrap();
+                let ready = self.write_lock_wait_group.remove(idx).expect("known to exist from call to `position` above");
                 if let Deferred::Plan(ready) = ready {
                     ready.tx.send(Ok(ExecuteResponse::Canceled), ready.session);
                 }

@@ -107,8 +107,6 @@ where
         let mut stashed_batches = BTreeMap::new();
 
         let mut write = persist_clients
-            .lock()
-            .await
             .open(metadata.persist_location)
             .await
             .expect("could not open persist client")

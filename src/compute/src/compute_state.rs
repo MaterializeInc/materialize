@@ -24,7 +24,7 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::reachability::logging::TrackerEvent;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tracing::{error, info, span, Level};
 use uuid::Uuid;
 
@@ -83,7 +83,7 @@ pub struct ComputeState {
     pub compute_logger: Option<logging::compute::Logger>,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
-    pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    pub persist_clients: Arc<PersistClientCache>,
     /// History of commands received by this workers and all its peers.
     pub command_history: ComputeCommandHistory,
     /// Max size in bytes of any result.

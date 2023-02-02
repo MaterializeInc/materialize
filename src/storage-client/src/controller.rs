@@ -39,7 +39,6 @@ use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
 use tracing::{debug, info};
 
@@ -527,7 +526,7 @@ pub trait ResumptionFrontierCalculator<T> {
 
     /// Creates an opaque state type that can be used to efficiently calculate a
     /// new _resumption frontier_ when needed.
-    async fn initialize_state(&self, client_cache: &mut PersistClientCache) -> Self::State;
+    async fn initialize_state(&self, client_cache: &PersistClientCache) -> Self::State;
 
     /// Calculates a new, safe _resumption frontier_.
     async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T>;
@@ -699,7 +698,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// The persist location where all storage collections are being written to
     persist_location: PersistLocation,
     /// A persist client used to write to storage collections
-    persist: Arc<Mutex<PersistClientCache>>,
+    persist: Arc<PersistClientCache>,
     /// Metrics of the Storage controller
     metrics: StorageControllerMetrics,
 }
@@ -1050,8 +1049,6 @@ where
         // So that we can open `SinceHandle`s for each collections concurrently.
         let persist_client = self
             .persist
-            .lock()
-            .await
             .open(self.persist_location.clone())
             .await
             .unwrap();
@@ -1162,8 +1159,7 @@ where
                         desc: ingestion.desc,
                         instance_id: ingestion.instance_id,
                     };
-                    let mut persist_clients = self.persist.lock().await;
-                    let mut state = desc.initialize_state(&mut persist_clients).await;
+                    let mut state = desc.initialize_state(&self.persist).await;
                     let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
 
                     // Fetch the client for this ingestion's instance.
@@ -1452,9 +1448,8 @@ where
         let as_of = Antichain::from_elem(as_of);
         let metadata = &self.collection(id)?.collection_metadata;
 
-        let mut persist_clients = self.persist.lock().await;
-
-        let persist_client = persist_clients
+        let persist_client = self
+            .persist
             .open(metadata.persist_location.clone())
             .await
             .unwrap();
@@ -1472,8 +1467,6 @@ where
             )
             .await
             .expect("invalid persist usage");
-
-        drop(persist_clients);
 
         match read_handle.snapshot_and_fetch(as_of).await {
             Ok(contents) => {
@@ -1754,7 +1747,7 @@ where
         build_info: &'static BuildInfo,
         postgres_url: String,
         persist_location: PersistLocation,
-        persist_clients: Arc<Mutex<PersistClientCache>>,
+        persist_clients: Arc<PersistClientCache>,
         now: NowFn,
         postgres_factory: &StashFactory,
         envd_epoch: NonZeroI64,
@@ -2124,8 +2117,6 @@ where
             if replace_data_shard {
                 let persist_client = self
                     .persist
-                    .lock()
-                    .await
                     .open(self.persist_location.clone())
                     .await
                     .unwrap();
@@ -2166,8 +2157,6 @@ where
         // Open a persist client to delete unused shards.
         let persist_client = self
             .persist
-            .lock()
-            .await
             .open(self.persist_location.clone())
             .await
             .unwrap();

@@ -102,7 +102,6 @@ use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::{self, UnboundedSender};
-use tokio::sync::Mutex;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 
@@ -142,7 +141,7 @@ pub struct ControllerConfig {
     /// A process-global cache of (blob_uri, consensus_uri) ->
     /// PersistClient.
     /// This is intentionally shared between workers.
-    pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    pub persist_clients: Arc<PersistClientCache>,
     /// The stash URL for the storage controller.
     pub storage_stash_url: String,
     /// The clusterd image to use when starting new cluster processes.

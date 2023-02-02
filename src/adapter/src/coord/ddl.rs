@@ -40,7 +40,7 @@ use crate::coord::Coordinator;
 use crate::session::vars::SystemVars;
 use crate::session::Session;
 use crate::telemetry::SegmentClientExt;
-use crate::util::ComputeSinkId;
+use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterError, AdapterNotice};
 
 /// State provided to a catalog transaction closure.
@@ -385,7 +385,10 @@ impl Coordinator {
         for id in &sources {
             self.drop_storage_read_policy(id);
         }
-        self.controller.storage.drop_sources(sources).unwrap();
+        self.controller
+            .storage
+            .drop_sources(sources)
+            .unwrap_or_terminate("cannot fail to drop sources");
     }
 
     pub(crate) fn drop_compute_sinks(&mut self, sinks: impl IntoIterator<Item = ComputeSinkId>) {
@@ -404,7 +407,9 @@ impl Coordinator {
         for (cluster_id, ids) in by_cluster {
             // A cluster could have been dropped, so verify it exists.
             if compute.instance_exists(cluster_id) {
-                compute.drop_collections(cluster_id, ids).unwrap();
+                compute
+                    .drop_collections(cluster_id, ids)
+                    .unwrap_or_terminate("cannot fail to drop collections");
             }
         }
     }
@@ -413,7 +418,10 @@ impl Coordinator {
         for id in &sinks {
             self.drop_storage_read_policy(id);
         }
-        self.controller.storage.drop_sinks(sinks).unwrap();
+        self.controller
+            .storage
+            .drop_sinks(sinks)
+            .unwrap_or_terminate("cannot fail to drop sinks");
     }
 
     pub(crate) fn drop_indexes(&mut self, indexes: Vec<(ClusterId, GlobalId)>) {
@@ -429,7 +437,9 @@ impl Coordinator {
         for (cluster_id, ids) in by_cluster {
             // A cluster could have been dropped, so verify it exists.
             if compute.instance_exists(cluster_id) {
-                compute.drop_collections(cluster_id, ids).unwrap();
+                compute
+                    .drop_collections(cluster_id, ids)
+                    .unwrap_or_terminate("cannot fail to drop collections");
             }
         }
     }
@@ -451,7 +461,9 @@ impl Coordinator {
         for (cluster_id, ids) in by_cluster {
             // A cluster could have been dropped, so verify it exists.
             if compute.instance_exists(cluster_id) {
-                compute.drop_collections(cluster_id, ids).unwrap();
+                compute
+                    .drop_collections(cluster_id, ids)
+                    .unwrap_or_terminate("cannot fail to drop collections");
             }
         }
 
@@ -473,7 +485,7 @@ impl Coordinator {
                 .cloud_resource_controller
                 .as_ref()
                 .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))
-                .unwrap()
+                .expect("vpc endpoints should only be dropped in CLOUD, where `cloud_resource_controller` is `Some`")
                 .delete_vpc_endpoint(vpc_endpoint)
                 .await
             {
@@ -532,7 +544,7 @@ impl Coordinator {
                     storage_sink_from_entry.name(),
                     storage_sink_from_entry.conn_id(),
                 ))
-                .unwrap()
+                .expect("indexes can only be built on items with descs")
                 .into_owned(),
             connection,
             envelope: Some(sink.envelope),
@@ -773,7 +785,9 @@ impl Coordinator {
                 .user_connections()
                 .filter(|c| {
                     matches!(
-                        c.connection().unwrap().connection,
+                        c.connection()
+                            .expect("`user_connections()` only returns connection objects")
+                            .connection,
                         mz_storage_client::types::connections::Connection::AwsPrivatelink(_),
                     )
                 })

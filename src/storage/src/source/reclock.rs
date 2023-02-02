@@ -616,7 +616,6 @@ mod tests {
     use itertools::Itertools;
     use once_cell::sync::Lazy;
     use timely::progress::Timestamp as _;
-    use tokio::sync::Mutex;
 
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::metrics::MetricsRegistry;
@@ -634,14 +633,10 @@ mod tests {
     // 15 minutes
     static PERSIST_READER_LEASE_TIMEOUT_MS: Duration = Duration::from_secs(60 * 15);
 
-    static PERSIST_CACHE: Lazy<Arc<Mutex<PersistClientCache>>> = Lazy::new(|| {
+    static PERSIST_CACHE: Lazy<Arc<PersistClientCache>> = Lazy::new(|| {
         let mut persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         persistcfg.reader_lease_duration = PERSIST_READER_LEASE_TIMEOUT_MS;
-
-        Arc::new(Mutex::new(PersistClientCache::new(
-            persistcfg,
-            &MetricsRegistry::new(),
-        )))
+        Arc::new(PersistClientCache::new(persistcfg, &MetricsRegistry::new()))
     });
 
     async fn make_test_operator(
@@ -1343,12 +1338,10 @@ mod tests {
             consensus_uri: "mem://".to_owned(),
         };
 
-        let mut persist_clients = PERSIST_CACHE.lock().await;
-        let persist_client = persist_clients
+        let persist_client = PERSIST_CACHE
             .open(persist_location)
             .await
             .expect("error creating persist client");
-        drop(persist_clients);
 
         let read_handle = persist_client
             .open_leased_reader::<SourceData, (), Timestamp, Diff>(

@@ -133,7 +133,7 @@ use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, Session};
 use crate::subscribe::ActiveSubscribe;
-use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId};
+use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::AdapterNotice;
 
 pub(crate) mod id_bundle;
@@ -569,7 +569,7 @@ impl Coordinator {
                     .storage
                     .create_collections(introspection_collections)
                     .await
-                    .unwrap();
+                    .unwrap_or_terminate("cannot fail to create collections");
 
                 // TODO - Should these windows be configurable?
                 policies_to_set
@@ -727,7 +727,7 @@ impl Coordinator {
             .storage
             .create_collections(collections_to_create)
             .await
-            .unwrap();
+            .unwrap_or_terminate("cannot fail to create collections");
 
         info!("coordinator init: installing existing objects in catalog");
         let mut privatelink_connections = BTreeMap::new();
@@ -762,7 +762,7 @@ impl Coordinator {
                             .storage
                             .create_collections(vec![(entry.id(), source_desc)])
                             .await
-                            .unwrap();
+                            .unwrap_or_terminate("cannot fail to create collections");
                     }
                     policies_to_set
                         .entry(policy.expect("sources have a compaction window"))
@@ -804,7 +804,7 @@ impl Coordinator {
                         self.controller
                             .active_compute()
                             .create_dataflows(idx.cluster_id, dataflow_plan)
-                            .unwrap();
+                            .unwrap_or_terminate("cannot fail to create dataflows");
                     }
                 }
                 CatalogItem::View(_) => (),
@@ -815,7 +815,7 @@ impl Coordinator {
                         .storage
                         .create_collections(vec![(entry.id(), collection_desc)])
                         .await
-                        .unwrap();
+                        .unwrap_or_terminate("cannot fail to create collections");
 
                     policies_to_set
                         .entry(policy.expect("materialized views have a compaction window"))
@@ -853,7 +853,7 @@ impl Coordinator {
                         .controller
                         .storage
                         .prepare_export(id, sink.from)
-                        .unwrap();
+                        .unwrap_or_terminate("cannot fail to prepare export");
 
                     task::spawn(
                         || format!("sink_connection_ready:{}", sink.from),
@@ -974,8 +974,9 @@ impl Coordinator {
             builtin_table_updates.extend(
                 log.variant.foreign_keys().into_iter().enumerate().flat_map(
                     |(index, (parent, pairs))| {
-                        let parent_log =
-                            BUILTINS::logs().find(|src| src.variant == parent).unwrap();
+                        let parent_log = BUILTINS::logs()
+                            .find(|src| src.variant == parent)
+                            .expect("log foreign key variant is invalid");
                         let parent_id = self.catalog.resolve_builtin_log(parent_log).to_string();
                         pairs.into_iter().map(move |(c, p)| {
                             let row = Row::pack_slice(&[
@@ -1016,7 +1017,7 @@ impl Coordinator {
             .expect("invalid updates")
             .await
             .expect("One-shot shouldn't be dropped during bootstrap")
-            .unwrap();
+            .unwrap_or_terminate("cannot fail to append");
 
         // Add builtin table updates the clear the contents of all system tables
         info!("coordinator init: resetting system tables");
@@ -1035,7 +1036,7 @@ impl Coordinator {
                 .storage
                 .snapshot(system_table.id(), read_ts)
                 .await
-                .unwrap();
+                .unwrap_or_terminate("cannot fail to fetch snapshot");
             info!("coordinator init: table size {}", current_contents.len());
             let retractions = current_contents
                 .into_iter()
@@ -1215,15 +1216,19 @@ pub async fn serve(
     // Coordinator::sequence_create_compute_replica.
     availability_zones.shuffle(&mut rand::thread_rng());
 
-    let aws_principal_context =
-        if aws_account_id.is_some() && connection_context.aws_external_id_prefix.is_some() {
-            Some(AwsPrincipalContext {
-                aws_account_id: aws_account_id.unwrap(),
-                aws_external_id_prefix: connection_context.aws_external_id_prefix.clone().unwrap(),
-            })
-        } else {
-            None
-        };
+    let aws_principal_context = if aws_account_id.is_some()
+        && connection_context.aws_external_id_prefix.is_some()
+    {
+        Some(AwsPrincipalContext {
+            aws_account_id: aws_account_id.expect("known to be `Some` from `is_some()` call above"),
+            aws_external_id_prefix: connection_context
+                .aws_external_id_prefix
+                .clone()
+                .expect("known to be `Some` from `is_some()` call above"),
+        })
+    } else {
+        None
+    };
 
     let aws_privatelink_availability_zones = aws_privatelink_availability_zones
         .map(|azs_vec| BTreeSet::from_iter(azs_vec.iter().cloned()));
@@ -1322,13 +1327,18 @@ pub async fn serve(
                 Ok(())
             });
             let ok = bootstrap.is_ok();
-            bootstrap_tx.send(bootstrap).unwrap();
+            bootstrap_tx
+                .send(bootstrap)
+                .expect("bootstrap_rx is not dropped until it receives this message");
             if ok {
                 handle.block_on(coord.serve(internal_cmd_rx, strict_serializable_reads_rx, cmd_rx));
             }
         })
-        .unwrap();
-    match bootstrap_rx.await.unwrap() {
+        .expect("failed to create coordinator thread");
+    match bootstrap_rx
+        .await
+        .expect("bootstrap_tx always sends a message or panics/halts")
+    {
         Ok(()) => {
             info!("coordinator init: complete");
             let handle = Handle {

@@ -50,7 +50,7 @@ use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::oneshot;
 use tokio_postgres::types::FromSql;
 use tokio_postgres::types::Kind as PgKind;
 use tokio_postgres::types::Type as PgType;
@@ -814,7 +814,7 @@ impl RunnerInner {
             PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone()),
             &metrics_registry,
         );
-        let persist_clients = Arc::new(Mutex::new(persist_clients));
+        let persist_clients = Arc::new(persist_clients);
         let postgres_factory = StashFactory::new(&metrics_registry);
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());

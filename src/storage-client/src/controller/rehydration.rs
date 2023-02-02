@@ -29,7 +29,6 @@ use tokio::pin;
 use tokio::select;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::sync::Mutex;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;
 
@@ -69,7 +68,7 @@ where
     /// a storage replica.
     pub fn new(
         build_info: &'static BuildInfo,
-        persist: Arc<Mutex<PersistClientCache>>,
+        persist: Arc<PersistClientCache>,
         metrics: RehydratingStorageClientMetrics,
     ) -> RehydratingStorageClient<T> {
         let (command_tx, command_rx) = unbounded_channel();
@@ -146,7 +145,7 @@ struct RehydrationTask<T> {
     /// Storage configuration that has been observed.
     config: StorageParameters,
     /// A handle to Persist
-    persist: Arc<Mutex<PersistClientCache>>,
+    persist: Arc<PersistClientCache>,
     /// Prometheus metrics
     metrics: RehydratingStorageClientMetrics,
 }
@@ -253,11 +252,7 @@ where
         };
 
         for ingest in self.sources.values_mut() {
-            let mut persist_clients = self.persist.lock().await;
-            let mut state = ingest
-                .description
-                .initialize_state(&mut persist_clients)
-                .await;
+            let mut state = ingest.description.initialize_state(&self.persist).await;
             let resume_upper = ingest
                 .description
                 .calculate_resumption_frontier(&mut state)
@@ -266,8 +261,8 @@ where
         }
 
         for export in self.sinks.values_mut() {
-            let mut persist_clients = self.persist.lock().await;
-            let persist_client = persist_clients
+            let persist_client = self
+                .persist
                 .open(
                     export
                         .description

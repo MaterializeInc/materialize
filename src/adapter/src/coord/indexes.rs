@@ -34,7 +34,11 @@ impl Coordinator {
     ) -> ComputeInstanceIndexOracle<mz_repr::Timestamp> {
         ComputeInstanceIndexOracle {
             catalog: self.catalog.state(),
-            compute: self.controller.compute.instance_ref(instance).unwrap(),
+            compute: self
+                .controller
+                .compute
+                .instance_ref(instance)
+                .expect("compute instance does not exist"),
         }
     }
 }

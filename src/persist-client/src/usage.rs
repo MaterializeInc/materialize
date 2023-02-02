@@ -30,7 +30,7 @@ impl StorageUsageClient {
     /// Creates a new StorageUsageClient pointed to a specific Blob
     pub async fn open(
         blob_uri: String,
-        client_cache: &mut PersistClientCache,
+        client_cache: &PersistClientCache,
     ) -> Result<StorageUsageClient, ExternalError> {
         let blob = client_cache.open_blob(blob_uri).await?;
         let metrics = Arc::clone(&client_cache.metrics);
