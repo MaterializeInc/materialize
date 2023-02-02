@@ -16,7 +16,8 @@
       STORAGECTL ADDRESSES ['storage:2100'],
       STORAGE ADDRESSES ['storage:2103'],
       COMPUTECTL ADDRESSES ['storage:2101'],
-      COMPUTE ADDRESSES ['storage:2102']
+      COMPUTE ADDRESSES ['storage:2102'],
+      WORKERS 4
     )
   )
 

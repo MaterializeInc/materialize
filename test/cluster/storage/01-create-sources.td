@@ -22,7 +22,8 @@ one
       STORAGECTL ADDRESSES ['clusterd1:2100'],
       STORAGE ADDRESSES ['clusterd1:2103'],
       COMPUTECTL ADDRESSES ['clusterd1:2101'],
-      COMPUTE ADDRESSES ['clusterd1:2102']
+      COMPUTE ADDRESSES ['clusterd1:2102'],
+      WORKERS 4
     )
   )
 
