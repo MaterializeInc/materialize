@@ -357,6 +357,11 @@ contains: requires both SSL KEY and SSL CERTIFICATE
   );
 contains: requires both SSL KEY and SSL CERTIFICATE
 
+! CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}/FOO/BAR/BAZ'
+  );
+contains: URL must have an empty path
+
 ## SSH
 ! CREATE CONNECTION missing_user TO SSH TUNNEL (
     USER 'foo'
