@@ -24,7 +24,6 @@ use timely::dataflow::operators::{Capability, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::scheduling::Activator;
-use tokio::sync::Mutex;
 
 use mz_expr::MfpPlan;
 use mz_persist_client::cache::PersistClientCache;
@@ -63,7 +62,7 @@ use mz_timely_util::buffer::ConsolidateBuffer;
 pub fn persist_source<G, YFn>(
     scope: &G,
     source_id: GlobalId,
-    persist_clients: Arc<Mutex<PersistClientCache>>,
+    persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
     as_of: Option<Antichain<Timestamp>>,
     until: Antichain<Timestamp>,
@@ -107,7 +106,7 @@ where
 pub fn persist_source_core<G, YFn>(
     scope: &G,
     source_id: GlobalId,
-    persist_clients: Arc<Mutex<PersistClientCache>>,
+    persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
     as_of: Option<Antichain<Timestamp>>,
     until: Antichain<Timestamp>,

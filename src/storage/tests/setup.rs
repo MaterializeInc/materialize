@@ -204,7 +204,7 @@ where
                 blob_uri: "mem://".to_string(),
                 consensus_uri: "mem://".to_string(),
             };
-            let mut persist_cache =
+            let persist_cache =
                 mz_persist_client::cache::PersistClientCache::new(persistcfg, &metrics_registry);
 
             // create a client for use with the `until` closure later.
@@ -212,7 +212,7 @@ where
                 .block_on(persist_cache.open(persist_location.clone()))
                 .unwrap();
 
-            let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_cache));
+            let persist_clients = Arc::new(persist_cache);
 
             let connection_context = mz_storage_client::types::connections::ConnectionContext {
                 librdkafka_log_level: tracing::Level::INFO,

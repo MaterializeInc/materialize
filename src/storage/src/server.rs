@@ -40,7 +40,7 @@ pub struct Config {
     /// Configuration for source and sink connection.
     pub connection_context: ConnectionContext,
     /// `persist` client cache.
-    pub persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
+    pub persist_clients: Arc<PersistClientCache>,
 }
 
 /// A handle to a running dataflow server.

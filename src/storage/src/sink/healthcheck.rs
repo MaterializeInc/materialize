@@ -12,7 +12,6 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use anyhow::Context;
-use tokio::sync::Mutex;
 use tracing::trace;
 
 use mz_ore::now::NowFn;
@@ -47,15 +46,13 @@ impl Healthchecker {
     /// storage.
     pub async fn new(
         sink_id: GlobalId,
-        persist_clients: &Arc<Mutex<PersistClientCache>>,
+        persist_clients: &Arc<PersistClientCache>,
         persist_location: PersistLocation,
         status_shard: ShardId,
         now: NowFn,
     ) -> anyhow::Result<Self> {
         trace!("Initializing healthchecker for sink {sink_id}");
         let persist_client = persist_clients
-            .lock()
-            .await
             .open(persist_location)
             .await
             .context("error creating persist client for Healthchecker")?;
@@ -414,11 +411,11 @@ mod tests {
     }
 
     // Auxiliary functions
-    fn persist_cache() -> Arc<Mutex<PersistClientCache>> {
-        Arc::new(Mutex::new(PersistClientCache::new(
+    fn persist_cache() -> Arc<PersistClientCache> {
+        Arc::new(PersistClientCache::new(
             PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
             &MetricsRegistry::new(),
-        )))
+        ))
     }
 
     static PERSIST_LOCATION: Lazy<PersistLocation> = Lazy::new(|| PersistLocation {
@@ -429,7 +426,7 @@ mod tests {
     async fn new_healthchecker(
         status_shard_id: ShardId,
         source_id: GlobalId,
-        persist_clients: &Arc<Mutex<PersistClientCache>>,
+        persist_clients: &Arc<PersistClientCache>,
     ) -> Healthchecker {
         let start = tokio::time::Instant::now();
         let now_fn = NowFn::from(move || u64::try_from(start.elapsed().as_millis()).unwrap());
@@ -448,7 +445,7 @@ mod tests {
     async fn simple_healthchecker(
         status_shard_id: ShardId,
         source_id: u64,
-        persist_clients: &Arc<Mutex<PersistClientCache>>,
+        persist_clients: &Arc<PersistClientCache>,
     ) -> Healthchecker {
         new_healthchecker(
             status_shard_id,
@@ -460,11 +457,9 @@ mod tests {
 
     async fn dump_storage_collection(
         shard_id: ShardId,
-        persist_clients: &Arc<Mutex<PersistClientCache>>,
+        persist_clients: &Arc<PersistClientCache>,
     ) -> Vec<Row> {
         let persist_client = persist_clients
-            .lock()
-            .await
             .open((*PERSIST_LOCATION).clone())
             .await
             .unwrap();

@@ -102,7 +102,6 @@ use jsonwebtoken::DecodingKey;
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tokio::sync::Mutex;
 use tower_http::cors::{self, AllowOrigin};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -713,7 +712,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone()),
         &metrics_registry,
     );
-    let persist_clients = Arc::new(Mutex::new(persist_clients));
+    let persist_clients = Arc::new(persist_clients);
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
     let controller = ControllerConfig {
         build_info: &mz_environmentd::BUILD_INFO,

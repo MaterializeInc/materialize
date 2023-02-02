@@ -18,7 +18,6 @@ use std::sync::Arc;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::dataflow::Scope;
-use tokio::sync::Mutex;
 
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use mz_ore::now::NowFn;
@@ -206,7 +205,7 @@ where
 /// Args for creating a healthchecker.  Not done inline because it requires async.
 pub struct HealthcheckerArgs {
     /// persist_clients
-    pub persist_clients: Arc<Mutex<PersistClientCache>>,
+    pub persist_clients: Arc<PersistClientCache>,
     /// location of persist
     pub persist_location: PersistLocation,
     /// id of status shard for updates

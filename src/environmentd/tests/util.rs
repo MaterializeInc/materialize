@@ -91,7 +91,6 @@ use postgres::{NoTls, Socket};
 use regex::Regex;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
-use tokio::sync::Mutex;
 use tokio_postgres::config::Host;
 use tokio_postgres::Client;
 use tower_http::cors::AllowOrigin;
@@ -285,7 +284,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     // with local postgres.
     persist_cfg.consensus_connection_pool_max_size = 1;
     let persist_clients = PersistClientCache::new(persist_cfg, &metrics_registry);
-    let persist_clients = Arc::new(Mutex::new(persist_clients));
+    let persist_clients = Arc::new(persist_clients);
     let postgres_factory = StashFactory::new(&metrics_registry);
     let secrets_controller = Arc::clone(&orchestrator);
     let connection_context = ConnectionContext::for_tests(orchestrator.reader());

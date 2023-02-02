@@ -96,7 +96,7 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
     // have to specialize this some more.
     type State = Vec<WriteHandle<SourceData, (), T, Diff>>;
 
-    async fn initialize_state(&self, client_cache: &mut PersistClientCache) -> Self::State {
+    async fn initialize_state(&self, client_cache: &PersistClientCache) -> Self::State {
         let mut handles = vec![];
         for (id, export) in self.source_exports.iter() {
             // Explicit destructuring to force a compile error when the metadata change

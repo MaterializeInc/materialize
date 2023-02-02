@@ -57,7 +57,7 @@ pub struct Config {
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
     /// `persist` client cache.
-    pub persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
+    pub persist_clients: Arc<PersistClientCache>,
 }
 
 /// A client managing access to the local portion of a Timely cluster
@@ -71,7 +71,7 @@ struct ClusterClient<C> {
     /// The compute metrics.
     compute_metrics: ComputeMetrics,
     /// Handle to the persist infrastructure.
-    persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
+    persist_clients: Arc<PersistClientCache>,
     /// The handle to the Tokio runtime.
     tokio_handle: tokio::runtime::Handle,
 }
@@ -129,7 +129,7 @@ impl ClusterClient<PartitionedClient> {
         timely_container: TimelyContainerRef,
         trace_metrics: TraceMetrics,
         compute_metrics: ComputeMetrics,
-        persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
+        persist_clients: Arc<PersistClientCache>,
         tokio_handle: tokio::runtime::Handle,
     ) -> Self {
         Self {
@@ -147,7 +147,7 @@ impl ClusterClient<PartitionedClient> {
         epoch: ComputeStartupEpoch,
         trace_metrics: TraceMetrics,
         compute_metrics: ComputeMetrics,
-        persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
+        persist_clients: Arc<PersistClientCache>,
         tokio_executor: Handle,
     ) -> Result<TimelyContainer, Error> {
         info!("Building timely container with config {config:?}");
@@ -374,7 +374,7 @@ struct Worker<'w, A: Allocate> {
     compute_metrics: ComputeMetrics,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
-    persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
+    persist_clients: Arc<PersistClientCache>,
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {

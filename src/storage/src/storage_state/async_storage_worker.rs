@@ -19,7 +19,6 @@ use std::sync::Arc;
 use differential_dataflow::lattice::Lattice;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc;
-use tokio::sync::Mutex;
 use tracing::Instrument;
 
 use mz_persist_client::cache::PersistClientCache;
@@ -70,7 +69,7 @@ impl<T: Timestamp + Lattice + Codec64> AsyncStorageWorker<T> {
     /// [`is_empty`](Self::is_empty) has returned `false`.
     pub fn new<A: Activatable + Send + 'static>(
         activatable: A,
-        persist_clients: Arc<Mutex<PersistClientCache>>,
+        persist_clients: Arc<PersistClientCache>,
     ) -> Self {
         let (command_tx, mut command_rx) = mpsc::unbounded_channel::<(tracing::Span, _)>();
         let (response_tx, response_rx) = crossbeam_channel::unbounded();
@@ -85,9 +84,8 @@ impl<T: Timestamp + Lattice + Codec64> AsyncStorageWorker<T> {
                         ingestion_description,
                         _phantom_data,
                     ) => {
-                        let mut persist_clients = persist_clients.lock().await;
                         let mut state = ingestion_description
-                            .initialize_state(&mut persist_clients)
+                            .initialize_state(&persist_clients)
                             .instrument(span.clone())
                             .await;
                         let resume_upper: Antichain<T> = ingestion_description

@@ -19,7 +19,6 @@ use mz_persist_types::codec_impls::UnitSchema;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
-use tokio::sync::Mutex;
 
 use mz_ore::halt;
 use mz_ore::vec::VecExt;
@@ -61,7 +60,7 @@ where
     IntoTime: Timestamp + Lattice + Codec64,
 {
     pub async fn new(
-        persist_clients: Arc<Mutex<PersistClientCache>>,
+        persist_clients: Arc<PersistClientCache>,
         metadata: CollectionMetadata,
         as_of: Antichain<IntoTime>,
         // additional information to improve logging
@@ -77,12 +76,10 @@ where
         // TODO(guswynn): use the type-system to prevent misuse here.
         remap_relation_desc: RelationDesc,
     ) -> anyhow::Result<Self> {
-        let mut persist_clients = persist_clients.lock().await;
         let persist_client = persist_clients
             .open(metadata.persist_location.clone())
             .await
             .context("error creating persist client")?;
-        drop(persist_clients);
 
         let since_handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
             .open_critical_since(
