@@ -130,7 +130,7 @@ pub struct TimelyConfig {
     pub addresses: Vec<String>,
     /// The amount of effort to be spent on arrangement compaction during idle times.
     ///
-    /// See [`differential_dataflow::Config::idle_merge_effort`].
+    /// See `differential_dataflow::Config::idle_merge_effort`.
     pub idle_arrangement_merge_effort: u32,
 }
 
