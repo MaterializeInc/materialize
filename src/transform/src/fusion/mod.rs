@@ -53,12 +53,12 @@ impl Fusion {
     /// as-yet-unexplored expression).
     fn action(expr: &mut MirRelationExpr) {
         match expr {
-            MirRelationExpr::Filter { .. } => filter::Filter.action(expr),
-            MirRelationExpr::Map { .. } => map::Map.action(expr),
-            MirRelationExpr::Project { .. } => project::Project.action(expr),
-            MirRelationExpr::Negate { .. } => negate::Negate.action(expr),
-            MirRelationExpr::TopK { .. } => top_k::TopK.action(expr),
-            MirRelationExpr::Union { .. } => union::Union.action(expr),
+            MirRelationExpr::Filter { .. } => filter::Filter::action(expr),
+            MirRelationExpr::Map { .. } => map::Map::action(expr),
+            MirRelationExpr::Project { .. } => project::Project::action(expr),
+            MirRelationExpr::Negate { .. } => negate::Negate::action(expr),
+            MirRelationExpr::TopK { .. } => top_k::TopK::action(expr),
+            MirRelationExpr::Union { .. } => union::Union::action(expr),
             _ => {}
         }
     }
