@@ -85,14 +85,15 @@ We'll start with some real-time data produced by Materialize's built-in [load ge
     ```
 
     ```nofmt
-         name      |      type      |  size
-    ---------------+----------------+---------
-     accounts      | subsource      | 3xsmall
-     auction_house | load-generator | 3xsmall
-     auctions      | subsource      | 3xsmall
-     bids          | subsource      | 3xsmall
-     organizations | subsource      | 3xsmall
-     users         | subsource      | 3xsmall
+              name          |      type      |  size
+    ------------------------+----------------+--------
+     accounts               | subsource      |
+     auction_house          | load-generator | 3xsmall
+     auction_house_progress | subsource      |
+     auctions               | subsource      |
+     bids                   | subsource      |
+     organizations          | subsource      |
+     users                  | subsource      |
     ```
 
 1. Now that we have some data to play around with, let's set up a [cluster](/sql/create-cluster) (logical compute) with one `xsmall` [replica](/sql/create-cluster-replica) (physical compute) so we can start running some queries:
