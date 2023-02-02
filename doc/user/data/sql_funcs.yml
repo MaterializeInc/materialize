@@ -355,7 +355,7 @@
     description: Substring starting at `start_pos` of length `l`
     url: substring
 
-  - signature: "trim([BOTH | LEADING | TRAILING]? 'c'? FROM 's') -> str"
+  - signature: "trim([BOTH | LEADING | TRAILING]? ['c'? FROM]? 's') -> str"
     description: "Trims any character in `c` from `s` on the specified side.<br/><br/>Defaults:<br/>
       &bull; Side: `BOTH`<br/>
       &bull; `'c'`: `' '` (space)"
