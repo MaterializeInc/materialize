@@ -141,6 +141,7 @@ pub mod write;
 
 /// An implementation of the public crate interface.
 mod internal {
+    pub mod apply;
     pub mod compact;
     pub mod encoding;
     pub mod gc;
@@ -641,7 +642,7 @@ mod tests {
     use tokio::task::JoinHandle;
 
     use crate::cache::PersistClientCache;
-    use crate::error::{CodecMismatch, UpperMismatch};
+    use crate::error::{CodecConcreteType, CodecMismatch, UpperMismatch};
     use crate::internal::paths::BlobKey;
     use crate::read::ListenEvent;
 
@@ -852,8 +853,13 @@ mod tests {
 
         // InvalidUsage from PersistClient methods.
         {
-            fn codecs(k: &str, v: &str, t: &str, d: &str) -> (String, String, String, String) {
-                (k.to_owned(), v.to_owned(), t.to_owned(), d.to_owned())
+            fn codecs(
+                k: &str,
+                v: &str,
+                t: &str,
+                d: &str,
+            ) -> (String, String, String, String, Option<CodecConcreteType>) {
+                (k.to_owned(), v.to_owned(), t.to_owned(), d.to_owned(), None)
             }
 
             assert_eq!(

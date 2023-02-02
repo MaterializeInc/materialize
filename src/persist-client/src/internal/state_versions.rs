@@ -97,6 +97,14 @@ pub struct RecentLiveDiffs(pub Vec<VersionedData>);
 #[derive(Debug, Clone)]
 pub struct AllLiveDiffs(pub Vec<VersionedData>);
 
+#[derive(Debug, Clone)]
+pub struct EncodedRollup {
+    pub(crate) shard_id: ShardId,
+    pub(crate) seqno: SeqNo,
+    pub(crate) key: PartialRollupKey,
+    buf: Bytes,
+}
+
 impl StateVersions {
     pub fn new(
         cfg: PersistConfig,
@@ -575,22 +583,22 @@ impl StateVersions {
             "add_and_remove_rollups should apply to the empty state"
         );
 
-        let () = self
-            .write_rollup_blob(shard_metrics, &initial_state, &rollup_key)
-            .await;
-        assert_eq!(initial_state.seqno, rollup_seqno);
+        let rollup = self.encode_rollup_blob(shard_metrics, &initial_state, rollup_key);
+        let () = self.write_rollup_blob(&rollup).await;
+        assert_eq!(initial_state.seqno, rollup.seqno);
 
         let diff = StateDiff::from_diff(&empty_state, &initial_state);
         (initial_state, diff)
     }
 
-    /// Writes the given state as a rollup to the specified key.
-    pub async fn write_rollup_blob<K, V, T, D>(
+    /// Encodes the given state as a rollup to be written to the specified key.
+    pub fn encode_rollup_blob<K, V, T, D>(
         &self,
         shard_metrics: &ShardMetrics,
         state: &State<K, V, T, D>,
-        key: &PartialRollupKey,
-    ) where
+        key: PartialRollupKey,
+    ) -> EncodedRollup
+    where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
@@ -601,19 +609,29 @@ impl StateVersions {
             state.encode(&mut buf);
             Bytes::from(buf)
         });
-        let payload_len = buf.len();
+        shard_metrics.set_encoded_rollup_size(buf.len());
+        EncodedRollup {
+            shard_id: state.shard_id,
+            seqno: state.seqno,
+            key,
+            buf,
+        }
+    }
+
+    /// Writes the given state rollup out to blob.
+    pub async fn write_rollup_blob(&self, rollup: &EncodedRollup) {
+        let payload_len = rollup.buf.len();
         retry_external(&self.metrics.retries.external.rollup_set, || async {
             self.blob
                 .set(
-                    &key.complete(&state.shard_id),
-                    Bytes::clone(&buf),
+                    &rollup.key.complete(&rollup.shard_id),
+                    Bytes::clone(&rollup.buf),
                     Atomicity::RequireAtomic,
                 )
                 .await
         })
         .instrument(debug_span!("rollup::set", payload_len))
         .await;
-        shard_metrics.set_encoded_rollup_size(payload_len);
     }
 
     /// Fetches a rollup for the given SeqNo, if it exists.

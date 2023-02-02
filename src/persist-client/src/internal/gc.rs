@@ -132,6 +132,7 @@ where
                 let merged_requests = gc_completed_senders.len() - 1;
                 if merged_requests > 0 {
                     machine
+                        .applier
                         .metrics
                         .gc
                         .merged
@@ -146,13 +147,14 @@ where
                 gc_span.follows_from(&Span::current());
 
                 let start = Instant::now();
-                machine.metrics.gc.started.inc();
+                machine.applier.metrics.gc.started.inc();
                 Self::gc_and_truncate(&mut machine, consolidated_req)
                     .instrument(gc_span)
                     .await;
-                machine.metrics.gc.finished.inc();
-                machine.shard_metrics.gc_finished.inc();
+                machine.applier.metrics.gc.finished.inc();
+                machine.applier.shard_metrics.gc_finished.inc();
                 machine
+                    .applier
                     .metrics
                     .gc
                     .seconds
@@ -226,7 +228,7 @@ where
             futures.collect().await
         }
 
-        let delete_semaphore = Semaphore::new(machine.cfg.gc_blob_delete_concurrency_limit);
+        let delete_semaphore = Semaphore::new(machine.applier.cfg.gc_blob_delete_concurrency_limit);
 
         let mut step_start = Instant::now();
         let mut report_step_timing = |counter: &Counter| {
@@ -241,6 +243,7 @@ where
         // already gc'd and truncated past new_seqno_since.
 
         let mut states = machine
+            .applier
             .state_versions
             .fetch_all_live_states::<K, V, T, D>(&req.shard_id)
             .await
@@ -252,7 +255,7 @@ where
             req.new_seqno_since,
             states.len()
         );
-        report_step_timing(&machine.metrics.gc.steps.fetch_seconds);
+        report_step_timing(&machine.applier.metrics.gc.steps.fetch_seconds);
 
         let earliest_live_seqno = match states.peek_seqno() {
             Some(x) => x,
@@ -266,7 +269,7 @@ where
         //
         // Also a fix for #14580.
         if earliest_live_seqno > req.new_seqno_since {
-            machine.metrics.gc.noop.inc();
+            machine.applier.metrics.gc.noop.inc();
             debug!(
                 "gc {} early returning, already GC'd past {}",
                 req.shard_id, req.new_seqno_since,
@@ -342,21 +345,21 @@ where
             deleteable_batch_blobs.len(),
             deleteable_rollup_blobs.len()
         );
-        report_step_timing(&machine.metrics.gc.steps.apply_diff_seconds);
+        report_step_timing(&machine.applier.metrics.gc.steps.apply_diff_seconds);
 
         // Delete the rollup blobs before removing them from state.
         delete_all(
-            machine.state_versions.blob.borrow(),
+            machine.applier.state_versions.blob.borrow(),
             deleteable_rollup_blobs
                 .iter()
                 .map(|(_, k)| k.complete(&req.shard_id)),
-            &machine.metrics.retries.external.rollup_delete,
+            &machine.applier.metrics.retries.external.rollup_delete,
             debug_span!("rollup::delete"),
             &delete_semaphore,
         )
         .await;
         debug!("gc {} deleted rollup blobs", req.shard_id);
-        report_step_timing(&machine.metrics.gc.steps.delete_rollup_seconds);
+        report_step_timing(&machine.applier.metrics.gc.steps.delete_rollup_seconds);
 
         // As described in the big rustdoc comment on [StateVersions], we
         // maintain the invariant that there is always a rollup corresponding to
@@ -371,43 +374,51 @@ where
         assert_eq!(state.seqno, req.new_seqno_since);
         let rollup_seqno = state.seqno;
         let rollup_key = PartialRollupKey::new(rollup_seqno, &RollupId::new());
+        let rollup = machine.applier.state_versions.encode_rollup_blob(
+            &machine.applier.shard_metrics,
+            state,
+            rollup_key,
+        );
         let () = machine
+            .applier
             .state_versions
-            .write_rollup_blob(&machine.shard_metrics, state, &rollup_key)
+            .write_rollup_blob(&rollup)
             .await;
         let applied = machine
-            .add_and_remove_rollups((rollup_seqno, &rollup_key), &deleteable_rollup_blobs)
+            .add_and_remove_rollups((rollup.seqno, &rollup.key), &deleteable_rollup_blobs)
             .await;
         // We raced with some other GC process to write this rollup out. Ours
         // wasn't registered, so delete it.
         if !applied {
             machine
+                .applier
                 .state_versions
-                .delete_rollup(&state.shard_id, &rollup_key)
+                .delete_rollup(&rollup.shard_id, &rollup.key)
                 .await;
         }
         debug!(
             "gc {} wrote rollup at seqno {}. applied={}",
             req.shard_id, rollup_seqno, applied
         );
-        report_step_timing(&machine.metrics.gc.steps.write_rollup_seconds);
+        report_step_timing(&machine.applier.metrics.gc.steps.write_rollup_seconds);
 
         delete_all(
-            machine.state_versions.blob.borrow(),
+            machine.applier.state_versions.blob.borrow(),
             deleteable_batch_blobs
                 .into_iter()
                 .map(|k| k.complete(&req.shard_id)),
-            &machine.metrics.retries.external.batch_delete,
+            &machine.applier.metrics.retries.external.batch_delete,
             debug_span!("batch::delete"),
             &delete_semaphore,
         )
         .await;
         debug!("gc {} deleted batch blobs", req.shard_id);
-        report_step_timing(&machine.metrics.gc.steps.delete_batch_part_seconds);
+        report_step_timing(&machine.applier.metrics.gc.steps.delete_batch_part_seconds);
 
         // Now that we've deleted the eligible blobs, "commit" this info by
         // truncating the state versions that referenced them.
         machine
+            .applier
             .state_versions
             .truncate_diffs(&req.shard_id, req.new_seqno_since)
             .await;
@@ -415,7 +426,7 @@ where
             "gc {} truncated diffs through seqno {}",
             req.shard_id, req.new_seqno_since
         );
-        report_step_timing(&machine.metrics.gc.steps.truncate_diff_seconds);
+        report_step_timing(&machine.applier.metrics.gc.steps.truncate_diff_seconds);
 
         // Finally, apply the remaining diffs to calculate metrics.
         while let Some(state) = states.next() {
@@ -436,9 +447,9 @@ where
             }
         });
 
-        let shard_metrics = machine.metrics.shards.shard(&req.shard_id);
+        let shard_metrics = machine.applier.metrics.shards.shard(&req.shard_id);
         shard_metrics.set_gc_seqno_held_parts(seqno_held_parts.len());
         shard_metrics.gc_live_diffs.set(live_diffs);
-        report_step_timing(&machine.metrics.gc.steps.finish_seconds);
+        report_step_timing(&machine.applier.metrics.gc.steps.finish_seconds);
     }
 }

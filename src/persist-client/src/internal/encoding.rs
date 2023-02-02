@@ -569,8 +569,9 @@ where
                     V::codec_name(),
                     T::codec_name(),
                     D::codec_name(),
+                    None,
                 ),
-                actual: (x.key_codec, x.val_codec, x.ts_codec, x.diff_codec),
+                actual: (x.key_codec, x.val_codec, x.ts_codec, x.diff_codec, None),
             }));
         }
 

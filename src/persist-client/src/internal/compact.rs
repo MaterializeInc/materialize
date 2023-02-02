@@ -113,7 +113,7 @@ where
                 compact_req_receiver.recv().await
             {
                 assert_eq!(req.shard_id, machine.shard_id());
-                let metrics = Arc::clone(&machine.metrics);
+                let metrics = Arc::clone(&machine.applier.metrics);
 
                 let permit = {
                     let inner = Arc::clone(&concurrency_limit);
@@ -141,8 +141,8 @@ where
                     .queued_seconds
                     .inc_by(enqueued.elapsed().as_secs_f64());
 
-                let cfg = machine.cfg.clone();
-                let blob = Arc::clone(&machine.state_versions.blob);
+                let cfg = machine.applier.cfg.clone();
+                let blob = Arc::clone(&machine.applier.state_versions.blob);
                 let cpu_heavy_runtime = Arc::clone(&cpu_heavy_runtime);
                 let writer_id = writer_id.clone();
 
@@ -303,13 +303,13 @@ where
                     ApplyMergeResult::AppliedExact => {
                         metrics.compaction.applied.inc();
                         metrics.compaction.applied_exact_match.inc();
-                        machine.shard_metrics.compaction_applied.inc();
+                        machine.applier.shard_metrics.compaction_applied.inc();
                         Ok(apply_merge_result)
                     }
                     ApplyMergeResult::AppliedSubset => {
                         metrics.compaction.applied.inc();
                         metrics.compaction.applied_subset_match.inc();
-                        machine.shard_metrics.compaction_applied.inc();
+                        machine.applier.shard_metrics.compaction_applied.inc();
                         Ok(apply_merge_result)
                     }
                     ApplyMergeResult::NotAppliedNoMatch
