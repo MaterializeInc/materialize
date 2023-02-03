@@ -137,7 +137,10 @@ impl HirRelationExpr {
                     writeln!(f, "{}Get {}", ctx.indent, id)?;
                 }
                 Id::Global(id) => {
-                    let humanized_id = ctx.humanizer.humanize_id(*id).ok_or(fmt::Error)?;
+                    let humanized_id = ctx
+                        .humanizer
+                        .humanize_id(*id)
+                        .unwrap_or_else(|| id.to_string());
                     writeln!(f, "{}Get {}", ctx.indent, humanized_id)?;
                 }
             },

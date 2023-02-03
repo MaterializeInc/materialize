@@ -71,7 +71,10 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 // Resolve the id as a string.
                 let id = match id {
                     Id::Local(id) => id.to_string(),
-                    Id::Global(id) => ctx.humanizer.humanize_id(*id).ok_or(fmt::Error)?,
+                    Id::Global(id) => ctx
+                        .humanizer
+                        .humanize_id(*id)
+                        .unwrap_or_else(|| id.to_string()),
                 };
                 // Render plan-specific fields.
                 use crate::plan::GetPlan;
