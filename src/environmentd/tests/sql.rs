@@ -94,12 +94,13 @@ use axum::{routing, Json, Router};
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use mz_storage_client::types::sources::Timeline;
+use once_cell::sync::Lazy;
 use postgres::Row;
 use regex::Regex;
 use serde_json::json;
 use timely::order::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
-use tokio_postgres::error::SqlState;
+use tokio_postgres::error::{DbError, SqlState};
 use tracing::info;
 
 use mz_adapter::catalog::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
@@ -110,7 +111,7 @@ use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use mz_repr::Timestamp;
 
-use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
+use crate::util::{MzTimestamp, PostgresErrorExt, Server, KAFKA_ADDRS};
 
 pub mod util;
 
@@ -2311,11 +2312,18 @@ fn test_emit_tracing_notice() {
 }
 
 #[test]
-fn test_subscribe_on_dropped_source() {
-    fn test_subscribe_on_dropped_source_inner(tables: Vec<&'static str>, subscribe: &'static str) {
-        let config = util::Config::default();
-        let server = util::start_server(config).unwrap();
-        let (tx, mut rx) = futures::channel::mpsc::unbounded();
+fn test_query_on_dropped_source() {
+    fn test_query_on_dropped_source_inner(
+        server: &Server,
+        tables: Vec<&'static str>,
+        query: &'static str,
+        assertion: impl FnOnce(
+                Result<(), tokio_postgres::error::Error>,
+                futures::channel::mpsc::UnboundedReceiver<DbError>,
+            ) + Send
+            + 'static,
+    ) {
+        let (tx, rx) = futures::channel::mpsc::unbounded();
 
         let mut client = server.connect(postgres::NoTls).unwrap();
         for table in &tables {
@@ -2327,30 +2335,14 @@ fn test_subscribe_on_dropped_source() {
                 .unwrap();
         }
 
-        let mut subscribe_client = server
+        let mut query_client = server
             .pg_config()
             .notice_callback(move |notice| tx.unbounded_send(notice).unwrap())
             .connect(postgres::NoTls)
             .unwrap();
-        let subscribe_thread = std::thread::spawn(move || {
-            subscribe_client
-                .batch_execute(&format!("SUBSCRIBE {subscribe}"))
-                .unwrap();
-            Retry::default()
-                .max_duration(Duration::from_secs(10))
-                .retry(|_| {
-                    let Some(e) = rx.try_next().unwrap() else {
-                        return Err("No notice received")
-                    };
-                    if e.message()
-                        .contains("subscribe has been terminated because underlying relation")
-                    {
-                        Ok(())
-                    } else {
-                        Err("wrong notice")
-                    }
-                })
-                .unwrap();
+        let query_thread = std::thread::spawn(move || {
+            let res = query_client.batch_execute(query);
+            assertion(res, rx);
         });
 
         Retry::default()
@@ -2361,7 +2353,7 @@ fn test_subscribe_on_dropped_source() {
                     .unwrap();
                 let count: i64 = row.get(0);
                 if count < 1 {
-                    Err("no active subscribe")
+                    Err("no active query")
                 } else {
                     Ok(())
                 }
@@ -2374,7 +2366,7 @@ fn test_subscribe_on_dropped_source() {
                 .unwrap();
         }
 
-        subscribe_thread.join().unwrap();
+        query_thread.join().unwrap();
 
         Retry::default()
             .max_duration(Duration::from_secs(10))
@@ -2392,6 +2384,46 @@ fn test_subscribe_on_dropped_source() {
             .unwrap();
     }
 
-    test_subscribe_on_dropped_source_inner(vec!["t"], "t");
-    test_subscribe_on_dropped_source_inner(vec!["t1", "t2"], "(SELECT * FROM t1, t2)");
+    fn assert_subscribe_notice(mut rx: futures::channel::mpsc::UnboundedReceiver<DbError>) {
+        Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry(|_| {
+                let Some(e) = rx.try_next().unwrap() else {
+                    return Err("No notice received")
+                };
+                if e.message()
+                    .contains("subscribe has been terminated because underlying relation")
+                {
+                    Ok(())
+                } else {
+                    Err("wrong notice")
+                }
+            })
+            .unwrap();
+    }
+
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+
+    test_query_on_dropped_source_inner(&server, vec!["t"], "SUBSCRIBE t", |res, rx| {
+        res.unwrap();
+        assert_subscribe_notice(rx);
+    });
+    test_query_on_dropped_source_inner(
+        &server,
+        vec!["t1", "t2"],
+        "SUBSCRIBE (SELECT * FROM t1, t2)",
+        |res, rx| {
+            res.unwrap();
+            assert_subscribe_notice(rx);
+        },
+    );
+    static SELECT: Lazy<String> =
+        Lazy::new(|| format!("SELECT * FROM t AS OF {}", mz_repr::Timestamp::MAX));
+    test_query_on_dropped_source_inner(&server, vec!["t"], &SELECT, |res, _| {
+        assert_eq!(
+            res.unwrap_err().as_db_error().unwrap().message(),
+            "query could not complete because materialize.public.t was dropped"
+        )
+    });
 }

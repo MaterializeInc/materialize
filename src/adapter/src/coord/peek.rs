@@ -25,6 +25,7 @@ use uuid::Uuid;
 use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_controller::clusters::ClusterId;
 use mz_expr::{
     EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
 };
@@ -46,6 +47,9 @@ use super::id_bundle::CollectionIdBundle;
 pub(crate) struct PendingPeek {
     pub(crate) sender: oneshot::Sender<PeekResponse>,
     pub(crate) conn_id: ConnectionId,
+    pub(crate) cluster_id: ClusterId,
+    /// All `GlobalId`s that the peek depend on.
+    pub(crate) depends_on: BTreeSet<GlobalId>,
 }
 
 /// The response from a `Peek`, with row multiplicities represented in unary.
@@ -140,6 +144,7 @@ pub struct PlannedPeek {
     pub conn_id: ConnectionId,
     pub source_arity: usize,
     pub id_bundle: CollectionIdBundle,
+    pub source_ids: BTreeSet<GlobalId>,
 }
 
 /// Possible ways in which the coordinator could produce the result for a goal view.
@@ -303,6 +308,7 @@ impl crate::coord::Coordinator {
             conn_id,
             source_arity,
             id_bundle: _,
+            source_ids,
         } = plan;
 
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
@@ -427,6 +433,8 @@ impl crate::coord::Coordinator {
             PendingPeek {
                 sender: rows_tx,
                 conn_id,
+                cluster_id: compute_instance,
+                depends_on: source_ids,
             },
         );
         self.client_pending_peeks
@@ -515,19 +523,15 @@ impl crate::coord::Coordinator {
         // peek's state in the coordinator.
         if let Some(PendingPeek {
             sender: rows_tx,
-            conn_id,
+            conn_id: _,
+            cluster_id: _,
+            depends_on: _,
         }) = self.remove_pending_peek(&uuid)
         {
             otel_ctx.attach_as_parent();
             // Peek cancellations are best effort, so we might still
             // receive a response, even though the recipient is gone.
             let _ = rows_tx.send(response);
-            if let Some(uuids) = self.client_pending_peeks.get_mut(&conn_id) {
-                uuids.remove(&uuid);
-                if uuids.is_empty() {
-                    self.client_pending_peeks.remove(&conn_id);
-                }
-            }
         }
         // Cancellation may cause us to receive responses for peeks no
         // longer in `self.pending_peeks`, so we quietly ignore them.
@@ -535,7 +539,18 @@ impl crate::coord::Coordinator {
 
     /// Clean up a peek's state.
     pub(crate) fn remove_pending_peek(&mut self, uuid: &Uuid) -> Option<PendingPeek> {
-        self.pending_peeks.remove(uuid)
+        let pending_peek = self.pending_peeks.remove(uuid);
+        if let Some(pending_peek) = &pending_peek {
+            let uuids = self
+                .client_pending_peeks
+                .get_mut(&pending_peek.conn_id)
+                .expect("coord peek state is inconsistent");
+            uuids.remove(uuid);
+            if uuids.is_empty() {
+                self.client_pending_peeks.remove(&pending_peek.conn_id);
+            }
+        }
+        pending_peek
     }
 
     /// Publishes a notice message to all sessions.

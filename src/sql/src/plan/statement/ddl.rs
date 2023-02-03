@@ -3493,8 +3493,8 @@ pub fn plan_drop_item(
                     );
                 }
             }
-            // TODO(jkosh44) It would be nice to also check if any active subscribe relies on
-            //  entry. Unfortunately, we don't have that information readily available.
+            // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
+            //  relies on entry. Unfortunately, we don't have that information readily available.
         }
     }
     Ok(Some(catalog_entry.id()))
