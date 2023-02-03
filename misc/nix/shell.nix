@@ -28,9 +28,14 @@ stdenv.mkDerivation rec {
       lld_14
       python39
       scoped-rust-analyzer
+      shellcheck
   ];
 
   hardeningDisable = [ "fortify" ];
 
   RUSTFLAGS = "-Clinker=clang -Clink-arg=--ld-path=${pkgs.mold}/bin/mold -Clink-arg=-Wl,--warn-unresolved-symbols -Cdebuginfo=1 -Csymbol-mangling-version=v0";
+
+  shellHook = ''
+    export LD_LIBRARY_PATH=${pkgs.stdenv.cc.cc.lib}/lib:$LD_LIBRARY_PATH
+  '';
 }
