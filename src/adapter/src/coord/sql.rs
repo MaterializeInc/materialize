@@ -158,11 +158,11 @@ impl Coordinator {
     }
 
     /// Handle removing metadata associated with a SUBSCRIBE query.
-    pub(crate) fn remove_subscribe(&mut self, sink_id: &GlobalId) {
-        if let Some(pending_subscribe) = self.pending_subscribes.remove(sink_id) {
+    pub(crate) fn remove_active_subscribe(&mut self, sink_id: &GlobalId) {
+        if let Some(active_subscribe) = self.active_subscribes.remove(sink_id) {
             self.metrics
                 .active_subscribes
-                .with_label_values(&[pending_subscribe.session_type])
+                .with_label_values(&[active_subscribe.session_type])
                 .dec();
         }
         // Note: Drop sinks are removed at commit time.

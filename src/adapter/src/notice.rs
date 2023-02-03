@@ -72,6 +72,9 @@ pub enum AdapterNotice {
     UnimplementedIsolationLevel {
         isolation_level: String,
     },
+    DroppedSubscribe {
+        dropped_name: String,
+    },
 }
 
 impl AdapterNotice {
@@ -161,6 +164,12 @@ impl fmt::Display for AdapterNotice {
                     f,
                     "transaction isolation level {isolation_level} is unimplemented, the session will be upgraded to {}",
                     IsolationLevel::Serializable.as_str()
+                )
+            }
+            AdapterNotice::DroppedSubscribe { dropped_name } => {
+                write!(
+                    f,
+                "subscribe has been terminated because underlying relation {dropped_name} was dropped"
                 )
             }
         }

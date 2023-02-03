@@ -133,7 +133,7 @@ use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, Session};
-use crate::subscribe::PendingSubscribe;
+use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::AdapterNotice;
 
@@ -476,8 +476,8 @@ pub struct Coordinator {
     /// A map from client connection ids to a pending real time recency timestamps.
     pending_real_time_recency_timestamp: BTreeMap<ConnectionId, RealTimeRecencyContext>,
 
-    /// A map from pending subscribes to the subscribe description.
-    pending_subscribes: BTreeMap<GlobalId, PendingSubscribe>,
+    /// A map from active subscribes to the subscribe description.
+    active_subscribes: BTreeMap<GlobalId, ActiveSubscribe>,
 
     /// Serializes accesses to write critical sections.
     write_lock: Arc<tokio::sync::Mutex<()>>,
@@ -1323,7 +1323,7 @@ pub async fn serve(
                 pending_peeks: BTreeMap::new(),
                 client_pending_peeks: BTreeMap::new(),
                 pending_real_time_recency_timestamp: BTreeMap::new(),
-                pending_subscribes: BTreeMap::new(),
+                active_subscribes: BTreeMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
                 pending_writes: Vec::new(),

@@ -253,10 +253,10 @@ impl Coordinator {
                 // We use an `if let` here because the peek could have been canceled already.
                 // We can also potentially receive multiple `Complete` responses, followed by
                 // a `Dropped` response.
-                if let Some(pending_subscribe) = self.pending_subscribes.get_mut(&sink_id) {
-                    let remove = pending_subscribe.process_response(response);
+                if let Some(active_subscribe) = self.active_subscribes.get_mut(&sink_id) {
+                    let remove = active_subscribe.process_response(response);
                     if remove {
-                        self.remove_subscribe(&sink_id);
+                        self.remove_active_subscribe(&sink_id);
                     }
                 }
             }

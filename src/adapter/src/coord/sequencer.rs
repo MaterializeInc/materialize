@@ -89,7 +89,7 @@ use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, Var,
     WriteOp,
 };
-use crate::subscribe::PendingSubscribe;
+use crate::subscribe::ActiveSubscribe;
 use crate::util::{send_immediate_rows, ClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{guard_write_critical_section, session, PeekResponseUnary};
 
@@ -2646,20 +2646,23 @@ impl Coordinator {
             .active_subscribes
             .with_label_values(&[session_type])
             .inc();
-        self.pending_subscribes.insert(
+        self.active_subscribes.insert(
             sink_id,
-            PendingSubscribe {
+            ActiveSubscribe {
                 session_type,
+                conn_id: session.conn_id(),
                 channel: tx,
                 emit_progress,
                 arity,
+                cluster_id,
+                depends_on: depends_on.into_iter().collect(),
             },
         );
 
         match self.ship_dataflow(dataflow, cluster_id).await {
             Ok(_) => {}
             Err(e) => {
-                self.remove_subscribe(&sink_id);
+                self.remove_active_subscribe(&sink_id);
                 return Err(e);
             }
         };

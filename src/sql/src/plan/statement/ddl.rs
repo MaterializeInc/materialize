@@ -3485,6 +3485,7 @@ pub fn plan_drop_item(
 
                 let dep = scx.catalog.get_item(id);
                 if dependency_prevents_drop(object_type, dep) {
+                    // TODO: Add a hint to add cascade.
                     sql_bail!(
                         "cannot drop {}: still depended upon by catalog item '{}'",
                         scx.catalog.resolve_full_name(catalog_entry.name()),
@@ -3492,6 +3493,8 @@ pub fn plan_drop_item(
                     );
                 }
             }
+            // TODO(jkosh44) It would be nice to also check if any active subscribe relies on
+            //  entry. Unfortunately, we don't have that information readily available.
         }
     }
     Ok(Some(catalog_entry.id()))
