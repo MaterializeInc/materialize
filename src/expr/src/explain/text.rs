@@ -734,43 +734,23 @@ impl fmt::Display for MirScalarExpr {
             CallUnmaterializable(func) => write!(f, "{}()", func),
             CallUnary { func, expr } => {
                 if let crate::UnaryFunc::Not(_) = *func {
-                    if let CallUnary {
-                        func,
-                        expr: inner_expr,
-                    } = expr.as_ref()
-                    {
+                    if let CallUnary { func, expr } = expr.as_ref() {
                         if let Some(is) = func.is() {
-                            write!(f, "(")?;
-                            inner_expr.fmt(f)?;
-                            write!(f, ") IS NOT {}", is)?;
-                            return Ok(());
+                            return write!(f, "({}) IS NOT {}", expr, is);
                         }
                     }
                 }
                 if let Some(is) = func.is() {
-                    write!(f, "(")?;
-                    expr.fmt(f)?;
-                    write!(f, ") IS {}", is)
+                    write!(f, "({}) IS {}", expr, is)
                 } else {
-                    write!(f, "{}(", func)?;
-                    expr.fmt(f)?;
-                    write!(f, ")")
+                    write!(f, "{}({})", func, expr)
                 }
             }
             CallBinary { func, expr1, expr2 } => {
                 if func.is_infix_op() {
-                    write!(f, "(")?;
-                    expr1.fmt(f)?;
-                    write!(f, " {} ", func)?;
-                    expr2.fmt(f)?;
-                    write!(f, ")")
+                    write!(f, "({} {} {})", expr1, func, expr2)
                 } else {
-                    write!(f, "{}", func)?;
-                    write!(f, "(")?;
-                    expr1.fmt(f)?;
-                    write!(f, ", ")?;
-                    expr2.fmt(f)?;
-                    write!(f, ")")
+                    write!(f, "{}({}, {})", func, expr1, expr2)
                 }
             }
             CallVariadic { func, exprs } => {
@@ -800,13 +780,7 @@ impl fmt::Display for MirScalarExpr {
                 }
             }
             If { cond, then, els } => {
-                write!(f, "case when ")?;
-                cond.fmt(f)?;
-                write!(f, " then ")?;
-                then.fmt(f)?;
-                write!(f, " else ")?;
-                els.fmt(f)?;
-                write!(f, " end")
+                write!(f, "case when {} then {} else {} end", cond, then, els)
             }
         }
     }
