@@ -120,7 +120,7 @@ impl HirRelationExpr {
             }
             LetRec { bindings, body } => {
                 writeln!(f, "{}Return", ctx.indent)?;
-                ctx.indented(|ctx| body.as_ref().fmt_text(f, ctx))?;
+                ctx.indented(|ctx| body.fmt_text(f, ctx))?;
                 writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
                 ctx.indented(|ctx| {
                     for (_name, id, value, _type) in bindings.iter().rev() {
@@ -144,12 +144,12 @@ impl HirRelationExpr {
             Project { outputs, input } => {
                 let outputs = Indices(outputs);
                 writeln!(f, "{}Project ({})", ctx.indent, outputs)?;
-                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             Map { scalars, input } => {
                 let scalars = CompactScalarSeq(scalars);
                 writeln!(f, "{}Map ({})", ctx.indent, scalars)?;
-                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             CallTable { func, exprs } => {
                 let exprs = CompactScalarSeq(exprs);
@@ -158,7 +158,7 @@ impl HirRelationExpr {
             Filter { predicates, input } => {
                 let predicates = separated(" AND ", predicates);
                 writeln!(f, "{}Filter {}", ctx.indent, predicates)?;
-                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             Join {
                 left,
@@ -173,8 +173,8 @@ impl HirRelationExpr {
                 }
                 writeln!(f)?;
                 ctx.indented(|ctx| {
-                    left.as_ref().fmt_text(f, ctx)?;
-                    right.as_ref().fmt_text(f, ctx)?;
+                    left.fmt_text(f, ctx)?;
+                    right.fmt_text(f, ctx)?;
                     Ok(())
                 })?;
             }
@@ -197,11 +197,11 @@ impl HirRelationExpr {
                     write!(f, " exp_group_size={}", expected_group_size)?;
                 }
                 writeln!(f)?;
-                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             Distinct { input } => {
                 writeln!(f, "{}Distinct", ctx.indent)?;
-                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             TopK {
                 group_key,
@@ -226,20 +226,20 @@ impl HirRelationExpr {
                     write!(f, " offset={}", offset)?
                 }
                 writeln!(f)?;
-                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             Negate { input } => {
                 writeln!(f, "{}Negate", ctx.indent)?;
-                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             Threshold { input } => {
                 writeln!(f, "{}Threshold", ctx.indent)?;
-                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             Union { base, inputs } => {
                 writeln!(f, "{}Union", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    base.as_ref().fmt_text(f, ctx)?;
+                    base.fmt_text(f, ctx)?;
                     for input in inputs.iter() {
                         input.fmt_text(f, ctx)?;
                     }
@@ -275,7 +275,7 @@ impl fmt::Display for HirScalarExpr {
                     {
                         if let Some(is) = func.is() {
                             write!(f, "(")?;
-                            inner_expr.as_ref().fmt(f)?;
+                            inner_expr.fmt(f)?;
                             write!(f, ") IS NOT {}", is)?;
                             return Ok(());
                         }
@@ -283,27 +283,27 @@ impl fmt::Display for HirScalarExpr {
                 }
                 if let Some(is) = func.is() {
                     write!(f, "(")?;
-                    expr.as_ref().fmt(f)?;
+                    expr.fmt(f)?;
                     write!(f, ") IS {}", is)
                 } else {
                     write!(f, "{}(", func)?;
-                    expr.as_ref().fmt(f)?;
+                    expr.fmt(f)?;
                     write!(f, ")")
                 }
             }
             CallBinary { func, expr1, expr2 } => {
                 if func.is_infix_op() {
                     write!(f, "(")?;
-                    expr1.as_ref().fmt(f)?;
+                    expr1.fmt(f)?;
                     write!(f, " {} ", func)?;
-                    expr2.as_ref().fmt(f)?;
+                    expr2.fmt(f)?;
                     write!(f, ")")
                 } else {
                     write!(f, "{}", func)?;
                     write!(f, "(")?;
-                    expr1.as_ref().fmt(f)?;
+                    expr1.fmt(f)?;
                     write!(f, ", ")?;
-                    expr2.as_ref().fmt(f)?;
+                    expr2.fmt(f)?;
                     write!(f, ")")
                 }
             }
@@ -335,11 +335,11 @@ impl fmt::Display for HirScalarExpr {
             }
             If { cond, then, els } => {
                 write!(f, "case when ")?;
-                cond.as_ref().fmt(f)?;
+                cond.fmt(f)?;
                 write!(f, " then ")?;
-                then.as_ref().fmt(f)?;
+                then.fmt(f)?;
                 write!(f, " else ")?;
-                els.as_ref().fmt(f)?;
+                els.fmt(f)?;
                 write!(f, " end")
             }
             Windowing(expr) => {
@@ -349,7 +349,7 @@ impl fmt::Display for HirScalarExpr {
                     }
                     WindowExprType::Value(scalar) => {
                         write!(f, "{}(", scalar.clone().into_expr())?;
-                        scalar.expr.as_ref().fmt(f)?;
+                        scalar.expr.fmt(f)?;
                         write!(f, ")")?
                     }
                 }
@@ -399,7 +399,7 @@ impl fmt::Display for AggregateExpr {
             if self.distinct { "distinct " } else { "" }
         )?;
 
-        self.expr.as_ref().fmt(f)?;
+        self.expr.fmt(f)?;
         write!(f, ")")
     }
 }

@@ -158,7 +158,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                             writeln!(f, "{}input_val={}", ctx.indent, val)?;
                         }
                     }
-                    input.as_ref().fmt_text(f, ctx)
+                    input.fmt_text(f, ctx)
                 })?;
             }
             FlatMap {
@@ -176,7 +176,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                         let key = CompactScalarSeq(key);
                         writeln!(f, "{}input_key={}", ctx.indent, key)?;
                     }
-                    input.as_ref().fmt_text(f, ctx)
+                    input.fmt_text(f, ctx)
                 })?;
             }
             Join { inputs, plan } => {
@@ -246,7 +246,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                         let key = CompactScalarSeq(key);
                         writeln!(f, "{}input_key={}", ctx.indent, key)?;
                     }
-                    input.as_ref().fmt_text(f, ctx)
+                    input.fmt_text(f, ctx)
                 })?;
             }
             TopK { input, top_k_plan } => {
@@ -296,11 +296,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     }
                 }
                 writeln!(f)?;
-                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             Negate { input } => {
                 writeln!(f, "{}Negate", ctx.indent)?;
-                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             Threshold {
                 input,
@@ -319,7 +319,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                         writeln!(f, " ensure_arrangement={}", ensure_arrangement)?;
                     }
                 };
-                ctx.indented(|ctx| input.as_ref().fmt_text(f, ctx))?;
+                ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             Union { inputs } => {
                 writeln!(f, "{}Union", ctx.indent)?;
@@ -345,7 +345,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     input_mfp.fmt_text(f, ctx)?;
                     forms.fmt_text(f, ctx)?;
                     // Render input
-                    input.as_ref().fmt_text(f, ctx)
+                    input.fmt_text(f, ctx)
                 })?;
             }
         }
@@ -567,12 +567,12 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for AccumulablePlan {
         // simple_aggrs
         for (i, (i_aggs, i_datum, agg)) in self.simple_aggrs.iter().enumerate() {
             write!(f, "{}simple_aggrs[{}]=", ctx.indent, i)?;
-            write!(f, "({}, {}, {})", i_aggs, i_datum, agg)?;
+            writeln!(f, "({}, {}, {})", i_aggs, i_datum, agg)?;
         }
         // distinct_aggrs
         for (i, (i_aggs, i_datum, agg)) in self.distinct_aggrs.iter().enumerate() {
             write!(f, "{}distinct_aggrs[{}]=", ctx.indent, i)?;
-            write!(f, "({}, {}, {})", i_aggs, i_datum, agg)?;
+            writeln!(f, "({}, {}, {})", i_aggs, i_datum, agg)?;
         }
         Ok(())
     }
@@ -612,11 +612,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for BasicPlan {
     ) -> fmt::Result {
         match self {
             BasicPlan::Single(idx, agg) => {
-                write!(f, "{}aggr=({}, {})", ctx.indent, idx, agg)?;
+                writeln!(f, "{}aggr=({}, {})", ctx.indent, idx, agg)?;
             }
             BasicPlan::Multiple(aggs) => {
                 for (i, (i_datum, agg)) in aggs.iter().enumerate() {
-                    write!(f, "{}aggrs[{}]=({}, {})", ctx.indent, i, i_datum, agg)?;
+                    writeln!(f, "{}aggrs[{}]=({}, {})", ctx.indent, i, i_datum, agg)?;
                 }
             }
         }
