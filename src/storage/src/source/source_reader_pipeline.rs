@@ -487,7 +487,7 @@ where
                 // This future is not cancel safe but we are only passing a reference to it in the
                 // select! loop so the future stays on the stack and never gets cancelled until the
                 // end of the function.
-                _ = offset_commit_loop.as_mut() => {},
+                _ = offset_commit_loop.as_mut() => break,
             }
         }
     });
