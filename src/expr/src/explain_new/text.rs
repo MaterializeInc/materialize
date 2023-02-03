@@ -300,7 +300,10 @@ impl MirRelationExpr {
                         write!(f, "{}Get {}", ctx.indent, id)?;
                     }
                     Id::Global(id) => {
-                        let humanized_id = ctx.humanizer.humanize_id(*id).ok_or(fmt::Error)?;
+                        let humanized_id = ctx
+                            .humanizer
+                            .humanize_id(*id)
+                            .unwrap_or_else(|| id.to_string());
                         write!(f, "{}Get {}", ctx.indent, humanized_id)?;
                     }
                 }
@@ -399,9 +402,9 @@ impl MirRelationExpr {
                             h: &dyn ExprHumanizer,
                             e: &MirRelationExpr,
                         ) -> Option<String> {
-                            let global_id_name = |gid: &GlobalId| -> String {
-                                h.humanize_id_unqualified(*gid)
-                                    .unwrap_or_else(|| format!("?{}", gid))
+                            let global_id_name = |id: &GlobalId| -> String {
+                                h.humanize_id_unqualified(*id)
+                                    .unwrap_or_else(|| id.to_string())
                             };
                             let (_mfp, e) = MapFilterProject::extract_from_expression(e);
                             match e {
