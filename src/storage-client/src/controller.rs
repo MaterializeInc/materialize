@@ -2340,7 +2340,7 @@ where
             .await
             .expect("connect to stash");
 
-        self.finalize_shards(&to_delete_shards).await;
+        self.finalize_shards(to_delete_shards).await;
 
         let DurableCollectionMetadata {
             remap_shard,
@@ -2385,13 +2385,21 @@ where
     /// The string accompanying the `ShardId` is the shard's "purpose",
     /// necessary to open read and write handles to the shard.
     #[allow(dead_code)]
-    async fn finalize_shards(&mut self, shards: &[ShardId]) {
+    /// Closes the identified shards from further reads or writes.
+    ///
+    /// The string accompanying the `ShardId` is the shard's "purpose",
+    /// necessary to open read and write handles to the shard.
+    #[allow(dead_code)]
+    async fn finalize_shards<I>(&mut self, shards: I)
+    where
+        I: IntoIterator<Item = ShardId> + Clone,
+    {
         soft_assert!(
             {
                 let mut all_registered = true;
-                for shard in shards {
+                for shard in shards.clone() {
                     all_registered =
-                        self.is_shard_registered_for_finalization(*shard).await && all_registered
+                        self.is_shard_registered_for_finalization(shard).await && all_registered
                 }
                 all_registered
             },
@@ -2415,10 +2423,10 @@ where
             .map(|shard_id| async move {
                 let (mut write, mut critical_since_handle) = this
                     .open_data_handles(
-                        "finalizing shard",
-                        *shard_id,
+                        "finalizing shards",
+                        shard_id,
                         RelationDesc::empty(),
-                        &persist_client,
+                        persist_client,
                     )
                     .await;
 
@@ -2445,10 +2453,10 @@ where
                         .expect("failed to connect")
                         .expect("failed to truncate write handle");
                 }
-                *shard_id
+                shard_id
             })
-            // Poll each future for each collection concurrently, maximum of 50 at a time.
-            .buffer_unordered(50)
+            // Poll each future for each collection concurrently, maximum of 10 at a time.
+            .buffer_unordered(10)
             // HERE BE DRAGONS: see warning on other uses of buffer_unordered
             // before any changes to `collect`
             .collect()

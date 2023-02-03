@@ -144,11 +144,7 @@ where
             .await;
 
         // Determine all shards that are registered that are not in use.
-        let shard_id_desc_to_truncate: Vec<_> = registered_shards
-            .difference(&in_use_shards)
-            .cloned()
-            .collect();
-
-        self.finalize_shards(&shard_id_desc_to_truncate).await;
+        self.finalize_shards(registered_shards.difference(&in_use_shards).cloned())
+            .await;
     }
 }
