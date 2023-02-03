@@ -91,7 +91,7 @@ use tracing::info;
 use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message};
 
-use mz_environmentd::{WebSocketAuth, WebSocketResponse};
+use mz_environmentd::WebSocketResponse;
 use mz_ore::retry::Retry;
 use mz_pgrepr::UInt8;
 
