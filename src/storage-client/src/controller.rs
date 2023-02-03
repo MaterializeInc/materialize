@@ -76,6 +76,7 @@ mod collection_mgmt;
 mod command_wals;
 mod persist_handles;
 mod rehydration;
+mod remap_migration;
 mod statistics;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
@@ -280,6 +281,16 @@ pub trait StorageController: Debug + Send {
     fn collections(
         &self,
     ) -> Box<dyn Iterator<Item = (&GlobalId, &CollectionState<Self::Timestamp>)> + '_>;
+
+    /// Migrate any storage controller state from previous versions to this
+    /// version's expectations.
+    ///
+    /// This function must "see" the GlobalId of every collection you plan to
+    /// create, but can be called with all of the catalog's collections at once.
+    async fn migrate_collections(
+        &mut self,
+        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+    ) -> Result<(), StorageError>;
 
     /// Create the sources described in the individual CreateSourceCommand commands.
     ///
@@ -1064,6 +1075,34 @@ where
         client.connect(location);
     }
 
+    // Add new migrations below and precede them with a short summary of the
+    // migration's purpose and optional additional commentary about safety or
+    // approach.
+    //
+    // Note that:
+    // - The sum of all migrations must be idempotent because all migrations run
+    //   every time the catalog opens, unless migrations are explicitly
+    //   disabled. This might mean changing code outside the migration itself,
+    //   or only executing some migrations when encountering certain versions.
+    // - Migrations must preserve backwards compatibility with all past releases
+    //   of Materialize.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn migrate_collections(
+        &mut self,
+        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+    ) -> Result<(), StorageError> {
+        let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
+
+        // MIGRATION: v0.44 See comments on remap_shard_migration.
+        let remap_shard_migration_delta =
+            self.remap_shard_migration(&durable_metadata, &collections);
+
+        self.upsert_collection_metadata(&mut durable_metadata, remap_shard_migration_delta)
+            .await;
+
+        Ok(())
+    }
+
     #[tracing::instrument(level = "debug", skip_all)]
     async fn create_collections(
         &mut self,
@@ -1094,30 +1133,12 @@ where
         // each section.
         let mut entries = Vec::with_capacity(collections.len());
 
-        for (id, desc) in &collections {
-            let remap_shard = match &desc.data_source {
-                // Iff the ingestion specifies a progress/remap collection, find that collection's data shard.
-                DataSource::Ingestion(IngestionDescription {
-                    remap_collection_id,
-                    ..
-                }) => Some(
-                    self.collection(*remap_collection_id)?
-                        .collection_metadata
-                        .data_shard,
-                ),
-                _ => None,
-            };
-
-            // Note that in the case of remap shards of collections that
-            // pre-date queryable remap shards, this data shard is "wrong". We
-            // will correct the relationship when we create the primary
-            // collection by replacing this data shard with that collection's
-            // remap shard.
+        for (id, _desc) in &collections {
             entries.push((
                 *id,
                 DurableCollectionMetadata {
-                    remap_shard,
                     data_shard: ShardId::new(),
+                    remap_shard: None,
                 },
             ))
         }
@@ -1136,6 +1157,9 @@ where
             .into_iter()
             .map(|(id, description)| {
                 let collection_shards = durable_metadata.remove(&id).expect("inserted above");
+                // MIGRATION: v0.44
+                assert!(collection_shards.remap_shard.is_none(), "remap shards must be migrated to be the data shard of their remap/progress collections or dropped");
+
                 let status_shard =
                     if let Some(status_collection_id) = description.status_collection_id {
                         Some(
@@ -2329,20 +2353,14 @@ where
     /// `upsert_state` into in `all_current_metadata`, as well as
     /// `METADATA_COLLECTION`.
     ///
-    /// Any shards changed between the old and the new version will be
-    /// finalized. e.g. it is not currently possible to swap a collection's data
-    /// and remap shards.
+    /// Any shards no longer referenced after the upsert will be finalized.
     ///
     /// Note that this function expects to be called:
     /// - While no source is currently using the shards identified in the
     ///   current metadata.
     /// - Before any sources begins using the shards identified in
     ///   `new_metadata`.
-    ///
-    /// # Panics
-    /// - If the keys in `metadata_to_update` are not a strict subset of the
-    ///   keys in `current_metadata`.
-    async fn _rewrite_collection_metadata(
+    async fn upsert_collection_metadata(
         &mut self,
         all_current_metadata: &mut BTreeMap<GlobalId, DurableCollectionMetadata>,
         upsert_state: BTreeMap<GlobalId, DurableCollectionMetadata>,
@@ -2353,48 +2371,70 @@ where
             return;
         }
 
-        let mut shards_to_finalize = BTreeSet::new();
+        let mut new_shards = BTreeSet::new();
+        let mut dropped_shards = BTreeSet::new();
         let mut data_shards_to_replace = BTreeSet::new();
         let mut remap_shards_to_replace = BTreeSet::new();
         for (id, new_metadata) in upsert_state.iter() {
-            let metadata = &all_current_metadata[id];
+            assert!(
+                new_metadata.remap_shard.is_none(),
+                "must not reintroduce remap shards"
+            );
 
-            for (old, new, data_shard) in [
-                (
-                    Some(metadata.data_shard),
-                    Some(new_metadata.data_shard),
-                    true,
-                ),
-                (metadata.remap_shard, new_metadata.remap_shard, false),
-            ] {
-                if old != new {
-                    info!(
-                        "replacing {:?}'s {} shard {:?} with {:?}",
-                        id,
-                        if data_shard { "data" } else { "remap" },
-                        old,
-                        new
-                    );
+            match all_current_metadata.get(id) {
+                Some(metadata) => {
+                    for (old, new, data_shard) in [
+                        (
+                            Some(metadata.data_shard),
+                            Some(new_metadata.data_shard),
+                            true,
+                        ),
+                        (metadata.remap_shard, new_metadata.remap_shard, false),
+                    ] {
+                        if old != new {
+                            info!(
+                                "replacing {:?}'s {} shard {:?} with {:?}",
+                                id,
+                                if data_shard { "data" } else { "remap" },
+                                old,
+                                new
+                            );
 
-                    if let Some(old) = old {
-                        shards_to_finalize.insert(old);
-                    }
+                            if let Some(new) = new {
+                                new_shards.insert(new);
+                            }
 
-                    if data_shard {
-                        data_shards_to_replace.insert(*id);
-                    } else {
-                        remap_shards_to_replace.insert(*id);
+                            if let Some(old) = old {
+                                dropped_shards.insert(old);
+                            }
+
+                            if data_shard {
+                                data_shards_to_replace.insert(*id);
+                            } else {
+                                remap_shards_to_replace.insert(*id);
+                            }
+                        }
                     }
                 }
-            }
+                // New collections, which might use an another collection's
+                // dropped shard.
+                None => {
+                    new_shards.insert(new_metadata.data_shard);
+                    continue;
+                }
+            };
 
             // Update the in-memory representation.
             all_current_metadata.insert(*id, new_metadata.clone());
         }
 
+        // Reconcile dropped shards reference with shards that moved into a new
+        // collection.
+        dropped_shards.retain(|shard| !new_shards.contains(shard));
+
         // Ensure we don't leak any shards by tracking all of them we intend to
         // finalize.
-        self.register_shards_for_finalization(shards_to_finalize.iter().cloned())
+        self.register_shards_for_finalization(dropped_shards.iter().cloned())
             .await;
 
         // Update the on-disk representation.
@@ -2404,9 +2444,9 @@ where
             .expect("connect to stash");
 
         // Finalize any shards that are no longer-in use.
-        self.finalize_shards(shards_to_finalize).await;
+        self.finalize_shards(dropped_shards).await;
 
-        // Update in-memory state.
+        // Update in-memory state for remap shards.
         for id in remap_shards_to_replace {
             let c = match self.collection_mut(id) {
                 Ok(c) => c,
@@ -2427,6 +2467,7 @@ where
             .await
             .unwrap();
 
+        // Update the in-memory state for data shards
         for id in data_shards_to_replace {
             let c = match self.collection_mut(id) {
                 Ok(c) => c,
