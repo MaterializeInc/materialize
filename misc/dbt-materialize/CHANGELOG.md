@@ -1,5 +1,9 @@
 # dbt-materialize Changelog
 
+## 1.4.0 - 2023-02-03
+
+* Upgrade to `dbt-postgres` v1.4.0.
+
 ## 1.3.4 - 2023-01-19
 
 * Fix a bug where the adapter would fail if the pre-installed `default` cluster

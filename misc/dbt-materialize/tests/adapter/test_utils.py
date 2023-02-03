@@ -19,7 +19,9 @@ from dbt.tests.adapter.utils.fixture_cast_bool_to_text import (
     models__test_cast_bool_to_text_yml,
 )
 from dbt.tests.adapter.utils.test_cast_bool_to_text import BaseCastBoolToText
+from dbt.tests.adapter.utils.test_current_timestamp import BaseCurrentTimestampAware
 from dbt.tests.adapter.utils.test_listagg import BaseListagg
+from dbt.tests.adapter.utils.test_timestamps import BaseCurrentTimestamps
 
 models__test_cast_bool_to_text_sql = """
 with data_bool as (
@@ -60,4 +62,23 @@ class TestCastBoolToText(BaseCastBoolToText):
 
 @pytest.mark.skip(reason="Materialize supports the list_agg() function")
 class TestListagg(BaseListagg):
+    pass
+
+
+# Materialize implements `timestamp`, which is an equivalent abbreviation for
+# `timestamp without timezone` (as required by the SQL standard)
+# See https://www.postgresql.org/docs/current/datatype-datetime.html
+class TestCurrentTimestamps(BaseCurrentTimestamps):
+    @pytest.fixture(scope="class")
+    def expected_schema(self):
+        return {
+            "current_timestamp": "timestamp with time zone",
+            "current_timestamp_in_utc_backcompat": "timestamp",
+            "current_timestamp_backcompat": "timestamp",
+        }
+
+    pass
+
+
+class TestCurrentTimestamp(BaseCurrentTimestampAware):
     pass
