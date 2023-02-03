@@ -377,9 +377,9 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
 pub struct Server {
     pub inner: mz_environmentd::Server,
     pub runtime: Arc<Runtime>,
-    _temp_dir: Option<TempDir>,
     pub metrics_registry: MetricsRegistry,
-    pub _tracing_guard: Option<TracingGuard>,
+    _temp_dir: Option<TempDir>,
+    _tracing_guard: Option<TracingGuard>,
 }
 
 impl Server {
