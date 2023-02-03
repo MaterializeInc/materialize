@@ -91,7 +91,6 @@ mod linear;
 mod relation;
 mod scalar;
 
-pub mod explain;
 pub mod explain_new;
 pub mod virtual_syntax;
 pub mod visit;
