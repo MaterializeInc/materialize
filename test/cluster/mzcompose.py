@@ -58,6 +58,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-github-15535",
         "test-github-15799",
         "test-github-15930",
+        "test-github-15496",
         "test-remote-storage",
         "test-drop-default-cluster",
         "test-upsert",
@@ -492,6 +493,70 @@ def workflow_test_github_15930(c: Composition) -> None:
                 """
             )
         )
+
+
+def workflow_test_github_15496(c: Composition) -> None:
+    """
+    Test that a reduce collation over a source with an invalid accumulation does not
+    panic, but rather logs errors, when soft assertions are turned off.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/15496.
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Clusterd(
+            name="clusterd_nopanic",
+            environment_extra=[
+                "MZ_SOFT_ASSERTIONS=0",
+            ],
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("clusterd_nopanic")
+
+        # set up a test cluster and run a testdrive regression script
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESS 'clusterd_nopanic:2100',
+                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
+                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    WORKERS 2
+                )
+            );
+            """
+        )
+        c.testdrive(
+            dedent(
+                f"""
+            # Set data for test up
+            > SET cluster = cluster1;
+
+            > CREATE TABLE base (data bigint, diff bigint);
+
+            > CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+
+            > INSERT INTO base VALUES (1, 1);
+
+            > INSERT INTO base VALUES (1, -1), (1, -1);
+
+            # Run a query that would generate a panic before the fix. Note that
+            # we expect the query to succeed for now, but follow-up work might
+            # eventually lead us to favor a SQL-level error for such a query, as
+            # tracked by https://github.com/MaterializeInc/materialize/issues/17178
+            > SELECT SUM(data), MAX(data) FROM data;
+            <null> <null>
+            """
+            )
+        )
+
+        # ensure that an error was put into the logs
+        c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
+        assert "Mismatched aggregates for key in ReduceCollation" in c1.stdout
 
 
 def workflow_test_upsert(c: Composition) -> None:
