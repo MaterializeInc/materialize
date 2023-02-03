@@ -1,9 +1,23 @@
-{{ $images := $.Resources.ByType "image" }} {{ $featured := $images.GetMatch
-"*feature*" }} {{ if not $featured }}{{ $featured = $images.GetMatch
-"{*cover*,*thumbnail*}" }}{{ end }} {{ if not $featured }} {{ $featured =
-resources.Get "/opengraph/og.png" }} {{ $size := 80 }} {{ $title := (cond (isset
-.Params "htmltitle") .Params.htmltitle .Page.Title ) }} {{ if gt (len $title) 20
-}} {{ $size = 70 }} {{ end }} {{ $text := $title }} {{ $textOptions := dict
-"color" "#FFF" "size" $size "lineSpacing" 10 "x" 65 "y" 80 "font" (resources.Get
-"/opengraph/Inter-Medium.ttf") }} {{ $featured = $featured | images.Filter
-(images.Text $text $textOptions) }} {{ end }} {{ return $featured }}
+{{ $images := $.Resources.ByType "image" }}
+{{ $featured := $images.GetMatch "*feature*" }}
+
+{{ if not $featured }}
+  {{ $featured = $images.GetMatch "{*cover*,*thumbnail*}" }}
+{{ end }}
+{{ if not $featured }}
+  {{ $featured = resources.Get "/opengraph/og.png" }}
+  {{ $size := 80 }}
+  {{ $title := (cond (isset .Params "htmltitle") .Params.htmltitle .Page.Title ) }}
+
+  {{ if gt (len $title) 20 }}
+    {{ $size = 70 }}
+  {{ end }}
+
+  {{ $text := $title }}
+
+  {{ $textOptions := dict "color" "#FFF" "size" $size "lineSpacing" 10 "x" 65 "y" 80 "font" (resources.GetRemote "https://res.cloudinary.com/mzimgcdn/raw/upload/v1675432925/Inter-Medium.ttf") }}
+  {{ $featured = $featured | images.Filter (images.Text $text $textOptions) }}
+{{ end }}
+
+{{ return $featured }}
+
