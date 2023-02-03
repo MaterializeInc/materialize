@@ -504,6 +504,10 @@ enum BatchOrData {
     },
 }
 
+/// If we'd otherwise write a batch smaller than this, flush the records over the output channel
+/// and let `append_batches` collect data from all the workers and batch it up itself.
+const MINIMUM_BATCH_SIZE: usize = 50;
+
 /// Writes `desired_stream - persist_stream` to persist, but only for updates
 /// that fall into batch a description that we get via `batch_descriptions`.
 /// This forwards a `HollowBatch` for any batch of updates that was written.
@@ -794,31 +798,43 @@ where
                         .peekable();
 
                     if to_append.peek().is_some() {
-                        let batch = write
-                            .batch(
-                                to_append.map(|(data, time, diff)| {
-                                    ((SourceData(data.clone()), ()), time, diff)
-                                }),
-                                batch_lower.clone(),
-                                batch_upper.clone(),
-                            )
-                            .await
-                            .expect("invalid usage");
+                        // We want to pass along the data directly if `to_append` is small, but to avoid
+                        // having to iterate through everything twice we'll check if `correction`
+                        // is small as a reasonable proxy.
+                        let batch_or_data = if correction.len() >= MINIMUM_BATCH_SIZE {
+                            let batch = write
+                                .batch(
+                                    to_append.map(|(data, time, diff)| {
+                                        ((SourceData(data.clone()), ()), time, diff)
+                                    }),
+                                    batch_lower.clone(),
+                                    batch_upper.clone(),
+                                )
+                                .await
+                                .expect("invalid usage");
 
-                        if sink_id.is_user() {
-                            trace!(
-                                "persist_sink {sink_id}/{shard_id}: \
+                            if sink_id.is_user() {
+                                trace!(
+                                    "persist_sink {sink_id}/{shard_id}: \
                                     wrote batch from worker {}: ({:?}, {:?})",
-                                worker_index,
-                                batch.lower(),
-                                batch.upper()
-                            );
-                        }
+                                    worker_index,
+                                    batch.lower(),
+                                    batch.upper()
+                                );
+                            }
+                            BatchOrData::Batch(batch.into_writer_hollow_batch())
+                        } else {
+                            BatchOrData::Data {
+                                lower: batch_lower.clone(),
+                                upper: batch_upper.clone(),
+                                contents: to_append.cloned().collect(),
+                            }
+                        };
 
                         let mut output = output.activate();
                         let mut session = output.session(&cap);
-                        session.give(BatchOrData::Batch(batch.into_writer_hollow_batch()));
-                    };
+                        session.give(batch_or_data);
+                    }
                 }
             } else {
                 trace!(
@@ -844,6 +860,10 @@ where
 /// we know that no future batches will arrive, that is, for those batch
 /// descriptions that are not beyond the frontier of both the
 /// `batch_descriptions` and `batches` inputs.
+///
+/// To avoid contention over the persist shard, we route all batches to a single worker.
+/// This worker may also batch up individual records sent by the upstream operator, as
+/// a way to coalesce what would otherwise be many tiny batches into fewer, larger ones.
 fn append_batches<G>(
     sink_id: GlobalId,
     operator_name: String,
