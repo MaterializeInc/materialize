@@ -14,11 +14,10 @@ use timely::dataflow::operators::Capability;
 use timely::progress::Antichain;
 use timely::scheduling::activate::SyncActivator;
 
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::{ColumnType, GlobalId, RelationDesc};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::SourceConnection;
-use once_cell::sync::Lazy;
+use mz_storage_client::types::sources::{IncludedColumnSource, SourceConnection};
 
 use crate::source::types::{
     NextMessage, SourceConnectionBuilder, SourceMessage, SourceMessageType, SourceReader,
@@ -37,6 +36,24 @@ impl<C: SourceConnection> SourceConnection for DelimitedValueSourceConnection<C>
     fn name(&self) -> &'static str {
         self.0.name()
     }
+    fn upstream_name(&self) -> Option<&str> {
+        self.0.upstream_name()
+    }
+    fn timestamp_desc(&self) -> RelationDesc {
+        self.0.timestamp_desc()
+    }
+    fn num_outputs(&self) -> usize {
+        self.0.num_outputs()
+    }
+    fn connection_id(&self) -> Option<GlobalId> {
+        self.0.connection_id()
+    }
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
+        self.0.metadata_columns()
+    }
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
+        self.0.metadata_column_types()
+    }
 }
 
 impl<C: SourceConnectionBuilder> SourceConnectionBuilder for DelimitedValueSourceConnection<C>
@@ -45,8 +62,6 @@ where
 {
     type Reader = DelimitedValueSourceReader<C::Reader>;
     type OffsetCommitter = C::OffsetCommitter;
-
-    const REMAP_RELATION_DESC: Lazy<RelationDesc> = Lazy::new(|| C::REMAP_RELATION_DESC.clone());
 
     fn into_reader(
         self,

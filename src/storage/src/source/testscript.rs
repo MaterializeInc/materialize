@@ -9,18 +9,15 @@
 
 use std::time::Duration;
 
-use once_cell::sync::Lazy;
 use timely::dataflow::operators::Capability;
 use timely::progress::Antichain;
 use timely::scheduling::SyncActivator;
 use tokio::time::sleep;
 
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::GlobalId;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::{
-    MzOffset, TestScriptSourceConnection, TESTSCRIPT_PROGRESS_DESC,
-};
+use mz_storage_client::types::sources::{MzOffset, TestScriptSourceConnection};
 
 use crate::source::commit::LogCommitter;
 use crate::source::types::SourceConnectionBuilder;
@@ -58,8 +55,6 @@ pub struct TestScriptSourceReader {
 impl SourceConnectionBuilder for TestScriptSourceConnection {
     type Reader = TestScriptSourceReader;
     type OffsetCommitter = LogCommitter;
-
-    const REMAP_RELATION_DESC: Lazy<RelationDesc> = Lazy::new(|| TESTSCRIPT_PROGRESS_DESC.clone());
 
     fn into_reader(
         self,

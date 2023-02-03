@@ -67,7 +67,7 @@ use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceError;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::{MzOffset, SourceTimestamp, SourceToken};
+use mz_storage_client::types::sources::{MzOffset, SourceConnection, SourceTimestamp, SourceToken};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::capture::UnboundedTokioCapture;
@@ -156,7 +156,7 @@ pub fn create_raw_source<RootG, G, C, R>(
 where
     RootG: Scope<Timestamp = ()> + Clone,
     G: Scope<Timestamp = mz_repr::Timestamp> + Clone,
-    C: SourceConnectionBuilder + Clone + 'static,
+    C: SourceConnection + SourceConnectionBuilder + Clone + 'static,
     R: ResumptionFrontierCalculator<mz_repr::Timestamp> + 'static,
 {
     let worker_id = config.worker_id;
@@ -185,6 +185,8 @@ where
     resume_stream.capture_into(UnboundedTokioCapture(resume_tx));
     let reclocked_resume_stream =
         reclock_resume_upper(resume_rx, reclock_follower.share(), worker_id, id);
+
+    let timestamp_desc = source_connection.timestamp_desc();
 
     let (token, health_token) = {
         let config = config.clone();
@@ -215,7 +217,7 @@ where
         config.clone(),
         source_upper_rx,
         &resume_stream,
-        C::REMAP_RELATION_DESC.clone(),
+        timestamp_desc,
     );
 
     let ((reclocked_stream, reclocked_err_stream), _reclock_token) =

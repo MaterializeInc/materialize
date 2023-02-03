@@ -9,17 +9,15 @@
 
 use std::time::{Duration, Instant};
 
-use once_cell::sync::Lazy;
 use timely::dataflow::operators::Capability;
 use timely::progress::Antichain;
 use timely::scheduling::SyncActivator;
 
-use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::GeneratorMessageType;
 use mz_storage_client::types::sources::{
-    encoding::SourceDataEncoding, Generator, LoadGenerator, LoadGeneratorSourceConnection,
-    MzOffset, LOADGEN_PROGRESS_DESC,
+    encoding::SourceDataEncoding, Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset,
 };
 
 use super::metrics::SourceBaseMetrics;
@@ -78,8 +76,6 @@ pub struct LoadGeneratorSourceReader {
 impl SourceConnectionBuilder for LoadGeneratorSourceConnection {
     type Reader = LoadGeneratorSourceReader;
     type OffsetCommitter = LogCommitter;
-
-    const REMAP_RELATION_DESC: Lazy<RelationDesc> = Lazy::new(|| LOADGEN_PROGRESS_DESC.clone());
 
     fn into_reader(
         self,

@@ -23,9 +23,6 @@ use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
 use globset::{Glob, GlobBuilder};
 use itertools::Itertools;
-use mz_persist_types::codec_impls::{TodoSchema, UnitSchema};
-use mz_persist_types::columnar::Schema;
-use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -41,6 +38,8 @@ use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
+use mz_persist_types::codec_impls::{TodoSchema, UnitSchema};
+use mz_persist_types::columnar::Schema;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
@@ -67,9 +66,9 @@ include!(concat!(
 
 /// A description of a source ingestion
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct IngestionDescription<S = ()> {
+pub struct IngestionDescription<S = (), C = GenericSourceConnection> {
     /// The source description
-    pub desc: SourceDesc,
+    pub desc: SourceDesc<C>,
     /// Source collections made available to this ingestion.
     pub source_imports: BTreeMap<GlobalId, S>,
     /// Additional storage controller metadata needed to ingest this source
@@ -123,14 +122,7 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
             handles.push(handle);
         }
 
-        let remap_relation_desc = match self.desc.connection {
-            GenericSourceConnection::Kafka(_) => KAFKA_PROGRESS_DESC.clone(),
-            GenericSourceConnection::Kinesis(_) => KINESIS_PROGRESS_DESC.clone(),
-            GenericSourceConnection::S3(_) => S3_PROGRESS_DESC.clone(),
-            GenericSourceConnection::Postgres(_) => PG_PROGRESS_DESC.clone(),
-            GenericSourceConnection::LoadGenerator(_) => LOADGEN_PROGRESS_DESC.clone(),
-            GenericSourceConnection::TestScript(_) => TESTSCRIPT_PROGRESS_DESC.clone(),
-        };
+        let remap_relation_desc = self.desc.connection.timestamp_desc();
 
         let CollectionMetadata {
             persist_location,
@@ -1354,8 +1346,33 @@ impl UnplannedSourceEnvelope {
     }
 }
 
+/// A connection to an external system
 pub trait SourceConnection: Clone {
+    /// The name of the external system (e.g kafka, postgres, s3, etc).
     fn name(&self) -> &'static str;
+
+    /// The name of the resource in the external system (e.g kafka topic) if any
+    fn upstream_name(&self) -> Option<&str>;
+
+    /// The schema of this connection's timestamp type. This will also be the schema of the
+    /// progress relation.
+    fn timestamp_desc(&self) -> RelationDesc;
+
+    /// The number of outputs. This will be 1 for sources with no subsources or 1 + num_subsources
+    /// otherwise.
+    fn num_outputs(&self) -> usize;
+
+    /// The id of the connection object (i.e the one obtained from running `CREATE CONNECTION`) in
+    /// the catalog, if any.
+    fn connection_id(&self) -> Option<GlobalId>;
+
+    /// Returns available metadata columns that this connection offers in (name, type) pairs in the
+    /// order specified by the user.
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)>;
+
+    /// The available metadata columns in the order specified by the user. This only identifies the
+    /// kinds of columns that this source offers without any further information.
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1382,19 +1399,93 @@ impl SourceConnection for KafkaSourceConnection {
     fn name(&self) -> &'static str {
         "kafka"
     }
-}
 
-pub static KAFKA_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
-    RelationDesc::empty()
-        .with_column(
-            "partition",
-            ScalarType::Range {
-                element_type: Box::new(ScalarType::Int32),
+    fn upstream_name(&self) -> Option<&str> {
+        Some(self.topic.as_str())
+    }
+
+    fn timestamp_desc(&self) -> RelationDesc {
+        RelationDesc::empty()
+            .with_column(
+                "partition",
+                ScalarType::Range {
+                    element_type: Box::new(ScalarType::Int32),
+                }
+                .nullable(false),
+            )
+            .with_column("offset", ScalarType::UInt64.nullable(true))
+    }
+
+    fn num_outputs(&self) -> usize {
+        1
+    }
+
+    fn connection_id(&self) -> Option<GlobalId> {
+        Some(self.connection_id)
+    }
+
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
+        let mut items = BTreeMap::new();
+        let header_typ = ScalarType::List {
+            element_type: Box::new(ScalarType::Record {
+                fields: vec![
+                    (
+                        "key".into(),
+                        ColumnType {
+                            nullable: false,
+                            scalar_type: ScalarType::String,
+                        },
+                    ),
+                    (
+                        "value".into(),
+                        ColumnType {
+                            nullable: false,
+                            scalar_type: ScalarType::Bytes,
+                        },
+                    ),
+                ],
+                custom_id: None,
+            }),
+            custom_id: None,
+        };
+        let metadata_columns = [
+            (&self.include_offset, ScalarType::UInt64),
+            (&self.include_partition, ScalarType::Int32),
+            (&self.include_timestamp, ScalarType::Timestamp),
+            (&self.include_topic, ScalarType::String),
+            (&self.include_headers, header_typ),
+        ];
+
+        for (include, ty) in metadata_columns {
+            if let Some(include) = include {
+                items.insert(include.pos + 1, (&*include.name, ty.nullable(false)));
             }
-            .nullable(false),
-        )
-        .with_column("offset", ScalarType::UInt64.nullable(true))
-});
+        }
+
+        items.into_values().collect()
+    }
+
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
+        // create a sorted list of column types based on the order they were declared in sql
+        // TODO: should key be included in the sorted list? Breaking change, and it's
+        // already special (it commonly multiple columns embedded in it).
+        let mut items = BTreeMap::new();
+        let metadata_columns = [
+            (&self.include_offset, IncludedColumnSource::Offset),
+            (&self.include_partition, IncludedColumnSource::Partition),
+            (&self.include_timestamp, IncludedColumnSource::Timestamp),
+            (&self.include_topic, IncludedColumnSource::Topic),
+            (&self.include_headers, IncludedColumnSource::Headers),
+        ];
+        for (include, ty) in metadata_columns {
+            if let Some(include) = include {
+                items.insert(include.pos, ty);
+            }
+        }
+
+        items.into_values().collect()
+    }
+}
 
 impl Arbitrary for KafkaSourceConnection {
     type Strategy = BoxedStrategy<Self>;
@@ -1524,15 +1615,15 @@ impl RustType<ProtoCompression> for Compression {
 
 /// An external source of updates for a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct SourceDesc {
-    pub connection: GenericSourceConnection,
+pub struct SourceDesc<C = GenericSourceConnection> {
+    pub connection: C,
     pub encoding: encoding::SourceDataEncoding,
     pub envelope: SourceEnvelope,
     pub metadata_columns: Vec<IncludedColumnSource>,
     pub timestamp_interval: Duration,
 }
 
-impl Arbitrary for SourceDesc {
+impl Arbitrary for SourceDesc<GenericSourceConnection> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -1557,7 +1648,7 @@ impl Arbitrary for SourceDesc {
     }
 }
 
-impl RustType<ProtoSourceDesc> for SourceDesc {
+impl RustType<ProtoSourceDesc> for SourceDesc<GenericSourceConnection> {
     fn into_proto(&self) -> ProtoSourceDesc {
         ProtoSourceDesc {
             connection: Some(self.connection.into_proto()),
@@ -1587,7 +1678,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
     }
 }
 
-impl SourceDesc {
+impl SourceDesc<GenericSourceConnection> {
     /// Returns `true` if this connection yields data that is
     /// append-only/monotonic. Append-monly means the source
     /// never produces retractions.
@@ -1625,28 +1716,6 @@ impl SourceDesc {
         }
     }
 
-    /// The number of outputs this source will produce
-    pub fn num_outputs(&self) -> usize {
-        let subsources = match &self.connection {
-            GenericSourceConnection::Kafka(_)
-            | GenericSourceConnection::Kinesis(_)
-            | GenericSourceConnection::S3(_)
-            | GenericSourceConnection::TestScript(_) => 0,
-            GenericSourceConnection::LoadGenerator(connection) => {
-                connection.load_generator.views().len()
-            }
-            GenericSourceConnection::Postgres(connection) => {
-                connection.publication_details.tables.len()
-            }
-        };
-        // Every ingestion produces a main stream plus subsource streams
-        subsources + 1
-    }
-
-    pub fn name(&self) -> &'static str {
-        self.connection.name()
-    }
-
     pub fn envelope(&self) -> &SourceEnvelope {
         &self.envelope
     }
@@ -1662,15 +1731,117 @@ pub enum GenericSourceConnection {
     TestScript(TestScriptSourceConnection),
 }
 
-impl GenericSourceConnection {
-    pub fn connection_id(&self) -> Option<GlobalId> {
-        use GenericSourceConnection::*;
+impl From<KafkaSourceConnection> for GenericSourceConnection {
+    fn from(conn: KafkaSourceConnection) -> Self {
+        Self::Kafka(conn)
+    }
+}
+
+impl From<KinesisSourceConnection> for GenericSourceConnection {
+    fn from(conn: KinesisSourceConnection) -> Self {
+        Self::Kinesis(conn)
+    }
+}
+
+impl From<S3SourceConnection> for GenericSourceConnection {
+    fn from(conn: S3SourceConnection) -> Self {
+        Self::S3(conn)
+    }
+}
+
+impl From<PostgresSourceConnection> for GenericSourceConnection {
+    fn from(conn: PostgresSourceConnection) -> Self {
+        Self::Postgres(conn)
+    }
+}
+
+impl From<LoadGeneratorSourceConnection> for GenericSourceConnection {
+    fn from(conn: LoadGeneratorSourceConnection) -> Self {
+        Self::LoadGenerator(conn)
+    }
+}
+
+impl From<TestScriptSourceConnection> for GenericSourceConnection {
+    fn from(conn: TestScriptSourceConnection) -> Self {
+        Self::TestScript(conn)
+    }
+}
+
+impl SourceConnection for GenericSourceConnection {
+    fn name(&self) -> &'static str {
         match self {
-            Kafka(KafkaSourceConnection { connection_id, .. })
-            | Kinesis(KinesisSourceConnection { connection_id, .. })
-            | S3(S3SourceConnection { connection_id, .. })
-            | Postgres(PostgresSourceConnection { connection_id, .. }) => Some(*connection_id),
-            LoadGenerator(_) | TestScript(_) => None,
+            Self::Kafka(conn) => conn.name(),
+            Self::Kinesis(conn) => conn.name(),
+            Self::S3(conn) => conn.name(),
+            Self::Postgres(conn) => conn.name(),
+            Self::LoadGenerator(conn) => conn.name(),
+            Self::TestScript(conn) => conn.name(),
+        }
+    }
+
+    fn upstream_name(&self) -> Option<&str> {
+        match self {
+            Self::Kafka(conn) => conn.upstream_name(),
+            Self::Kinesis(conn) => conn.upstream_name(),
+            Self::S3(conn) => conn.upstream_name(),
+            Self::Postgres(conn) => conn.upstream_name(),
+            Self::LoadGenerator(conn) => conn.upstream_name(),
+            Self::TestScript(conn) => conn.upstream_name(),
+        }
+    }
+
+    fn timestamp_desc(&self) -> RelationDesc {
+        match self {
+            Self::Kafka(conn) => conn.timestamp_desc(),
+            Self::Kinesis(conn) => conn.timestamp_desc(),
+            Self::S3(conn) => conn.timestamp_desc(),
+            Self::Postgres(conn) => conn.timestamp_desc(),
+            Self::LoadGenerator(conn) => conn.timestamp_desc(),
+            Self::TestScript(conn) => conn.timestamp_desc(),
+        }
+    }
+
+    fn num_outputs(&self) -> usize {
+        match self {
+            Self::Kafka(conn) => conn.num_outputs(),
+            Self::Kinesis(conn) => conn.num_outputs(),
+            Self::S3(conn) => conn.num_outputs(),
+            Self::Postgres(conn) => conn.num_outputs(),
+            Self::LoadGenerator(conn) => conn.num_outputs(),
+            Self::TestScript(conn) => conn.num_outputs(),
+        }
+    }
+
+    fn connection_id(&self) -> Option<GlobalId> {
+        match self {
+            Self::Kafka(conn) => conn.connection_id(),
+            Self::Kinesis(conn) => conn.connection_id(),
+            Self::S3(conn) => conn.connection_id(),
+            Self::Postgres(conn) => conn.connection_id(),
+            Self::LoadGenerator(conn) => conn.connection_id(),
+            Self::TestScript(conn) => conn.connection_id(),
+        }
+    }
+
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
+        match self {
+            Self::Kafka(conn) => conn.metadata_columns(),
+            Self::Kinesis(conn) => conn.metadata_columns(),
+            Self::S3(conn) => conn.metadata_columns(),
+            Self::Postgres(conn) => conn.metadata_columns(),
+            Self::LoadGenerator(conn) => conn.metadata_columns(),
+            Self::TestScript(conn) => conn.metadata_columns(),
+        }
+    }
+
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
+        match self {
+            Self::Kafka(conn) => conn.metadata_column_types(),
+            Self::Kinesis(conn) => conn.metadata_column_types(),
+            Self::S3(conn) => conn.metadata_column_types(),
+            Self::Postgres(conn) => conn.metadata_column_types(),
+            Self::LoadGenerator(conn) => conn.metadata_column_types(),
+            Self::TestScript(conn) => conn.metadata_column_types(),
         }
     }
 }
@@ -1714,141 +1885,6 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection {
     }
 }
 
-impl GenericSourceConnection {
-    /// Returns the name and type of each additional metadata column that
-    /// Materialize will automatically append to the source's inherent columns.
-    ///
-    /// Presently, each source type exposes precisely one metadata column that
-    /// corresponds to some source-specific record counter. For example, file
-    /// sources use a line number, while Kafka sources use a topic offset.
-    ///
-    /// The columns declared here must be kept in sync with the actual source
-    /// implementations that produce these columns.
-    pub fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
-        match self {
-            Self::Kafka(KafkaSourceConnection {
-                include_partition: part,
-                include_timestamp: time,
-                include_topic: topic,
-                include_offset: offset,
-                include_headers: headers,
-                ..
-            }) => {
-                let mut items = BTreeMap::new();
-                for (include, ty) in [
-                    (offset, ScalarType::UInt64),
-                    (part, ScalarType::Int32),
-                    (time, ScalarType::Timestamp),
-                    (topic, ScalarType::String),
-                    (
-                        headers,
-                        ScalarType::List {
-                            element_type: Box::new(ScalarType::Record {
-                                fields: vec![
-                                    (
-                                        "key".into(),
-                                        ColumnType {
-                                            nullable: false,
-                                            scalar_type: ScalarType::String,
-                                        },
-                                    ),
-                                    (
-                                        "value".into(),
-                                        ColumnType {
-                                            nullable: false,
-                                            scalar_type: ScalarType::Bytes,
-                                        },
-                                    ),
-                                ],
-                                custom_id: None,
-                            }),
-                            custom_id: None,
-                        },
-                    ),
-                ] {
-                    if let Some(include) = include {
-                        items.insert(include.pos + 1, (&*include.name, ty.nullable(false)));
-                    }
-                }
-
-                items.into_values().collect()
-            }
-            Self::Kinesis(_) => vec![],
-            Self::S3(_) => vec![],
-            Self::Postgres(_) => vec![],
-            Self::LoadGenerator(_) => vec![],
-            Self::TestScript(_) => vec![],
-        }
-    }
-
-    pub fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
-        match self {
-            GenericSourceConnection::Kafka(KafkaSourceConnection {
-                include_partition: part,
-                include_timestamp: time,
-                include_topic: topic,
-                include_offset: offset,
-                include_headers: headers,
-                ..
-            }) => {
-                // create a sorted list of column types based on the order they were declared in sql
-                // TODO: should key be included in the sorted list? Breaking change, and it's
-                // already special (it commonly multiple columns embedded in it).
-                let mut items = BTreeMap::new();
-                for (include, ty) in [
-                    (offset, IncludedColumnSource::Offset),
-                    (part, IncludedColumnSource::Partition),
-                    (time, IncludedColumnSource::Timestamp),
-                    (topic, IncludedColumnSource::Topic),
-                    (headers, IncludedColumnSource::Headers),
-                ] {
-                    if let Some(include) = include {
-                        items.insert(include.pos, ty);
-                    }
-                }
-
-                items.into_values().collect()
-            }
-
-            GenericSourceConnection::Kinesis(_)
-            | GenericSourceConnection::S3(_)
-            | GenericSourceConnection::Postgres(_)
-            | GenericSourceConnection::LoadGenerator(_)
-            | GenericSourceConnection::TestScript(_) => Vec::new(),
-        }
-    }
-
-    /// Returns the name of the external source connection.
-    pub fn name(&self) -> &'static str {
-        match self {
-            GenericSourceConnection::Kafka(c) => c.name(),
-            GenericSourceConnection::Kinesis(c) => c.name(),
-            GenericSourceConnection::S3(c) => c.name(),
-            GenericSourceConnection::Postgres(c) => c.name(),
-            GenericSourceConnection::LoadGenerator(c) => c.name(),
-            GenericSourceConnection::TestScript(c) => c.name(),
-        }
-    }
-
-    /// Optionally returns the name of the upstream resource this source corresponds to.
-    /// (Currently only implemented for Kafka and Kinesis, to match old-style behavior
-    ///  TODO: decide whether we want file paths and other upstream names to show up in metrics too.
-    pub fn upstream_name(&self) -> Option<&str> {
-        match self {
-            GenericSourceConnection::Kafka(KafkaSourceConnection { topic, .. }) => {
-                Some(topic.as_str())
-            }
-            GenericSourceConnection::Kinesis(KinesisSourceConnection { stream_name, .. }) => {
-                Some(stream_name.as_str())
-            }
-            GenericSourceConnection::S3(_) => None,
-            GenericSourceConnection::Postgres(_) => None,
-            GenericSourceConnection::LoadGenerator(_) => None,
-            GenericSourceConnection::TestScript(_) => None,
-        }
-    }
-}
-
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KinesisSourceConnection {
     pub connection_id: GlobalId,
@@ -1860,16 +1896,35 @@ impl SourceConnection for KinesisSourceConnection {
     fn name(&self) -> &'static str {
         "kinesis"
     }
-}
 
-pub static KINESIS_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
-    /* In the future, kinesis will have a more complex ts
-    RelationDesc::empty()
-        .with_column("shard_id", ScalarType::Int32.nullable(false))
-        .with_column("sequence_number", ScalarType::UInt64.nullable(true))
-    */
-    RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
-});
+    fn upstream_name(&self) -> Option<&str> {
+        Some(self.stream_name.as_str())
+    }
+
+    fn timestamp_desc(&self) -> RelationDesc {
+        //  In the future, kinesis will have a more complex ts
+        // RelationDesc::empty()
+        //     .with_column("shard_id", ScalarType::Int32.nullable(false))
+        //     .with_column("sequence_number", ScalarType::UInt64.nullable(true))
+        RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
+    }
+
+    fn num_outputs(&self) -> usize {
+        1
+    }
+
+    fn connection_id(&self) -> Option<GlobalId> {
+        Some(self.connection_id)
+    }
+
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
+        vec![]
+    }
+
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
+        vec![]
+    }
+}
 
 impl RustType<ProtoKinesisSourceConnection> for KinesisSourceConnection {
     fn into_proto(&self) -> ProtoKinesisSourceConnection {
@@ -1904,9 +1959,6 @@ pub struct PostgresSourceConnection {
     pub publication_details: PostgresSourcePublicationDetails,
 }
 
-pub static PG_PROGRESS_DESC: Lazy<RelationDesc> =
-    Lazy::new(|| RelationDesc::empty().with_column("lsn", ScalarType::UInt64.nullable(true)));
-
 impl Arbitrary for PostgresSourceConnection {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
@@ -1939,6 +1991,30 @@ impl Arbitrary for PostgresSourceConnection {
 impl SourceConnection for PostgresSourceConnection {
     fn name(&self) -> &'static str {
         "postgres"
+    }
+
+    fn upstream_name(&self) -> Option<&str> {
+        None
+    }
+
+    fn timestamp_desc(&self) -> RelationDesc {
+        RelationDesc::empty().with_column("lsn", ScalarType::UInt64.nullable(true))
+    }
+
+    fn num_outputs(&self) -> usize {
+        self.publication_details.tables.len() + 1
+    }
+
+    fn connection_id(&self) -> Option<GlobalId> {
+        Some(self.connection_id)
+    }
+
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
+        vec![]
+    }
+
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
+        vec![]
     }
 }
 
@@ -2046,10 +2122,31 @@ impl SourceConnection for LoadGeneratorSourceConnection {
     fn name(&self) -> &'static str {
         "load-generator"
     }
-}
 
-pub static LOADGEN_PROGRESS_DESC: Lazy<RelationDesc> =
-    Lazy::new(|| RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true)));
+    fn upstream_name(&self) -> Option<&str> {
+        None
+    }
+
+    fn timestamp_desc(&self) -> RelationDesc {
+        RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
+    }
+
+    fn num_outputs(&self) -> usize {
+        self.load_generator.views().len() + 1
+    }
+
+    fn connection_id(&self) -> Option<GlobalId> {
+        None
+    }
+
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
+        vec![]
+    }
+
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
+        vec![]
+    }
+}
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum LoadGenerator {
@@ -2342,10 +2439,31 @@ impl SourceConnection for TestScriptSourceConnection {
     fn name(&self) -> &'static str {
         "testscript"
     }
-}
 
-pub static TESTSCRIPT_PROGRESS_DESC: Lazy<RelationDesc> =
-    Lazy::new(|| RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true)));
+    fn upstream_name(&self) -> Option<&str> {
+        None
+    }
+
+    fn timestamp_desc(&self) -> RelationDesc {
+        RelationDesc::empty().with_column("offset", ScalarType::UInt64.nullable(true))
+    }
+
+    fn num_outputs(&self) -> usize {
+        1
+    }
+
+    fn connection_id(&self) -> Option<GlobalId> {
+        None
+    }
+
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
+        vec![]
+    }
+
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
+        vec![]
+    }
+}
 
 impl RustType<ProtoTestScriptSourceConnection> for TestScriptSourceConnection {
     fn into_proto(&self) -> ProtoTestScriptSourceConnection {
@@ -2374,11 +2492,31 @@ impl SourceConnection for S3SourceConnection {
     fn name(&self) -> &'static str {
         "s3"
     }
-}
 
-pub static S3_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
-    RelationDesc::empty().with_column("byte_offset", ScalarType::UInt64.nullable(true))
-});
+    fn upstream_name(&self) -> Option<&str> {
+        None
+    }
+
+    fn timestamp_desc(&self) -> RelationDesc {
+        RelationDesc::empty().with_column("byte_offset", ScalarType::UInt64.nullable(true))
+    }
+
+    fn num_outputs(&self) -> usize {
+        1
+    }
+
+    fn connection_id(&self) -> Option<GlobalId> {
+        Some(self.connection_id)
+    }
+
+    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
+        vec![]
+    }
+
+    fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
+        vec![]
+    }
+}
 
 fn any_glob() -> impl Strategy<Value = Glob> {
     r"[a-z][a-z0-9]{0,10}/?([a-z0-9]{0,5}/?){0,3}".prop_map(|s| {
