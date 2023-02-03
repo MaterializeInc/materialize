@@ -9,17 +9,14 @@
 
 //! `EXPLAIN` support for structures defined in this crate.
 
-use crate::plan::{HirRelationExpr, HirScalarExpr};
-use mz_expr::{
-    explain::{ExplainContext, ExplainSinglePlan},
-    visit::{Visit, VisitChildren},
-    Id, LocalId,
-};
+use mz_expr::explain::{ExplainContext, ExplainSinglePlan};
+use mz_expr::visit::{Visit, VisitChildren};
+use mz_expr::{Id, LocalId};
 use mz_ore::stack::RecursionLimitError;
-use mz_repr::{
-    explain::{AnnotatedPlan, Explain, ExplainConfig, ExplainError, ScalarOps, UnsupportedFormat},
-    RelationType,
-};
+use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, ScalarOps, UnsupportedFormat};
+use mz_repr::RelationType;
+
+use crate::plan::{HirRelationExpr, HirScalarExpr};
 
 mod text;
 
@@ -32,32 +29,23 @@ impl<'a> Explain<'a> for HirRelationExpr {
 
     type Dot = UnsupportedFormat;
 
-    fn explain_text(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Text, ExplainError> {
-        self.as_explain_single_plan(config, context)
+    fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_single_plan(context)
     }
 
-    fn explain_json(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Json, ExplainError> {
-        self.as_explain_single_plan(config, context)
+    fn explain_json(&'a mut self, context: &'a Self::Context) -> Result<Self::Json, ExplainError> {
+        self.as_explain_single_plan(context)
     }
 }
 
 impl<'a> HirRelationExpr {
     fn as_explain_single_plan(
         &'a mut self,
-        config: &'a ExplainConfig,
         context: &'a ExplainContext<'a>,
     ) -> Result<ExplainSinglePlan<'a, HirRelationExpr>, ExplainError> {
         // unless raw plans are explicitly requested
         // ensure that all nested subqueries are wrapped in Let blocks
-        if !config.raw_plans {
+        if !context.config.raw_plans {
             normalize_subqueries(self)?;
         }
 

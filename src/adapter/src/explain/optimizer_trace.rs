@@ -112,7 +112,7 @@ impl OptimizerTrace {
         };
         let fast_path_plan = match fast_path_plan {
             Some(mut plan) if !context.config.no_fast_path => {
-                Some(Explainable::new(&mut plan).explain(&format, context.config, &context)?)
+                Some(Explainable::new(&mut plan).explain(&format, &context)?)
             }
             _ => None,
         };
@@ -172,11 +172,7 @@ impl OptimizerTrace {
                         instant: entry.instant,
                         duration: entry.duration,
                         path: entry.path,
-                        plan: Explainable::new(&mut entry.plan).explain(
-                            format,
-                            context.config,
-                            context,
-                        )?,
+                        plan: Explainable::new(&mut entry.plan).explain(format, context)?,
                     }),
                 })
                 .collect()

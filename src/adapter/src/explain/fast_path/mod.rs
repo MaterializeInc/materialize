@@ -7,12 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! `EXPLAIN` support for FastPathPlan structures.
+//! `EXPLAIN` support for [`FastPathPlan`].
 
 use std::collections::BTreeMap;
 
 use mz_expr::explain::ExplainMultiPlan;
-use mz_repr::explain::{AnnotatedPlan, Explain, ExplainConfig, ExplainError, UnsupportedFormat};
+use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
 
 use crate::coord::peek::FastPathPlan;
 
@@ -27,19 +27,11 @@ impl<'a> Explain<'a> for Explainable<'a, FastPathPlan> {
 
     type Dot = UnsupportedFormat;
 
-    fn explain_text(
-        &'a mut self,
-        _config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Text, ExplainError> {
+    fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
         self.as_explain_multi_plan(context)
     }
 
-    fn explain_json(
-        &'a mut self,
-        _config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Text, ExplainError> {
+    fn explain_json(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
         self.as_explain_multi_plan(context)
     }
 }

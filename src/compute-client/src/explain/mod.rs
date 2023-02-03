@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! `EXPLAIN` support for LIR structures.
+//! `EXPLAIN` support for structures defined in this crate.
 
 pub(crate) mod text;
 
@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use mz_expr::explain::{enforce_linear_chains, ExplainContext, ExplainMultiPlan};
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
-use mz_repr::explain::{AnnotatedPlan, Explain, ExplainConfig, ExplainError, UnsupportedFormat};
+use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
 
 use crate::plan::Plan;
 use crate::types::dataflows::DataflowDescription;
@@ -29,27 +29,18 @@ impl<'a> Explain<'a> for DataflowDescription<Plan> {
 
     type Dot = UnsupportedFormat;
 
-    fn explain_text(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Text, ExplainError> {
-        self.as_explain_multi_plan(config, context)
+    fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(context)
     }
 
-    fn explain_json(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Text, ExplainError> {
-        self.as_explain_multi_plan(config, context)
+    fn explain_json(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(context)
     }
 }
 
 impl<'a> DataflowDescription<Plan> {
     fn as_explain_multi_plan(
         &'a mut self,
-        _config: &'a ExplainConfig,
         context: &'a ExplainContext<'a>,
     ) -> Result<ExplainMultiPlan<'a, Plan>, ExplainError> {
         let plans = self
@@ -100,27 +91,18 @@ impl<'a> Explain<'a> for DataflowDescription<OptimizedMirRelationExpr> {
 
     type Dot = UnsupportedFormat;
 
-    fn explain_text(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Text, ExplainError> {
-        self.as_explain_multi_plan(config, context)
+    fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(context)
     }
 
-    fn explain_json(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Text, ExplainError> {
-        self.as_explain_multi_plan(config, context)
+    fn explain_json(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(context)
     }
 }
 
 impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
     fn as_explain_multi_plan(
         &'a mut self,
-        config: &'a ExplainConfig,
         context: &'a ExplainContext<'a>,
     ) -> Result<ExplainMultiPlan<'a, MirRelationExpr>, ExplainError> {
         let plans = self
@@ -129,8 +111,8 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
             .rev()
             .map(|build_desc| {
                 // normalize the representation as linear chains
-                // (this implies !config.raw_plans by construction)
-                if config.linear_chains {
+                // (this implies !context.config.raw_plans by construction)
+                if context.config.linear_chains {
                     enforce_linear_chains(build_desc.plan.as_inner_mut())?;
                 };
 
