@@ -783,7 +783,7 @@ where
                         .map(|(data, time, diff)| ((SourceData(data.clone()), ()), time, diff))
                         .peekable();
 
-                    let mut batch_tokens = if to_append.peek().is_some() {
+                    if to_append.peek().is_some() {
                         let batch = write
                             .batch(to_append, batch_lower.clone(), batch_upper.clone())
                             .await
@@ -799,14 +799,10 @@ where
                             );
                         }
 
-                        vec![batch.into_writer_hollow_batch()]
-                    } else {
-                        vec![]
+                        let mut output = output.activate();
+                        let mut session = output.session(&cap);
+                        session.give(batch.into_writer_hollow_batch());
                     };
-
-                    let mut output = output.activate();
-                    let mut session = output.session(&cap);
-                    session.give_vec(&mut batch_tokens);
                 }
             } else {
                 trace!(
