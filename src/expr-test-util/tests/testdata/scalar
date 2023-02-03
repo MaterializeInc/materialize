@@ -35,7 +35,7 @@ build-scalar
     "hello"
 )
 ----
-if (#0 > -2) then {substr(#1, 1, 4)} else {"hello"}
+case when (#0 > -2) then substr(#1, 1, 4) else "hello" end
 
 build-scalar
 (call_binary (jsonb_get_string true) #2 ("field1" string))
@@ -55,12 +55,12 @@ build-scalar
 build-scalar
 (err division_by_zero)
 ----
-(err: division by zero)
+error("division by zero")
 
 build-scalar
 (err float_overflow)
 ----
-(err: value out of range: overflow)
+error("value out of range: overflow")
 
 build-scalar
 (ok true)

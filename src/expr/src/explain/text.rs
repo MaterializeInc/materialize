@@ -13,7 +13,7 @@ use std::fmt;
 
 use mz_ore::soft_assert;
 use mz_ore::str::{bracketed, separated, Indent, IndentLike, StrExt};
-use mz_repr::explain::text::{fmt_text_constant_rows, separated_text, DisplayText};
+use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{
     CompactScalarSeq, ExprHumanizer, Indices, PlanRenderingContext, RenderingContext,
 };
@@ -152,7 +152,7 @@ where
         // render `filter` field iff predicates are present
         if !predicates.is_empty() {
             let predicates = predicates.iter().map(|(_, p)| p);
-            let predicates = separated_text(" AND ", predicates);
+            let predicates = separated(" AND ", predicates);
             writeln!(f, "{}filter=({})", ctx.as_mut(), predicates)?;
         }
         // render `map` field iff scalars are present
@@ -357,7 +357,7 @@ impl MirRelationExpr {
             Filter { predicates, input } => {
                 FmtNode {
                     fmt_root: |f, ctx| {
-                        let predicates = separated_text(" AND ", predicates);
+                        let predicates = separated(" AND ", predicates);
                         write!(f, "{}Filter {}", ctx.indent, predicates)?;
                         self.fmt_attributes(f, ctx)
                     },
@@ -538,7 +538,7 @@ impl MirRelationExpr {
                             write!(f, " group_by=[{}]", group_key)?;
                         }
                         if aggregates.len() > 0 {
-                            let aggregates = separated_text(", ", aggregates);
+                            let aggregates = separated(", ", aggregates);
                             write!(f, " aggregates=[{}]", aggregates)?;
                         }
                         if let Some(expected_group_size) = expected_group_size {
@@ -746,8 +746,8 @@ where
     }
 }
 
-impl DisplayText for MirScalarExpr {
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut ()) -> fmt::Result {
+impl fmt::Display for MirScalarExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use MirScalarExpr::*;
         match self {
             Column(i) => write!(f, "#{}", i),
@@ -765,7 +765,7 @@ impl DisplayText for MirScalarExpr {
                     {
                         if let Some(is) = func.is() {
                             write!(f, "(")?;
-                            inner_expr.as_ref().fmt_text(f, ctx)?;
+                            inner_expr.as_ref().fmt(f)?;
                             write!(f, ") IS NOT {}", is)?;
                             return Ok(());
                         }
@@ -773,27 +773,27 @@ impl DisplayText for MirScalarExpr {
                 }
                 if let Some(is) = func.is() {
                     write!(f, "(")?;
-                    expr.as_ref().fmt_text(f, ctx)?;
+                    expr.as_ref().fmt(f)?;
                     write!(f, ") IS {}", is)
                 } else {
                     write!(f, "{}(", func)?;
-                    expr.as_ref().fmt_text(f, ctx)?;
+                    expr.as_ref().fmt(f)?;
                     write!(f, ")")
                 }
             }
             CallBinary { func, expr1, expr2 } => {
                 if func.is_infix_op() {
                     write!(f, "(")?;
-                    expr1.as_ref().fmt_text(f, ctx)?;
+                    expr1.as_ref().fmt(f)?;
                     write!(f, " {} ", func)?;
-                    expr2.as_ref().fmt_text(f, ctx)?;
+                    expr2.as_ref().fmt(f)?;
                     write!(f, ")")
                 } else {
                     write!(f, "{}", func)?;
                     write!(f, "(")?;
-                    expr1.as_ref().fmt_text(f, ctx)?;
+                    expr1.as_ref().fmt(f)?;
                     write!(f, ", ")?;
-                    expr2.as_ref().fmt_text(f, ctx)?;
+                    expr2.as_ref().fmt(f)?;
                     write!(f, ")")
                 }
             }
@@ -801,43 +801,43 @@ impl DisplayText for MirScalarExpr {
                 use crate::VariadicFunc::*;
                 match func {
                     ArrayCreate { .. } => {
-                        let exprs = separated_text(", ", exprs);
+                        let exprs = separated(", ", exprs);
                         write!(f, "array[{}]", exprs)
                     }
                     ListCreate { .. } => {
-                        let exprs = separated_text(", ", exprs);
+                        let exprs = separated(", ", exprs);
                         write!(f, "list[{}]", exprs)
                     }
                     RecordCreate { .. } => {
-                        let exprs = separated_text(", ", exprs);
+                        let exprs = separated(", ", exprs);
                         write!(f, "row({})", exprs)
                     }
                     func if func.is_infix_op() && exprs.len() > 1 => {
                         let func = format!(" {} ", func);
-                        let exprs = separated_text(&func, exprs);
+                        let exprs = separated(&func, exprs);
                         write!(f, "({})", exprs)
                     }
                     func => {
-                        let exprs = separated_text(", ", exprs);
+                        let exprs = separated(", ", exprs);
                         write!(f, "{}({})", func, exprs)
                     }
                 }
             }
             If { cond, then, els } => {
                 write!(f, "case when ")?;
-                cond.as_ref().fmt_text(f, ctx)?;
+                cond.as_ref().fmt(f)?;
                 write!(f, " then ")?;
-                then.as_ref().fmt_text(f, ctx)?;
+                then.as_ref().fmt(f)?;
                 write!(f, " else ")?;
-                els.as_ref().fmt_text(f, ctx)?;
+                els.as_ref().fmt(f)?;
                 write!(f, " end")
             }
         }
     }
 }
 
-impl DisplayText for AggregateExpr {
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut ()) -> fmt::Result {
+impl fmt::Display for AggregateExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.is_count_asterisk() {
             return write!(f, "count(*)");
         }
@@ -849,7 +849,7 @@ impl DisplayText for AggregateExpr {
             if self.distinct { "distinct " } else { "" }
         )?;
 
-        self.expr.fmt_text(f, ctx)?;
+        self.expr.fmt(f)?;
         write!(f, ")")
     }
 }

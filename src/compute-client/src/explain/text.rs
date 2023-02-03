@@ -567,16 +567,12 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for AccumulablePlan {
         // simple_aggrs
         for (i, (i_aggs, i_datum, agg)) in self.simple_aggrs.iter().enumerate() {
             write!(f, "{}simple_aggrs[{}]=", ctx.indent, i)?;
-            write!(f, "({}, {}, ", i_aggs, i_datum)?;
-            agg.fmt_text(f, &mut ())?;
-            writeln!(f, ")")?;
+            write!(f, "({}, {}, {})", i_aggs, i_datum, agg)?;
         }
         // distinct_aggrs
         for (i, (i_aggs, i_datum, agg)) in self.distinct_aggrs.iter().enumerate() {
             write!(f, "{}distinct_aggrs[{}]=", ctx.indent, i)?;
-            write!(f, "({}, {}, ", i_aggs, i_datum)?;
-            agg.fmt_text(f, &mut ())?;
-            writeln!(f, ")")?;
+            write!(f, "({}, {}, {})", i_aggs, i_datum, agg)?;
         }
         Ok(())
     }
@@ -616,15 +612,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for BasicPlan {
     ) -> fmt::Result {
         match self {
             BasicPlan::Single(idx, agg) => {
-                write!(f, "{}aggr=[({}, ", ctx.indent, idx)?;
-                agg.fmt_text(f, &mut ())?;
-                writeln!(f, ")")?;
+                write!(f, "{}aggr=({}, {})", ctx.indent, idx, agg)?;
             }
             BasicPlan::Multiple(aggs) => {
                 for (i, (i_datum, agg)) in aggs.iter().enumerate() {
-                    write!(f, "{}aggrs[{}]=({}, ", ctx.indent, i, i_datum)?;
-                    agg.fmt_text(f, &mut ())?;
-                    writeln!(f, ")")?;
+                    write!(f, "{}aggrs[{}]=({}, {})", ctx.indent, i, i_datum, agg)?;
                 }
             }
         }

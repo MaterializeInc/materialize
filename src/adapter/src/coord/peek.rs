@@ -29,10 +29,10 @@ use mz_expr::{
     EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::str::Indent;
 use mz_ore::str::StrExt;
+use mz_ore::str::{separated, Indent};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::explain::text::{fmt_text_constant_rows, separated_text, DisplayText};
+use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, Indices};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
@@ -114,7 +114,7 @@ where
                     *ctx.as_mut() += 1;
                 }
                 if !filter.is_empty() {
-                    let predicates = separated_text(" AND ", filter);
+                    let predicates = separated(" AND ", filter);
                     writeln!(f, "{}Filter {}", ctx.as_mut(), predicates)?;
                     *ctx.as_mut() += 1;
                 }

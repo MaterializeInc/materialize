@@ -2453,18 +2453,6 @@ impl AggregateExpr {
     }
 }
 
-impl fmt::Display for AggregateExpr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "{}({}{})",
-            self.func,
-            if self.distinct { "distinct " } else { "" },
-            self.expr
-        )
-    }
-}
-
 /// Describe a join implementation in dataflow.
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
 pub enum JoinImplementation {
