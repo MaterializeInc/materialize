@@ -102,7 +102,7 @@ Currently, the optimization team is mostly concerned with the `HIR ⇒ MIR` and 
 ### Unit tests
 
 * [Datadriven](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/guide-testing.md#datadriven)
-    * [Transform unit tests ](https://github.com/MaterializeInc/materialize/tree/main/src/transform)currently allow:
+    * [Transform unit tests](https://github.com/MaterializeInc/materialize/tree/main/src/transform) currently allow:
         * testing each transformation independently of the others.
         * Printing out which block of transformations change the plan and how.
     * [Unit tests in the mz-expr](https://github.com/MaterializeInc/materialize/tree/main/src/expr/tests) crate currently allow:

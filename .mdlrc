@@ -1,0 +1,16 @@
+# See https://github.com/markdownlint/markdownlint/blob/main/docs/RULES.md for explanations
+# TODO: MD018 gets misparsed, it's inside a code block: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/tracing.md
+# TODO: MD027 intentional: https://github.com/MaterializeInc/materialize/blob/main/src/lowertest/README.md
+# MD002 - First header should be a top level header
+# MD013 - Line length
+# MD022 - Headers should be surrounded by blank lines
+# MD025 - Multiple top level headers in the same document
+# MD029 Ordered list item prefix
+# MD031 - Fenced code blocks should be surrounded by blank lines
+# MD032 - Lists should be surrounded by blank lines
+# MD033 - Inline HTML
+rules "~MD002", "~MD013", "~MD022", "~MD025", "~MD029", "~MD031", "~MD032", "~MD033"
+git_recurse true
+# Can't exclude misc directory, so list all others instead:
+# mdl bin ci doc mzdata src test|cut -d" " -f2|sort|uniq -c|sort -n
+# Maybe misc is too much to exclude
