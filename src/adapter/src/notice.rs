@@ -169,7 +169,7 @@ impl fmt::Display for AdapterNotice {
             AdapterNotice::DroppedSubscribe { dropped_name } => {
                 write!(
                     f,
-                "subscribe has been dropped because underlying relation {dropped_name} was dropped"
+                "subscribe has been terminated because underlying relation {dropped_name} was dropped"
                 )
             }
         }

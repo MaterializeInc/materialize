@@ -2315,72 +2315,81 @@ fn test_subscribe_on_dropped_source() {
     fn test_subscribe_on_dropped_source_inner(tables: Vec<&'static str>, subscribe: &'static str) {
         let config = util::Config::default();
         let server = util::start_server(config).unwrap();
+        let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
-        server.runtime.block_on(async {
-            let (client, _conn_task) = server.connect_async(tokio_postgres::NoTls).await.unwrap();
-            for table in &tables {
-                client
-                    .batch_execute(&format!("CREATE TABLE {table} (a INT);"))
-                    .await
-                    .unwrap();
-                client
-                    .batch_execute(&format!("INSERT INTO {table} VALUES (1);"))
-                    .await
-                    .unwrap();
-            }
-
-            let (subscribe_client, _subscribe_conn_task) =
-                server.connect_async(tokio_postgres::NoTls).await.unwrap();
-            let subscribe_task = task::spawn(|| "subscribe", async move {
-                subscribe_client
-                    .batch_execute(&format!("SUBSCRIBE {subscribe}"))
-                    .await
-                    .unwrap();
-            });
-
-            Retry::default()
-                .max_duration(Duration::from_secs(10))
-                .retry_async(|_| async {
-                    let row = client
-                        .query_one("SELECT count(*) FROM mz_internal.mz_compute_exports;", &[])
-                        .await
-                        .unwrap();
-                    let count: i64 = row.get(0);
-                    if count < 1 {
-                        Err("no active subscribe")
-                    } else {
-                        Ok(())
-                    }
-                })
-                .await
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        for table in &tables {
+            client
+                .batch_execute(&format!("CREATE TABLE {table} (a INT);"))
                 .unwrap();
+            client
+                .batch_execute(&format!("INSERT INTO {table} VALUES (1);"))
+                .unwrap();
+        }
 
-            for table in &tables {
-                client
-                    .batch_execute(&format!("DROP TABLE {table};"))
-                    .await
-                    .unwrap();
-            }
-
-            subscribe_task.await.unwrap();
-
+        let mut subscribe_client = server
+            .pg_config()
+            .notice_callback(move |notice| tx.unbounded_send(notice).unwrap())
+            .connect(postgres::NoTls)
+            .unwrap();
+        let subscribe_thread = std::thread::spawn(move || {
+            subscribe_client
+                .batch_execute(&format!("SUBSCRIBE {subscribe}"))
+                .unwrap();
             Retry::default()
                 .max_duration(Duration::from_secs(10))
-                .retry_async(|_| async {
-                    let row = client
-                        .query_one("SELECT count(*) FROM mz_internal.mz_compute_exports;", &[])
-                        .await
-                        .unwrap();
-                    let count: i64 = row.get(0);
-                    if count > 0 {
-                        Err("subscribe still active")
-                    } else {
+                .retry(|_| {
+                    let Some(e) = rx.try_next().unwrap() else {
+                        return Err("No notice received")
+                    };
+                    if e.message()
+                        .contains("subscribe has been terminated because underlying relation")
+                    {
                         Ok(())
+                    } else {
+                        Err("wrong notice")
                     }
                 })
-                .await
                 .unwrap();
         });
+
+        Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry(|_| {
+                let row = client
+                    .query_one("SELECT count(*) FROM mz_internal.mz_compute_exports;", &[])
+                    .unwrap();
+                let count: i64 = row.get(0);
+                if count < 1 {
+                    Err("no active subscribe")
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap();
+
+        for table in &tables {
+            client
+                .batch_execute(&format!("DROP TABLE {table};"))
+                .unwrap();
+        }
+
+        subscribe_thread.join().unwrap();
+
+        Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry(|_| {
+                let row = client
+                    .query_one("SELECT count(*) FROM mz_internal.mz_compute_exports;", &[])
+                    .unwrap();
+                let count: i64 = row.get(0);
+                if count > 0 {
+                    Err("subscribe still active")
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap();
     }
 
     test_subscribe_on_dropped_source_inner(vec!["t"], "t");
