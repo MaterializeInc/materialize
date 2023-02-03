@@ -1,6 +1,6 @@
 # dbt-materialize Changelog
 
-## 1.4.0 - 2023-02-02
+## 1.4.0 - 2023-02-03
 
 * Upgrade to `dbt-postgres` v1.4.0.
 
