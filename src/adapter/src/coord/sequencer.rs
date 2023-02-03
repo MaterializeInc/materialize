@@ -510,6 +510,7 @@ impl Coordinator {
                             source_imports: ingestion.source_imports,
                             subsource_exports: ingestion.subsource_exports,
                             cluster_id,
+                            remap_collection_id: None,
                         })
                     }
                     mz_sql::plan::DataSourceDesc::Progress => {
@@ -577,6 +578,7 @@ impl Coordinator {
                                     source_imports,
                                     source_exports,
                                     instance_id: ingestion.cluster_id,
+                                    remap_collection_id: GlobalId::User(99),
                                 }),
                                 source_status_collection_id,
                             )
