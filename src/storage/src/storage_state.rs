@@ -373,6 +373,10 @@ impl SinkToken {
     }
 }
 
+/// A error type for when the client disconnects.
+#[derive(Copy, Clone, Debug)]
+struct Disconnected;
+
 impl<'w, A: Allocate> Worker<'w, A> {
     /// Waits for client connections and runs them to completion.
     pub fn run(&mut self) {
@@ -403,12 +407,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let command_sequencer = Rc::clone(&self.storage_state.internal_cmd_tx);
 
         // At this point, all workers are still reading from the command flow.
-        {
+        let mut disconnected = {
             let mut command_sequencer = command_sequencer.borrow_mut();
-            self.reconcile(&mut *command_sequencer, &mut async_worker, &command_rx);
-        }
-
-        let mut disconnected = false;
+            self.reconcile(&mut *command_sequencer, &mut async_worker, &command_rx)
+                .is_err()
+        };
 
         let mut last_stats_time: Option<Instant> = None;
 
@@ -834,20 +837,30 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// subscribe response buffer. We will need to be vigilant with future
     /// modifications to `StorageState` to line up changes there with clean
     /// resets here.
+    ///
+    /// Returns an `Err` if the client (through the `CommandReceiver`) has
+    /// been disconnected.
     fn reconcile(
         &mut self,
         internal_cmd_tx: &mut dyn InternalCommandSender,
         async_worker: &mut AsyncStorageWorker<mz_repr::Timestamp>,
         command_rx: &CommandReceiver,
-    ) {
+    ) -> Result<(), Disconnected> {
         // To initialize the connection, we want to drain all commands until we
         // receive a `StorageCommand::InitializationComplete` command to form a
         // target command state.
         let mut commands = vec![];
-        while let Ok(command) = command_rx.recv() {
-            match command {
-                StorageCommand::InitializationComplete => break,
-                _ => commands.push(command),
+        loop {
+            match command_rx.recv() {
+                Err(_) => {
+                    // The channel has been disconnected and we should entirely
+                    // give up on reconciliation.
+                    return Err(Disconnected);
+                }
+                Ok(command) => match command {
+                    StorageCommand::InitializationComplete => break,
+                    _ => commands.push(command),
+                },
             }
         }
 
@@ -907,9 +920,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         }
                     })
                 }
-                StorageCommand::InitializationComplete
-                | StorageCommand::UpdateConfiguration(_)
-                | StorageCommand::AllowCompaction(_) => (),
+                StorageCommand::InitializationComplete => {
+                    // This marks the ends of commands to reconcile.
+                }
+                StorageCommand::UpdateConfiguration(_) | StorageCommand::AllowCompaction(_) => (),
             }
         }
 
@@ -942,6 +956,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 command,
             );
         }
+        Ok(())
     }
 }
 
@@ -960,7 +975,9 @@ impl StorageState {
         cmd: StorageCommand,
     ) {
         match cmd {
-            StorageCommand::InitializationComplete => (),
+            StorageCommand::InitializationComplete => {
+                panic!("InitializationComplete should always be handled by `reconcile`")
+            }
             StorageCommand::UpdateConfiguration(params) => {
                 tracing::info!("Applying configuration update: {params:?}");
 
