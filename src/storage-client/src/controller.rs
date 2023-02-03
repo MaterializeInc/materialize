@@ -177,9 +177,11 @@ impl<T> CollectionDescription<T> {
                         // No storage dependencies.
                     }
                 }
+                result.push(ingestion.remap_collection_id);
             }
-            DataSource::Introspection(_) => {
-                // Introspection sources have no dependencies, for now.
+            DataSource::Introspection(_) | DataSource::Progress => {
+                // Introspection, Progress sources have no dependencies, for
+                // now.
             }
             DataSource::Other => {
                 // We don't know anything about it's dependencies.
@@ -537,7 +539,7 @@ pub struct CollectionMetadata {
     /// The persist location where the shards are located.
     pub persist_location: PersistLocation,
     /// The persist shard id of the remap collection used to reclock this collection.
-    pub remap_shard: ShardId,
+    pub remap_shard: Option<ShardId>,
     /// The persist shard containing the contents of this storage collection.
     pub data_shard: ShardId,
     /// The persist shard containing the status updates for this storage collection.
@@ -552,7 +554,7 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
             blob_uri: self.persist_location.blob_uri.clone(),
             consensus_uri: self.persist_location.consensus_uri.clone(),
             data_shard: self.data_shard.to_string(),
-            remap_shard: self.remap_shard.to_string(),
+            remap_shard: self.remap_shard.map(|s| s.to_string()),
             status_shard: self.status_shard.map(|s| s.to_string()),
             relation_desc: Some(self.relation_desc.into_proto()),
         }
@@ -566,8 +568,8 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
             },
             remap_shard: value
                 .remap_shard
-                .parse()
-                .map_err(TryFromProtoError::InvalidShardId)?,
+                .map(|s| s.parse().map_err(TryFromProtoError::InvalidShardId))
+                .transpose()?,
             data_shard: value
                 .data_shard
                 .parse()
@@ -606,15 +608,19 @@ pub trait ResumptionFrontierCalculator<T> {
 /// The subset of [`CollectionMetadata`] that must be durable stored.
 #[derive(Arbitrary, Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize)]
 pub struct DurableCollectionMetadata {
-    // See the comments on [`CollectionMetadata`].
-    pub remap_shard: ShardId,
+    // This field can be deleted in a future version of Materialize because we
+    // are moving the relationship between a collection and its remap shard into
+    // a relationship between a collection and its remap collection, i.e. we
+    // will use another collection's data shard as our remap shard, rendering
+    // this mapping duplicative.
+    pub remap_shard: Option<ShardId>,
     pub data_shard: ShardId,
 }
 
 impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
     fn into_proto(&self) -> ProtoDurableCollectionMetadata {
         ProtoDurableCollectionMetadata {
-            remap_shard: self.remap_shard.to_string(),
+            remap_shard: self.remap_shard.into_proto(),
             data_shard: self.data_shard.to_string(),
         }
     }
@@ -623,8 +629,12 @@ impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
         Ok(DurableCollectionMetadata {
             remap_shard: value
                 .remap_shard
-                .parse()
-                .map_err(TryFromProtoError::InvalidShardId)?,
+                .map(|data_shard| {
+                    data_shard
+                        .parse()
+                        .map_err(TryFromProtoError::InvalidShardId)
+                })
+                .transpose()?,
             data_shard: value
                 .data_shard
                 .parse()
@@ -1078,26 +1088,44 @@ where
             }
         }
 
-        // Install collection state for each bound description.
-        // Note that this method implementation attempts to do AS MUCH work
-        // concurrently as possible. There are inline comments explaining the motivation
-        // behind each section
+        // Install collection state for each bound description. Note that this
+        // method implementation attempts to do AS MUCH work concurrently as
+        // possible. There are inline comments explaining the motivation behind
+        // each section.
+        let mut entries = Vec::with_capacity(collections.len());
+
+        for (id, desc) in &collections {
+            let remap_shard = match &desc.data_source {
+                // Iff the ingestion specifies a progress/remap collection, find that collection's data shard.
+                DataSource::Ingestion(IngestionDescription {
+                    remap_collection_id,
+                    ..
+                }) => Some(
+                    self.collection(*remap_collection_id)?
+                        .collection_metadata
+                        .data_shard,
+                ),
+                _ => None,
+            };
+
+            // Note that in the case of remap shards of collections that
+            // pre-date queryable remap shards, this data shard is "wrong". We
+            // will correct the relationship when we create the primary
+            // collection by replacing this data shard with that collection's
+            // remap shard.
+            entries.push((
+                *id,
+                DurableCollectionMetadata {
+                    remap_shard,
+                    data_shard: ShardId::new(),
+                },
+            ))
+        }
 
         // Perform all stash writes in a single transaction, to minimize transaction overhead and
         // the time spent waiting for stash.
         METADATA_COLLECTION
-            .insert_without_overwrite(
-                &mut self.state.stash,
-                collections.iter().map(|(id, _)| {
-                    (
-                        *id,
-                        DurableCollectionMetadata {
-                            remap_shard: ShardId::new(),
-                            data_shard: ShardId::new(),
-                        },
-                    )
-                }),
-            )
+            .insert_without_overwrite(&mut self.state.stash, entries.into_iter())
             .await?;
 
         let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
@@ -1120,9 +1148,27 @@ where
                         None
                     };
 
+                let remap_shard = match &description.data_source {
+                    // Only ingestions can have remap shards.
+                    DataSource::Ingestion(IngestionDescription {
+                        remap_collection_id,
+                        ..
+                    }) => {
+                        // Iff ingestion has a remap collection, its metadata must
+                        // exist (and be correct) by this point.
+                        Some(
+                            durable_metadata
+                                .get(remap_collection_id)
+                                .ok_or(StorageError::IdentifierMissing(*remap_collection_id))?
+                                .data_shard,
+                        )
+                    }
+                    _ => None,
+                };
+
                 let metadata = CollectionMetadata {
                     persist_location: self.persist_location.clone(),
-                    remap_shard: collection_shards.remap_shard,
+                    remap_shard,
                     data_shard: collection_shards.data_shard,
                     status_shard,
                     relation_desc: description.desc.clone(),
@@ -1149,14 +1195,14 @@ where
                 // should be replaced with real introspection (https://github.com/MaterializeInc/materialize/issues/14266)
                 // but for now, it's helpful to have this mapping written down somewhere
                 debug!(
-                    "mapping GlobalId={} to remap shard ({}), data shard ({}), status shard ({:?})",
+                    "mapping GlobalId={} to remap shard ({:?}), data shard ({}), status shard ({:?})",
                     id, metadata.remap_shard, metadata.data_shard, metadata.status_shard
                 );
 
                 let (write, since_handle) = this
                     .open_data_handles(
                         format!("controller data {}", id).as_str(),
-                        metadata.data_shard.clone(),
+                        metadata.data_shard,
                         metadata.relation_desc.clone(),
                         persist_client,
                     )
@@ -1253,6 +1299,7 @@ where
                         // The rest of the fields are identical
                         desc: ingestion.desc,
                         instance_id: ingestion.instance_id,
+                        remap_collection_id: ingestion.remap_collection_id,
                     };
                     let mut state = desc.initialize_state(&self.persist).await;
                     let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
@@ -2313,7 +2360,11 @@ where
             let metadata = &all_current_metadata[id];
 
             for (old, new, data_shard) in [
-                (metadata.data_shard, new_metadata.data_shard, true),
+                (
+                    Some(metadata.data_shard),
+                    Some(new_metadata.data_shard),
+                    true,
+                ),
                 (metadata.remap_shard, new_metadata.remap_shard, false),
             ] {
                 if old != new {
@@ -2325,7 +2376,9 @@ where
                         new
                     );
 
-                    shards_to_finalize.insert(old);
+                    if let Some(old) = old {
+                        shards_to_finalize.insert(old);
+                    }
 
                     if data_shard {
                         data_shards_to_replace.insert(*id);
