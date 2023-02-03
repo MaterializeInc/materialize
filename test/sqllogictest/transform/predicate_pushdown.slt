@@ -394,6 +394,53 @@ Source mz_catalog.mz_materialized_views
 
 EOF
 
+# Regression tests for #17515
+# Push predicates through Threshold and TopK
+
+# Test Threshold.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+WITH cte(a) as (SELECT a FROM x EXCEPT ALL SELECT a FROM y)
+SELECT a * 5 FROM cte WHERE a = 5
+----
+Explained Query:
+  Project (#1)
+    Filter (#0 = 5)
+      Map (25)
+        Threshold
+          Union
+            Project (#0)
+              Get materialize.public.x
+            Negate
+              Get materialize.public.y
+
+EOF
+
+# Test TopK.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+SELECT a FROM y as y, LATERAL(SELECT u FROM x WHERE y.a = x.a LIMIT 5) WHERE a IN (41, 42);
+----
+Explained Query:
+  Project (#0)
+    Join on=(#0 = #1) type=differential
+      ArrangeBy keys=[[#0]]
+        Filter ((#0 = 41) OR (#0 = 42))
+          Get materialize.public.y
+      ArrangeBy keys=[[#0]]
+        Filter ((#0 = 41) OR (#0 = 42))
+          TopK group_by=[#0] limit=5 monotonic=false
+            Project (#0)
+              Join on=(#0 = #1) type=differential
+                ArrangeBy keys=[[#0]]
+                  Distinct group_by=[#0]
+                    Get materialize.public.y
+                ArrangeBy keys=[[#0]]
+                  Project (#0)
+                    Get materialize.public.x
+
+EOF
+
 # One more for https://github.com/MaterializeInc/materialize/issues/16128
 # https://github.com/MaterializeInc/materialize/pull/16147#issuecomment-1322042176
 
