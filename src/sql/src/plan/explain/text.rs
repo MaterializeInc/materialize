@@ -23,10 +23,8 @@ use std::fmt;
 use mz_expr::virtual_syntax::{AlgExcept, Except};
 use mz_expr::Id;
 use mz_ore::str::{separated, IndentLike};
-use mz_repr::explain::{
-    fmt_text_constant_rows, separated_text, CompactScalarSeq, DisplayText, Indices,
-    PlanRenderingContext,
-};
+use mz_repr::explain::text::{fmt_text_constant_rows, separated_text, DisplayText};
+use mz_repr::explain::{CompactScalarSeq, Indices, PlanRenderingContext};
 
 use crate::plan::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
 

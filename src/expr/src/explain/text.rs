@@ -13,9 +13,9 @@ use std::fmt;
 
 use mz_ore::soft_assert;
 use mz_ore::str::{bracketed, separated, Indent, IndentLike, StrExt};
+use mz_repr::explain::text::{fmt_text_constant_rows, separated_text, DisplayText};
 use mz_repr::explain::{
-    fmt_text_constant_rows, separated_text, CompactScalarSeq, DisplayText, ExprHumanizer, Indices,
-    PlanRenderingContext, RenderingContext,
+    CompactScalarSeq, ExprHumanizer, Indices, PlanRenderingContext, RenderingContext,
 };
 use mz_repr::{GlobalId, Row};
 
