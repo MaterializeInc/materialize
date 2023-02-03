@@ -16,6 +16,7 @@ use std::sync::Arc;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
+use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{
     Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
@@ -493,6 +494,16 @@ where
     (output_stream, token)
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+enum BatchOrData {
+    Batch(WriterEnrichedHollowBatch<Timestamp>),
+    Data {
+        lower: Antichain<Timestamp>,
+        upper: Antichain<Timestamp>,
+        contents: Vec<(Result<Row, DataflowError>, Timestamp, Diff)>,
+    },
+}
+
 /// Writes `desired_stream - persist_stream` to persist, but only for updates
 /// that fall into batch a description that we get via `batch_descriptions`.
 /// This forwards a `HollowBatch` for any batch of updates that was written.
@@ -504,7 +515,7 @@ fn write_batches<G>(
     desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_clients: Arc<PersistClientCache>,
-) -> (Stream<G, WriterEnrichedHollowBatch<Timestamp>>, Rc<dyn Any>)
+) -> (Stream<G, BatchOrData>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -780,12 +791,17 @@ where
                         .filter(|(_, time, _)| {
                             batch_lower.less_equal(time) && !batch_upper.less_equal(time)
                         })
-                        .map(|(data, time, diff)| ((SourceData(data.clone()), ()), time, diff))
                         .peekable();
 
                     if to_append.peek().is_some() {
                         let batch = write
-                            .batch(to_append, batch_lower.clone(), batch_upper.clone())
+                            .batch(
+                                to_append.map(|(data, time, diff)| {
+                                    ((SourceData(data.clone()), ()), time, diff)
+                                }),
+                                batch_lower.clone(),
+                                batch_upper.clone(),
+                            )
                             .await
                             .expect("invalid usage");
 
@@ -801,7 +817,7 @@ where
 
                         let mut output = output.activate();
                         let mut session = output.session(&cap);
-                        session.give(batch.into_writer_hollow_batch());
+                        session.give(BatchOrData::Batch(batch.into_writer_hollow_batch()));
                     };
                 }
             } else {
@@ -833,7 +849,7 @@ fn append_batches<G>(
     operator_name: String,
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    batches: &Stream<G, WriterEnrichedHollowBatch<Timestamp>>,
+    batches: &Stream<G, BatchOrData>,
     persist_clients: Arc<PersistClientCache>,
 ) -> (Stream<G, ()>, Rc<dyn Any>)
 where
@@ -898,9 +914,15 @@ where
             (Antichain<Timestamp>, Antichain<Timestamp>)
         >::new();
 
+        #[derive(Debug, Default)]
+        struct BatchSet {
+            finished: Vec<Batch<SourceData, (), Timestamp, Diff>>,
+            incomplete: Vec<((SourceData, ()), Timestamp, Diff)>
+        }
+
         let mut in_flight_batches = HashMap::<
             (Antichain<Timestamp>, Antichain<Timestamp>),
-            Vec<Batch<_, _, _, _>>,
+            BatchSet,
         >::new();
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
@@ -966,14 +988,28 @@ where
                             // Ingest new written batches
                             data.swap(&mut batch_buffer);
                             for batch in batch_buffer.drain(..) {
-                                let batch = write.batch_from_hollow_batch(batch);
-                                let batch_description = (batch.lower().clone(), batch.upper().clone());
+                                match batch {
+                                    BatchOrData::Batch(batch) => {
+                                        let batch = write.batch_from_hollow_batch(batch);
+                                        let batch_description = (batch.lower().clone(), batch.upper().clone());
 
-                                let batches = in_flight_batches
-                                    .entry(batch_description)
-                                    .or_insert_with(Vec::new);
+                                        let batches = in_flight_batches
+                                            .entry(batch_description)
+                                            .or_default();
 
-                                batches.push(batch);
+                                        batches.finished.push(batch);
+                                    }
+                                    BatchOrData::Data { lower, upper, contents } => {
+                                        let batches = in_flight_batches
+                                            .entry((lower, upper))
+                                            .or_default();
+                                        batches.incomplete.extend(
+                                            contents.into_iter()
+                                              .map(|(data, time, diff)| ((SourceData(data), ()), time, diff))
+                                        );
+                                    }
+                                }
+
                             }
 
                             continue;
@@ -1031,9 +1067,19 @@ where
             for done_batch_metadata in done_batches.into_iter() {
                 in_flight_descriptions.remove(&done_batch_metadata);
 
-                let mut batches = in_flight_batches
+                let batch_set = in_flight_batches
                     .remove(&done_batch_metadata)
-                    .unwrap_or_else(Vec::new);
+                    .unwrap_or_default();
+
+                let mut batches = batch_set.finished;
+                if !batch_set.incomplete.is_empty() {
+                    let (lower, upper) = done_batch_metadata.clone();
+                    let batch = write
+                        .batch(batch_set.incomplete, lower, upper)
+                        .await
+                        .expect("invalid usage");
+                    batches.push(batch);
+                }
 
                 trace!(
                     "persist_sink {sink_id}/{shard_id}: \
