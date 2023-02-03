@@ -10,7 +10,7 @@
 #![warn(missing_docs)]
 
 use std::cmp::{max, Ordering};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroUsize;
 
@@ -24,13 +24,13 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::explain_new::DummyHumanizer;
+use mz_repr::explain::text::text_string_at;
+use mz_repr::explain::{DummyHumanizer, ExplainConfig, PlanRenderingContext};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
-#[allow(deprecated)] // TODO(#17360): use new explain output format
-use crate::explain::ViewExplanation;
 use crate::visit::{Visit, VisitChildren};
 use crate::{
     func as scalar_func, EvalError, FilterCharacteristics, Id, LocalId, MirScalarExpr, UnaryFunc,
@@ -1350,9 +1350,25 @@ impl MirRelationExpr {
     }
 
     /// Pretty-print this MirRelationExpr to a string.
-    #[allow(deprecated)] // TODO(#17360): use new explain output format
     pub fn pretty(&self) -> String {
-        ViewExplanation::new(self, &DummyHumanizer).to_string()
+        text_string_at(self, || PlanRenderingContext {
+            indent: Indent::default(),
+            humanizer: &DummyHumanizer,
+            annotations: BTreeMap::default(),
+            config: &ExplainConfig {
+                arity: false,
+                join_impls: true,
+                keys: false,
+                linear_chains: false,
+                non_negative: false,
+                no_fast_path: true,
+                raw_plans: true,
+                raw_syntax: true,
+                subtree_size: false,
+                timing: false,
+                types: false,
+            },
+        })
     }
 
     /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with the correct type.
@@ -2965,7 +2981,7 @@ mod tests {
     use proptest::prelude::*;
 
     use mz_proto::protobuf_roundtrip;
-    use mz_repr::explain_new::text_string_at;
+    use mz_repr::explain::text::text_string_at;
 
     use super::*;
 

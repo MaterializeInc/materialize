@@ -32,9 +32,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::Indent;
 use mz_ore::str::StrExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::explain_new::{
-    fmt_text_constant_rows, separated_text, CompactScalarSeq, DisplayText, ExprHumanizer, Indices,
-};
+use mz_repr::explain::text::{fmt_text_constant_rows, separated_text, DisplayText};
+use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, Indices};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::ConnectionId;
@@ -564,10 +563,9 @@ fn consolidate_constant_updates(rows: Vec<(Row, Diff)>) -> Vec<(Row, Diff)> {
 mod tests {
     use mz_expr::{func::IsNull, MapFilterProject, UnaryFunc};
     use mz_ore::str::Indent;
-    use mz_repr::{
-        explain_new::{text_string_at, DummyHumanizer, RenderingContext},
-        ColumnType, Datum, ScalarType,
-    };
+    use mz_repr::explain::text::text_string_at;
+    use mz_repr::explain::{DummyHumanizer, RenderingContext};
+    use mz_repr::{ColumnType, Datum, ScalarType};
 
     use super::*;
 

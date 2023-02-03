@@ -25,64 +25,60 @@ steps
    (filter (get x) [#0])])
 ----
 ----
-%0 =
-| Get x (u0)
-| Filter #0
-
-%1 =
-| Get x (u0)
-| Filter #0
-
-%2 =
-| Union %0 %1
+Union
+  Filter #0
+    Get x
+  Filter #0
+    Get x
 
 ====
 No change: Normalize { normalize_lets: NormalizeLets { inline_mfp: false } }, TopKElision, NonNullRequirements { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, FlatMapToMap, Join, NormalizeLets { inline_mfp: false }, Reduce, UnionNegate, UnionBranchCancellation, NormalizeLets { inline_mfp: false }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }, ThresholdElision, Fixpoint { transforms: [PredicatePushdown { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, NonNullable, ColumnKnowledge { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Demand { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, FlatMapToMap, Join, NormalizeLets { inline_mfp: false }, Reduce, UnionNegate, UnionBranchCancellation, NormalizeLets { inline_mfp: false }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }
 ====
 Applied Fixpoint { transforms: [SemijoinIdempotence, ReductionPushdown, ReduceElision, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, RelationCSE { normalize_lets: NormalizeLets { inline_mfp: false } }, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, FlatMapToMap, Join, NormalizeLets { inline_mfp: false }, Reduce, UnionNegate, UnionBranchCancellation, NormalizeLets { inline_mfp: false }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }:
-%0 = Let l0 =
-| Get x (u0)
-| Filter #0
-
-%1 =
-| Union %0 %0
+Return
+  Union
+    Get l0
+    Get l0
+With
+  cte l0 =
+    Filter #0
+      Get x
 
 ====
 No change: ProjectionPushdown, NormalizeLets { inline_mfp: false }, Fusion
 ====
 Applied Fixpoint { transforms: [CanonicalizeMfp, ThresholdElision, Join, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, UnionNegate, UnionBranchCancellation, RelationCSE { normalize_lets: NormalizeLets { inline_mfp: true } }, FoldConstants { limit: Some(10000) }], limit: 100 }:
-%0 =
-| Get x (u0)
-| Filter #0
-
-%1 =
-| Get x (u0)
-| Filter #0
-
-%2 =
-| Union %0 %1
+Union
+  Filter #0
+    Get x
+  Filter #0
+    Get x
 
 ====
 No change: LiteralConstraints, Fixpoint { transforms: [JoinImplementation { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, ColumnKnowledge { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }, Demand { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }], limit: 100 }, CanonicalizeMfp
 ====
 Applied RelationCSE { normalize_lets: NormalizeLets { inline_mfp: false } }:
-%0 = Let l0 =
-| Get x (u0)
-| Filter #0
-
-%1 =
-| Union %0 %0
+Return
+  Union
+    Get l0
+    Get l0
+With
+  cte l0 =
+    Filter #0
+      Get x
 
 ====
 No change: FoldConstants { limit: Some(10000) }, ThresholdElision
 ====
 Final:
-%0 = Let l0 =
-| Get x (u0)
-| Filter #0
-
-%1 =
-| Union %0 %0
+Return
+  Union
+    Get l0
+    Get l0
+With
+  cte l0 =
+    Filter #0
+      Get x
 
 ====
 ----

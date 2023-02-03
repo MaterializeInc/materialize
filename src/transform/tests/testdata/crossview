@@ -24,14 +24,12 @@ Source x: {2}
 
 ====
 View a:
-%0 =
-| Get x (u0)
-| Project (#2)
+Project (#2)
+  Get x
 
 ====
 View b:
-%0 =
-| Get a (t1)
+Get a
 
 ----
 ----
@@ -47,29 +45,21 @@ Source x: {1, 2}
 
 ====
 View a:
-%0 =
-| Get x (u0)
-| Project (#1, #2)
-| Map
+Map ()
+  Project (#1, #2)
+    Get x
 
 ====
 View b:
-%0 =
-| Get a (t1)
-| Project (#1)
+Project (#1)
+  Get a
 
 ====
 View c:
-%0 =
-| Get a (t1)
-| Project (#0)
-
-%1 =
-| Get b (t2)
-
-%2 =
-| Join %0 %1 (= #0 #1)
-| | implementation = Unimplemented
+Join on=(#0 = #1)
+  Project (#0)
+    Get a
+  Get b
 
 ----
 ----

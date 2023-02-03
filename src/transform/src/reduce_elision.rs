@@ -35,7 +35,7 @@ impl crate::Transform for ReduceElision {
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let result = relation.try_visit_mut_post(&mut |e| self.action(e));
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         result
     }
 }

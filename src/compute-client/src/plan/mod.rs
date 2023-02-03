@@ -1674,7 +1674,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
         }
 
-        mz_repr::explain_new::trace_plan(&dataflow);
+        mz_repr::explain::trace_plan(&dataflow);
 
         Ok(dataflow)
     }

@@ -184,11 +184,7 @@ mod test {
                             // however, a partially optimized query can.
                             // Since clippy rejects test results with trailing
                             // whitespace, remove whitespace before comparing results.
-                            Ok(rel) => format!(
-                                "{}\n",
-                                generate_explanation(&catalog, &rel, s.args.get("format"))
-                                    .trim_end()
-                            ),
+                            Ok(rel) => format!("{}\n", rel.pretty()),
                             Err(err) => format!("error: {}\n", err),
                         }
                     }

@@ -36,7 +36,7 @@ use mz_expr::{
     OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::task;
-use mz_repr::explain_new::{ExplainFormat, Explainee};
+use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
 use mz_sql::catalog::CatalogItem as SqlCatalogItem;
@@ -79,7 +79,7 @@ use crate::coord::{
     SinkConnectionReady, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
-use crate::explain_new::optimizer_trace::OptimizerTrace;
+use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::metrics;
 use crate::notice::AdapterNotice;
 use crate::session::vars::{
@@ -2707,7 +2707,7 @@ impl Coordinator {
         plan: ExplainPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         use mz_compute_client::plan::Plan;
-        use mz_repr::explain_new::trace_plan;
+        use mz_repr::explain::trace_plan;
         use ExplainStage::*;
 
         let cluster = self.catalog.active_cluster(session)?.id;
@@ -2755,7 +2755,7 @@ impl Coordinator {
                             &optimized_plan,
                             &mut dataflow,
                         )?;
-                        mz_repr::explain_new::trace_plan(&dataflow);
+                        mz_repr::explain::trace_plan(&dataflow);
                         Ok(dataflow)
                     },
                 )?;

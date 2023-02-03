@@ -15,43 +15,19 @@ ok
 build apply=UnionFusion
 (union [(get x) (union [(get x) (union [(get x) (get x)])])])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Get x (u0)
-
-%3 =
-| Get x (u0)
-
-%4 =
-| Union %0 %1 %2 %3
-----
-----
+Union
+  Get x
+  Get x
+  Get x
+  Get x
 
 build apply=UnionFusion
 (union [(get x) (union [(get x) (negate (union [(get x) (get x)]))])])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Get x (u0)
-| Negate
-
-%3 =
-| Get x (u0)
-| Negate
-
-%4 =
-| Union %0 %1 %2 %3
-----
-----
+Union
+  Get x
+  Get x
+  Negate
+    Get x
+  Negate
+    Get x

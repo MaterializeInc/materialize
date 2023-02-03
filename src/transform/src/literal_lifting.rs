@@ -69,7 +69,7 @@ impl crate::Transform for LiteralLifting {
             // Literals return up the root should be re-installed.
             *relation = relation.take_dangerous().map(literals);
         }
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
 }

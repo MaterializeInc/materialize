@@ -17,250 +17,250 @@ ok
 build apply=Fusion
 (top_k (top_k (get x) [] [] 3 2) [] [] 1 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=() order=() limit=1 offset=3
+TopK limit=1 offset=3 monotonic=false
+  Get x
 
 build apply=Fusion
 (top_k (top_k (get x) [0] [#0] 3 2) [0] [#0] 1 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#0 asc nulls_first) limit=1 offset=3
+TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=1 offset=3 monotonic=false
+  Get x
 
 # outer limit is greater than inner limit plus outer offset
 
 build apply=Fusion
 (top_k (top_k (get x) [0] [#0] 3 2) [0] [#0] 10 0)
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#0 asc nulls_first) limit=3 offset=2
+TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=3 offset=2 monotonic=false
+  Get x
 
 build apply=Fusion
 (top_k (top_k (get x) [0] [#0] 3 2) [0] [#0] 10 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#0 asc nulls_first) limit=2 offset=3
+TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=2 offset=3 monotonic=false
+  Get x
 
 # outer offset is equal to inner limit
 
 build apply=Fusion
 (top_k (top_k (get x) [] [] 3 2) [] [] 1 3)
 ----
-%0 =
-| Constant
+Constant <empty>
 
 # outer offset is greater than the inner offset
 
 build apply=Fusion
 (top_k (top_k (get x) [] [] 3 0) [] [] null 4)
 ----
-%0 =
-| Constant
+Constant <empty>
 
 # inner has no limit, but both have offset
 
 build apply=Fusion
 (top_k (top_k (get x) [0] [#0] null 2) [0] [#0] 10 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#0 asc nulls_first) limit=10 offset=3
+TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=10 offset=3 monotonic=false
+  Get x
 
 # both have no limit, but offset
 
 build apply=Fusion
 (top_k (top_k (get x) [0] [#0] null 2) [0] [#0] null 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#0 asc nulls_first) offset=3
+TopK group_by=[#0] order_by=[#0 asc nulls_first] offset=3 monotonic=false
+  Get x
 
 # outer has no limit, but both have offset
 
 build apply=Fusion
 (top_k (top_k (get x) [] [#0] 3 2) [] [#0] null 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=() order=(#0 asc nulls_first) limit=2 offset=3
+TopK order_by=[#0 asc nulls_first] limit=2 offset=3 monotonic=false
+  Get x
 
 # outer has no limit and no offset
 
 build apply=Fusion
 (top_k (top_k (get x) [] [#0] 3 2) [] [#0] null 0)
 ----
-%0 =
-| Get x (u0)
-| TopK group=() order=(#0 asc nulls_first) limit=3 offset=2
+TopK order_by=[#0 asc nulls_first] limit=3 offset=2 monotonic=false
+  Get x
 
 # inner has no limit and no offset
 
 build apply=Fusion
 (top_k (top_k (get x) [] [#0] null 0) [] [#0] 3 2)
 ----
-%0 =
-| Get x (u0)
-| TopK group=() order=(#0 asc nulls_first) limit=3 offset=2
+TopK order_by=[#0 asc nulls_first] limit=3 offset=2 monotonic=false
+  Get x
 
 # inner has no limit and no offset, and outer has only limit
 
 build apply=Fusion
 (top_k (top_k (get x) [] [#0] null 0) [] [#0] 3 0)
 ----
-%0 =
-| Get x (u0)
-| TopK group=() order=(#0 asc nulls_first) limit=3 offset=0
+TopK order_by=[#0 asc nulls_first] limit=3 monotonic=false
+  Get x
 
 # inner has no limit and no offset, and outer has only offset
 
 build apply=Fusion
 (top_k (top_k (get x) [] [#0] null 0) [] [#0] null 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=() order=(#0 asc nulls_first) offset=1
+TopK order_by=[#0 asc nulls_first] offset=1 monotonic=false
+  Get x
 
 # both have no limit and no offset
 
 build apply=Fusion
 (top_k (top_k (get x) [] [#0] null 0) [] [#0] null 0)
 ----
-%0 =
-| Get x (u0)
-| TopK group=() order=(#0 asc nulls_first) offset=0
+TopK order_by=[#0 asc nulls_first] monotonic=false
+  Get x
 
 # both have limit 0 and no offset
 
 build apply=Fusion
 (top_k (top_k (get x) [] [#0] 0 0) [] [#0] 0 0)
 ----
-%0 =
-| Constant
+Constant <empty>
 
 # outer has limit 0
 
 build apply=Fusion
 (top_k (top_k (get x) [] [#0] null 0) [] [#0] 0 0)
 ----
-%0 =
-| Constant
+Constant <empty>
 
 # inner has limit 0
 
 build apply=Fusion
 (top_k (top_k (get x) [] [#0] 0 0) [] [#0] null 0)
 ----
-%0 =
-| Constant
+Constant <empty>
 
 build
 (top_k (top_k (constant [[5][4][2][3][2][1]] [int32]) [] [] 3 2) [] [] 1 1)
 ----
-%0 =
-| Constant (5) (4) (2) (3) (2) (1)
-| TopK group=() order=() limit=3 offset=2
-| TopK group=() order=() limit=1 offset=1
+TopK limit=1 offset=1 monotonic=false
+  TopK limit=3 offset=2 monotonic=false
+    Constant
+      - (5)
+      - (4)
+      - (2)
+      - (3)
+      - (2)
+      - (1)
 
 build apply=Fusion
 (top_k (top_k (constant [[5][4][2][3][2][1]] [int32]) [] [] 3 2) [] [] 1 1)
 ----
-%0 =
-| Constant (5) (4) (2) (3) (2) (1)
-| TopK group=() order=() limit=1 offset=3
+TopK limit=1 offset=3 monotonic=false
+  Constant
+    - (5)
+    - (4)
+    - (2)
+    - (3)
+    - (2)
+    - (1)
 
 opt
 (top_k (top_k (constant [[5][4][2][3][2][1]] [int32]) [] [] 3 2) [] [] 1 1)
 ----
-%0 =
-| Constant (3)
+Constant
+  - (3)
 
 
 build apply=Fusion
 (top_k (top_k (constant [[5][4][2][3][2][1]] [int32]) [] [] 3 2) [] [] 1 3)
 ----
-%0 =
-| Constant
+Constant <empty>
 
 build apply=Fusion
 (top_k (top_k (constant [[5 4] [3 2] [1 0]] [int32 int32]) [] [#1] 3 2) [] [#0] 1 0)
 ----
-%0 =
-| Constant (5, 4) (3, 2) (1, 0)
-| TopK group=() order=(#1 asc nulls_first) limit=3 offset=2
-| TopK group=() order=(#0 asc nulls_first) limit=1 offset=0
+TopK order_by=[#0 asc nulls_first] limit=1 monotonic=false
+  TopK order_by=[#1 asc nulls_first] limit=3 offset=2 monotonic=false
+    Constant
+      - (5, 4)
+      - (3, 2)
+      - (1, 0)
 
 build apply=Fusion
 (top_k (top_k (constant [[5 4] [3 2] [1 0]] [int32 int32]) [] [#1] 3 2) [] [#1] 1 0)
 ----
-%0 =
-| Constant (5, 4) (3, 2) (1, 0)
-| TopK group=() order=(#1 asc nulls_first) limit=1 offset=2
+TopK order_by=[#1 asc nulls_first] limit=1 offset=2 monotonic=false
+  Constant
+    - (5, 4)
+    - (3, 2)
+    - (1, 0)
 
 build apply=Fusion
 (top_k (top_k (constant [[5 4] [3 2] [1 0]] [int32 int32]) [0] [#0] 3 2) [1] [#1] 1 0)
 ----
-%0 =
-| Constant (5, 4) (3, 2) (1, 0)
-| TopK group=(#0) order=(#0 asc nulls_first) limit=3 offset=2
-| TopK group=(#1) order=(#1 asc nulls_first) limit=1 offset=0
+TopK group_by=[#1] order_by=[#1 asc nulls_first] limit=1 monotonic=false
+  TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=3 offset=2 monotonic=false
+    Constant
+      - (5, 4)
+      - (3, 2)
+      - (1, 0)
 
 build apply=Fusion
 (top_k (top_k (constant [[5 4] [3 2] [1 0]] [int32 int32]) [0] [] 3 2) [0] [#1] 1 0)
 ----
-%0 =
-| Constant (5, 4) (3, 2) (1, 0)
-| TopK group=(#0) order=() limit=3 offset=2
-| TopK group=(#0) order=(#1 asc nulls_first) limit=1 offset=0
+TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=1 monotonic=false
+  TopK group_by=[#0] limit=3 offset=2 monotonic=false
+    Constant
+      - (5, 4)
+      - (3, 2)
+      - (1, 0)
 
 # Fusionable TopK operators with grouping key
 
 build apply=Fusion
 (top_k (top_k (constant [[5 4] [3 2] [1 0] [1 1]] [int32 int32]) [0] [] 3 1) [0] [] 1 0)
 ----
-%0 =
-| Constant (5, 4) (3, 2) (1, 0) (1, 1)
-| TopK group=(#0) order=() limit=1 offset=1
+TopK group_by=[#0] limit=1 offset=1 monotonic=false
+  Constant
+    - (5, 4)
+    - (3, 2)
+    - (1, 0)
+    - (1, 1)
 
 build apply=FoldConstants
 (top_k (constant [[5 4] [3 2] [1 0] [1 1]] [int32 int32]) [0] [] 1 1)
 ----
-%0 =
-| Constant (1, 1)
+Constant
+  - (1, 1)
 
 build apply=FoldConstants
 (top_k (top_k (constant [[5 4] [3 2] [1 0] [1 1]] [int32 int32]) [0] [] 3 1) [0] [] 1 0)
 ----
-%0 =
-| Constant (1, 1)
+Constant
+  - (1, 1)
 
 # Both nulls_last
 
 build apply=Fusion
 (top_k (top_k (get x) [0] [(#0 false true)] 3 2) [0] [(#0 false true)] 1 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#0 asc nulls_last) limit=1 offset=3
+TopK group_by=[#0] order_by=[#0 asc nulls_last] limit=1 offset=3 monotonic=false
+  Get x
 
 # Cannot be fused, because nulls_last differs
 
 build apply=Fusion
 (top_k (top_k (get x) [0] [(#0 false false)] 3 2) [0] [(#0 false true)] 1 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#0 asc nulls_first) limit=3 offset=2
-| TopK group=(#0) order=(#0 asc nulls_last) limit=1 offset=1
+TopK group_by=[#0] order_by=[#0 asc nulls_last] limit=1 offset=1 monotonic=false
+  TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=3 offset=2 monotonic=false
+    Get x
 
 # Cannot be fused, because asc-desc differs
 
 build apply=Fusion
 (top_k (top_k (get x) [0] [(#0 false false)] 3 2) [0] [(#0 true false)] 1 1)
 ----
-%0 =
-| Get x (u0)
-| TopK group=(#0) order=(#0 asc nulls_first) limit=3 offset=2
-| TopK group=(#0) order=(#0 desc nulls_first) limit=1 offset=1
+TopK group_by=[#0] order_by=[#0 desc nulls_first] limit=1 offset=1 monotonic=false
+  TopK group_by=[#0] order_by=[#0 asc nulls_first] limit=3 offset=2 monotonic=false
+    Get x

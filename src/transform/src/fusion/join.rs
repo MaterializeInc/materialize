@@ -46,7 +46,7 @@ impl crate::Transform for Join {
         _: TransformArgs,
     ) -> Result<(), TransformError> {
         relation.try_visit_mut_post(&mut Self::action)?;
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
 }

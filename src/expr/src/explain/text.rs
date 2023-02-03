@@ -13,9 +13,9 @@ use std::fmt;
 
 use mz_ore::soft_assert;
 use mz_ore::str::{bracketed, separated, Indent, IndentLike, StrExt};
-use mz_repr::explain_new::{
-    fmt_text_constant_rows, separated_text, CompactScalarSeq, DisplayText, ExprHumanizer, Indices,
-    PlanRenderingContext, RenderingContext,
+use mz_repr::explain::text::{fmt_text_constant_rows, separated_text, DisplayText};
+use mz_repr::explain::{
+    CompactScalarSeq, ExprHumanizer, Indices, PlanRenderingContext, RenderingContext,
 };
 use mz_repr::{GlobalId, Row};
 
@@ -300,7 +300,10 @@ impl MirRelationExpr {
                         write!(f, "{}Get {}", ctx.indent, id)?;
                     }
                     Id::Global(id) => {
-                        let humanized_id = ctx.humanizer.humanize_id(*id).ok_or(fmt::Error)?;
+                        let humanized_id = ctx
+                            .humanizer
+                            .humanize_id(*id)
+                            .unwrap_or_else(|| id.to_string());
                         write!(f, "{}Get {}", ctx.indent, humanized_id)?;
                     }
                 }
@@ -399,9 +402,9 @@ impl MirRelationExpr {
                             h: &dyn ExprHumanizer,
                             e: &MirRelationExpr,
                         ) -> Option<String> {
-                            let global_id_name = |gid: &GlobalId| -> String {
-                                h.humanize_id_unqualified(*gid)
-                                    .unwrap_or_else(|| format!("?{}", gid))
+                            let global_id_name = |id: &GlobalId| -> String {
+                                h.humanize_id_unqualified(*id)
+                                    .unwrap_or_else(|| id.to_string())
                             };
                             let (_mfp, e) = MapFilterProject::extract_from_expression(e);
                             match e {
@@ -658,7 +661,7 @@ impl MirRelationExpr {
         constants: Option<Vec<Row>>, // The values that we are looking up
     ) -> fmt::Result
     where
-        C: AsMut<mz_ore::str::Indent> + AsRef<&'b dyn mz_repr::explain_new::ExprHumanizer>,
+        C: AsMut<mz_ore::str::Indent> + AsRef<&'b dyn mz_repr::explain::ExprHumanizer>,
     {
         let humanized_index = ctx
             .as_ref()
@@ -686,7 +689,7 @@ impl MirRelationExpr {
 /// A helper struct that abstracts over the formatting behavior of a
 /// single-input node.
 ///
-/// If [`mz_repr::explain_new::ExplainConfig::linear_chains`] is set, this will
+/// If [`mz_repr::explain::ExplainConfig::linear_chains`] is set, this will
 /// render children before parents using the same indentation level, and if not
 /// the children will be rendered indented after their parent.
 struct FmtNode<F, G>

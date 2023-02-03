@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 
 use mz_ore::stack::RecursionLimitError;
-use mz_repr::explain_new::{
+use mz_repr::explain::{
     AnnotatedPlan, Explain, ExplainConfig, ExplainError, ExprHumanizer, ScalarOps,
     UnsupportedFormat, UsedIndexes,
 };
@@ -24,7 +24,7 @@ use crate::{
 mod json;
 mod text;
 
-/// Explain context shared by all [`mz_repr::explain_new::Explain`]
+/// Explain context shared by all [`mz_repr::explain::Explain`]
 /// implementations in this crate.
 #[derive(Debug)]
 pub struct ExplainContext<'a> {
@@ -35,7 +35,7 @@ pub struct ExplainContext<'a> {
 }
 
 /// A structure produced by the `explain_$format` methods in
-/// [`mz_repr::explain_new::Explain`] implementations for points
+/// [`mz_repr::explain::Explain`] implementations for points
 /// in the optimization pipeline identified with a single plan of
 /// type `T`.
 #[allow(missing_debug_implementations)]
@@ -45,7 +45,7 @@ pub struct ExplainSinglePlan<'a, T> {
 }
 
 /// A structure produced by the `explain_$format` methods in
-/// [`mz_repr::explain_new::Explain`] implementations at points
+/// [`mz_repr::explain::Explain`] implementations at points
 /// in the optimization pipeline identified with a
 /// `DataflowDescription` instance with plans of type `T`.
 #[allow(missing_debug_implementations)]

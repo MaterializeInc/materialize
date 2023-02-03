@@ -157,7 +157,7 @@ impl HirRelationExpr {
             }
         };
 
-        mz_repr::explain_new::trace_plan(&result);
+        mz_repr::explain::trace_plan(&result);
 
         result
     }

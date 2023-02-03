@@ -81,14 +81,12 @@ use proc_macro2::TokenTree;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[allow(deprecated)] // TODO(#17360): use new explain output format
-use mz_expr::explain::ViewExplanation;
 use mz_expr::{EvalError, Id, LocalId, MirRelationExpr, MirScalarExpr};
 use mz_lowertest::*;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_ore::str::separated;
-use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
+use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{ColumnType, GlobalId, RelationType, Row, ScalarType};
 use mz_repr_test_util::*;
 
@@ -112,25 +110,6 @@ pub fn build_rel(s: &str, catalog: &TestCatalog) -> Result<MirRelationExpr, Stri
         "MirRelationExpr",
         &mut MirRelationExprDeserializeContext::new(catalog),
     )
-}
-
-/// Pretty-print the [MirRelationExpr].
-///
-/// If format contains "types", then add types to the pretty-printed
-/// [MirRelationExpr].
-#[allow(deprecated)] // TODO(#17360): use new explain output format
-pub fn generate_explanation(
-    humanizer: &dyn ExprHumanizer,
-    rel: &MirRelationExpr,
-    format: Option<&Vec<String>>,
-) -> String {
-    let mut explanation = ViewExplanation::new(rel, humanizer);
-    if let Some(format) = format {
-        if format.contains(&"types".to_string()) {
-            explanation.explain_types();
-        }
-    }
-    explanation.to_string()
 }
 
 /// Turns the json version of a [MirRelationExpr] into the [mz_lowertest::to_json]

@@ -19,7 +19,7 @@ use mz_compute_client::controller::error as compute_error;
 use mz_expr::{EvalError, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
-use mz_repr::explain_new::ExplainError;
+use mz_repr::explain::ExplainError;
 use mz_repr::NotNullViolation;
 use mz_sql::plan::PlanError;
 use mz_storage_client::controller::StorageError;

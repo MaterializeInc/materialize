@@ -10,27 +10,37 @@
 opt
 (top_k (constant [[5][4][2][3][2][1]] [int32]) [] [] 3 2)
 ----
-%0 =
-| Constant (2) (3) (4)
+Constant
+  - (2)
+  - (3)
+  - (4)
 
 opt
 (top_k (constant [[5][4][2][3][2][1]] [int32]) [] [] 10 0)
 ----
-%0 =
-| Constant (1) ((2) x 2) (3) (4) (5)
+Constant
+  - (1)
+  - ((2) x 2)
+  - (3)
+  - (4)
+  - (5)
 
 opt
 (top_k
     (constant [["a" 2]["b" 1]["a" 3]["b" 3]["a" 2]["a" 3]["a" 4]["b" 3]["b" 3]] [string int32])
     [#0] [#1] 2 1)
 ----
-%0 =
-| Constant ("a", 2) ("a", 3) (("b", 3) x 2)
+Constant
+  - ("a", 2)
+  - ("a", 3)
+  - (("b", 3) x 2)
 
 opt
 (top_k
     (constant [["a" 2]["b" 1]["a" 3]["b" 3]["a" 2]["a" 3]["a" 4]["b" 3]["b" 3]] [string int32])
     [#0] [(#1 true)] 2 0)
 ----
-%0 =
-| Constant ("a", 3) ("a", 4) (("b", 3) x 2)
+Constant
+  - ("a", 3)
+  - ("a", 4)
+  - (("b", 3) x 2)

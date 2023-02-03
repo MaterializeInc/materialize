@@ -47,7 +47,7 @@ impl crate::Transform for CanonicalizeMfp {
         args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let result = self.action(relation, args.indexes);
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         result
     }
 }

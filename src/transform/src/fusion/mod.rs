@@ -40,7 +40,7 @@ impl crate::Transform for Fusion {
     ) -> Result<(), crate::TransformError> {
         use mz_expr::visit::Visit;
         relation.visit_mut_post(&mut Self::action)?;
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
 }

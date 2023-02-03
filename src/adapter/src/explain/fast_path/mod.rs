@@ -11,10 +11,8 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::explain_new::ExplainMultiPlan;
-use mz_repr::explain_new::{
-    AnnotatedPlan, Explain, ExplainConfig, ExplainError, UnsupportedFormat,
-};
+use mz_expr::explain::ExplainMultiPlan;
+use mz_repr::explain::{AnnotatedPlan, Explain, ExplainConfig, ExplainError, UnsupportedFormat};
 
 use crate::coord::peek::FastPathPlan;
 

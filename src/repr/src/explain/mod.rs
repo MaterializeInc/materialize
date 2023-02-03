@@ -33,15 +33,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use mz_ore::{stack::RecursionLimitError, str::Indent, str::IndentLike};
+use mz_ore::{stack::RecursionLimitError, str::Indent};
 
-use crate::{ColumnType, GlobalId, Row, ScalarType};
+use crate::{ColumnType, GlobalId, ScalarType};
 
+pub mod dot;
+pub mod json;
+pub mod text;
 #[cfg(feature = "tracing_")]
-mod tracing;
+pub mod tracing;
 
+use self::dot::{dot_string, DisplayDot};
+use self::json::{json_string, DisplayJson};
+use self::text::{text_string, DisplayText};
 #[cfg(feature = "tracing_")]
-pub use self::tracing::{trace_plan, PlanTrace, TraceEntry};
+pub use self::tracing::trace_plan;
 
 /// Possible output formats for an explanation.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -61,247 +67,11 @@ impl fmt::Display for ExplainFormat {
     }
 }
 
-/// A trait implemented by explanation types that can be rendered as
-/// [`ExplainFormat::Text`].
-pub trait DisplayText<C = ()>
-where
-    Self: Sized,
-{
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result;
-}
-
-impl<T> DisplayText for &T
-where
-    T: DisplayText,
-{
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut ()) -> fmt::Result {
-        (*self).fmt_text(f, ctx)
-    }
-}
-
-impl<A, C> DisplayText<C> for Box<A>
-where
-    A: DisplayText<C>,
-{
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
-        self.as_ref().fmt_text(f, ctx)
-    }
-}
-
-impl<A, C> DisplayText<C> for Option<A>
-where
-    A: DisplayText<C>,
-{
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
-        if let Some(val) = self {
-            val.fmt_text(f, ctx)
-        } else {
-            fmt::Result::Ok(())
-        }
-    }
-}
-
-/// Render a type `t: T` as [`ExplainFormat::Text`].
-///
-/// # Panics
-///
-/// Panics if the [`DisplayText::fmt_text`] call returns a [`fmt::Error`].
-pub fn text_string<T: DisplayText>(t: &T) -> String {
-    struct TextString<'a, T>(&'a T);
-
-    impl<'a, F: DisplayText> fmt::Display for TextString<'a, F> {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            self.0.fmt_text(f, &mut ())
-        }
-    }
-
-    TextString::<'_>(t).to_string()
-}
-
-/// Apply `f: F` to create a rendering context of type `C` and render the given
-/// tree `t: T` within that context.
-/// # Panics
-///
-/// Panics if the [`DisplayText::fmt_text`] call returns a [`fmt::Error`].
-pub fn text_string_at<'a, T: DisplayText<C>, C, F: Fn() -> C>(t: &'a T, f: F) -> String {
-    struct TextStringAt<'a, T, C, F: Fn() -> C> {
-        t: &'a T,
-        f: F,
-    }
-
-    impl<T: DisplayText<C>, C, F: Fn() -> C> DisplayText<()> for TextStringAt<'_, T, C, F> {
-        fn fmt_text(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
-            let mut ctx = (self.f)();
-            self.t.fmt_text(f, &mut ctx)
-        }
-    }
-
-    text_string(&TextStringAt { t, f })
-}
-
-/// Creates a type whose [`fmt::Display`] implementation outputs each item in
-/// `iter` separated by `separator`.
-///
-/// The difference between this and [`mz_ore::str::separated`] is that the latter
-/// requires the iterator items to implement [`fmt::Display`], whereas this version
-/// wants them to implement [`DisplayText<C>`] for some rendering context `C` which
-/// implements [`Default`].
-pub fn separated_text<'a, I, C>(separator: &'a str, iter: I) -> impl fmt::Display + 'a
-where
-    I: IntoIterator,
-    I::IntoIter: Clone + 'a,
-    I::Item: DisplayText<C> + 'a,
-    C: Default + 'a,
-{
-    struct Separated<'a, I, C> {
-        separator: &'a str,
-        iter: I,
-        phantom: std::marker::PhantomData<C>,
-    }
-
-    impl<'a, I, C> fmt::Display for Separated<'a, I, C>
-    where
-        C: Default,
-        I: Iterator + Clone,
-        I::Item: DisplayText<C>,
-    {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            for (i, item) in self.iter.clone().enumerate() {
-                if i != 0 {
-                    write!(f, "{}", self.separator)?;
-                }
-                item.fmt_text(f, &mut C::default())?;
-            }
-            Ok(())
-        }
-    }
-
-    Separated {
-        separator,
-        iter: iter.into_iter(),
-        phantom: std::marker::PhantomData::<C>,
-    }
-}
-
-/// A trait implemented by explanation types that can be rendered as
-/// [`ExplainFormat::Json`].
-pub trait DisplayJson
-where
-    Self: Sized,
-{
-    fn to_serde_value(&self) -> serde_json::Result<serde_json::Value>;
-}
-
-/// Render a type `t: T` as [`ExplainFormat::Json`].
-///
-/// # Panics
-///
-/// Panics if the [`DisplayJson::to_serde_value`] or the subsequent
-/// [`serde_json::to_string_pretty`] call return a [`serde_json::Error`].
-pub fn json_string<T: DisplayJson>(t: &T) -> String {
-    let value = t.to_serde_value().expect("serde_json::Value");
-    serde_json::to_string_pretty(&value).expect("JSON string")
-}
-
-impl DisplayJson for String {
-    fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
-        Ok(serde_json::Value::String(self.clone()))
-    }
-}
-
-/// A trait implemented by explanation types that can be rendered as
-/// [`ExplainFormat::Dot`].
-pub trait DisplayDot<C = ()>
-where
-    Self: Sized,
-{
-    fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result;
-}
-
-impl<A, C> DisplayDot<C> for Box<A>
-where
-    A: DisplayDot<C>,
-{
-    fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
-        self.as_ref().fmt_dot(f, ctx)
-    }
-}
-
-impl<A, C> DisplayDot<C> for Option<A>
-where
-    A: DisplayDot<C>,
-{
-    fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
-        if let Some(val) = self {
-            val.fmt_dot(f, ctx)
-        } else {
-            fmt::Result::Ok(())
-        }
-    }
-}
-
-/// Render a type `t: T` as [`ExplainFormat::Dot`].
-///
-/// # Panics
-///
-/// Panics if the [`DisplayDot::fmt_dot`] call returns a [`fmt::Error`].
-pub fn dot_string<T: DisplayDot<()>>(t: &T) -> String {
-    struct DotString<'a, T>(&'a T);
-
-    impl<'a, T: DisplayDot> fmt::Display for DotString<'a, T> {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            self.0.fmt_dot(f, &mut ())
-        }
-    }
-
-    DotString::<'_>(t).to_string()
-}
-
-/// Apply `f: F` to create a rendering context of type `C` and render the given
-/// type `t: T` as [`ExplainFormat::Dot`] within that context.
-///
-/// # Panics
-///
-/// Panics if the [`DisplayDot::fmt_dot`] call returns a [`fmt::Error`].
-pub fn dot_string_at<'a, T: DisplayDot<C>, C, F: Fn() -> C>(t: &'a T, f: F) -> String {
-    struct DotStringAt<'a, T, C, F: Fn() -> C> {
-        t: &'a T,
-        f: F,
-    }
-
-    impl<T: DisplayDot<C>, C, F: Fn() -> C> DisplayDot<()> for DotStringAt<'_, T, C, F> {
-        fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
-            let mut ctx = (self.f)();
-            self.t.fmt_dot(f, &mut ctx)
-        }
-    }
-
-    dot_string(&DotStringAt { t, f })
-}
-
 /// A zero-variant enum to be used as the explanation type in the
 /// [`Explain`] implementation for all formats that are not supported
 /// for `Self`.
 #[allow(missing_debug_implementations)]
 pub enum UnsupportedFormat {}
-
-impl DisplayText for UnsupportedFormat {
-    fn fmt_text(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
-        unreachable!()
-    }
-}
-
-impl DisplayJson for UnsupportedFormat {
-    fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
-        unreachable!()
-    }
-}
-
-impl DisplayDot for UnsupportedFormat {
-    fn fmt_dot(&self, _f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
-        unreachable!()
-    }
-}
 
 /// The type of errors that may occur when an [`Explain::explain`]
 /// call goes wrong.
@@ -660,85 +430,9 @@ impl ExprHumanizer for DummyHumanizer {
     }
 }
 
-fn write_first_rows(
-    f: &mut fmt::Formatter<'_>,
-    first_rows: &Vec<(&Row, &crate::Diff)>,
-    ctx: &mut Indent,
-) -> fmt::Result {
-    for (row, diff) in first_rows {
-        if **diff == 1 {
-            writeln!(f, "{}- {}", ctx, row)?;
-        } else {
-            writeln!(f, "{}- ({} x {})", ctx, row, diff)?;
-        }
-    }
-    Ok(())
-}
-
-pub fn fmt_text_constant_rows<'a, I>(
-    f: &mut fmt::Formatter<'_>,
-    mut rows: I,
-    ctx: &mut Indent,
-) -> fmt::Result
-where
-    I: Iterator<Item = (&'a Row, &'a crate::Diff)>,
-{
-    let mut row_count = 0;
-    let mut first_rows = Vec::with_capacity(20);
-    for _ in 0..20 {
-        if let Some((row, diff)) = rows.next() {
-            row_count += diff.abs();
-            first_rows.push((row, diff));
-        }
-    }
-    let rest_of_row_count = rows
-        .into_iter()
-        .map(|(_, diff)| diff.abs())
-        .sum::<crate::Diff>();
-    if rest_of_row_count != 0 {
-        writeln!(
-            f,
-            "{}total_rows (diffs absed): {}",
-            ctx,
-            row_count + rest_of_row_count
-        )?;
-        writeln!(f, "{}first_rows:", ctx)?;
-        ctx.indented(move |ctx| write_first_rows(f, &first_rows, ctx))?;
-    } else {
-        write_first_rows(f, &first_rows, ctx)?;
-    }
-    Ok(())
-}
-
 /// Pretty-prints a list of indices.
 #[derive(Debug)]
 pub struct Indices<'a>(pub &'a [usize]);
-
-impl<'a> fmt::Display for Indices<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut is_first = true;
-        let mut slice = self.0;
-        while !slice.is_empty() {
-            if !is_first {
-                write!(f, ", ")?;
-            }
-            is_first = false;
-            let lead = &slice[0];
-            if slice.len() > 2 && slice[1] == lead + 1 && slice[2] == lead + 2 {
-                let mut last = 3;
-                while slice.get(last) == Some(&(lead + last)) {
-                    last += 1;
-                }
-                write!(f, "#{}..=#{}", lead, lead + last - 1)?;
-                slice = &slice[last..];
-            } else {
-                write!(f, "#{}", slice[0])?;
-                slice = &slice[1..];
-            }
-        }
-        Ok(())
-    }
-}
 
 /// Pretty-prints a list of scalar expressions that may have runs of column
 /// indices as a comma-separated list interleaved with interval expressions.
@@ -746,47 +440,6 @@ impl<'a> fmt::Display for Indices<'a> {
 /// Interval expressions are used only for runs of three or more elements.
 #[derive(Debug)]
 pub struct CompactScalarSeq<'a, T: ScalarOps>(pub &'a [T]);
-
-impl<'a, T> std::fmt::Display for CompactScalarSeq<'a, T>
-where
-    T: ScalarOps,
-    T: DisplayText,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let mut is_first = true;
-        let mut slice = self.0;
-        while !slice.is_empty() {
-            if !is_first {
-                write!(f, ", ")?;
-            }
-            is_first = false;
-            if let Some(lead) = slice[0].match_col_ref() {
-                if slice.len() > 2 && slice[1].references(lead + 1) && slice[2].references(lead + 2)
-                {
-                    let mut last = 3;
-                    while slice
-                        .get(last)
-                        .map(|expr| expr.references(lead + last))
-                        .unwrap_or(false)
-                    {
-                        last += 1;
-                    }
-                    slice[0].fmt_text(f, &mut ())?;
-                    write!(f, "..=")?;
-                    slice[last - 1].fmt_text(f, &mut ())?;
-                    slice = &slice[last..];
-                } else {
-                    slice[0].fmt_text(f, &mut ())?;
-                    slice = &slice[1..];
-                }
-            } else {
-                slice[0].fmt_text(f, &mut ())?;
-                slice = &slice[1..];
-            }
-        }
-        Ok(())
-    }
-}
 
 pub trait ScalarOps {
     fn match_col_ref(&self) -> Option<usize>;
@@ -845,25 +498,6 @@ impl UsedIndexes {
 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
-    }
-}
-
-impl<'a, C> DisplayText<C> for UsedIndexes
-where
-    C: AsMut<Indent> + AsRef<&'a dyn ExprHumanizer>,
-{
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
-        writeln!(f, "{}Used Indexes:", ctx.as_mut())?;
-        *ctx.as_mut() += 1;
-        for id in &self.0 {
-            let index_name = ctx
-                .as_ref()
-                .humanize_id(*id)
-                .unwrap_or_else(|| id.to_string());
-            writeln!(f, "{}- {}", ctx.as_mut(), index_name)?;
-        }
-        *ctx.as_mut() -= 1;
-        Ok(())
     }
 }
 

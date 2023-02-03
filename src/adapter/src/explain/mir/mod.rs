@@ -7,27 +7,32 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! `EXPLAIN` support for LIR structures.
+//! `EXPLAIN` support for MIR structures.
+//!
+//! The specialized [`Explain`] implementation for an [`MirRelationExpr`]
+//! wrapped in an [`Explainable`] newtype struct allows us to interpret more
+//! [`ExplainConfig`] options. This is the case because attribute derivation and
+//! let normalization are defined in [`mz_transform`] and conssequently are not
+//! available for the default [`Explain`] implementation for [`MirRelationExpr`]
+//! in [`mz_expr`].
 
-pub(crate) mod text;
-
-use std::collections::BTreeMap;
-
-use mz_expr::explain_new::{enforce_linear_chains, ExplainContext, ExplainMultiPlan};
-use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
-use mz_repr::explain_new::{
-    AnnotatedPlan, Explain, ExplainConfig, ExplainError, UnsupportedFormat,
+use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_expr::explain::{
+    enforce_linear_chains, ExplainContext, ExplainMultiPlan, ExplainSinglePlan,
 };
+use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
+use mz_repr::explain::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
+use mz_transform::attribute::annotate_plan;
+use mz_transform::normalize_lets::normalize_lets;
 
-use crate::plan::Plan;
-use crate::types::dataflows::DataflowDescription;
+use super::Explainable;
 
-impl<'a> Explain<'a> for DataflowDescription<Plan> {
+impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
     type Context = ExplainContext<'a>;
 
-    type Text = ExplainMultiPlan<'a, Plan>;
+    type Text = ExplainSinglePlan<'a, MirRelationExpr>;
 
-    type Json = ExplainMultiPlan<'a, Plan>;
+    type Json = ExplainSinglePlan<'a, MirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
@@ -36,64 +41,44 @@ impl<'a> Explain<'a> for DataflowDescription<Plan> {
         config: &'a ExplainConfig,
         context: &'a Self::Context,
     ) -> Result<Self::Text, ExplainError> {
-        self.as_explain_multi_plan(config, context)
+        self.as_explain_single_plan(config, context)
     }
 
     fn explain_json(
         &'a mut self,
         config: &'a ExplainConfig,
         context: &'a Self::Context,
-    ) -> Result<Self::Text, ExplainError> {
-        self.as_explain_multi_plan(config, context)
+    ) -> Result<Self::Json, ExplainError> {
+        self.as_explain_single_plan(config, context)
     }
 }
 
-impl<'a> DataflowDescription<Plan> {
-    fn as_explain_multi_plan(
+impl<'a> Explainable<'a, MirRelationExpr> {
+    fn as_explain_single_plan(
         &'a mut self,
-        _config: &'a ExplainConfig,
+        config: &'a ExplainConfig,
         context: &'a ExplainContext<'a>,
-    ) -> Result<ExplainMultiPlan<'a, Plan>, ExplainError> {
-        let plans = self
-            .objects_to_build
-            .iter_mut()
-            .rev()
-            .map(|build_desc| {
-                let id = context
-                    .humanizer
-                    .humanize_id(build_desc.id)
-                    .unwrap_or_else(|| build_desc.id.to_string());
-                let plan = AnnotatedPlan {
-                    plan: &build_desc.plan,
-                    annotations: BTreeMap::default(),
-                };
-                (id, plan)
-            })
-            .collect::<Vec<_>>();
+    ) -> Result<ExplainSinglePlan<'a, MirRelationExpr>, ExplainError> {
+        // normalize the representation as linear chains
+        // (this implies !config.raw_plans by construction)
+        if config.linear_chains {
+            enforce_linear_chains(self.0)?;
+        };
+        // unless raw plans are explicitly requested
+        // normalize the representation of nested Let bindings
+        // and enforce sequential Let binding IDs
+        if !config.raw_plans {
+            normalize_lets(self.0).map_err(|e| ExplainError::UnknownError(e.to_string()))?;
+        }
 
-        let sources = self
-            .source_imports
-            .iter_mut()
-            .filter_map(|(id, (source_desc, _))| {
-                source_desc.arguments.operators.as_ref().map(|op| {
-                    let id = context
-                        .humanizer
-                        .humanize_id(*id)
-                        .unwrap_or_else(|| id.to_string());
-                    (id, op)
-                })
-            })
-            .collect::<Vec<_>>();
-
-        Ok(ExplainMultiPlan {
+        Ok(ExplainSinglePlan {
             context,
-            sources,
-            plans,
+            plan: annotate_plan(self.0, context)?,
         })
     }
 }
 
-impl<'a> Explain<'a> for DataflowDescription<OptimizedMirRelationExpr> {
+impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
     type Context = ExplainContext<'a>;
 
     type Text = ExplainMultiPlan<'a, MirRelationExpr>;
@@ -119,36 +104,43 @@ impl<'a> Explain<'a> for DataflowDescription<OptimizedMirRelationExpr> {
     }
 }
 
-impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
+impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
     fn as_explain_multi_plan(
         &'a mut self,
         config: &'a ExplainConfig,
         context: &'a ExplainContext<'a>,
     ) -> Result<ExplainMultiPlan<'a, MirRelationExpr>, ExplainError> {
         let plans = self
+            .0
             .objects_to_build
             .iter_mut()
             .rev()
             .map(|build_desc| {
+                let plan = build_desc.plan.as_inner_mut();
+
                 // normalize the representation as linear chains
                 // (this implies !config.raw_plans by construction)
                 if config.linear_chains {
-                    enforce_linear_chains(build_desc.plan.as_inner_mut())?;
+                    enforce_linear_chains(plan)?;
                 };
+                // unless raw plans are explicitly requested
+                // normalize the representation of nested Let bindings
+                // and enforce sequential Let binding IDs
+                if !config.raw_plans {
+                    normalize_lets(plan).map_err(|e| ExplainError::UnknownError(e.to_string()))?;
+                }
 
                 let id = context
                     .humanizer
                     .humanize_id(build_desc.id)
                     .unwrap_or_else(|| build_desc.id.to_string());
-                let plan = AnnotatedPlan {
-                    plan: build_desc.plan.as_inner(),
-                    annotations: BTreeMap::default(),
-                };
-                Ok((id, plan))
+
+                Ok((id, annotate_plan(plan, context)?))
             })
             .collect::<Result<Vec<_>, ExplainError>>()?;
 
         let sources = self
+            .0
             .source_imports
             .iter_mut()
             .filter_map(|(id, (source_desc, _))| {

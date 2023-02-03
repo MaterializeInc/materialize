@@ -22,84 +22,48 @@ ok
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y)] [[#1 #3]]) [#1] [])
 ----
-----
-%0 =
-| Get x (u1)
-| Distinct group=(#1)
-
-%1 =
-| Get y (u2)
-| Distinct group=(#1)
-
-%2 =
-| Join %0 %1 (= #0 #1)
-| | implementation = Unimplemented
-| Project (#0)
-----
-----
+Project (#0)
+  Join on=(#0 = #1)
+    Distinct group_by=[#1]
+      Get x
+    Distinct group_by=[#1]
+      Get y
 
 ## distinct(<multiple columns from same input>)
 
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y)] [[#1 #3]]) [#0 #1] [])
 ----
-----
-%0 =
-| Get x (u1)
-| Distinct group=(#0, #1)
-
-%1 =
-| Get y (u2)
-| Distinct group=(#1)
-
-%2 =
-| Join %0 %1 (= #1 #2)
-| | implementation = Unimplemented
-| Project (#0, #1)
-----
-----
+Project (#0, #1)
+  Join on=(#1 = #2)
+    Distinct group_by=[#0, #1]
+      Get x
+    Distinct group_by=[#1]
+      Get y
 
 ## distinct(<multiple columns from differing inputs>)
 
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y)] [[#1 #3]]) [#0 #1 #2] [])
 ----
-----
-%0 =
-| Get x (u1)
-| Distinct group=(#0, #1)
-
-%1 =
-| Get y (u2)
-| Distinct group=(#1, #0)
-
-%2 =
-| Join %0 %1 (= #1 #2)
-| | implementation = Unimplemented
-| Project (#0, #1, #3)
-----
-----
+Project (#0, #1, #3)
+  Join on=(#1 = #2)
+    Distinct group_by=[#0, #1]
+      Get x
+    Distinct group_by=[#1, #0]
+      Get y
 
 ## Expressions in join equivalence classes
 
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y)] [[(call_variadic substr [#1 5]) #3]]) [#3] [])
 ----
-----
-%0 =
-| Get x (u1)
-| Distinct group=(substr(#1, 5))
-
-%1 =
-| Get y (u2)
-| Distinct group=(#1)
-
-%2 =
-| Join %0 %1 (= #0 #1)
-| | implementation = Unimplemented
-| Project (#1)
-----
-----
+Project (#1)
+  Join on=(#0 = #1)
+    Distinct group_by=[substr(#1, 5)]
+      Get x
+    Distinct group_by=[#1]
+      Get y
 
 build apply=ReductionPushdown
 (reduce
@@ -108,21 +72,12 @@ build apply=ReductionPushdown
     [(call_variadic substr [#1 5])]
     [])
 ----
-----
-%0 =
-| Get x (u1)
-| Distinct group=(substr(#1, 5))
-
-%1 =
-| Get y (u2)
-| Distinct group=(#1)
-
-%2 =
-| Join %0 %1 (= #0 #1)
-| | implementation = Unimplemented
-| Project (#0)
-----
-----
+Project (#0)
+  Join on=(#0 = #1)
+    Distinct group_by=[substr(#1, 5)]
+      Get x
+    Distinct group_by=[#1]
+      Get y
 
 ### Negative test: Do not do reduction pushdown
 ### if there are multi-component expressions in the join equivalence
@@ -134,19 +89,10 @@ build apply=ReductionPushdown
     [(call_variadic substr [#1 5])]
     [])
 ----
-----
-%0 =
-| Get x (u1)
-
-%1 =
-| Get y (u2)
-
-%2 =
-| Join %0 %1 (= substr(#1, 5) (#1 || #3))
-| | implementation = Unimplemented
-| Distinct group=(substr(#1, 5))
-----
-----
+Distinct group_by=[substr(#1, 5)]
+  Join on=(substr(#1, 5) = (#1 || #3))
+    Get x
+    Get y
 
 build apply=ReductionPushdown
 (reduce
@@ -156,19 +102,10 @@ build apply=ReductionPushdown
     [(call_variadic substr [#1 5])]
     [])
 ----
-----
-%0 =
-| Get x (u1)
-
-%1 =
-| Get y (u2)
-
-%2 =
-| Join %0 %1 (= substr(#1, 5) #3) (= (#1 || #3) "hello")
-| | implementation = Unimplemented
-| Distinct group=(substr(#1, 5))
-----
-----
+Distinct group_by=[substr(#1, 5)]
+  Join on=(substr(#1, 5) = #3 AND (#1 || #3) = "hello")
+    Get x
+    Get y
 
 ### Negative test: multi-input expression in group by key
 
@@ -179,19 +116,10 @@ build apply=ReductionPushdown
     [(call_binary text_concat #1 #3)]
     [])
 ----
-----
-%0 =
-| Get x (u1)
-
-%1 =
-| Get y (u2)
-
-%2 =
-| Join %0 %1 (= (#1 || #3) "hello")
-| | implementation = Unimplemented
-| Distinct group=((#1 || #3))
-----
-----
+Distinct group_by=[(#1 || #3)]
+  Join on=((#1 || #3) = "hello")
+    Get x
+    Get y
 
 ## Distinct pushdown across more than two inputs
 ## Make sure no cross joins happen.
@@ -199,157 +127,86 @@ build apply=ReductionPushdown
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y) (get y)] [[#1 #3 #5]]) [#1] [])
 ----
-----
-%0 =
-| Get x (u1)
-| Distinct group=(#1)
-
-%1 =
-| Get y (u2)
-| Distinct group=(#1)
-
-%2 =
-| Get y (u2)
-| Distinct group=(#1)
-
-%3 =
-| Join %0 %1 %2 (= #0 #1 #2)
-| | implementation = Unimplemented
-| Project (#0)
-----
-----
+Project (#0)
+  Join on=(eq(#0, #1, #2))
+    Distinct group_by=[#1]
+      Get x
+    Distinct group_by=[#1]
+      Get y
+    Distinct group_by=[#1]
+      Get y
 
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y) (get z)] [[#1 #3] [#2 #4]]) [#1 #5] [])
 ----
-----
-%0 =
-| Get x (u1)
-| Distinct group=(#1)
-
-%1 =
-| Get y (u2)
-
-%2 =
-| Get z (u3)
-
-%3 =
-| Join %1 %2 (= #0 #2)
-| | implementation = Unimplemented
-| Distinct group=(#1, #3)
-
-%4 =
-| Join %0 %3 (= #0 #1)
-| | implementation = Unimplemented
-| Project (#0, #2)
-----
-----
+Project (#0, #2)
+  Join on=(#0 = #1)
+    Distinct group_by=[#1]
+      Get x
+    Distinct group_by=[#1, #3]
+      Join on=(#0 = #2)
+        Get y
+        Get z
 
 ### Similar to the above, but the join graph is now y-x-z instead of x-y-z
 
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y) (get z)] [[#0 #2] [#1 #5]]) [#3 #5] [])
 ----
-----
-%0 =
-| Get x (u1)
-
-%1 =
-| Get y (u2)
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Unimplemented
-| Distinct group=(#3, #1)
-
-%3 =
-| Get z (u3)
-| Distinct group=(#1)
-
-%4 =
-| Join %2 %3 (= #1 #2)
-| | implementation = Unimplemented
-| Project (#0, #2)
-----
-----
+Project (#0, #2)
+  Join on=(#1 = #2)
+    Distinct group_by=[#3, #1]
+      Join on=(#0 = #2)
+        Get x
+        Get y
+    Distinct group_by=[#1]
+      Get z
 
 ### Push down reductions on join(x, y) and join(z, w)
 
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y) (get z) (get w)] [[#0 #2] [#3 #5] [#4 #6]]) [#3 #5] [])
 ----
-----
-%0 =
-| Get x (u1)
-
-%1 =
-| Get y (u2)
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Unimplemented
-| Distinct group=(#3, #3)
-
-%3 =
-| Get z (u3)
-
-%4 =
-| Get w (u0)
-
-%5 =
-| Join %3 %4 (= #0 #2)
-| | implementation = Unimplemented
-| Distinct group=(#1, #1)
-
-%6 =
-| Join %2 %5 (= #0 #2) (= #1 #3)
-| | implementation = Unimplemented
-| Project (#0, #3)
-----
-----
+Project (#0, #3)
+  Join on=(#0 = #2 AND #1 = #3)
+    Distinct group_by=[#3, #3]
+      Join on=(#0 = #2)
+        Get x
+        Get y
+    Distinct group_by=[#1, #1]
+      Join on=(#0 = #2)
+        Get z
+        Get w
 
 opt
 (reduce (join [(get x) (get y) (get z) (get w)] [[#0 #2] [#3 #5] [#4 #6]]) [#3 #5] [])
 ----
-----
-%0 =
-| Get x (u1)
-| Project (#0)
-| ArrangeBy (#0)
-
-%1 =
-| Get y (u2)
-| ArrangeBy (#0)
-
-%2 =
-| Join %0 %1 (= #0 #1)
-| | implementation = Differential %1.(#0) %0.(#0)
-| Project (#2)
-| Distinct group=(#0)
-| ArrangeBy (#0)
-
-%3 =
-| Get z (u3)
-| ArrangeBy (#0)
-
-%4 =
-| Get w (u0)
-| Project (#0)
-| ArrangeBy (#0)
-
-%5 =
-| Join %3 %4 (= #0 #2)
-| | implementation = Differential %4.(#0) %3.(#0)
-| Project (#1)
-| Distinct group=(#0)
-| ArrangeBy (#0)
-
-%6 =
-| Join %2 %5 (= #0 #1)
-| | implementation = Differential %5.(#0) %2.(#0)
-| Project (#0, #0)
-----
-----
+Project (#0, #0)
+  Join on=(#0 = #1) type=differential
+    implementation
+      %1[#0] » %0[#0]UKA
+    ArrangeBy keys=[[#0]]
+      Distinct group_by=[#0]
+        Project (#2)
+          Join on=(#0 = #1) type=differential
+            implementation
+              %1:y[#0] » %0:x[#0]KA
+            ArrangeBy keys=[[#0]]
+              Project (#0)
+                Get x
+            ArrangeBy keys=[[#0]]
+              Get y
+    ArrangeBy keys=[[#0]]
+      Distinct group_by=[#0]
+        Project (#1)
+          Join on=(#0 = #2) type=differential
+            implementation
+              %1:w[#0] » %0:z[#0]KA
+            ArrangeBy keys=[[#0]]
+              Get z
+            ArrangeBy keys=[[#0]]
+              Project (#0)
+                Get w
 
 ### TODO: support this case where a reduction pushdown can happen by breaking
 ### it into components x-y and z.
@@ -361,119 +218,61 @@ build apply=ReductionPushdown
     [(call_binary text_concat #1 #3)]
     [])
 ----
-----
-%0 =
-| Get x (u1)
-
-%1 =
-| Get y (u2)
-
-%2 =
-| Get z (u3)
-
-%3 =
-| Join %0 %1 %2 (= (#1 || #3) "hello") (= #1 #5)
-| | implementation = Unimplemented
-| Distinct group=((#1 || #3))
-----
-----
+Distinct group_by=[(#1 || #3)]
+  Join on=((#1 || #3) = "hello" AND #1 = #5)
+    Get x
+    Get y
+    Get z
 
 ## Cross join tests
 
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y) (get z)] [[#3 #5]]) [#5] [])
 ----
-----
-%0 =
-| Get x (u1)
-| Distinct group=()
-
-%1 =
-| Get y (u2)
-| Distinct group=(#1)
-
-%2 =
-| Get z (u3)
-| Distinct group=(#1)
-
-%3 =
-| Join %0 %1 %2 (= #0 #1)
-| | implementation = Unimplemented
-| Project (#1)
-----
-----
+Project (#1)
+  Join on=(#0 = #1)
+    Distinct
+      Get x
+    Distinct group_by=[#1]
+      Get y
+    Distinct group_by=[#1]
+      Get z
 
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y) (get z)] [[#3 #5]]) [#0] [])
 ----
-----
-%0 =
-| Get x (u1)
-| Distinct group=(#0)
-
-%1 =
-| Get y (u2)
-
-%2 =
-| Get z (u3)
-
-%3 =
-| Join %1 %2 (= #1 #3)
-| | implementation = Unimplemented
-| Distinct group=()
-
-%4 =
-| Join %0 %3
-| | implementation = Unimplemented
-| Project (#0)
-----
-----
+Project (#0)
+  CrossJoin
+    Distinct group_by=[#0]
+      Get x
+    Distinct
+      Join on=(#1 = #3)
+        Get y
+        Get z
 
 # Pushdown agg(distinct <single-input-expression>)
 
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y)] [[#1 #3]]) [#1] [(sum_int32 #0 true)])
 ----
-----
-%0 =
-| Get x (u1)
-| Reduce group=(#1)
-| | agg sum(distinct #0)
-
-%1 =
-| Get y (u2)
-| Distinct group=(#1)
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Unimplemented
-| Project (#0, #1)
-----
-----
+Project (#0, #1)
+  Join on=(#0 = #2)
+    Reduce group_by=[#1] aggregates=[sum(distinct #0)]
+      Get x
+    Distinct group_by=[#1]
+      Get y
 
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y) (get z)] [[#1 #3]]) [#3] [(sum_int16 #2 true)])
 ----
-----
-%0 =
-| Get x (u1)
-| Distinct group=(#1)
-
-%1 =
-| Get y (u2)
-| Reduce group=(#1)
-| | agg sum(distinct #0)
-
-%2 =
-| Get z (u3)
-| Distinct group=()
-
-%3 =
-| Join %0 %1 %2 (= #0 #1)
-| | implementation = Unimplemented
-| Project (#1, #2)
-----
-----
+Project (#1, #2)
+  Join on=(#0 = #1)
+    Distinct group_by=[#1]
+      Get x
+    Reduce group_by=[#1] aggregates=[sum(distinct #0)]
+      Get y
+    Distinct
+      Get z
 
 build apply=ReductionPushdown
 (reduce
@@ -481,27 +280,14 @@ build apply=ReductionPushdown
     [#3]
     [(sum_int32 (call_unary neg_int32 #0) true) (sum_int16 #2 true)])
 ----
-----
-%0 =
-| Get x (u1)
-| Reduce group=(#1)
-| | agg sum(distinct -(#0))
-
-%1 =
-| Get y (u2)
-| Reduce group=(#1)
-| | agg sum(distinct #0)
-
-%2 =
-| Get z (u3)
-| Distinct group=(#1)
-
-%3 =
-| Join %0 %1 %2 (= #0 #2 #4)
-| | implementation = Unimplemented
-| Project (#2, #1, #3)
-----
-----
+Project (#2, #1, #3)
+  Join on=(eq(#0, #2, #4))
+    Reduce group_by=[#1] aggregates=[sum(distinct -(#0))]
+      Get x
+    Reduce group_by=[#1] aggregates=[sum(distinct #0)]
+      Get y
+    Distinct group_by=[#1]
+      Get z
 
 # Pushdown agg(distinct <single-component multi-input expression>)
 
@@ -512,70 +298,32 @@ build apply=ReductionPushdown
     [(sum_int32 (call_binary add_int32 #0 (call_unary cast_int16_to_int32 #2)) true)
      (sum_int16 (call_binary mul_int16 #2 #4) true)])
 ----
-----
-%0 =
-| Get x (u1)
-
-%1 =
-| Get y (u2)
-
-%2 =
-| Get z (u3)
-
-%3 =
-| Join %0 %1 %2 (= #1 #3 #5)
-| | implementation = Unimplemented
-| Reduce group=(#4)
-| | agg sum(distinct (#0 + smallint_to_integer(#2)))
-| | agg sum(distinct (#2 * #4))
-
-%4 =
-| Get w (u0)
-| Distinct group=(#0)
-
-%5 =
-| Join %3 %4 (= #0 #3)
-| | implementation = Unimplemented
-| Project (#3, #1, #2)
-----
-----
+Project (#3, #1, #2)
+  Join on=(#0 = #3)
+    Reduce group_by=[#4] aggregates=[sum(distinct (#0 + smallint_to_integer(#2))), sum(distinct (#2 * #4))]
+      Join on=(eq(#1, #3, #5))
+        Get x
+        Get y
+        Get z
+    Distinct group_by=[#0]
+      Get w
 
 # Empty group by key tests
 
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y)] []) [] [(sum_int32 #0 true)])
 ----
-----
-%0 =
-| Get x (u1)
-| Reduce group=()
-| | agg sum(distinct #0)
-
-%1 =
-| Get y (u2)
-| Distinct group=()
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
-| Project (#0)
-----
-----
+Project (#0)
+  CrossJoin
+    Reduce aggregates=[sum(distinct #0)]
+      Get x
+    Distinct
+      Get y
 
 build apply=ReductionPushdown
 (reduce (join [(get x) (get y)] [[#1 #3]]) [] [(sum_int32 #0 true)])
 ----
-----
-%0 =
-| Get x (u1)
-
-%1 =
-| Get y (u2)
-
-%2 =
-| Join %0 %1 (= #1 #3)
-| | implementation = Unimplemented
-| Reduce group=()
-| | agg sum(distinct #0)
-----
-----
+Reduce aggregates=[sum(distinct #0)]
+  Join on=(#1 = #3)
+    Get x
+    Get y
