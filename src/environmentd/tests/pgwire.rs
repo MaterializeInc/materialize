@@ -87,6 +87,7 @@ use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use futures::future;
 use mz_adapter::session::DEFAULT_DATABASE_NAME;
+use mz_ore::retry::Retry;
 use postgres::binary_copy::BinaryCopyOutIter;
 use postgres::error::SqlState;
 use postgres::types::Type;
@@ -365,15 +366,25 @@ fn test_conn_user() {
     let server = util::start_server(util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
-    // Attempting to connect as a nonexistent user should fail. The initial
-    // connection succeeds due to our delayed startup, but the first query will
-    // fail.
-    let mut conn = server
-        .pg_config()
-        .user("rj")
-        .connect(postgres::NoTls)
+    // This sometimes returns a network error, so retry until we get a db error.
+    let err = Retry::default()
+        .retry(|_| {
+            // Attempting to connect as a nonexistent user should fail. The initial
+            // connection succeeds due to our delayed startup, but the first query will
+            // fail.
+            let mut conn = server
+                .pg_config()
+                .user("rj")
+                .connect(postgres::NoTls)
+                .unwrap();
+            conn.batch_execute("SELECT 1")
+                .unwrap_err()
+                .as_db_error()
+                .cloned()
+                .ok_or("unexpected error")
+        })
         .unwrap();
-    let err = conn.batch_execute("SELECT 1").unwrap_db_error();
+
     assert_eq!(err.severity(), "FATAL");
     assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
     assert_eq!(err.message(), "role \"rj\" does not exist");
