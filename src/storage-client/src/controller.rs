@@ -2273,122 +2273,134 @@ where
         self.append_to_managed_collection(id, updates).await;
     }
 
-    /// Updates the `DurableCollectionMetadata` associated with `id` to
-    /// `new_metadata`.
+    /// Updates the on-disk and in-memory representation of
+    /// `DurableCollectionMetadata` (i.e. KV pairs in `METADATA_COLLECTION`
+    /// on-disk and `all_current_metadata` as its in-memory representation) to
+    /// include that of `upsert_state`, i.e. upserting the KV pairs in
+    /// `upsert_state` into in `all_current_metadata`, as well as
+    /// `METADATA_COLLECTION`.
     ///
     /// Any shards changed between the old and the new version will be
-    /// decommissioned/eventually deleted.
+    /// finalized. e.g. it is not currently possible to swap a collection's data
+    /// and remap shards.
     ///
     /// Note that this function expects to be called:
     /// - While no source is currently using the shards identified in the
     ///   current metadata.
     /// - Before any sources begins using the shards identified in
     ///   `new_metadata`.
+    ///
+    /// # Panics
+    /// - If the keys in `metadata_to_update` are not a strict subset of the
+    ///   keys in `current_metadata`.
     async fn _rewrite_collection_metadata(
         &mut self,
-        id: GlobalId,
-        new_metadata: DurableCollectionMetadata,
+        all_current_metadata: &mut BTreeMap<GlobalId, DurableCollectionMetadata>,
+        upsert_state: BTreeMap<GlobalId, DurableCollectionMetadata>,
     ) {
-        let current_metadata = METADATA_COLLECTION
-            .peek_key_one(&mut self.state.stash, id)
-            .await
-            .expect("connect to stash");
+        // If nothing changed, don't do any work, which might include async
+        // calls into stash.
+        if upsert_state.is_empty() {
+            return;
+        }
 
-        let mut replace_data_shard = false;
+        let mut shards_to_finalize = BTreeSet::new();
+        let mut data_shards_to_replace = BTreeSet::new();
+        let mut remap_shards_to_replace = BTreeSet::new();
+        for (id, new_metadata) in upsert_state.iter() {
+            let metadata = &all_current_metadata[id];
 
-        let to_delete_shards = match current_metadata {
-            None => {
-                // If this ID has not yet been written, nothing to update.
-                return;
-            }
-            Some(metadata) => {
-                if metadata == new_metadata {
-                    return;
-                }
+            for (old, new, data_shard) in [
+                (metadata.data_shard, new_metadata.data_shard, true),
+                (metadata.remap_shard, new_metadata.remap_shard, false),
+            ] {
+                if old != new {
+                    info!(
+                        "replacing {:?}'s {} shard {:?} with {:?}",
+                        id,
+                        if data_shard { "data" } else { "remap" },
+                        old,
+                        new
+                    );
 
-                let mut to_delete_shards = vec![];
-                for (old, new, desc, data_shard_replaced) in [
-                    (metadata.data_shard, new_metadata.data_shard, "data", true),
-                    (
-                        metadata.remap_shard,
-                        new_metadata.remap_shard,
-                        "remap",
-                        false,
-                    ),
-                ] {
-                    if old != new {
-                        info!(
-                            "replacing {:?}'s {} shard {:?} with {:?}",
-                            id, desc, old, new
-                        );
-                        to_delete_shards.push(old);
+                    shards_to_finalize.insert(old);
 
-                        replace_data_shard = replace_data_shard | data_shard_replaced;
+                    if data_shard {
+                        data_shards_to_replace.insert(*id);
+                    } else {
+                        remap_shards_to_replace.insert(*id);
                     }
                 }
-
-                to_delete_shards
             }
-        };
 
-        self.register_shards_for_finalization(to_delete_shards.iter().cloned())
+            // Update the in-memory representation.
+            all_current_metadata.insert(*id, new_metadata.clone());
+        }
+
+        // Ensure we don't leak any shards by tracking all of them we intend to
+        // finalize.
+        self.register_shards_for_finalization(shards_to_finalize.iter().cloned())
             .await;
 
-        // Perform the update.
+        // Update the on-disk representation.
         METADATA_COLLECTION
-            .upsert(&mut self.state.stash, vec![(id, new_metadata.clone())])
+            .upsert(&mut self.state.stash, upsert_state.into_iter())
             .await
             .expect("connect to stash");
 
-        self.finalize_shards(to_delete_shards).await;
+        // Finalize any shards that are no longer-in use.
+        self.finalize_shards(shards_to_finalize).await;
 
-        let DurableCollectionMetadata {
-            remap_shard,
-            data_shard,
-        } = new_metadata;
+        // Update in-memory state.
+        for id in remap_shards_to_replace {
+            let c = match self.collection_mut(id) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
 
-        // Update in memory collection metadata if the collection has been
-        // registered.
-        if let Some(metadata) = self.state.collections.get_mut(&id) {
-            metadata.collection_metadata.data_shard = data_shard;
-            metadata.collection_metadata.remap_shard = remap_shard;
+            c.collection_metadata.remap_shard = all_current_metadata[&id].remap_shard;
+        }
 
-            if replace_data_shard {
-                let persist_client = self
-                    .persist
-                    .open(self.persist_location.clone())
-                    .await
-                    .unwrap();
+        // Avoid taking lock if unnecessary
+        if data_shards_to_replace.is_empty() {
+            return;
+        }
 
-                let relation_desc = metadata.collection_metadata.relation_desc.clone();
+        let persist_client = self
+            .persist
+            .open(self.persist_location.clone())
+            .await
+            .unwrap();
 
-                // This will halt! if any of the handles cannot be acquired
-                // because we're not the leader anymore. But that's fine, we
-                // already updated all the persistent state (in stash).
-                let (write, since_handle) = self
-                    .open_data_handles(
-                        format!("controller data {}", id).as_str(),
-                        data_shard,
-                        relation_desc,
-                        &persist_client,
-                    )
-                    .await;
+        for id in data_shards_to_replace {
+            let c = match self.collection_mut(id) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
 
-                self.state.persist_write_handles.update(id, write);
-                self.state.persist_read_handles.update(id, since_handle);
-            }
+            let data_shard = all_current_metadata[&id].data_shard;
+            c.collection_metadata.data_shard = data_shard;
+
+            let relation_desc = c.collection_metadata.relation_desc.clone();
+
+            // This will halt! if any of the handles cannot be acquired
+            // because we're not the leader anymore. But that's fine, we
+            // already updated all the persistent state (in stash).
+            let (write, since_handle) = self
+                .open_data_handles(
+                    format!("controller data for {id}").as_str(),
+                    data_shard,
+                    relation_desc,
+                    &persist_client,
+                )
+                .await;
+
+            self.state.persist_write_handles.update(id, write);
+            self.state.persist_read_handles.update(id, since_handle);
         }
     }
 
     /// Closes the identified shards from further reads or writes.
-    ///
-    /// The string accompanying the `ShardId` is the shard's "purpose",
-    /// necessary to open read and write handles to the shard.
-    #[allow(dead_code)]
-    /// Closes the identified shards from further reads or writes.
-    ///
-    /// The string accompanying the `ShardId` is the shard's "purpose",
-    /// necessary to open read and write handles to the shard.
     #[allow(dead_code)]
     async fn finalize_shards<I>(&mut self, shards: I)
     where
