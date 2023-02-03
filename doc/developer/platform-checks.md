@@ -21,9 +21,9 @@ The list of Checks available can be found [here](https://dev.materialize.com/api
 
 The list of Scenarios is [here](https://dev.materialize.com/api/python/materialize/checks/scenarios.html#materialize.checks.scenarios.Scenario)
 
-The list of available Actions for use in Scenarios is [here](https://dev.materialize.com/api/python/materialize/checks/actions.html)
+The list of available Actions for use in Scenarios is [here](https://dev.materialize.com/api/python/materialize/checks/actions.html#materialize.checks.actions.Action)
 
-In execution mode `altogether` (the defauklt), all Checks are run against a single Mz instance. This means more "stuff" happens
+In execution mode `altogether` (the default), all Checks are run against a single Mz instance. This means more "stuff" happens
 against that single instance, which has the potential for exposing various bugs that do not happen in isolation. At the same time,
 a smaller number of adverse events can be injected in the test per unit of time.
 
@@ -138,7 +138,7 @@ manipulation (twice) and validation of all participating Checks. Any Actions tha
 are then interspersed between those steps. Two `Manipulate` sections are run so that more complex, drawn-out
 upgrade scenarios can be tested while ensuring that database activity happens during every stage of the upgrade.
 
-The list of available Actions is (here)[https://dev.materialize.com/api/python/materialize/checks/actions.html#materialize.checks.actions.Action]
+The list of available Actions is [here](https://dev.materialize.com/api/python/materialize/checks/actions.html#materialize.checks.actions.Action).
 
 # Writing an Action
 
@@ -156,7 +156,7 @@ class DropCreateDefaultReplica(Action):
 ```
 
 The Action's `execute()` method gets passed a `Composition` object, so that the Action can perform any operation
-against the mzcompose composition. The methods of the `Composition` class are listed (here)[https://dev.materialize.com/api/python/materialize/mzcompose/index.html]
+against the mzcompose composition. The methods of the `Composition` class are listed [here](https://dev.materialize.com/api/python/materialize/mzcompose/index.html#materialize.mzcompose.Composition).
 
 # Tips for creating a comprehensive `Check`
 
