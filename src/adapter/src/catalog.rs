@@ -1598,6 +1598,9 @@ pub struct Ingestion {
     /// This map does *not* include the export of the source associated with the ingestion itself
     pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub cluster_id: ClusterId,
+    /// The ID of this collection's remap/progress collection. An option only to
+    /// support migrating into this structure.
+    pub remap_collection_id: Option<GlobalId>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -5664,6 +5667,7 @@ impl Catalog {
                                     self.state.clusters_by_linked_object_id[&id]
                                 }
                             },
+                            remap_collection_id: None,
                         })
                     }
                     mz_sql::plan::DataSourceDesc::Progress => {
