@@ -103,10 +103,11 @@ class Materialized(Service):
         if propagate_crashes:
             command += ["--orchestrator-process-propagate-crashes"]
 
-        self.default_storage_size = default_size
         self.default_replica_size = (
             "1" if default_size == 1 else f"{default_size}-{default_size}"
         )
+        self.default_storage_size = self.default_replica_size
+
         command += [
             # Issue #15858 prevents the habitual use of large introspection
             # clusters, so we leave the builtin cluster replica size as is.
