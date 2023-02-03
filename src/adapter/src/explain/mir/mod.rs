@@ -16,21 +16,14 @@
 //! available for the default [`Explain`] implementation for [`MirRelationExpr`]
 //! in [`mz_expr`].
 
-use std::collections::BTreeMap;
-
 use mz_compute_client::types::dataflows::DataflowDescription;
-use mz_expr::{
-    explain_new::{enforce_linear_chains, ExplainContext, ExplainMultiPlan, ExplainSinglePlan},
-    visit::Visit,
-    MirRelationExpr, OptimizedMirRelationExpr,
+use mz_expr::explain::{
+    enforce_linear_chains, ExplainContext, ExplainMultiPlan, ExplainSinglePlan,
 };
-use mz_ore::{stack::RecursionLimitError, str::bracketed, str::separated};
-use mz_repr::explain_new::{
-    AnnotatedPlan, Attributes, Explain, ExplainConfig, ExplainError, UnsupportedFormat,
-};
-use mz_transform::attribute::{
-    Arity, DerivedAttributes, NonNegative, RelationType, SubtreeSize, UniqueKeys,
-};
+use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
+use mz_repr::explain::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
+use mz_transform::attribute::annotate_plan;
+use mz_transform::normalize_lets::normalize_lets;
 
 use super::Explainable;
 
@@ -75,12 +68,13 @@ impl<'a> Explainable<'a, MirRelationExpr> {
         // normalize the representation of nested Let bindings
         // and enforce sequential Let binding IDs
         if !config.raw_plans {
-            mz_transform::normalize_lets::normalize_lets(self.0)
-                .map_err(|e| ExplainError::UnknownError(e.to_string()))?;
+            normalize_lets(self.0).map_err(|e| ExplainError::UnknownError(e.to_string()))?;
         }
 
-        let plan = try_from(context, self.0)?;
-        Ok(ExplainSinglePlan { context, plan })
+        Ok(ExplainSinglePlan {
+            context,
+            plan: annotate_plan(self.0, context)?,
+        })
     }
 }
 
@@ -122,25 +116,26 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
             .iter_mut()
             .rev()
             .map(|build_desc| {
+                let plan = build_desc.plan.as_inner_mut();
+
                 // normalize the representation as linear chains
                 // (this implies !config.raw_plans by construction)
                 if config.linear_chains {
-                    enforce_linear_chains(build_desc.plan.as_inner_mut())?;
+                    enforce_linear_chains(plan)?;
                 };
                 // unless raw plans are explicitly requested
                 // normalize the representation of nested Let bindings
                 // and enforce sequential Let binding IDs
                 if !config.raw_plans {
-                    mz_transform::normalize_lets::normalize_lets(build_desc.plan.as_inner_mut())
-                        .map_err(|e| ExplainError::UnknownError(e.to_string()))?;
+                    normalize_lets(plan).map_err(|e| ExplainError::UnknownError(e.to_string()))?;
                 }
 
                 let id = context
                     .humanizer
                     .humanize_id(build_desc.id)
                     .unwrap_or_else(|| build_desc.id.to_string());
-                let plan = try_from(context, build_desc.plan.as_inner())?;
-                Ok((id, plan))
+
+                Ok((id, annotate_plan(plan, context)?))
             })
             .collect::<Result<Vec<_>, ExplainError>>()?;
 
@@ -165,80 +160,4 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
             plans,
         })
     }
-}
-
-fn try_from<'a>(
-    context: &'a ExplainContext,
-    plan: &'a MirRelationExpr,
-) -> Result<AnnotatedPlan<'a, MirRelationExpr>, RecursionLimitError> {
-    let mut annotations = BTreeMap::<&MirRelationExpr, Attributes>::default();
-    let config = context.config;
-
-    if config.requires_attributes() {
-        // get the annotation keys
-        let subtree_refs = plan.post_order_vec();
-        // get the annotation values
-        let mut explain_attrs = DerivedAttributes::from(config);
-        plan.visit(&mut explain_attrs)?;
-
-        if config.subtree_size {
-            for (expr, attr) in std::iter::zip(
-                subtree_refs.iter(),
-                explain_attrs.remove_results::<SubtreeSize>().into_iter(),
-            ) {
-                let attrs = annotations.entry(expr).or_default();
-                attrs.subtree_size = Some(attr);
-            }
-        }
-        if config.non_negative {
-            for (expr, attr) in std::iter::zip(
-                subtree_refs.iter(),
-                explain_attrs.remove_results::<NonNegative>().into_iter(),
-            ) {
-                let attrs = annotations.entry(expr).or_default();
-                attrs.non_negative = Some(attr);
-            }
-        }
-
-        if config.arity {
-            for (expr, attr) in std::iter::zip(
-                subtree_refs.iter(),
-                explain_attrs.remove_results::<Arity>().into_iter(),
-            ) {
-                let attrs = annotations.entry(expr).or_default();
-                attrs.arity = Some(attr);
-            }
-        }
-
-        if config.types {
-            for (expr, types) in std::iter::zip(
-                subtree_refs.iter(),
-                explain_attrs.remove_results::<RelationType>().into_iter(),
-            ) {
-                let humanized_columns = types
-                    .into_iter()
-                    .map(|c| context.humanizer.humanize_column_type(&c))
-                    .collect::<Vec<_>>();
-                let attr = bracketed("(", ")", separated(", ", humanized_columns)).to_string();
-                let attrs = annotations.entry(expr).or_default();
-                attrs.types = Some(attr);
-            }
-        }
-
-        if config.keys {
-            for (expr, keys) in std::iter::zip(
-                subtree_refs.iter(),
-                explain_attrs.remove_results::<UniqueKeys>().into_iter(),
-            ) {
-                let formatted_keys = keys
-                    .into_iter()
-                    .map(|key_set| bracketed("[", "]", separated(", ", key_set)).to_string());
-                let attr = bracketed("(", ")", separated(", ", formatted_keys)).to_string();
-                let attrs = annotations.entry(expr).or_default();
-                attrs.keys = Some(attr);
-            }
-        }
-    }
-
-    Ok(AnnotatedPlan { plan, annotations })
 }

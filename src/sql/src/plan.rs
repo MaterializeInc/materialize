@@ -42,7 +42,7 @@ use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::explain_new::{ExplainConfig, ExplainFormat};
+use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use mz_storage_client::types::instances::StorageInstanceId;
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
@@ -58,7 +58,7 @@ use crate::names::{
 };
 
 pub(crate) mod error;
-pub(crate) mod explain_new;
+pub(crate) mod explain;
 pub(crate) mod expr;
 pub(crate) mod lowering;
 pub(crate) mod optimize;
@@ -75,7 +75,7 @@ pub use self::expr::{
     AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
 };
 pub use error::PlanError;
-pub use explain_new::normalize_subqueries;
+pub use explain::normalize_subqueries;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 pub use optimize::OptimizerConfig;
 pub use query::{QueryContext, QueryLifetime};
@@ -485,7 +485,7 @@ pub struct ExplainPlan {
     pub stage: ExplainStage,
     pub format: ExplainFormat,
     pub config: ExplainConfig,
-    pub explainee: mz_repr::explain_new::Explainee,
+    pub explainee: mz_repr::explain::Explainee,
 }
 
 #[derive(Debug)]

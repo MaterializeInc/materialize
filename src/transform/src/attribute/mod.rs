@@ -15,12 +15,12 @@ use mz_ore::{
     stack::RecursionLimitError,
     str::{bracketed, separated},
 };
-use mz_repr::explain_new::{AnnotatedPlan, Attributes, ExplainConfig};
+use mz_repr::explain::{AnnotatedPlan, Attributes, ExplainConfig};
 use num_traits::FromPrimitive;
 use typemap_rev::{TypeMap, TypeMapKey};
 
 use mz_expr::{
-    explain_new::ExplainContext,
+    explain::ExplainContext,
     visit::{Visit, Visitor},
     LocalId, MirRelationExpr,
 };

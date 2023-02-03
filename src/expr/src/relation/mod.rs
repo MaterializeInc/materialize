@@ -27,7 +27,7 @@ use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::explain_new::{text_string_at, DummyHumanizer, ExplainConfig, PlanRenderingContext};
+use mz_repr::explain::{text_string_at, DummyHumanizer, ExplainConfig, PlanRenderingContext};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
 use crate::visit::{Visit, VisitChildren};
@@ -2980,7 +2980,7 @@ mod tests {
     use proptest::prelude::*;
 
     use mz_proto::protobuf_roundtrip;
-    use mz_repr::explain_new::text_string_at;
+    use mz_repr::explain::text_string_at;
 
     use super::*;
 

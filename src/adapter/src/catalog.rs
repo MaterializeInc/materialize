@@ -46,7 +46,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_persist_client::cfg::PersistParameters;
 use mz_pgrepr::oid::FIRST_USER_OID;
-use mz_repr::{explain_new::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{explain::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;

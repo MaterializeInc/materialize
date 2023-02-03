@@ -40,7 +40,7 @@ impl crate::Transform for ThresholdElision {
     ) -> Result<(), crate::TransformError> {
         let mut visitor = ThresholdElisionAction::default();
         let result = relation.visit_mut(&mut visitor).map_err(From::from);
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         result
     }
 }

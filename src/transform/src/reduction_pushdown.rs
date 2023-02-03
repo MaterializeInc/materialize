@@ -73,7 +73,7 @@ impl crate::Transform for ReductionPushdown {
         // `try_visit_mut_pre` is used here because after pushing down a reduction,
         // we want to see if we can push the same reduction further down.
         let result = relation.try_visit_mut_pre(&mut |e| self.action(e));
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         result
     }
 }

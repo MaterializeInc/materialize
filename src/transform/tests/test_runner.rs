@@ -88,7 +88,7 @@ mod tests {
     use std::fmt::Write;
 
     use anyhow::{anyhow, Error};
-    use mz_expr::explain_new::ExplainContext;
+    use mz_expr::explain::ExplainContext;
     use mz_expr::{Id, MirRelationExpr};
     use mz_expr_test_util::{
         build_rel, json_to_spec, MirRelationExprDeserializeContext, TestCatalog,
@@ -96,7 +96,7 @@ mod tests {
     use mz_lowertest::{deserialize, tokenize};
     use mz_ore::collections::HashMap;
     use mz_ore::str::separated;
-    use mz_repr::explain_new::{Explain, ExplainConfig, ExplainFormat, UsedIndexes};
+    use mz_repr::explain::{Explain, ExplainConfig, ExplainFormat, UsedIndexes};
     use mz_repr::GlobalId;
     use mz_transform::dataflow::{optimize_dataflow_demand_inner, optimize_dataflow_filters_inner};
     use mz_transform::{EmptyIndexOracle, Optimizer, Transform, TransformArgs};
@@ -584,9 +584,9 @@ mod tests {
 /// [`mz_transform::attribute`] and [`mz_transform::normalize_lets`] to
 /// [`mz_expr`].
 mod explain {
-    use mz_expr::explain_new::{enforce_linear_chains, ExplainContext, ExplainSinglePlan};
+    use mz_expr::explain::{enforce_linear_chains, ExplainContext, ExplainSinglePlan};
     use mz_expr::MirRelationExpr;
-    use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
+    use mz_repr::explain::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
     use mz_transform::attribute::annotate_plan;
     use mz_transform::normalize_lets::normalize_lets;
 

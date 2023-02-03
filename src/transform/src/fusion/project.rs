@@ -32,7 +32,7 @@ impl crate::Transform for Project {
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut Self::action)?;
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
 }

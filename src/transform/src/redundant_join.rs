@@ -64,7 +64,7 @@ impl crate::Transform for RedundantJoin {
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let result = self.action(relation, &mut BTreeMap::new()).map(|_| ());
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         result
     }
 }

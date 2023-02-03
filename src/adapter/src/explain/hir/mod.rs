@@ -7,22 +7,21 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! `EXPLAIN` support for LIR structures.
+//! `EXPLAIN` support for HIR structures.
 
-use mz_compute_client::plan::Plan;
-use mz_compute_client::types::dataflows::DataflowDescription;
-use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError};
+use mz_repr::explain::{Explain, ExplainConfig, ExplainError};
+use mz_sql::plan::HirRelationExpr;
 
 use super::Explainable;
 
-impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<Plan>> {
-    type Context = <DataflowDescription<Plan> as Explain<'a>>::Context;
+impl<'a> Explain<'a> for Explainable<'a, HirRelationExpr> {
+    type Context = <HirRelationExpr as Explain<'a>>::Context;
 
-    type Text = <DataflowDescription<Plan> as Explain<'a>>::Text;
+    type Text = <HirRelationExpr as Explain<'a>>::Text;
 
-    type Json = <DataflowDescription<Plan> as Explain<'a>>::Json;
+    type Json = <HirRelationExpr as Explain<'a>>::Json;
 
-    type Dot = <DataflowDescription<Plan> as Explain<'a>>::Dot;
+    type Dot = <HirRelationExpr as Explain<'a>>::Dot;
 
     fn explain_text(
         &'a mut self,

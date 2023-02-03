@@ -68,7 +68,7 @@ impl crate::Transform for Demand {
             (0..relation.arity()).collect(),
             &mut BTreeMap::new(),
         );
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         result
     }
 }

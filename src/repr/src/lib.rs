@@ -101,7 +101,7 @@ mod timestamp;
 pub mod adt;
 pub mod antichain;
 pub mod chrono;
-pub mod explain_new;
+pub mod explain;
 pub mod global_id;
 pub mod strconv;
 pub mod url;

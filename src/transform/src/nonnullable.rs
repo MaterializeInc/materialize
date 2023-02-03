@@ -37,7 +37,7 @@ impl crate::Transform for NonNullable {
         _: TransformArgs,
     ) -> Result<(), TransformError> {
         let result = relation.try_visit_mut_pre(&mut |e| self.action(e));
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         result
     }
 }

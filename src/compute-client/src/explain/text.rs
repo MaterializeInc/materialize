@@ -24,7 +24,7 @@ use std::{collections::BTreeMap, fmt, ops::Deref};
 
 use mz_expr::{Id, MirScalarExpr};
 use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
-use mz_repr::explain_new::{
+use mz_repr::explain::{
     fmt_text_constant_rows, CompactScalarSeq, DisplayText, Indices, PlanRenderingContext,
 };
 

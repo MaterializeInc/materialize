@@ -86,7 +86,7 @@ use mz_lowertest::*;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_ore::str::separated;
-use mz_repr::explain_new::{DummyHumanizer, ExprHumanizer};
+use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{ColumnType, GlobalId, RelationType, Row, ScalarType};
 use mz_repr_test_util::*;
 

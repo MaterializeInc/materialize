@@ -14,8 +14,8 @@
 //! struct in order to provide alternate [`mz_repr::explain::Explain`]
 //! implementations for some structs (see the [`mir`]) module for details.
 
-use mz_expr::explain_new::ExplainContext;
-use mz_repr::explain_new::UsedIndexes;
+use mz_expr::explain::ExplainContext;
+use mz_repr::explain::UsedIndexes;
 
 pub(crate) mod fast_path;
 pub(crate) mod hir;
@@ -24,7 +24,7 @@ pub(crate) mod mir;
 pub(crate) mod optimizer_trace;
 
 /// Newtype struct for wrapping types that should
-/// implement the [`mz_repr::explain_new::Explain`] trait.
+/// implement the [`mz_repr::explain::Explain`] trait.
 pub(crate) struct Explainable<'a, T>(&'a mut T);
 
 impl<'a, T> Explainable<'a, T> {

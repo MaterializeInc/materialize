@@ -73,7 +73,7 @@ impl crate::Transform for NormalizeLets {
         _args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let result = self.transform_without_trace(relation);
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         result
     }
 }

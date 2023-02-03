@@ -19,7 +19,7 @@ use tracing::{event, Level};
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
-use mz_repr::explain_new::ExprHumanizer;
+use mz_repr::explain::ExprHumanizer;
 use mz_repr::{RowArena, ScalarType, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
 use mz_storage_client::types::sources::Timeline;

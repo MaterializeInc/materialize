@@ -13,7 +13,7 @@ use std::fmt;
 
 use mz_ore::soft_assert;
 use mz_ore::str::{bracketed, separated, Indent, IndentLike, StrExt};
-use mz_repr::explain_new::{
+use mz_repr::explain::{
     fmt_text_constant_rows, separated_text, CompactScalarSeq, DisplayText, ExprHumanizer, Indices,
     PlanRenderingContext, RenderingContext,
 };
@@ -661,7 +661,7 @@ impl MirRelationExpr {
         constants: Option<Vec<Row>>, // The values that we are looking up
     ) -> fmt::Result
     where
-        C: AsMut<mz_ore::str::Indent> + AsRef<&'b dyn mz_repr::explain_new::ExprHumanizer>,
+        C: AsMut<mz_ore::str::Indent> + AsRef<&'b dyn mz_repr::explain::ExprHumanizer>,
     {
         let humanized_index = ctx
             .as_ref()
@@ -689,7 +689,7 @@ impl MirRelationExpr {
 /// A helper struct that abstracts over the formatting behavior of a
 /// single-input node.
 ///
-/// If [`mz_repr::explain_new::ExplainConfig::linear_chains`] is set, this will
+/// If [`mz_repr::explain::ExplainConfig::linear_chains`] is set, this will
 /// render children before parents using the same indentation level, and if not
 /// the children will be rendered indented after their parent.
 struct FmtNode<F, G>

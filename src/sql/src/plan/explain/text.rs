@@ -23,7 +23,7 @@ use std::fmt;
 use mz_expr::virtual_syntax::{AlgExcept, Except};
 use mz_expr::Id;
 use mz_ore::str::{separated, IndentLike};
-use mz_repr::explain_new::{
+use mz_repr::explain::{
     fmt_text_constant_rows, separated_text, CompactScalarSeq, DisplayText, Indices,
     PlanRenderingContext,
 };

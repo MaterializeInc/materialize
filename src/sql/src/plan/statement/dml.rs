@@ -19,7 +19,7 @@ use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::explain_new::{ExplainConfig, ExplainFormat};
+use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
 
 use crate::ast::display::AstDisplay;
@@ -274,7 +274,7 @@ pub fn plan_explain(
             };
             let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             (
-                mz_repr::explain_new::Explainee::Dataflow(view.id()),
+                mz_repr::explain::Explainee::Dataflow(view.id()),
                 names::resolve(qcx.scx.catalog, query)?.0,
             )
         }
@@ -301,11 +301,11 @@ pub fn plan_explain(
             };
             let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
             (
-                mz_repr::explain_new::Explainee::Dataflow(mview.id()),
+                mz_repr::explain::Explainee::Dataflow(mview.id()),
                 names::resolve(qcx.scx.catalog, query)?.0,
             )
         }
-        Explainee::Query(query) => (mz_repr::explain_new::Explainee::Query, query),
+        Explainee::Query(query) => (mz_repr::explain::Explainee::Query, query),
     };
     // Previously we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).

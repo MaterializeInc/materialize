@@ -13,11 +13,9 @@ pub(crate) mod text;
 
 use std::collections::BTreeMap;
 
-use mz_expr::explain_new::{enforce_linear_chains, ExplainContext, ExplainMultiPlan};
+use mz_expr::explain::{enforce_linear_chains, ExplainContext, ExplainMultiPlan};
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
-use mz_repr::explain_new::{
-    AnnotatedPlan, Explain, ExplainConfig, ExplainError, UnsupportedFormat,
-};
+use mz_repr::explain::{AnnotatedPlan, Explain, ExplainConfig, ExplainError, UnsupportedFormat};
 
 use crate::plan::Plan;
 use crate::types::dataflows::DataflowDescription;

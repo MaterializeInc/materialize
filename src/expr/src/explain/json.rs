@@ -9,7 +9,7 @@
 
 //! `EXPLAIN AS JSON` support for structures defined in this crate.
 
-use mz_repr::explain_new::DisplayJson;
+use mz_repr::explain::DisplayJson;
 
 use super::{ExplainMultiPlan, ExplainSinglePlan};
 

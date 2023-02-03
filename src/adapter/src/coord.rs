@@ -101,7 +101,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{stack, task};
 use mz_persist_client::usage::StorageUsageClient;
 use mz_persist_client::ShardId;
-use mz_repr::explain_new::ExplainFormat;
+use mz_repr::explain::ExplainFormat;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};

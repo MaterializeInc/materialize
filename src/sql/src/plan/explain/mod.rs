@@ -11,15 +11,13 @@
 
 use crate::plan::{HirRelationExpr, HirScalarExpr};
 use mz_expr::{
-    explain_new::{ExplainContext, ExplainSinglePlan},
+    explain::{ExplainContext, ExplainSinglePlan},
     visit::{Visit, VisitChildren},
     Id, LocalId,
 };
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::{
-    explain_new::{
-        AnnotatedPlan, Explain, ExplainConfig, ExplainError, ScalarOps, UnsupportedFormat,
-    },
+    explain::{AnnotatedPlan, Explain, ExplainConfig, ExplainError, ScalarOps, UnsupportedFormat},
     RelationType,
 };
 

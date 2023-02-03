@@ -275,12 +275,12 @@ impl Transform for Fixpoint {
                             )?;
                         }
                     }
-                    mz_repr::explain_new::trace_plan(relation);
+                    mz_repr::explain::trace_plan(relation);
                     Ok(())
                 })?;
 
                 if *relation == original {
-                    mz_repr::explain_new::trace_plan(relation);
+                    mz_repr::explain::trace_plan(relation);
                     return Ok(());
                 }
             }
@@ -375,7 +375,7 @@ impl Transform for FuseAndCollapse {
                 },
             )?;
         }
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
 }
@@ -552,7 +552,7 @@ impl Optimizer {
         let transform_result = self.transform(&mut relation, &EmptyIndexOracle);
         match transform_result {
             Ok(_) => {
-                mz_repr::explain_new::trace_plan(&relation);
+                mz_repr::explain::trace_plan(&relation);
                 Ok(mz_expr::OptimizedMirRelationExpr(relation))
             }
             Err(e) => {

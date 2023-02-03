@@ -32,7 +32,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::Indent;
 use mz_ore::str::StrExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::explain_new::{
+use mz_repr::explain::{
     fmt_text_constant_rows, separated_text, CompactScalarSeq, DisplayText, ExprHumanizer, Indices,
 };
 use mz_repr::{Diff, GlobalId, RelationType, Row};
@@ -565,7 +565,7 @@ mod tests {
     use mz_expr::{func::IsNull, MapFilterProject, UnaryFunc};
     use mz_ore::str::Indent;
     use mz_repr::{
-        explain_new::{text_string_at, DummyHumanizer, RenderingContext},
+        explain::{text_string_at, DummyHumanizer, RenderingContext},
         ColumnType, Datum, ScalarType,
     };
 

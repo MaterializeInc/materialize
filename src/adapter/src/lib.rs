@@ -108,7 +108,7 @@ macro_rules! coord_bail {
 mod command;
 mod coord;
 mod error;
-mod explain_new;
+mod explain;
 mod notice;
 mod subscribe;
 mod util;

@@ -76,7 +76,7 @@ impl crate::Transform for Normalize {
                 Ok(())
             },
         )?;
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
 }

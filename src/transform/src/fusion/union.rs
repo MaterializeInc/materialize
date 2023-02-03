@@ -36,7 +36,7 @@ impl crate::Transform for Union {
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_post(&mut Self::action)?;
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
 }
@@ -89,7 +89,7 @@ impl crate::Transform for UnionNegate {
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let result = relation.try_visit_mut_post(&mut |e| Ok(self.action(e)));
-        mz_repr::explain_new::trace_plan(&*relation);
+        mz_repr::explain::trace_plan(&*relation);
         result
     }
 }

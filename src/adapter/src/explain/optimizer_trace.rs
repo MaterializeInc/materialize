@@ -13,7 +13,7 @@ use std::fmt::Debug;
 
 use mz_compute_client::{plan::Plan, types::dataflows::DataflowDescription};
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
-use mz_repr::explain_new::{
+use mz_repr::explain::{
     text_string, DisplayText, Explain, ExplainConfig, ExplainError, ExplainFormat, PlanTrace,
     TraceEntry,
 };
