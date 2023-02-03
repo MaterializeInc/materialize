@@ -25,7 +25,7 @@ use crate::{
     MirRelationExpr, MirScalarExpr, RowSetFinishing,
 };
 
-impl<'a, T: 'a> DisplayText<()> for ExplainSinglePlan<'a, T>
+impl<'a, T: 'a> DisplayText for ExplainSinglePlan<'a, T>
 where
     T: DisplayText<PlanRenderingContext<'a, T>>,
 {
@@ -38,7 +38,7 @@ where
         );
 
         if let Some(finishing) = &self.context.finishing {
-            finishing.fmt_text(f, &mut ctx.indent)?;
+            finishing.fmt_text(f, &mut ctx)?;
             ctx.indented(|ctx| self.plan.plan.fmt_text(f, ctx))?;
         } else {
             self.plan.plan.fmt_text(f, &mut ctx)?;
@@ -53,7 +53,7 @@ where
     }
 }
 
-impl<'a, T: 'a> DisplayText<()> for ExplainMultiPlan<'a, T>
+impl<'a, T: 'a> DisplayText for ExplainMultiPlan<'a, T>
 where
     T: DisplayText<PlanRenderingContext<'a, T>>,
 {
@@ -74,7 +74,7 @@ where
                 match &self.context.finishing {
                     // if present, a RowSetFinishing always applies to the first rendered plan
                     Some(finishing) if no == 0 => {
-                        finishing.fmt_text(f, &mut ctx.indent)?;
+                        finishing.fmt_text(f, ctx)?;
                         ctx.indented(|ctx| plan.plan.fmt_text(f, ctx))?;
                     }
                     // all other plans are rendered without a RowSetFinishing
@@ -104,9 +104,12 @@ where
     }
 }
 
-impl DisplayText<Indent> for RowSetFinishing {
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut Indent) -> fmt::Result {
-        write!(f, "{}Finish", ctx)?;
+impl<C> DisplayText<C> for RowSetFinishing
+where
+    C: AsMut<Indent>,
+{
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        write!(f, "{}Finish", ctx.as_mut())?;
         // order by
         if !self.order_by.is_empty() {
             let order_by = separated(", ", &self.order_by);
