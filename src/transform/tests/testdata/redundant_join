@@ -19,17 +19,10 @@ build apply=RedundantJoin
    (get x)]
   [[#0 #1]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Join %0
-| | implementation = Unimplemented
-| Map #0
-| Project (#2, #0, #1)
-----
-----
+Project (#2, #0, #1)
+  Map (#0)
+    CrossJoin
+      Get x
 
 build apply=RedundantJoin
 (join
@@ -37,17 +30,10 @@ build apply=RedundantJoin
    (reduce (get x) [#0] [])]
   [[#0 #2]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Join %0
-| | implementation = Unimplemented
-| Map #0
-| Project (#0..=#2)
-----
-----
+Project (#0..=#2)
+  Map (#0)
+    CrossJoin
+      Get x
 
 # self-join on primary key
 
@@ -57,17 +43,10 @@ build apply=RedundantJoin
    (get y)]
   [[#0 #2]])
 ----
-----
-%0 =
-| Get y (u1)
-
-%1 =
-| Join %0
-| | implementation = Unimplemented
-| Map #0, #1
-| Project (#0..=#3)
-----
-----
+Project (#0..=#3)
+  Map (#0, #1)
+    CrossJoin
+      Get y
 
 # Expressions that can be built from the other projection.
 
@@ -77,17 +56,10 @@ build apply=RedundantJoin
    (get x)]
   [[#0 #6]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Join %0
-| | implementation = Unimplemented
-| Map #0, #0, (#0 + 1), (#0) IS NULL, record_create(#0), if (#0 = 0) then {1} else {2}
-| Project (#2..=#7, #0, #1)
-----
-----
+Project (#2..=#7, #0, #1)
+  Map (#0, #0, (#0 + 1), (#0) IS NULL, row(#0), case when (#0 = 0) then 1 else 2 end)
+    CrossJoin
+      Get x
 
 build apply=RedundantJoin
 (join
@@ -99,17 +71,10 @@ build apply=RedundantJoin
    (get x)]
   [[#0 #4]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Join %0
-| | implementation = Unimplemented
-| Map #0, #0, (#0 + 1), (#0) IS NULL
-| Project (#2..=#5, #0, #1)
-----
-----
+Project (#2..=#5, #0, #1)
+  Map (#0, #0, (#0 + 1), (#0) IS NULL)
+    CrossJoin
+      Get x
 
 build apply=RedundantJoin
 (join
@@ -123,17 +88,10 @@ build apply=RedundantJoin
    (get x)]
   [[#3 #4]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Join %0
-| | implementation = Unimplemented
-| Map (#0) IS NULL, (#0 + 1), #0, #0
-| Project (#2..=#5, #0, #1)
-----
-----
+Project (#2..=#5, #0, #1)
+  Map ((#0) IS NULL, (#0 + 1), #0, #0)
+    CrossJoin
+      Get x
 
 build apply=RedundantJoin
 (join
@@ -141,19 +99,12 @@ build apply=RedundantJoin
    (reduce (get x) [(call_binary add_int64 #0 1)] [])]
   [[#0 #1]])
 ----
-----
-%0 =
-| Get x (u0)
-| Map (#0 + 1)
-| Project (#2)
-
-%1 =
-| Join %0
-| | implementation = Unimplemented
-| Map #0
-| Project (#0, #1)
-----
-----
+Project (#0, #1)
+  Map (#0)
+    CrossJoin
+      Project (#2)
+        Map ((#0 + 1))
+          Get x
 
 build apply=RedundantJoin
 (join
@@ -163,27 +114,16 @@ build apply=RedundantJoin
    (reduce (get x) [(call_binary add_int64 #0 1)] [])]
   [[#0 #1]])
 ----
-----
-%0 =
-| Get x (u0)
-| Map (#0 + 1)
-| Project (#2)
-
-%1 =
-| Get x (u0)
-| Map (#0 + 1)
-| Project (#2)
-
-%2 =
-| Union %0 %1
-
-%3 =
-| Join %2
-| | implementation = Unimplemented
-| Map #0
-| Project (#0, #1)
-----
-----
+Project (#0, #1)
+  Map (#0)
+    CrossJoin
+      Union
+        Project (#2)
+          Map ((#0 + 1))
+            Get x
+        Project (#2)
+          Map ((#0 + 1))
+            Get x
 
 # different dereferenced projection in union branches
 
@@ -195,29 +135,16 @@ build apply=RedundantJoin
    (reduce (get x) [(call_binary add_int64 #0 1)] [])]
   [[#0 #1]])
 ----
-----
-%0 =
-| Get x (u0)
-| Map (#0 + 1)
-| Project (#2)
-
-%1 =
-| Get x (u0)
-| Map (#0 + 2)
-| Project (#2)
-
-%2 =
-| Union %0 %1
-
-%3 =
-| Get x (u0)
-| Distinct group=((#0 + 1))
-
-%4 =
-| Join %2 %3 (= #0 #1)
-| | implementation = Unimplemented
-----
-----
+Join on=(#0 = #1)
+  Union
+    Project (#2)
+      Map ((#0 + 1))
+        Get x
+    Project (#2)
+      Map ((#0 + 2))
+        Get x
+  Distinct group_by=[(#0 + 1)]
+    Get x
 
 # We can't remove the join unless the literal is lifted
 
@@ -227,20 +154,11 @@ build apply=RedundantJoin
    (get x)]
   [[#0 #2]])
 ----
-----
-%0 =
-| Get x (u0)
-| Distinct group=(#0)
-| Map 1
-
-%1 =
-| Get x (u0)
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Unimplemented
-----
-----
+Join on=(#0 = #2)
+  Map (1)
+    Distinct group_by=[#0]
+      Get x
+  Get x
 
 build apply=(LiteralLifting,RedundantJoin)
 (join
@@ -248,16 +166,9 @@ build apply=(LiteralLifting,RedundantJoin)
    (get x)]
   [[#0 #2]])
 ----
-----
-%0 =
-| Get x (u0)
-
-%1 =
-| Join %0
-| | implementation = Unimplemented
-| Map #0
-| Project (#2, #0, #1)
-| Map 1
-| Project (#0, #3, #1, #2)
-----
-----
+Project (#0, #3, #1, #2)
+  Map (1)
+    Project (#2, #0, #1)
+      Map (#0)
+        CrossJoin
+          Get x

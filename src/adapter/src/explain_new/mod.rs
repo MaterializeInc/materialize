@@ -9,12 +9,10 @@
 
 //! `EXPLAIN` support for various intermediate representations.
 //!
-//! Ideally, the `EXPLAIN` support for each IR should be in the
-//! crate where this IR is defined. However, due to the use of
-//! some generic structs with fields specific to LIR in the current
-//! explain paths, and the dependency chain between the crates where
-//! the various IRs live, this is not possible. Consequencly, we
-//! currently resort to using a wrapper type.
+//! Ideally, the `EXPLAIN` support for each IR should be in the crate where this
+//! IR is defined. However, we need to resort to an [`Explainable`] newtype
+//! struct in order to provide alternate [`mz_repr::explain::Explain`]
+//! implementations for some structs (see the [`mir`]) module for details.
 
 use mz_expr::explain_new::ExplainContext;
 use mz_repr::explain_new::UsedIndexes;

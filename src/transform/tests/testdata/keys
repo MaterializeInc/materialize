@@ -18,13 +18,8 @@ ok
 build format=types
 (map (get x) [4145])
 ----
-%0 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
-| Map 4145
-| | types = (Int32?, Int64?, Int32?, Int64)
-| | keys = ((#0), (#1))
+Map (4145) // { types: "(Int32?, Int64?, Int32?, Int64)", keys: "([0], [1])" }
+  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
 
 # Run tests where a transform occuring depends on the input keys.
 
@@ -34,57 +29,30 @@ build format=types
 opt format=types
 (join [(get x) (get x)] [[#0 #3]])
 ----
-%0 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
-| Project (#0..=#2, #0..=#2)
-| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
+Project (#0..=#2, #0..=#2) // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "([0], [1])" }
+  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
 
 steps format=types
 (join [(get x) (get x)] [[#0 #3] [#2 #5]])
 ----
 ----
-%0 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
-
-%1 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
-
-%2 =
-| Join %0 %1 (= #0 #3) (= #2 #5)
-| | implementation = Unimplemented
-| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
+Join on=(#0 = #3 AND #2 = #5) // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "([0], [1])" }
+  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
+  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
 
 ====
 No change: Normalize { normalize_lets: NormalizeLets { inline_mfp: false } }, TopKElision, NonNullRequirements { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }
 ====
 Applied Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, FlatMapToMap, Join, NormalizeLets { inline_mfp: false }, Reduce, UnionNegate, UnionBranchCancellation, NormalizeLets { inline_mfp: false }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }:
-%0 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
-| Project (#0..=#2, #0..=#2)
-| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
+Project (#0..=#2, #0..=#2) // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "([0], [1])" }
+  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
 
 ====
 No change: ThresholdElision, Fixpoint { transforms: [PredicatePushdown { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, NonNullable, ColumnKnowledge { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Demand { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, FlatMapToMap, Join, NormalizeLets { inline_mfp: false }, Reduce, UnionNegate, UnionBranchCancellation, NormalizeLets { inline_mfp: false }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Fixpoint { transforms: [SemijoinIdempotence, ReductionPushdown, ReduceElision, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, RelationCSE { normalize_lets: NormalizeLets { inline_mfp: false } }, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, FlatMapToMap, Join, NormalizeLets { inline_mfp: false }, Reduce, UnionNegate, UnionBranchCancellation, NormalizeLets { inline_mfp: false }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }, ProjectionPushdown, NormalizeLets { inline_mfp: false }, Fusion, Fixpoint { transforms: [CanonicalizeMfp, ThresholdElision, Join, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, UnionNegate, UnionBranchCancellation, RelationCSE { normalize_lets: NormalizeLets { inline_mfp: true } }, FoldConstants { limit: Some(10000) }], limit: 100 }, LiteralConstraints, Fixpoint { transforms: [JoinImplementation { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, ColumnKnowledge { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }, Demand { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }], limit: 100 }, CanonicalizeMfp, RelationCSE { normalize_lets: NormalizeLets { inline_mfp: false } }, FoldConstants { limit: Some(10000) }, ThresholdElision
 ====
 Final:
-%0 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
-| Project (#0..=#2, #0..=#2)
-| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
+Project (#0..=#2, #0..=#2) // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "([0], [1])" }
+  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
 
 ====
 ----
@@ -93,22 +61,14 @@ Final:
 opt format=types
 (join [(get x) (get x)] [[#2 #5]])
 ----
-----
-%0 = Let l0 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
-| ArrangeBy (#2)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ((#0), (#1))
-
-%1 =
-| Join %0 %0 (= #2 #5)
-| | implementation = Differential %0.(#2) %0.(#2)
-| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
-| | keys = ()
-| Project (#0..=#4, #2)
-| | types = (Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)
-| | keys = ()
-----
-----
+Return // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "()" }
+  Project (#0..=#4, #2) // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "()" }
+    Join on=(#2 = #5) type=differential // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "()" }
+      implementation
+        %1:l0[#2] » %0:l0[#2]KA
+      Get l0 // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
+      Get l0 // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
+With
+  cte l0 =
+    ArrangeBy keys=[[#2]] // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
+      Get x // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }

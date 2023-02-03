@@ -20,9 +20,8 @@ build apply=FlatMapToMap
     (get x)
     (Wrap [(String false)] 1) [("a_string" String)])
 ----
-%0 =
-| Get x (u0)
-| Map "a_string"
+Map ("a_string")
+  Get x
 
 # Rewrite possible
 build apply=FlatMapToMap
@@ -30,45 +29,39 @@ build apply=FlatMapToMap
     (get x)
     (Wrap [(String false)] 3) [("a_string" String) ("another" String) ("test" String)])
 ----
-%0 =
-| Get x (u0)
-| Map "a_string", "another", "test"
+Map ("a_string", "another", "test")
+  Get x
 
 # Rewrite possible, two columns
 build apply=FlatMapToMap
 (FlatMap (get x) (Wrap [(Int32 false) (String false)] 2) [(0 Int32) ("test" String)])
 ----
-%0 =
-| Get x (u0)
-| Map 0, "test"
+Map (0, "test")
+  Get x
 
 # Rewrite possible, bigger wrap width than input
 build apply=FlatMapToMap
 (FlatMap (get x) (Wrap [(Int32 false) (String false) (String false)] 3) [(0 Int32) ("test" String)])
 ----
-%0 =
-| Get x (u0)
-| Map 0, "test"
+Map (0, "test")
+  Get x
 
 
 # Produces more than one row, must not rewrite these
 build apply=FlatMapToMap
 (FlatMap (get x) (Wrap [(Int32 false)] 1) [(0 Int32) (1 Int32) (2 Int32)])
 ----
-%0 =
-| Get x (u0)
-| FlatMap wrap1(0, 1, 2)
+FlatMap wrap1(0, 1, 2)
+  Get x
 
 build apply=FlatMapToMap
 (FlatMap (get x) (Wrap [(Int32 false) (Int32 false)] 2) [(0 Int32) (1 Int32) (2 Int32) (3 Int32)])
 ----
-%0 =
-| Get x (u0)
-| FlatMap wrap2(0, 1, 2, 3)
+FlatMap wrap2(0, 1, 2, 3)
+  Get x
 
 build apply=FlatMapToMap
 (FlatMap (get x) (Wrap [(Int32 false) (Int32 true) (Int32 true)] 3) [(0 Int32) (1 Int32) (2 Int32) (3 Int32)])
 ----
-%0 =
-| Get x (u0)
-| FlatMap wrap3(0, 1, 2, 3)
+FlatMap wrap3(0, 1, 2, 3)
+  Get x

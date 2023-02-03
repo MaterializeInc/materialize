@@ -8,6 +8,13 @@
 // by the Apache License, Version 2.0.
 
 //! `EXPLAIN` support for MIR structures.
+//!
+//! The specialized [`Explain`] implementation for an [`MirRelationExpr`]
+//! wrapped in an [`Explainable`] newtype struct allows us to interpret more
+//! [`ExplainConfig`] options. This is the case because attribute derivation and
+//! let normalization are defined in [`mz_transform`] and conssequently are not
+//! available for the default [`Explain`] implementation for [`MirRelationExpr`]
+//! in [`mz_expr`].
 
 use std::collections::BTreeMap;
 

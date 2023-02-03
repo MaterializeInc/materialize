@@ -26,10 +26,9 @@ build apply=CanonicalizeMfp
         [(call_binary add_int64 null #3)])
      [#1])
 ----
-%0 =
-| Get x (u0)
-| Filter false
-| Project (#1)
+Project (#1)
+  Filter false
+    Get x
 
 # pushdown filters with a map. filters should be fused and re-sorted with the expression inlined
 build apply=CanonicalizeMfp
@@ -41,11 +40,10 @@ build apply=CanonicalizeMfp
         [(call_binary gt #3 (1234 Int32))])
      [3])
 ----
-%0 =
-| Get x (u0)
-| Map (#0 + #1)
-| Filter (#3 < 4321), (#3 > 1234)
-| Project (#3)
+Project (#3)
+  Filter (#3 < 4321) AND (#3 > 1234)
+    Map ((#0 + #1))
+      Get x
 
 # multiple pushdown filters without a map. filters should be fused and re-sorted least to greatest
 build apply=CanonicalizeMfp
@@ -57,10 +55,9 @@ build apply=CanonicalizeMfp
         [(call_binary gt #1 (4321 Int32))])
     [0 1])
 ----
-%0 =
-| Get x (u0)
-| Filter (#0 < 1234), (#1 > 4321)
-| Project (#0, #1)
+Project (#0, #1)
+  Filter (#0 < 1234) AND (#1 > 4321)
+    Get x
 
 # multiple retained filters with a map. canonicalized filters should be re-sorted least to greatest
 build apply=CanonicalizeMfp
@@ -70,11 +67,10 @@ build apply=CanonicalizeMfp
         [(call_unary is_null #4) (call_unary is_null #3)])
      [0 3 4])
 ----
-%0 =
-| Get x (u0)
-| Map hmac(#0, #1, #2), hmac(#0, #1)
-| Filter (#3) IS NULL, (#4) IS NULL
-| Project (#0, #3, #4)
+Project (#0, #3, #4)
+  Filter (#3) IS NULL AND (#4) IS NULL
+    Map (hmac(#0, #1, #2), hmac(#0, #1))
+      Get x
 
 build apply=CanonicalizeMfp
 (project
@@ -86,11 +82,10 @@ build apply=CanonicalizeMfp
         ])
      [0 3])
 ----
-%0 =
-| Get x (u0)
-| Map hmac(#0, #1, #2)
-| Filter (#3) IS NULL, (#0 < 1234)
-| Project (#0, #3)
+Project (#0, #3)
+  Filter (#3) IS NULL AND (#0 < 1234)
+    Map (hmac(#0, #1, #2))
+      Get x
 
 # regression test for #10000.
 # Even though there is no map in the test, the duplicated predicates cause the creation
@@ -110,20 +105,11 @@ build apply=CanonicalizeMfp
         ])
     [0])
 ----
-----
-%0 =
-| Get t1 (u1)
-
-%1 =
-| Get t2 (u2)
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Unimplemented
-| Filter (#0) IS NOT NULL, ((#0 = 5) OR (#0 = 1337))
-| Project (#0)
-----
-----
+Project (#0)
+  Filter (#0) IS NOT NULL AND ((#0 = 5) OR (#0 = 1337))
+    Join on=(#0 = #2)
+      Get t1
+      Get t2
 
 # same test as above, but with predicates that are equivalent only after considering the innermost map-project
 build apply=CanonicalizeMfp
@@ -147,21 +133,12 @@ build apply=CanonicalizeMfp
         ])
     [0])
 ----
-----
-%0 =
-| Get t1 (u1)
-
-%1 =
-| Get t2 (u2)
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Unimplemented
-| Map (#0 + #1)
-| Filter (#0) IS NOT NULL, ((#4 = 5) OR (#4 = 9))
-| Project (#0)
-----
-----
+Project (#0)
+  Filter (#0) IS NOT NULL AND ((#4 = 5) OR (#4 = 9))
+    Map ((#0 + #1))
+      Join on=(#0 = #2)
+        Get t1
+        Get t2
 
 # consecutive levels of map-filter-project. outermost mfp is the same as the #10000 regression test.
 build apply=CanonicalizeMfp
@@ -188,24 +165,15 @@ build apply=CanonicalizeMfp
         ])
     [0 3])
 ----
-----
-%0 =
-| Get t1 (u1)
-| Map (#0 + #1)
-| Filter (#2 > 1234)
-| Project (#2)
-
-%1 =
-| Get t2 (u2)
-| Map (#0 * #1)
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Unimplemented
-| Filter (#0) IS NOT NULL, ((#0 = 5) OR (#0 = 1337))
-| Project (#0, #3)
-----
-----
+Project (#0, #3)
+  Filter (#0) IS NOT NULL AND ((#0 = 5) OR (#0 = 1337))
+    Join on=(#0 = #2)
+      Project (#2)
+        Filter (#2 > 1234)
+          Map ((#0 + #1))
+            Get t1
+      Map ((#0 * #1))
+        Get t2
 
 build apply=CanonicalizeMfp
 (project
@@ -224,18 +192,9 @@ build apply=CanonicalizeMfp
         [(call_binary add_int64 #0 #1)])
     [2])
 ----
-----
-%0 =
-| Get t1 (u1)
-
-%1 =
-| Get t2 (u2)
-
-%2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Unimplemented
-| Map (#0 + #2)
-| Filter (#0) IS NOT NULL, ((#0 = 5) OR (#0 = 1337))
-| Project (#4)
-----
-----
+Project (#4)
+  Filter (#0) IS NOT NULL AND ((#0 = 5) OR (#0 = 1337))
+    Map ((#0 + #2))
+      Join on=(#0 = #2)
+        Get t1
+        Get t2

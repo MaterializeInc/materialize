@@ -88,18 +88,21 @@ mod tests {
     use std::fmt::Write;
 
     use anyhow::{anyhow, Error};
+    use mz_expr::explain_new::ExplainContext;
     use mz_expr::{Id, MirRelationExpr};
     use mz_expr_test_util::{
-        build_rel, generate_explanation, json_to_spec, MirRelationExprDeserializeContext,
-        TestCatalog,
+        build_rel, json_to_spec, MirRelationExprDeserializeContext, TestCatalog,
     };
     use mz_lowertest::{deserialize, tokenize};
     use mz_ore::collections::HashMap;
     use mz_ore::str::separated;
+    use mz_repr::explain_new::{Explain, ExplainConfig, ExplainFormat, UsedIndexes};
     use mz_repr::GlobalId;
     use mz_transform::dataflow::{optimize_dataflow_demand_inner, optimize_dataflow_filters_inner};
     use mz_transform::{EmptyIndexOracle, Optimizer, Transform, TransformArgs};
     use proc_macro2::TokenTree;
+
+    use super::explain::Explainable;
 
     // Global options
     const IN: &str = "in";
@@ -180,7 +183,38 @@ mod tests {
                 json_to_spec(&serde_json::to_string(rel).unwrap(), cat).0
             ),
             FormatType::Json => format!("{}\n", serde_json::to_string(rel).unwrap()),
-            FormatType::Explain(format) => generate_explanation(cat, rel, *format),
+            FormatType::Explain(format) => {
+                let format_contains = |key: &str| {
+                    format
+                        .map(|format| format.contains(&key.to_string()))
+                        .unwrap_or(false)
+                };
+
+                let config = ExplainConfig {
+                    arity: false,
+                    join_impls: true,
+                    keys: format_contains("types"), // FIXME: use `keys`
+                    linear_chains: false,
+                    non_negative: false,
+                    no_fast_path: false,
+                    raw_plans: false,
+                    raw_syntax: false,
+                    subtree_size: false,
+                    timing: false,
+                    types: format_contains("types"),
+                };
+
+                let context = ExplainContext {
+                    config: &config,
+                    humanizer: cat,
+                    used_indexes: UsedIndexes::new(vec![]),
+                    finishing: None,
+                };
+
+                Explainable(&mut rel.clone())
+                    .explain(&ExplainFormat::Text, &config, &context)
+                    .unwrap()
+            }
         }
     }
 
@@ -543,5 +577,63 @@ mod tests {
                 }
             })
         });
+    }
+}
+
+/// This duplicates code from `mz_adapter` as we don't want to move
+/// [`mz_transform::attribute`] and [`mz_transform::normalize_lets`] to
+/// [`mz_expr`].
+mod explain {
+    use mz_expr::explain_new::{enforce_linear_chains, ExplainContext, ExplainSinglePlan};
+    use mz_expr::MirRelationExpr;
+    use mz_repr::explain_new::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
+    use mz_transform::attribute::annotate_plan;
+    use mz_transform::normalize_lets::normalize_lets;
+
+    /// Newtype struct for wrapping types that should
+    /// implement the [`mz_repr::explain::Explain`] trait.
+    pub(crate) struct Explainable<'a, T>(pub &'a mut T);
+
+    impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
+        type Context = ExplainContext<'a>;
+
+        type Text = ExplainSinglePlan<'a, MirRelationExpr>;
+
+        type Json = UnsupportedFormat;
+
+        type Dot = UnsupportedFormat;
+
+        fn explain_text(
+            &'a mut self,
+            config: &'a ExplainConfig,
+            context: &'a Self::Context,
+        ) -> Result<Self::Text, ExplainError> {
+            self.as_explain_single_plan(config, context)
+        }
+    }
+
+    impl<'a> Explainable<'a, MirRelationExpr> {
+        fn as_explain_single_plan(
+            &'a mut self,
+            config: &'a ExplainConfig,
+            context: &'a ExplainContext<'a>,
+        ) -> Result<ExplainSinglePlan<'a, MirRelationExpr>, ExplainError> {
+            // normalize the representation as linear chains
+            // (this implies !config.raw_plans by construction)
+            if config.linear_chains {
+                enforce_linear_chains(self.0)?;
+            };
+            // unless raw plans are explicitly requested
+            // normalize the representation of nested Let bindings
+            // and enforce sequential Let binding IDs
+            if !config.raw_plans {
+                normalize_lets(self.0).map_err(|e| ExplainError::UnknownError(e.to_string()))?;
+            }
+
+            Ok(ExplainSinglePlan {
+                context,
+                plan: annotate_plan(self.0, context)?,
+            })
+        }
     }
 }

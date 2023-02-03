@@ -19,159 +19,64 @@ ok
 build format=types
 (union [(get x) (get x) (get x)])
 ----
-----
-%0 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%1 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%2 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%3 =
-| Union %0 %1 %2
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-----
-----
+Union // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
 
 build format=types
 (union [(get x) (project (get y) [#1 #0 #2])])
 ----
-----
-%0 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%1 =
-| Get y (u1)
-| | types = (Int64?, Int32?, Int32?)
-| | keys = ()
-| Project (#1, #0, #2)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%2 =
-| Union %0 %1
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-----
-----
+Union // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+  Project (#1, #0, #2) // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+    Get y // { types: "(Int64?, Int32?, Int32?)", keys: "()" }
 
 build format=types
 (union [(project (get y) [#1 #0 #2]) (get x)])
 ----
-----
-%0 =
-| Get y (u1)
-| | types = (Int64?, Int32?, Int32?)
-| | keys = ()
-| Project (#1, #0, #2)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%1 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%2 =
-| Union %0 %1
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-----
-----
+Union // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+  Project (#1, #0, #2) // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+    Get y // { types: "(Int64?, Int32?, Int32?)", keys: "()" }
+  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
 
 build format=types
 (let z (project (get y) [#1 #0 #2])
     (union [(get x) (get z)]))
 ----
-----
-%0 = Let l0 =
-| Get y (u1)
-| | types = (Int64?, Int32?, Int32?)
-| | keys = ()
-| Project (#1, #0, #2)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%1 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%2 =
-| Union %1 %0
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-----
-----
+Union // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+  Project (#1, #0, #2) // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+    Get y // { types: "(Int64?, Int32?, Int32?)", keys: "()" }
 
 build format=types
 (let z (project (get y) [#1 #0 #2])
     (union [(get z) (get z)]))
 ----
-----
-%0 = Let l0 =
-| Get y (u1)
-| | types = (Int64?, Int32?, Int32?)
-| | keys = ()
-| Project (#1, #0, #2)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%1 =
-| Union %0 %0
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-----
-----
+Return // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+  Union // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+    Get l0 // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+    Get l0 // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+With
+  cte l0 =
+    Project (#1, #0, #2) // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+      Get y // { types: "(Int64?, Int32?, Int32?)", keys: "()" }
 
 build format=types
 (join [(get x) (get y)] [])
 ----
-----
-%0 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-
-%1 =
-| Get y (u1)
-| | types = (Int64?, Int32?, Int32?)
-| | keys = ()
-
-%2 =
-| Join %0 %1
-| | implementation = Unimplemented
-| | types = (Int32?, Int64?, Int32?, Int64?, Int32?, Int32?)
-| | keys = ()
-----
-----
+CrossJoin // { types: "(Int32?, Int64?, Int32?, Int64?, Int32?, Int32?)", keys: "()" }
+  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+  Get y // { types: "(Int64?, Int32?, Int32?)", keys: "()" }
 
 # Key information propagation through Filters
 
 build format=types
 (filter (reduce (get x) [#0 #2] []) [(call_binary eq #0 #1)])
 ----
-%0 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-| Distinct group=(#0, #2)
-| | types = (Int32?, Int32?)
-| | keys = ((#0, #1))
-| Filter (#0 = #1)
-| | types = (Int32, Int32)
-| | keys = ((#0), (#1))
+Filter (#0 = #1) // { types: "(Int32, Int32)", keys: "([0], [1])" }
+  Distinct group_by=[#0, #2] // { types: "(Int32?, Int32?)", keys: "([0, 1])" }
+    Get x // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
 
 cat
 (defsource with_keys ([int32 int32 int32] [[0 1] [1 2]]))
@@ -181,13 +86,8 @@ ok
 build format=types
 (filter (get with_keys) [(call_binary eq #0 #2)])
 ----
-%0 =
-| Get with_keys (u2)
-| | types = (Int32?, Int32?, Int32?)
-| | keys = ((#0, #1), (#1, #2))
-| Filter (#0 = #2)
-| | types = (Int32, Int32?, Int32)
-| | keys = ((#0, #1), (#1, #2))
+Filter (#0 = #2) // { types: "(Int32, Int32?, Int32)", keys: "([0, 1], [1, 2])" }
+  Get with_keys // { types: "(Int32?, Int32?, Int32?)", keys: "([0, 1], [1, 2])" }
 
 cat
 (defsource with_keys2 ([int32 int32 int32 int32] [[0 1] [2 3]]))
@@ -197,27 +97,14 @@ ok
 build format=types
 (filter (get with_keys2) [(call_binary eq #0 #2)])
 ----
-%0 =
-| Get with_keys2 (u3)
-| | types = (Int32?, Int32?, Int32?, Int32?)
-| | keys = ((#0, #1), (#2, #3))
-| Filter (#0 = #2)
-| | types = (Int32, Int32?, Int32, Int32?)
-| | keys = ((#0, #1), (#0, #3), (#1, #2), (#2, #3))
+Filter (#0 = #2) // { types: "(Int32, Int32?, Int32, Int32?)", keys: "([0, 1], [0, 3], [1, 2], [2, 3])" }
+  Get with_keys2 // { types: "(Int32?, Int32?, Int32?, Int32?)", keys: "([0, 1], [2, 3])" }
 
 # Regression test for #14146. The keys at the end should be [#0]
 
 build format=types
 (filter (reduce (get x) [#0] [(count true false)])[(call_binary eq #0 #0)])
 ----
-%0 =
-| Get x (u0)
-| | types = (Int32?, Int64?, Int32?)
-| | keys = ()
-| Reduce group=(#0)
-| | agg count(true)
-| | types = (Int32?, Int64)
-| | keys = ((#0))
-| Filter (#0 = #0)
-| | types = (Int32, Int64)
-| | keys = ((#0))
+Filter (#0 = #0) // { types: "(Int32, Int64)", keys: "([0])" }
+  Reduce group_by=[#0] aggregates=[count(*)] // { types: "(Int32?, Int64)", keys: "([0])" }
+    Get x // { types: "(Int32?, Int64?, Int32?)", keys: "()" }

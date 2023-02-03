@@ -11,11 +11,19 @@
 
 use std::{collections::BTreeMap, marker::PhantomData};
 
-use mz_repr::explain_new::ExplainConfig;
+use mz_ore::{
+    stack::RecursionLimitError,
+    str::{bracketed, separated},
+};
+use mz_repr::explain_new::{AnnotatedPlan, Attributes, ExplainConfig};
 use num_traits::FromPrimitive;
 use typemap_rev::{TypeMap, TypeMapKey};
 
-use mz_expr::{visit::Visitor, LocalId, MirRelationExpr};
+use mz_expr::{
+    explain_new::ExplainContext,
+    visit::{Visit, Visitor},
+    LocalId, MirRelationExpr,
+};
 
 // Attributes should have shortened paths when exported.
 mod arity;
@@ -385,3 +393,81 @@ enum AttributeId {
 
 /// Should always be equal to the number of attributes
 const TOTAL_ATTRIBUTES: usize = 5;
+
+/// Produce an [`AnnotatedPlan`] wrapping the given [`MirRelationExpr`] along
+/// with [`Attributes`] derived from the given context configuration.
+pub fn annotate_plan<'a>(
+    plan: &'a MirRelationExpr,
+    context: &'a ExplainContext,
+) -> Result<AnnotatedPlan<'a, MirRelationExpr>, RecursionLimitError> {
+    let mut annotations = BTreeMap::<&MirRelationExpr, Attributes>::default();
+    let config = context.config;
+
+    if config.requires_attributes() {
+        // get the annotation keys
+        let subtree_refs = plan.post_order_vec();
+        // get the annotation values
+        let mut attributes = DerivedAttributes::from(config);
+        plan.visit(&mut attributes)?;
+
+        if config.subtree_size {
+            for (expr, attr) in std::iter::zip(
+                subtree_refs.iter(),
+                attributes.remove_results::<SubtreeSize>().into_iter(),
+            ) {
+                let attributes = annotations.entry(expr).or_default();
+                attributes.subtree_size = Some(attr);
+            }
+        }
+        if config.non_negative {
+            for (expr, attr) in std::iter::zip(
+                subtree_refs.iter(),
+                attributes.remove_results::<NonNegative>().into_iter(),
+            ) {
+                let attrs = annotations.entry(expr).or_default();
+                attrs.non_negative = Some(attr);
+            }
+        }
+
+        if config.arity {
+            for (expr, attr) in std::iter::zip(
+                subtree_refs.iter(),
+                attributes.remove_results::<Arity>().into_iter(),
+            ) {
+                let attrs = annotations.entry(expr).or_default();
+                attrs.arity = Some(attr);
+            }
+        }
+
+        if config.types {
+            for (expr, types) in std::iter::zip(
+                subtree_refs.iter(),
+                attributes.remove_results::<RelationType>().into_iter(),
+            ) {
+                let humanized_columns = types
+                    .into_iter()
+                    .map(|c| context.humanizer.humanize_column_type(&c))
+                    .collect::<Vec<_>>();
+                let attr = bracketed("(", ")", separated(", ", humanized_columns)).to_string();
+                let attrs = annotations.entry(expr).or_default();
+                attrs.types = Some(attr);
+            }
+        }
+
+        if config.keys {
+            for (expr, keys) in std::iter::zip(
+                subtree_refs.iter(),
+                attributes.remove_results::<UniqueKeys>().into_iter(),
+            ) {
+                let formatted_keys = keys
+                    .into_iter()
+                    .map(|key_set| bracketed("[", "]", separated(", ", key_set)).to_string());
+                let attr = bracketed("(", ")", separated(", ", formatted_keys)).to_string();
+                let attrs = annotations.entry(expr).or_default();
+                attrs.keys = Some(attr);
+            }
+        }
+    }
+
+    Ok(AnnotatedPlan { plan, annotations })
+}
