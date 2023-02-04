@@ -30,7 +30,7 @@ Some window functions are impossible to efficiently support in streaming, becaus
     - If changes mostly come near the end of the window partition. For example, if there is an ORDER BY time, and new records usually have recent timestamps. (Prefix Sum will handle this fine.)
     - If most changes are not record appearances or disappearances, but existing records changing in a way that they move only a little bit in the ordering. In this case, the output changes only for as many records, that got “jumped over” by the changing record. (Prefix Sum will handle this fine.)
     - TopK is an important special case: This is when there is a `WHERE ROW_NUMBER() < k`
-        - Instead of doing Prefix Sum, we will transform this into our [efficient TopK implementation](https://www.notion.so/e62fe2b3d8354052ac7d0fe92be1e711).
+        - Instead of doing Prefix Sum, we will transform this into our [efficient TopK implementation](https://github.com/MaterializeInc/materialize/blob/2f56c8b2ff1cc604e5bff9fb1c75a81a9dbe05a6/src/compute-client/src/plan/top_k.rs#L30).
 
 ## Non-goals / Limitations
 
@@ -220,9 +220,23 @@ We could do the idiom recognition in the rendering instead of the MIR-to-LIR low
 - We want EXPLAIN PHYSICAL PLAN to show how we'll execute a window function.
 - We need to know the type of the ORDER BY columns, which we don't know in LIR. (Although we could add extra type info to window function calls.)
 
-### Use WITH MUTUALLY RECURSIVE
+### Implement Prefix Sum in MIR (involving `LetRec`) instead of a large chunk of custom rendering code
 
-We are [in the process of adding support for recursive SQL queries](https://github.com/MaterializeInc/materialize/issues/17012). We could implement prefix sum using that instead of custom rendering code. In this case, all the window function handling could happen in the HIR-to-MIR lowering, by translating to a MIR expression that has `LetRec`.
+The main plan for implementing Prefix Sum is to implement it directly on DD (and represent it as one node in LIR). An alternative would be to implement Prefix Sum on MIR: The joins, reduces, iterations, etc. would be constructed not by directly calling DD functions in the rendering, but by MIR joins, MIR reduces, MIR LetRec, etc. In this case, the window function handling code would mainly operate in the HIR-to-MIR lowering: it would translate HIR's WindowExpr to MirRelationExpr.
+
+Critically, the Prefix Sum algorithm involves iteration, needed for operating on the data-dependent number of levels of the tree data structure that is storing the sums. Iteration is possible to express in MIR using `LetRec`, which is our recently built infrastructure for WITH MUTUALLY RECURSIVE. However, [this infrastructure is in an experimental state at the moment](https://github.com/MaterializeInc/materialize/issues/17012). For example, the optimizer currently mostly skips the recursive parts of queries, leaving them unoptimized. This is a long way from the robust optimization that would be needed to support such a highly complex algorithm as our Prefix Sum. Therefore, I would not tie the success of the window function effort to `LetRec` at this time.
+
+Still, at some future time when we are confident in our optimizer's ability to robustly handle `LetRec`, we might revisit this decision. I'll list some pro and contra arguments for implementing Prefix Sum in MIR, putting aside the above immaturity of `LetRec`:
+
+Pro:
+- Prefix Sum could potentially benefit from later performance improvements from an evolving optimizer or rendering.
+- We wouldn't need to specially implement certain optimiziations for window functions, but would instead get them for free from the standard MIR optimizations. For example, [projection pushdown through window functions](https://github.com/MaterializeInc/materialize/issues/17522).
+- Optimizing Prefix Sum could be integrated with optimizing other parts of the query.
+
+Contra:
+- Creating MIR nodes is more cumbersome than calling DD functions. (column references by position instead of Rust variables, etc.)
+- We would need to add several scalar functions for integer bit manipulations, e.g., for extracting set bits from integers.
+- When directly writing DD code, we have access to all the power of DD, potentially enabling access to better performance than through the compiler pipeline from MIR.
 
 ### Representing window functions in each of the IRs
 
