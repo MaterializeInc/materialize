@@ -21,7 +21,7 @@ kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
 launchdarkly-api==11.0.0
 mypy==0.991
-numpy==1.22.4
+numpy==1.24.2
 pandas==1.5.2
 parameterized==0.8.1
 paramiko==2.12.0
