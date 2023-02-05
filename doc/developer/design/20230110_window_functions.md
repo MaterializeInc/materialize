@@ -9,6 +9,36 @@ By “window functions”, this document means the `OVER` clause, e.g.,
 
 [Many users want to use window functions](https://www.notion.so/Window-Functions-Use-Cases-6ad1846a7da942dc8fa28997d9c220dd), but our current window function support is very inefficient: We recompute results for an entire window partition for any small change in the partition. So the only situations when our current support works is if the window partitions are either very small, or they rarely change.
 
+## Window Functions
+
+SQL window functions (introduced in the SQL:2003 standard) compute a scalar value for each row, by using information from other rows. Which other rows are involved is determined by the function and an `OVER` clause that accompanies the window function call itself. For example, the following query prints each measurement and its difference from the previous measurement, where "previous" is determined by the ordering on the `time` field.
+```SQL
+SELECT time, measurement_value, measurement_value - LAG(measurement_value) OVER (ORDER BY time)
+FROM measurements;
+```
+The `LAG` window function computes the value of a scalar expression (here simply a reference to `measurement_value`) on data from the previous row (instead of the current row, which is normally what a scalar expression does). 
+The `OVER` clause has to directly follow the window function call (`LAG(...)` here). Note that this `ORDER BY` has no influence on the ordering of the result set of the query, it only influences the operation of `LAG`.
+
+Note that if the measurements follow each other at regular time intervals, then the same query can be written without a window function, simply with a self join. However, for arbitrary measurement times there is no good workaround without a window function.
+
+We can also add a `PARTITION BY` clause inside the `OVER` clause. In this case, the window function will gather information only from those other rows that are in the same partition. For example, we can modify the above query for the situation when measurements are from multiple sensors, and we want to compute the differences only between measurements of the same sensor:
+
+```SQL
+SELECT sensor_id, time, measurement_value, measurement_value - LAG(measurement_value)
+    OVER (ORDER BY time PARTITION BY sensor_id)
+FROM measurements;
+```
+
+Certain window functions operate on a _window frame_, which is a subset of a partition. The default frame includes the rows from the first row of the partition up to the current row (or more accurately, to the last row of the peer group of the current row, where a peer group is a set of rows that are equal on both the PARTITION BY and the ORDER BY). For example, all aggregation functions can be used also as window functions (we will refer to this as _window aggregations_), where they aggregate values from inside the current window frame. The following query calculates a running total (prefix sum) of measurement values for each sensor (which wouldn't make sense for a temperature sensor, but makes sense for, e.g., a water flow sensor):
+
+```SQL
+SELECT sensor_id, time, SUM(measurement_value)
+    OVER (ORDER BY time PARTITION BY sensor_id)
+FROM measurements;
+```
+
+
+
 ## Goals
 
 We would like to have efficient window function support.
