@@ -354,8 +354,10 @@ where
                             }
                         }
 
-                        // If the frontier has advanced, it is time to announce a thing.
-                        if old_frontier != new_frontier {
+                        // If the frontier has advanced, it is time to announce subscribe progress.
+                        // Unless we have already announced that the subscribe has been dropped, in
+                        // which case we must keep quiet.
+                        if old_frontier != new_frontier && !entry.dropped {
                             let updates = match &mut entry.stashed_updates {
                                 Ok(stashed_updates) => {
                                     consolidate_updates(stashed_updates);
