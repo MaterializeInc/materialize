@@ -1140,7 +1140,7 @@ where
         response: SubscribeResponse<T>,
         replica_id: ReplicaId,
     ) -> Option<ComputeControllerResponse<T>> {
-        // We should not receive updates for subscribes we don't track. It is possible that we
+        // We should not receive updates for collections we don't track. It is possible that we
         // currently do due to a bug where replicas send `DroppedAt` responses for subscribes they
         // drop during reconciliation.
         // TODO(teskje): Revisit this after #16247 is resolved.
