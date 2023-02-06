@@ -225,6 +225,7 @@ impl IndexOracle for EmptyIndexOracle {
 /// A sequence of transformations iterated some number of times.
 #[derive(Debug)]
 pub struct Fixpoint {
+    name: &'static str,
     transforms: Vec<Box<dyn crate::Transform>>,
     limit: usize,
 }
@@ -238,7 +239,7 @@ impl Transform for Fixpoint {
         target = "optimizer"
         level = "trace",
         skip_all,
-        fields(path.segment = "fixpoint")
+        fields(path.segment = self.name)
     )]
     fn transform(
         &self,
@@ -407,6 +408,7 @@ impl Optimizer {
             // TODO: lift filters/maps to maximize ability to collapse
             // things down?
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![Box::new(crate::FuseAndCollapse::default())],
             }),
@@ -415,6 +417,7 @@ impl Optimizer {
             // 4. Move predicate information up and down the tree.
             //    This also fixes the shape of joins in the plan.
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![
                     // Predicate pushdown sets the equivalence classes of joins.
@@ -433,6 +436,7 @@ impl Optimizer {
             }),
             // 5. Reduce/Join simplifications.
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::semijoin_idempotence::SemijoinIdempotence),
@@ -486,6 +490,7 @@ impl Optimizer {
             //             - ()
             Box::new(crate::literal_constraints::LiteralConstraints),
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::join_implementation::JoinImplementation::default()),
@@ -520,6 +525,7 @@ impl Optimizer {
             // Delete unnecessary maps.
             Box::new(crate::fusion::Fusion),
             Box::new(crate::Fixpoint {
+                name: "fixpoint",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
