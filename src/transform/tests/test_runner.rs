@@ -348,7 +348,7 @@ mod tests {
                 mz_transform::predicate_pushdown::PredicatePushdown::default(),
             )),
             "ProjectionExtraction" => Ok(Box::new(
-                mz_transform::projection_extraction::ProjectionExtraction,
+                mz_transform::canonicalization::ProjectionExtraction,
             )),
             "ProjectionLifting" => Ok(Box::new(
                 mz_transform::projection_lifting::ProjectionLifting::default(),
