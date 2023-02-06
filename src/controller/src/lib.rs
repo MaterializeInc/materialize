@@ -340,11 +340,9 @@ where
     pub async fn new(config: ControllerConfig, envd_epoch: NonZeroI64) -> Self {
         let storage_controller = mz_storage_client::controller::Controller::new(
             config.build_info,
-            config.storage_stash_url,
             config.persist_location,
             config.persist_clients,
             config.now,
-            &config.postgres_factory,
             envd_epoch,
             config.metrics_registry.clone(),
         )

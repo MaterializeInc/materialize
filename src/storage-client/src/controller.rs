@@ -23,18 +23,14 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{self, Debug};
 use std::num::NonZeroI64;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use bytes::BufMut;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
-use prost::Message;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
@@ -45,16 +41,16 @@ use tracing::{debug, info};
 use mz_build_info::BuildInfo;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::soft_assert;
+use mz_ore::{halt, soft_assert};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
-use mz_stash::{self, AppendBatch, StashError, StashFactory, TypedCollection};
+use mz_stash::{self, StashError};
 
 use crate::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
@@ -66,9 +62,7 @@ use crate::metrics::StorageControllerMetrics;
 use crate::types::errors::DataflowError;
 use crate::types::instances::StorageInstanceId;
 use crate::types::parameters::StorageParameters;
-use crate::types::sinks::{
-    MetadataUnfilled, ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc,
-};
+use crate::types::sinks::{MetadataUnfilled, StorageSinkDesc};
 use crate::types::sources::{IngestionDescription, SourceData, SourceExport};
 
 mod collection_mgmt;
@@ -79,35 +73,6 @@ mod rehydration;
 mod statistics;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
-
-pub static METADATA_COLLECTION: TypedCollection<GlobalId, DurableCollectionMetadata> =
-    TypedCollection::new("storage-collection-metadata");
-
-pub static METADATA_EXPORT: TypedCollection<GlobalId, DurableExportMetadata<mz_repr::Timestamp>> =
-    TypedCollection::new("storage-export-metadata-u64");
-
-pub static ALL_COLLECTIONS: &[&str] = &[
-    METADATA_COLLECTION.name(),
-    METADATA_EXPORT.name(),
-    command_wals::SHARD_FINALIZATION.name(),
-];
-
-// Do this dance so that we keep the storage controller expressed in terms of a generic timestamp `T`.
-struct MetadataExportFetcher;
-trait MetadataExport<T>
-where
-    // Associated type would be better but you can't express this relationship without unstable
-    DurableExportMetadata<T>: mz_stash::Data,
-{
-    fn get_stash_collection() -> &'static TypedCollection<GlobalId, DurableExportMetadata<T>>;
-}
-
-impl MetadataExport<mz_repr::Timestamp> for MetadataExportFetcher {
-    fn get_stash_collection(
-    ) -> &'static TypedCollection<GlobalId, DurableExportMetadata<mz_repr::Timestamp>> {
-        &METADATA_EXPORT
-    }
-}
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum IntrospectionType {
@@ -533,97 +498,6 @@ pub trait ResumptionFrontierCalculator<T> {
     async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T>;
 }
 
-/// The subset of [`CollectionMetadata`] that must be durable stored.
-#[derive(Arbitrary, Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize)]
-pub struct DurableCollectionMetadata {
-    // See the comments on [`CollectionMetadata`].
-    pub remap_shard: ShardId,
-    pub data_shard: ShardId,
-}
-
-impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
-    fn into_proto(&self) -> ProtoDurableCollectionMetadata {
-        ProtoDurableCollectionMetadata {
-            remap_shard: self.remap_shard.to_string(),
-            data_shard: self.data_shard.to_string(),
-        }
-    }
-
-    fn from_proto(value: ProtoDurableCollectionMetadata) -> Result<Self, TryFromProtoError> {
-        Ok(DurableCollectionMetadata {
-            remap_shard: value
-                .remap_shard
-                .parse()
-                .map_err(TryFromProtoError::InvalidShardId)?,
-            data_shard: value
-                .data_shard
-                .parse()
-                .map_err(TryFromProtoError::InvalidShardId)?,
-        })
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DurableExportMetadata<T> {
-    pub initial_as_of: SinkAsOf<T>,
-}
-
-impl PartialOrd for DurableExportMetadata<mz_repr::Timestamp> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl std::cmp::Ord for DurableExportMetadata<mz_repr::Timestamp> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let mut s = vec![];
-        let mut o = vec![];
-        self.encode(&mut s);
-        other.encode(&mut o);
-        s.cmp(&o)
-    }
-}
-
-impl RustType<ProtoDurableExportMetadata> for DurableExportMetadata<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoDurableExportMetadata {
-        ProtoDurableExportMetadata {
-            initial_as_of: Some(self.initial_as_of.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoDurableExportMetadata) -> Result<Self, TryFromProtoError> {
-        Ok(DurableExportMetadata {
-            initial_as_of: proto
-                .initial_as_of
-                .into_rust_if_some("ProtoDurableExportMetadata::initial_as_of")?,
-        })
-    }
-}
-
-impl DurableExportMetadata<mz_repr::Timestamp> {
-    pub fn encode<B: BufMut>(&self, buf: &mut B) {
-        self.into_proto()
-            .encode(buf)
-            .expect("no required fields means no initialization errors");
-    }
-
-    pub fn decode(buf: &[u8]) -> Result<Self, String> {
-        let proto = ProtoDurableExportMetadata::decode(buf).map_err(|err| err.to_string())?;
-        proto.into_rust().map_err(|err| err.to_string())
-    }
-}
-
-impl Arbitrary for DurableExportMetadata<mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (any::<SinkAsOf<mz_repr::Timestamp>>(),)
-            .prop_map(|(initial_as_of,)| Self { initial_as_of })
-            .boxed()
-    }
-}
-
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
 pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
@@ -639,7 +513,6 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
     pub(super) exports: BTreeMap<GlobalId, ExportState<T>>,
     pub(super) exported_collections: BTreeMap<GlobalId, Vec<GlobalId>>,
-    pub(super) stash: mz_stash::Stash,
     /// Write handle for persist shards.
     pub(super) persist_write_handles: persist_handles::PersistWriteWorker<T>,
     /// Read handles for persist shards.
@@ -694,6 +567,10 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// The state for the storage controller.
     /// TODO(benesch): why is this a separate struct?
     state: StorageControllerState<T>,
+    /// The durable state for the storage controller.
+    /// TODO(aljoscha): @bensch: Now it might make sense that they are separate
+    /// structs?
+    durable_state: durable_controller_state::DurableControllerState<T>,
     /// Mechanism for returning frontier advancement for tables.
     internal_response_queue: tokio::sync::mpsc::UnboundedReceiver<StorageResponse<T>>,
     /// The persist location where all storage collections are being written to
@@ -793,74 +670,11 @@ impl From<DataflowError> for StorageError {
 impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
     StorageControllerState<T>
 {
-    pub(super) async fn new(
-        postgres_url: String,
+    pub(super) fn new(
         tx: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
         now: NowFn,
-        factory: &StashFactory,
         envd_epoch: NonZeroI64,
     ) -> Self {
-        let tls = mz_postgres_util::make_tls(
-            &tokio_postgres::config::Config::from_str(&postgres_url)
-                .expect("invalid postgres url for storage stash"),
-        )
-        .expect("could not make storage TLS connection");
-        let mut stash = factory
-            .open(postgres_url, None, tls)
-            .await
-            .expect("could not connect to postgres storage stash");
-
-        // Ensure all collections are initialized, otherwise they panic if
-        // they're read before being written to.
-        async fn maybe_get_init_batch<'tx, K, V>(
-            tx: &'tx mz_stash::Transaction<'tx>,
-            typed: &TypedCollection<K, V>,
-        ) -> Option<AppendBatch>
-        where
-            K: mz_stash::Data,
-            V: mz_stash::Data,
-        {
-            let collection = tx
-                .collection::<K, V>(typed.name())
-                .await
-                .expect("named collection must exist");
-            let upper = tx
-                .upper(collection.id)
-                .await
-                .expect("collection known to exist");
-            if upper.elements() == [mz_stash::Timestamp::MIN] {
-                Some(
-                    collection
-                        .make_batch_lower(upper)
-                        .expect("stash operation must succeed"),
-                )
-            } else {
-                None
-            }
-        }
-
-        stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    // Query all collections in parallel. Makes for triplicated
-                    // names, but runs quick.
-                    let (metadata_collection, metadata_export, shard_finalization) = futures::join!(
-                        maybe_get_init_batch(&tx, &METADATA_COLLECTION),
-                        maybe_get_init_batch(&tx, &METADATA_EXPORT),
-                        maybe_get_init_batch(&tx, &command_wals::SHARD_FINALIZATION),
-                    );
-                    let batches: Vec<AppendBatch> =
-                        [metadata_collection, metadata_export, shard_finalization]
-                            .into_iter()
-                            .filter_map(|b| b)
-                            .collect();
-
-                    tx.append(batches).await
-                })
-            })
-            .await
-            .expect("stash operation must succeed");
-
         let persist_write_handles = persist_handles::PersistWriteWorker::new(tx);
         let collection_manager_write_handle = persist_write_handles.clone();
 
@@ -871,7 +685,6 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
             exported_collections: BTreeMap::default(),
-            stash,
             persist_write_handles,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
             stashed_response: None,
@@ -898,8 +711,6 @@ where
     T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-    MetadataExportFetcher: MetadataExport<T>,
-    DurableExportMetadata<T>: mz_stash::Data,
 {
     type Timestamp = T;
 
@@ -1001,51 +812,87 @@ where
         // concurrently as possible. There are inline comments explaining the motivation
         // behind each section
 
-        // Perform all stash writes in a single transaction, to minimize transaction overhead and
-        // the time spent waiting for stash.
-        METADATA_COLLECTION
-            .insert_without_overwrite(
-                &mut self.state.stash,
-                collections.iter().map(|(id, _)| {
-                    (
-                        *id,
-                        DurableCollectionMetadata {
-                            remap_shard: ShardId::new(),
-                            data_shard: ShardId::new(),
-                        },
-                    )
-                }),
-            )
-            .await?;
+        // First, collect all required changes in durable state. Then commit
+        // them all at once and use the bindings that we made durable.
+        let mut required_state_updates = Vec::new();
+        for (id, _description) in collections.iter() {
+            let data_shard = self.durable_state.get_data_shard(id);
+            if data_shard.is_none() {
+                let mut updates = self
+                    .durable_state
+                    .prepare_upsert_data_shard(id.clone(), ShardId::new());
+                required_state_updates.append(&mut updates);
+            }
 
-        let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
+            let remap_shard = self.durable_state.get_remap_shard(id);
+            if remap_shard.is_none() {
+                let mut updates = self
+                    .durable_state
+                    .prepare_upsert_remap_shard(id.clone(), ShardId::new());
+                required_state_updates.append(&mut updates);
+            }
+        }
+
+        let res = self
+            .durable_state
+            .commit_updates(required_state_updates)
+            .await;
+
+        match res {
+            Ok(()) => {
+                // All's well!
+            }
+            Err(upper_mismatch) => {
+                // TODO(aljoscha): We could do a number of things in here:
+                // Assume there is only one controller and halt once we get a
+                // mismatch, because it means someone else took over. Or we
+                // could retry and use the updates that the other controller
+                // committed.
+                //
+                // One problem is figuring out fencing. Before, we used the
+                // stash to fence out older controller versions.
+                halt!(
+                    "could not update durable controller state: {:?}",
+                    upper_mismatch
+                );
+            }
+        }
 
         // We first enrich each collection description with some additional metadata...
-        use futures::stream::{StreamExt, TryStreamExt};
         let enriched_with_metdata = collections.into_iter().map(|(id, description)| {
-            let collection_shards = durable_metadata.remove(&id).expect("inserted above");
+            let data_shard = self
+                .durable_state
+                .get_data_shard(&id)
+                .expect("we inserted this");
+            let remap_shard = self
+                .durable_state
+                .get_remap_shard(&id)
+                .expect("we inserted this");
+
             let status_shard = if let Some(status_collection_id) = description.status_collection_id
             {
-                Some(
-                    durable_metadata
-                        .get(&status_collection_id)
-                        .ok_or(StorageError::IdentifierMissing(status_collection_id))?
-                        .data_shard,
-                )
+                let status_shard = self
+                    .durable_state
+                    .get_data_shard(&status_collection_id)
+                    .ok_or(StorageError::IdentifierMissing(status_collection_id))?;
+
+                Some(status_shard)
             } else {
                 None
             };
 
             let metadata = CollectionMetadata {
                 persist_location: self.persist_location.clone(),
-                remap_shard: collection_shards.remap_shard,
-                data_shard: collection_shards.data_shard,
+                remap_shard,
+                data_shard,
                 status_shard,
                 relation_desc: description.desc.clone(),
             };
 
             Ok((id, description, metadata))
         });
+
+        use futures::stream::{StreamExt, TryStreamExt};
 
         // So that we can open `SinceHandle`s for each collections concurrently.
         let persist_client = self
@@ -1314,6 +1161,45 @@ where
             }
         }
 
+        // First, collect all required changes in durable state. Then commit
+        // them all at once and use the bindings that we made durable.
+        let mut required_state_updates = Vec::new();
+        for (export_token, description) in exports.iter() {
+            let as_of = self.durable_state.get_export_as_of(&export_token.id);
+            if as_of.is_none() {
+                let mut updates = self.durable_state.prepare_upsert_export_as_of(
+                    export_token.id.clone(),
+                    description.sink.as_of.clone(),
+                );
+                required_state_updates.append(&mut updates);
+            }
+        }
+
+        let res = self
+            .durable_state
+            .commit_updates(required_state_updates)
+            .await;
+
+        match res {
+            Ok(()) => {
+                // All's well!
+            }
+            Err(upper_mismatch) => {
+                // TODO(aljoscha): We could do a number of things in here:
+                // Assume there is only one controller and halt once we get a
+                // mismatch, because it means someone else took over. Or we
+                // could retry and use the updates that the other controller
+                // committed.
+                //
+                // One problem is figuring out fencing. Before, we used the
+                // stash to fence out older controller versions.
+                halt!(
+                    "could not update durable controller state: {:?}",
+                    upper_mismatch
+                );
+            }
+        }
+
         for (CreateExportToken { id, from_id }, description) in exports {
             self.state
                 .exports
@@ -1325,16 +1211,10 @@ where
             // until the sink is started up.
             let from_since = from_collection.implied_capability.clone();
 
-            let as_of = MetadataExportFetcher::get_stash_collection()
-                .insert_key_without_overwrite(
-                    &mut self.state.stash,
-                    id,
-                    DurableExportMetadata {
-                        initial_as_of: description.sink.as_of,
-                    },
-                )
-                .await?
-                .initial_as_of
+            let as_of = self
+                .durable_state
+                .get_export_as_of(&id)
+                .expect("we added this")
                 .maybe_fast_forward(&from_since);
 
             let status_id = if let Some(status_collection_id) = description.sink.status_id {
@@ -1746,20 +1626,28 @@ where
     /// reconcile it with the previous state.
     pub async fn new(
         build_info: &'static BuildInfo,
-        postgres_url: String,
         persist_location: PersistLocation,
         persist_clients: Arc<PersistClientCache>,
         now: NowFn,
-        postgres_factory: &StashFactory,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
+        let persist_client = persist_clients
+            .open(persist_location.clone())
+            .await
+            .unwrap();
+        let durable_state = durable_controller_state::DurableControllerState::new(
+            PersistClient::STORAGE_CONTROLLER_LOG_SHARD,
+            persist_client,
+        )
+        .await;
+
         Self {
             build_info,
-            state: StorageControllerState::new(postgres_url, tx, now, postgres_factory, envd_epoch)
-                .await,
+            state: StorageControllerState::new(tx, now, envd_epoch),
+            durable_state,
             internal_response_queue: rx,
             persist_location,
             persist: persist_clients,
@@ -2034,109 +1922,6 @@ where
         self.append_to_managed_collection(id, updates).await;
     }
 
-    /// Updates the `DurableCollectionMetadata` associated with `id` to
-    /// `new_metadata`.
-    ///
-    /// Any shards changed between the old and the new version will be
-    /// decommissioned/eventually deleted.
-    ///
-    /// Note that this function expects to be called:
-    /// - While no source is currently using the shards identified in the
-    ///   current metadata.
-    /// - Before any sources begins using the shards identified in
-    ///   `new_metadata`.
-    async fn _rewrite_collection_metadata(
-        &mut self,
-        id: GlobalId,
-        new_metadata: DurableCollectionMetadata,
-    ) {
-        let current_metadata = METADATA_COLLECTION
-            .peek_key_one(&mut self.state.stash, id)
-            .await
-            .expect("connect to stash");
-
-        let mut replace_data_shard = false;
-
-        let to_delete_shards = match current_metadata {
-            None => {
-                // If this ID has not yet been written, nothing to update.
-                return;
-            }
-            Some(metadata) => {
-                if metadata == new_metadata {
-                    return;
-                }
-
-                let mut to_delete_shards = vec![];
-                for (old, new, desc, data_shard_replaced) in [
-                    (metadata.data_shard, new_metadata.data_shard, "data", true),
-                    (
-                        metadata.remap_shard,
-                        new_metadata.remap_shard,
-                        "remap",
-                        false,
-                    ),
-                ] {
-                    if old != new {
-                        info!(
-                            "replacing {:?}'s {} shard {:?} with {:?}",
-                            id, desc, old, new
-                        );
-                        to_delete_shards
-                            .push((old, format!("retired {} shard for {:?}", desc, id)));
-
-                        replace_data_shard = replace_data_shard | data_shard_replaced;
-                    }
-                }
-
-                to_delete_shards
-            }
-        };
-
-        self.register_shards_for_finalization(to_delete_shards.iter().map(|(shard, _)| *shard))
-            .await;
-
-        // Perform the update.
-        METADATA_COLLECTION
-            .upsert(&mut self.state.stash, vec![(id, new_metadata.clone())])
-            .await
-            .expect("connect to stash");
-
-        self.finalize_shards(&to_delete_shards).await;
-
-        let DurableCollectionMetadata {
-            remap_shard,
-            data_shard,
-        } = new_metadata;
-
-        // Update in memory collection metadata if the collection has been
-        // registered.
-        if let Some(metadata) = self.state.collections.get_mut(&id) {
-            metadata.collection_metadata.data_shard = data_shard;
-            metadata.collection_metadata.remap_shard = remap_shard;
-
-            if replace_data_shard {
-                let persist_client = self
-                    .persist
-                    .open(self.persist_location.clone())
-                    .await
-                    .unwrap();
-
-                let relation_desc = metadata.collection_metadata.relation_desc.clone();
-
-                // This will halt! if any of the handles cannot be acquired
-                // because we're not the leader anymore. But that's fine, we
-                // already updated all the persistent state (in stash).
-                let (write, since_handle) = self
-                    .acquire_data_handles(id, data_shard, relation_desc, &persist_client)
-                    .await;
-
-                self.state.persist_write_handles.update(id, write);
-                self.state.persist_read_handles.update(id, since_handle);
-            }
-        }
-    }
-
     /// Closes the identified shards from further reads or writes.
     ///
     /// The string accompanying the `ShardId` is the shard's "purpose",
@@ -2148,7 +1933,7 @@ where
                 let mut all_registered = true;
                 for (shard, _) in shards {
                     all_registered =
-                        self.is_shard_registered_for_finalization(*shard).await && all_registered
+                        self.is_shard_registered_for_finalization(*shard) && all_registered
                 }
                 all_registered
             },

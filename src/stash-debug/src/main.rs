@@ -106,7 +106,6 @@ use mz_ore::{
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash::{Stash, StashFactory};
-use mz_storage_client::controller as storage;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
@@ -261,7 +260,7 @@ impl Usage {
         BTreeSet::from_iter(
             match self {
                 Self::Catalog => catalog::ALL_COLLECTIONS,
-                Self::Storage => storage::ALL_COLLECTIONS,
+                Self::Storage => &[],
             }
             .iter()
             .map(|s| s.to_string()),
@@ -300,10 +299,7 @@ impl Usage {
                 dump_col!(catalog::COLLECTION_AUDIT_LOG);
                 dump_col!(catalog::COLLECTION_STORAGE_USAGE);
             }
-            Usage::Storage => {
-                dump_col!(storage::METADATA_COLLECTION);
-                dump_col!(storage::METADATA_EXPORT);
-            }
+            Usage::Storage => {}
         }
         let data = BTreeMap::from_iter(collections);
         let data_names = BTreeSet::from_iter(data.keys().map(|k| k.to_string()));
@@ -359,10 +355,7 @@ impl Usage {
                 edit_col!(catalog::COLLECTION_AUDIT_LOG);
                 edit_col!(catalog::COLLECTION_STORAGE_USAGE);
             }
-            Usage::Storage => {
-                edit_col!(storage::METADATA_COLLECTION);
-                edit_col!(storage::METADATA_EXPORT);
-            }
+            Usage::Storage => {}
         }
         anyhow::bail!("unknown collection {} for stash {:?}", collection, self)
     }

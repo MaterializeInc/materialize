@@ -452,6 +452,10 @@ impl PersistClient {
     pub const CONTROLLER_CRITICAL_SINCE: CriticalReaderId =
         CriticalReaderId([0, 0, 0, 0, 17, 17, 34, 34, 51, 51, 68, 68, 68, 68, 68, 68]);
 
+    /// A fixed shard it for the durable log of storage controller state.
+    pub const STORAGE_CONTROLLER_LOG_SHARD: ShardId =
+        ShardId([0, 0, 0, 0, 17, 17, 34, 34, 51, 51, 68, 68, 68, 68, 68, 68]);
+
     /// Provides a capability for the durable TVC identified by `shard_id` at
     /// its current since frontier.
     ///

@@ -14,6 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use differential_dataflow::lattice::Lattice;
+use mz_ore::halt;
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 
@@ -22,15 +23,11 @@ use mz_persist_client::ShardId;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::TimestampManipulation;
-use mz_stash::{self, TypedCollection};
 
 use crate::client::{StorageCommand, StorageResponse};
 use crate::controller::{ProtoStorageCommand, ProtoStorageResponse};
 
 use super::Controller;
-
-pub(super) static SHARD_FINALIZATION: TypedCollection<ShardId, ()> =
-    TypedCollection::new("storage-shards-to-finalize");
 
 impl<T> Controller<T>
 where
@@ -41,12 +38,8 @@ where
     Self: super::StorageController<Timestamp = T>,
 {
     /// `true` if shard is in register for shards marked for finalization.
-    pub(super) async fn is_shard_registered_for_finalization(&mut self, shard: ShardId) -> bool {
-        SHARD_FINALIZATION
-            .peek_key_one(&mut self.state.stash, shard)
-            .await
-            .expect("must be able to connect to stash")
-            .is_some()
+    pub(super) fn is_shard_registered_for_finalization(&mut self, shard: ShardId) -> bool {
+        self.durable_state.is_in_finalization_wal(&shard)
     }
 
     /// Register shards for finalization. This must be called if you intend to
@@ -61,13 +54,33 @@ where
     where
         I: IntoIterator<Item = ShardId>,
     {
-        SHARD_FINALIZATION
-            .insert_without_overwrite(
-                &mut self.state.stash,
-                entries.into_iter().map(|key| (key, ())),
-            )
-            .await
-            .expect("must be able to write to stash")
+        let mut updates = Vec::new();
+
+        for shard in entries.into_iter() {
+            updates.append(&mut self.durable_state.prepare_insert_finalized_shard(shard));
+        }
+
+        let res = self.durable_state.commit_updates(updates).await;
+
+        match res {
+            Ok(()) => {
+                // All's well!
+            }
+            Err(upper_mismatch) => {
+                // TODO(aljoscha): We could do a number of things in here:
+                // Assume there is only one controller and halt once we get a
+                // mismatch, because it means someone else took over. Or we
+                // could retry and use the updates that the other controller
+                // committed.
+                //
+                // One problem is figuring out fencing. Before, we used the
+                // stash to fence out older controller versions.
+                halt!(
+                    "could not update durable controller state: {:?}",
+                    upper_mismatch
+                );
+            }
+        }
     }
 
     /// Removes the shard from the finalization register.
@@ -78,57 +91,61 @@ where
         &mut self,
         shards: BTreeSet<ShardId>,
     ) {
-        SHARD_FINALIZATION
-            .delete(&mut self.state.stash, move |k, _v| shards.contains(k))
-            .await
-            .expect("must be able to write to stash")
+        let mut updates = Vec::new();
+
+        for shard in shards.into_iter() {
+            updates.append(&mut self.durable_state.prepare_remove_finalized_shard(shard));
+        }
+
+        let res = self.durable_state.commit_updates(updates).await;
+
+        match res {
+            Ok(()) => {
+                // All's well!
+            }
+            Err(upper_mismatch) => {
+                // TODO(aljoscha): We could do a number of things in here:
+                // Assume there is only one controller and halt once we get a
+                // mismatch, because it means someone else took over. Or we
+                // could retry and use the updates that the other controller
+                // committed.
+                //
+                // One problem is figuring out fencing. Before, we used the
+                // stash to fence out older controller versions.
+                halt!(
+                    "could not update durable controller state: {:?}",
+                    upper_mismatch
+                );
+            }
+        }
     }
 
     /// Reconcile the state of `SHARD_FINALIZATION_WAL` with
     /// `super::METADATA_COLLECTION` on boot.
     pub(super) async fn reconcile_shards(&mut self) {
         // Get all shards in the WAL.
-        let registered_shards: BTreeSet<_> = SHARD_FINALIZATION
-            .peek_one(&mut self.state.stash)
-            .await
-            .expect("must be able to read from stash")
+        let registered_shards: BTreeSet<_> = self
+            .durable_state
+            .get_finalization_wal()
             .into_iter()
-            .map(|(shard_id, _)| shard_id)
             .collect();
 
         if registered_shards.is_empty() {
             return;
         }
 
-        // Get all shards we're aware of from stash.
-        let all_shard_data: BTreeMap<_, _> = super::METADATA_COLLECTION
-            .peek_one(&mut self.state.stash)
-            .await
-            .expect("must be able to read from stash")
+        // Get all shards we're aware of from durable state.
+        let all_data_shards = self.durable_state.get_all_data_shards();
+        let all_remap_shards = self.durable_state.get_all_remap_shards();
+        let all_shard_data: BTreeMap<_, _> = all_data_shards
             .into_iter()
-            .map(
-                |(
-                    id,
-                    // TODO(guswynn): produce the schema for each shard.
-                    super::DurableCollectionMetadata {
-                        remap_shard,
-                        data_shard,
-                    },
-                )| { [(id, [remap_shard, data_shard])] },
-            )
-            .flatten()
+            .chain(all_remap_shards.into_iter())
             .collect();
 
         // Consider shards in use if they are still attached to a collection.
         let in_use_shards: BTreeSet<_> = all_shard_data
             .into_iter()
-            .filter_map(|(id, shards)| {
-                self.state
-                    .collections
-                    .get(&id)
-                    .map(|_| Some(shards.to_vec()))
-            })
-            .flatten()
+            .filter_map(|(id, shard)| self.state.collections.get(&id).map(|_| Some(shard)))
             .flatten()
             .collect();
 
