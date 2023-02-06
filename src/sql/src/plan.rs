@@ -366,6 +366,9 @@ pub struct CreateViewPlan {
     /// The ID of the object that this view is replacing, if any.
     pub replace: Option<GlobalId>,
     pub if_not_exists: bool,
+    /// True if the view contains an expression that can make the exact column list
+    /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
+    pub ambiguous_columns: bool,
 }
 
 #[derive(Debug)]
@@ -375,6 +378,9 @@ pub struct CreateMaterializedViewPlan {
     /// The ID of the object that this view is replacing, if any.
     pub replace: Option<GlobalId>,
     pub if_not_exists: bool,
+    /// True if the materialized view contains an expression that can make the exact column list
+    /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
+    pub ambiguous_columns: bool,
 }
 
 #[derive(Debug)]

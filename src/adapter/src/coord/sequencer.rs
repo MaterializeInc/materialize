@@ -1401,6 +1401,12 @@ impl Coordinator {
         plan: CreateViewPlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
+        if plan.ambiguous_columns && depends_on.iter().any(|id| id.is_system()) {
+            return Err(AdapterError::Unsupported(
+                "ambiguous column references, like NATURAL JOIN or SELECT *, in a view with system tables",
+            ));
+        }
+
         let if_not_exists = plan.if_not_exists;
         let ops = self
             .generate_view_ops(
@@ -1484,6 +1490,7 @@ impl Coordinator {
                 },
             replace,
             if_not_exists,
+            ambiguous_columns,
         } = plan;
 
         if !self
@@ -1499,6 +1506,12 @@ impl Coordinator {
         }
 
         self.validate_timeline_context(depends_on.clone())?;
+
+        if ambiguous_columns && depends_on.iter().any(|id| id.is_system()) {
+            return Err(AdapterError::Unsupported(
+                "ambiguous column references, like NATURAL JOIN or SELECT *, in a materialized view with system tables",
+            ));
+        }
 
         // Materialized views are not allowed to depend on log sources, as replicas
         // are not producing the same definite collection for these.

@@ -1700,6 +1700,7 @@ pub fn plan_create_view(
         view,
         replace,
         if_not_exists: *if_exists == IfExistsBehavior::Skip,
+        ambiguous_columns: *scx.ambiguous_columns.borrow(),
     }))
 }
 
@@ -1780,6 +1781,7 @@ pub fn plan_create_materialized_view(
         },
         replace,
         if_not_exists,
+        ambiguous_columns: *scx.ambiguous_columns.borrow(),
     }))
 }
 
