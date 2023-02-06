@@ -10,7 +10,7 @@
 mode cockroach
 
 statement error ambiguous column references
-CREATE VIEW v AS SELECT * FROM mz_schemas
+CREATE VIEW v AS SELECT * FROM mz_schemas;
 
 statement error ambiguous column references
 CREATE VIEW v AS SELECT id FROM mz_columns NATURAL JOIN mz_indexes;
@@ -44,3 +44,25 @@ CREATE VIEW v1 AS SELECT oid FROM mz_objects;
 
 statement ok
 CREATE VIEW v2 AS SELECT * FROM v1;
+
+# Queries are fine
+
+query IIIT
+SELECT * FROM mz_schemas LIMIT 0;
+----
+
+query TTIBTTIITTT
+SELECT id FROM mz_columns NATURAL JOIN mz_indexes LIMIT 0;
+----
+
+query TIIT
+SELECT (mz_tables).* FROM mz_tables LIMIT 0;
+----
+
+query TIITT
+SELECT mz_connections.* FROM mz_connections LIMIT 0;
+----
+
+query TI
+SELECT * FROM (SELECT id, oid FROM mz_sources) LIMIT 0;
+----

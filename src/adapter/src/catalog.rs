@@ -2037,6 +2037,23 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Log(_))
     }
 
+    /// Reports whether this catalog entry can be treated as a relation, it can produce rows.
+    pub fn is_relation(&self) -> bool {
+        match self.item {
+            CatalogItem::Table(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Index(_) => true,
+            CatalogItem::Sink(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => false,
+        }
+    }
+
     /// Collects the identifiers of the dataflows that this dataflow depends
     /// upon.
     pub fn uses(&self) -> &[GlobalId] {

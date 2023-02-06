@@ -1401,9 +1401,13 @@ impl Coordinator {
         plan: CreateViewPlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        if plan.ambiguous_columns && depends_on.iter().any(|id| id.is_system()) {
+        if plan.ambiguous_columns
+            && depends_on
+                .iter()
+                .any(|id| id.is_system() && self.catalog.get_entry(id).is_relation())
+        {
             return Err(AdapterError::Unsupported(
-                "ambiguous column references, like NATURAL JOIN or SELECT *, in a view with system tables",
+                "ambiguous column references, like NATURAL JOIN or SELECT *, in a view with system objects",
             ));
         }
 
@@ -1507,9 +1511,13 @@ impl Coordinator {
 
         self.validate_timeline_context(depends_on.clone())?;
 
-        if ambiguous_columns && depends_on.iter().any(|id| id.is_system()) {
+        if ambiguous_columns
+            && depends_on
+                .iter()
+                .any(|id| id.is_system() && self.catalog.get_entry(id).is_relation())
+        {
             return Err(AdapterError::Unsupported(
-                "ambiguous column references, like NATURAL JOIN or SELECT *, in a materialized view with system tables",
+                "ambiguous column references, like NATURAL JOIN or SELECT *, in a materialized view with system objects",
             ));
         }
 
