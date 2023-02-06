@@ -68,7 +68,7 @@ impl crate::Transform for Normalize {
                 // (c) Fuse join trees (might lift in-between Filters).
                 crate::fusion::join::Join::action(expr)?;
                 // (d) Extract column references in Map as Project.
-                crate::projection_extraction::ProjectionExtraction::action(expr)?;
+                crate::canonicalization::ProjectionExtraction::action(expr);
                 // Done!
                 Ok(())
             },
