@@ -316,6 +316,27 @@ where
             inner: Some(RangeInner { lower, upper }),
         })
     }
+
+    pub fn intersection(&self, other: &Range<B>) -> Range<B> {
+        // Handle self or other being empty
+        let (s, o) = match (self.inner, other.inner) {
+            (Some(s), Some(o)) => {
+                if !self.overlaps(other) {
+                    return Range { inner: None };
+                }
+
+                (s, o)
+            }
+            _ => return Range { inner: None },
+        };
+
+        let lower = std::cmp::max(s.lower, o.lower);
+        let upper = std::cmp::min(s.upper, o.upper);
+
+        Range {
+            inner: Some(RangeInner { lower, upper }),
+        }
+    }
 }
 
 impl<'a> Range<Datum<'a>> {
