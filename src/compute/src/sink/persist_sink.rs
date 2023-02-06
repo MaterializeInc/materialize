@@ -30,7 +30,7 @@ use tracing::trace;
 use mz_compute_client::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
-use mz_persist_client::batch::Batch;
+use mz_persist_client::batch::{Batch, BatchBuilder};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriterEnrichedHollowBatch;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -937,7 +937,7 @@ where
         #[derive(Debug, Default)]
         struct BatchSet {
             finished: Vec<Batch<SourceData, (), Timestamp, Diff>>,
-            incomplete: Vec<((SourceData, ()), Timestamp, Diff)>
+            incomplete: Option<BatchBuilder<SourceData, (), Timestamp, Diff>>,
         }
 
         let mut in_flight_batches = HashMap::<
@@ -1021,12 +1021,14 @@ where
                                     }
                                     BatchOrData::Data { lower, upper, contents } => {
                                         let batches = in_flight_batches
-                                            .entry((lower, upper))
+                                            .entry((lower.clone(), upper))
                                             .or_default();
-                                        batches.incomplete.extend(
-                                            contents.into_iter()
-                                              .map(|(data, time, diff)| ((SourceData(data), ()), time, diff))
-                                        );
+                                        let builder = batches.incomplete.get_or_insert_with(|| {
+                                            write.builder(lower)
+                                        });
+                                        for (data, time, diff) in contents {
+                                            builder.add(&SourceData(data), &(), &time, &diff).await.expect("invalid usage");
+                                        }
                                     }
                                 }
 
@@ -1092,12 +1094,9 @@ where
                     .unwrap_or_default();
 
                 let mut batches = batch_set.finished;
-                if !batch_set.incomplete.is_empty() {
-                    let (lower, upper) = done_batch_metadata.clone();
-                    let batch = write
-                        .batch(batch_set.incomplete, lower, upper)
-                        .await
-                        .expect("invalid usage");
+                if let Some(builder) = batch_set.incomplete {
+                    let (_lower, upper) = &done_batch_metadata;
+                    let batch = builder.finish(upper.clone()).await.expect("invalid usage");
                     batches.push(batch);
                 }
 
