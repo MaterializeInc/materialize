@@ -24,7 +24,6 @@ use serde::{Deserialize, Serialize};
 use mz_lowertest::MzReflect;
 use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
-use mz_ore::str::separated;
 use mz_ore::vec::swap_remove_multiple;
 use mz_pgrepr::TypeFromOidError;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
@@ -1815,55 +1814,6 @@ impl MirScalarExpr {
                 cond.could_error() || then.could_error() || els.could_error()
             }
         }
-    }
-}
-
-impl fmt::Display for MirScalarExpr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        use MirScalarExpr::*;
-        match self {
-            Column(i) => write!(f, "#{}", i)?,
-            Literal(Ok(row), _) => write!(f, "{}", row.unpack_first())?,
-            Literal(Err(e), _) => write!(f, "(err: {})", e)?,
-            CallUnmaterializable(func) => write!(f, "{}()", func)?,
-            CallUnary { func, expr } => {
-                if let UnaryFunc::Not(_) = *func {
-                    if let CallUnary {
-                        func,
-                        expr: inner_expr,
-                    } = &**expr
-                    {
-                        if let Some(is) = func.is() {
-                            write!(f, "({}) IS NOT {}", inner_expr, is)?;
-                            return Ok(());
-                        }
-                    }
-                }
-                if let Some(is) = func.is() {
-                    write!(f, "({}) IS {}", expr, is)?;
-                } else {
-                    write!(f, "{}({})", func, expr)?;
-                }
-            }
-            CallBinary { func, expr1, expr2 } => {
-                if func.is_infix_op() {
-                    write!(f, "({} {} {})", expr1, func, expr2)?;
-                } else {
-                    write!(f, "{}({}, {})", func, expr1, expr2)?;
-                }
-            }
-            CallVariadic { func, exprs } => {
-                if func.is_infix_op() && exprs.len() > 1 {
-                    write!(f, "({})", separated(&*format!(" {} ", func), exprs.clone()))?;
-                } else {
-                    write!(f, "{}({})", func, separated(", ", exprs.clone()))?;
-                }
-            }
-            If { cond, then, els } => {
-                write!(f, "if {} then {{{}}} else {{{}}}", cond, then, els)?;
-            }
-        }
-        Ok(())
     }
 }
 

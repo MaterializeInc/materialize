@@ -13,7 +13,7 @@ use std::fmt;
 
 use mz_ore::soft_assert;
 use mz_ore::str::{bracketed, separated, Indent, IndentLike, StrExt};
-use mz_repr::explain::text::{fmt_text_constant_rows, separated_text, DisplayText};
+use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{
     CompactScalarSeq, ExprHumanizer, Indices, PlanRenderingContext, RenderingContext,
 };
@@ -25,7 +25,7 @@ use crate::{
     MirRelationExpr, MirScalarExpr, RowSetFinishing,
 };
 
-impl<'a, T: 'a> DisplayText<()> for ExplainSinglePlan<'a, T>
+impl<'a, T: 'a> DisplayText for ExplainSinglePlan<'a, T>
 where
     T: DisplayText<PlanRenderingContext<'a, T>>,
 {
@@ -38,7 +38,7 @@ where
         );
 
         if let Some(finishing) = &self.context.finishing {
-            finishing.fmt_text(f, &mut ctx.indent)?;
+            finishing.fmt_text(f, &mut ctx)?;
             ctx.indented(|ctx| self.plan.plan.fmt_text(f, ctx))?;
         } else {
             self.plan.plan.fmt_text(f, &mut ctx)?;
@@ -53,7 +53,7 @@ where
     }
 }
 
-impl<'a, T: 'a> DisplayText<()> for ExplainMultiPlan<'a, T>
+impl<'a, T: 'a> DisplayText for ExplainMultiPlan<'a, T>
 where
     T: DisplayText<PlanRenderingContext<'a, T>>,
 {
@@ -74,7 +74,7 @@ where
                 match &self.context.finishing {
                     // if present, a RowSetFinishing always applies to the first rendered plan
                     Some(finishing) if no == 0 => {
-                        finishing.fmt_text(f, &mut ctx.indent)?;
+                        finishing.fmt_text(f, ctx)?;
                         ctx.indented(|ctx| plan.plan.fmt_text(f, ctx))?;
                     }
                     // all other plans are rendered without a RowSetFinishing
@@ -104,9 +104,12 @@ where
     }
 }
 
-impl DisplayText<Indent> for RowSetFinishing {
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut Indent) -> fmt::Result {
-        write!(f, "{}Finish", ctx)?;
+impl<C> DisplayText<C> for RowSetFinishing
+where
+    C: AsMut<Indent>,
+{
+    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+        write!(f, "{}Finish", ctx.as_mut())?;
         // order by
         if !self.order_by.is_empty() {
             let order_by = separated(", ", &self.order_by);
@@ -149,7 +152,7 @@ where
         // render `filter` field iff predicates are present
         if !predicates.is_empty() {
             let predicates = predicates.iter().map(|(_, p)| p);
-            let predicates = separated_text(" AND ", predicates);
+            let predicates = separated(" AND ", predicates);
             writeln!(f, "{}filter=({})", ctx.as_mut(), predicates)?;
         }
         // render `map` field iff scalars are present
@@ -316,10 +319,7 @@ impl MirRelationExpr {
                         write!(f, "{}Project ({})", ctx.indent, outputs)?;
                         self.fmt_attributes(f, ctx)
                     },
-                    fmt_children: |f, ctx| {
-                        let input = input.as_ref();
-                        input.fmt_text(f, ctx)
-                    },
+                    fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
                 .render(f, ctx)?;
             }
@@ -330,10 +330,7 @@ impl MirRelationExpr {
                         write!(f, "{}Map ({})", ctx.indent, scalars)?;
                         self.fmt_attributes(f, ctx)
                     },
-                    fmt_children: |f, ctx| {
-                        let input = input.as_ref();
-                        input.fmt_text(f, ctx)
-                    },
+                    fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
                 .render(f, ctx)?;
             }
@@ -344,24 +341,18 @@ impl MirRelationExpr {
                         write!(f, "{}FlatMap {}({})", ctx.indent, func, exprs)?;
                         self.fmt_attributes(f, ctx)
                     },
-                    fmt_children: |f, ctx| {
-                        let input = input.as_ref();
-                        input.fmt_text(f, ctx)
-                    },
+                    fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
                 .render(f, ctx)?;
             }
             Filter { predicates, input } => {
                 FmtNode {
                     fmt_root: |f, ctx| {
-                        let predicates = separated_text(" AND ", predicates);
+                        let predicates = separated(" AND ", predicates);
                         write!(f, "{}Filter {}", ctx.indent, predicates)?;
                         self.fmt_attributes(f, ctx)
                     },
-                    fmt_children: |f, ctx| {
-                        let input = input.as_ref();
-                        input.fmt_text(f, ctx)
-                    },
+                    fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
                 .render(f, ctx)?;
             }
@@ -535,7 +526,7 @@ impl MirRelationExpr {
                             write!(f, " group_by=[{}]", group_key)?;
                         }
                         if aggregates.len() > 0 {
-                            let aggregates = separated_text(", ", aggregates);
+                            let aggregates = separated(", ", aggregates);
                             write!(f, " aggregates=[{}]", aggregates)?;
                         }
                         if let Some(expected_group_size) = expected_group_size {
@@ -543,10 +534,7 @@ impl MirRelationExpr {
                         }
                         self.fmt_attributes(f, ctx)
                     },
-                    fmt_children: |f, ctx| {
-                        let input = input.as_ref();
-                        input.fmt_text(f, ctx)
-                    },
+                    fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
                 .render(f, ctx)?;
             }
@@ -578,10 +566,7 @@ impl MirRelationExpr {
                         write!(f, " monotonic={}", monotonic)?;
                         self.fmt_attributes(f, ctx)
                     },
-                    fmt_children: |f, ctx| {
-                        let input = input.as_ref();
-                        input.fmt_text(f, ctx)
-                    },
+                    fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
                 .render(f, ctx)?;
             }
@@ -591,10 +576,7 @@ impl MirRelationExpr {
                         write!(f, "{}Negate", ctx.indent)?;
                         self.fmt_attributes(f, ctx)
                     },
-                    fmt_children: |f, ctx| {
-                        let input = input.as_ref();
-                        input.fmt_text(f, ctx)
-                    },
+                    fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
                 .render(f, ctx)?;
             }
@@ -604,10 +586,7 @@ impl MirRelationExpr {
                         write!(f, "{}Threshold", ctx.indent)?;
                         self.fmt_attributes(f, ctx)
                     },
-                    fmt_children: |f, ctx| {
-                        let input = input.as_ref();
-                        input.fmt_text(f, ctx)
-                    },
+                    fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
                 .render(f, ctx)?;
             }
@@ -615,7 +594,7 @@ impl MirRelationExpr {
                 write!(f, "{}Union", ctx.indent)?;
                 self.fmt_attributes(f, ctx)?;
                 ctx.indented(|ctx| {
-                    base.as_ref().fmt_text(f, ctx)?;
+                    base.fmt_text(f, ctx)?;
                     for input in inputs.iter() {
                         input.fmt_text(f, ctx)?;
                     }
@@ -629,7 +608,7 @@ impl MirRelationExpr {
                         write!(f, "{}ArrangeBy keys=[[{}]]", ctx.indent, keys)?;
                         self.fmt_attributes(f, ctx)
                     },
-                    fmt_children: |f, ctx| input.as_ref().fmt_text(f, ctx),
+                    fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
                 .render(f, ctx)?;
             }
@@ -743,8 +722,8 @@ where
     }
 }
 
-impl DisplayText for MirScalarExpr {
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut ()) -> fmt::Result {
+impl fmt::Display for MirScalarExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use MirScalarExpr::*;
         match self {
             Column(i) => write!(f, "#{}", i),
@@ -755,86 +734,60 @@ impl DisplayText for MirScalarExpr {
             CallUnmaterializable(func) => write!(f, "{}()", func),
             CallUnary { func, expr } => {
                 if let crate::UnaryFunc::Not(_) = *func {
-                    if let CallUnary {
-                        func,
-                        expr: inner_expr,
-                    } = expr.as_ref()
-                    {
+                    if let CallUnary { func, expr } = expr.as_ref() {
                         if let Some(is) = func.is() {
-                            write!(f, "(")?;
-                            inner_expr.as_ref().fmt_text(f, ctx)?;
-                            write!(f, ") IS NOT {}", is)?;
-                            return Ok(());
+                            return write!(f, "({}) IS NOT {}", expr, is);
                         }
                     }
                 }
                 if let Some(is) = func.is() {
-                    write!(f, "(")?;
-                    expr.as_ref().fmt_text(f, ctx)?;
-                    write!(f, ") IS {}", is)
+                    write!(f, "({}) IS {}", expr, is)
                 } else {
-                    write!(f, "{}(", func)?;
-                    expr.as_ref().fmt_text(f, ctx)?;
-                    write!(f, ")")
+                    write!(f, "{}({})", func, expr)
                 }
             }
             CallBinary { func, expr1, expr2 } => {
                 if func.is_infix_op() {
-                    write!(f, "(")?;
-                    expr1.as_ref().fmt_text(f, ctx)?;
-                    write!(f, " {} ", func)?;
-                    expr2.as_ref().fmt_text(f, ctx)?;
-                    write!(f, ")")
+                    write!(f, "({} {} {})", expr1, func, expr2)
                 } else {
-                    write!(f, "{}", func)?;
-                    write!(f, "(")?;
-                    expr1.as_ref().fmt_text(f, ctx)?;
-                    write!(f, ", ")?;
-                    expr2.as_ref().fmt_text(f, ctx)?;
-                    write!(f, ")")
+                    write!(f, "{}({}, {})", func, expr1, expr2)
                 }
             }
             CallVariadic { func, exprs } => {
                 use crate::VariadicFunc::*;
                 match func {
                     ArrayCreate { .. } => {
-                        let exprs = separated_text(", ", exprs);
+                        let exprs = separated(", ", exprs);
                         write!(f, "array[{}]", exprs)
                     }
                     ListCreate { .. } => {
-                        let exprs = separated_text(", ", exprs);
+                        let exprs = separated(", ", exprs);
                         write!(f, "list[{}]", exprs)
                     }
                     RecordCreate { .. } => {
-                        let exprs = separated_text(", ", exprs);
+                        let exprs = separated(", ", exprs);
                         write!(f, "row({})", exprs)
                     }
                     func if func.is_infix_op() && exprs.len() > 1 => {
                         let func = format!(" {} ", func);
-                        let exprs = separated_text(&func, exprs);
+                        let exprs = separated(&func, exprs);
                         write!(f, "({})", exprs)
                     }
                     func => {
-                        let exprs = separated_text(", ", exprs);
+                        let exprs = separated(", ", exprs);
                         write!(f, "{}({})", func, exprs)
                     }
                 }
             }
             If { cond, then, els } => {
-                write!(f, "case when ")?;
-                cond.as_ref().fmt_text(f, ctx)?;
-                write!(f, " then ")?;
-                then.as_ref().fmt_text(f, ctx)?;
-                write!(f, " else ")?;
-                els.as_ref().fmt_text(f, ctx)?;
-                write!(f, " end")
+                write!(f, "case when {} then {} else {} end", cond, then, els)
             }
         }
     }
 }
 
-impl DisplayText for AggregateExpr {
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut ()) -> fmt::Result {
+impl fmt::Display for AggregateExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.is_count_asterisk() {
             return write!(f, "count(*)");
         }
@@ -846,7 +799,7 @@ impl DisplayText for AggregateExpr {
             if self.distinct { "distinct " } else { "" }
         )?;
 
-        self.expr.fmt_text(f, ctx)?;
+        self.expr.fmt(f)?;
         write!(f, ")")
     }
 }

@@ -67,32 +67,23 @@ impl<'a> Explain<'a> for MirRelationExpr {
 
     type Dot = UnsupportedFormat;
 
-    fn explain_text(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Text, ExplainError> {
-        self.as_explain_single_plan(config, context)
+    fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_single_plan(context)
     }
 
-    fn explain_json(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Json, ExplainError> {
-        self.as_explain_single_plan(config, context)
+    fn explain_json(&'a mut self, context: &'a Self::Context) -> Result<Self::Json, ExplainError> {
+        self.as_explain_single_plan(context)
     }
 }
 
 impl<'a> MirRelationExpr {
     fn as_explain_single_plan(
         &'a mut self,
-        config: &'a ExplainConfig,
         context: &'a ExplainContext<'a>,
     ) -> Result<ExplainSinglePlan<'a, MirRelationExpr>, ExplainError> {
         // normalize the representation as linear chains
-        // (this implies !config.raw_plans by construction)
-        if config.linear_chains {
+        // (this implies !context.config.raw_plans by construction)
+        if context.config.linear_chains {
             enforce_linear_chains(self)?;
         };
 

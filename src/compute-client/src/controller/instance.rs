@@ -1140,6 +1140,14 @@ where
         response: SubscribeResponse<T>,
         replica_id: ReplicaId,
     ) -> Option<ComputeControllerResponse<T>> {
+        // We should not receive updates for subscribes we don't track. It is possible that we
+        // currently do due to a bug where replicas send `DroppedAt` responses for subscribes they
+        // drop during reconciliation.
+        // TODO(teskje): Revisit this after #16247 is resolved.
+        if !self.compute.collections.contains_key(&subscribe_id) {
+            return None;
+        }
+
         // Always apply write frontier updates. Even if the subscribe is not tracked anymore, there
         // might still be replicas reading from its inputs, so we need to track the frontiers until
         // all replicas have advanced to the empty one.

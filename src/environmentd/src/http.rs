@@ -114,6 +114,7 @@ impl HttpServer {
             .expect("rx known to be live");
 
         let base_router = base_router(BaseRouterConfig { profiling: false })
+            .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
             .layer(middleware::from_fn(move |req, next| {
                 let base_frontegg = Arc::clone(&base_frontegg);
                 async move { http_auth(req, next, tls_mode, &base_frontegg).await }
@@ -237,6 +238,7 @@ impl InternalHttpServer {
                 "/api/catalog",
                 routing::get(catalog::handle_internal_catalog),
             )
+            .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
             .layer(Extension(AuthedUser {
                 user: SYSTEM_USER.clone(),
                 create_if_not_exists: false,
@@ -526,6 +528,8 @@ struct BaseRouterConfig {
 /// Returns the router for routes that are shared between the internal and
 /// external HTTP servers.
 fn base_router(BaseRouterConfig { profiling }: BaseRouterConfig) -> Router {
+    // Adding a layer with in this function will only apply to the routes defined in this function.
+    // https://docs.rs/axum/0.6.1/axum/routing/struct.Router.html#method.layer
     let mut router = Router::new()
         .route(
             "/",
@@ -537,8 +541,7 @@ fn base_router(BaseRouterConfig { profiling }: BaseRouterConfig) -> Router {
             "/hierarchical-memory",
             routing::get(memory::handle_hierarchical_memory),
         )
-        .route("/static/*path", routing::get(root::handle_static))
-        .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE));
+        .route("/static/*path", routing::get(root::handle_static));
     if profiling {
         router = router.nest("/prof/", mz_prof::http::router(&BUILD_INFO));
     }
