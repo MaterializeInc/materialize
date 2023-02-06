@@ -88,9 +88,10 @@ use itertools::Itertools;
 use reqwest::blocking::Client;
 use reqwest::Url;
 use tracing::info;
-use tungstenite::Message;
+use tungstenite::error::ProtocolError;
+use tungstenite::{Error, Message};
 
-use mz_environmentd::{WebSocketAuth, WebSocketResponse};
+use mz_environmentd::WebSocketResponse;
 use mz_ore::retry::Retry;
 use mz_pgrepr::UInt8;
 
@@ -258,30 +259,7 @@ fn test_http_sql() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-
-        ws.write_message(Message::Text(
-            serde_json::to_string(&WebSocketAuth::Basic {
-                user: "materialize".into(),
-                password: "".into(),
-            })
-            .unwrap(),
-        ))
-        .unwrap();
-        // Wait for initial ready response.
-        loop {
-            let resp = ws.read_message().unwrap();
-            match resp {
-                Message::Text(msg) => {
-                    let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
-                    match msg {
-                        WebSocketResponse::ReadyForQuery(_) => break,
-                        _ => {}
-                    }
-                }
-                Message::Ping(_) => continue,
-                _ => panic!("unexpected response: {:?}", resp),
-            }
-        }
+        util::auth_with_ws(&mut ws);
 
         f.run(|tc| {
             let msg = match tc.directive.as_str() {
@@ -725,15 +703,12 @@ fn test_default_cluster_sizes() {
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
     let statement_size = statement.bytes().count();
+    let server = util::start_server(util::Config::default()).unwrap();
 
     // pgwire
     {
         let param_size = mz_pgwire::MAX_REQUEST_SIZE - statement_size + 1;
         let param = std::iter::repeat("1").take(param_size).join("");
-        let config = util::Config::default()
-            .with_builtin_cluster_replica_size("1".to_string())
-            .with_default_cluster_replica_size("2".to_string());
-        let server = util::start_server(config).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         // The specific error isn't forwarded to the client, the connection is just closed.
@@ -745,7 +720,6 @@ fn test_max_request_size() {
     {
         let param_size = mz_environmentd::http::MAX_REQUEST_SIZE - statement_size + 1;
         let param = std::iter::repeat("1").take(param_size).join("");
-        let server = util::start_server(util::Config::default()).unwrap();
         let http_url = Url::parse(&format!(
             "http://{}/api/sql",
             server.inner.http_local_addr()
@@ -755,5 +729,29 @@ fn test_max_request_size() {
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
         let res = Client::new().post(http_url).json(&json).send().unwrap();
         assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    // ws
+    {
+        let param_size = mz_environmentd::http::MAX_REQUEST_SIZE - statement_size + 1;
+        let param = std::iter::repeat("1").take(param_size).join("");
+        let ws_url = Url::parse(&format!(
+            "ws://{}/api/experimental/sql",
+            server.inner.http_local_addr()
+        ))
+        .unwrap();
+        let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+        util::auth_with_ws(&mut ws);
+        let json =
+            format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[\"{param}\"]}}]}}");
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        ws.write_message(Message::Text(json.to_string())).unwrap();
+
+        // The specific error isn't forwarded to the client, the connection is just closed.
+        let err = ws.read_message().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)
+        ));
     }
 }

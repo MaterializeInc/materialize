@@ -35,7 +35,7 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
 use mz_sql::plan::Plan;
 
-use crate::http::AuthedClient;
+use crate::http::{AuthedClient, MAX_REQUEST_SIZE};
 
 use super::{init_ws, WsState};
 
@@ -61,7 +61,8 @@ pub async fn handle_sql_ws(
     State(state): State<WsState>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    ws.on_upgrade(|ws| async move { run_ws(&state, ws).await })
+    ws.max_message_size(MAX_REQUEST_SIZE)
+        .on_upgrade(|ws| async move { run_ws(&state, ws).await })
 }
 
 #[derive(Serialize, Deserialize, Debug)]
