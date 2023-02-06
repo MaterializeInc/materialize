@@ -13,7 +13,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 use mz_compute_client::controller::error::{
-    CollectionUpdateError, DataflowCreationError, PeekError, SubscribeTargetError,
+    CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, SubscribeTargetError,
 };
 use mz_controller::clusters::ClusterId;
 use mz_ore::halt;
@@ -362,5 +362,11 @@ impl ShouldHalt for TransformError {
             | TransformError::LetRecUnsupported
             | TransformError::IdentifierMissing(_) => false,
         }
+    }
+}
+
+impl ShouldHalt for InstanceMissing {
+    fn should_halt(&self) -> bool {
+        false
     }
 }

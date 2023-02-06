@@ -2271,7 +2271,7 @@ impl Coordinator {
             view_id,
             index_id,
             timeline_context,
-            &source_ids,
+            source_ids,
             id_bundle,
             in_immediate_multi_stmt_txn,
             real_time_recency_ts,
@@ -2326,7 +2326,7 @@ impl Coordinator {
         view_id: GlobalId,
         index_id: GlobalId,
         timeline_context: TimelineContext,
-        source_ids: &BTreeSet<GlobalId>,
+        source_ids: BTreeSet<GlobalId>,
         id_bundle: CollectionIdBundle,
         in_immediate_multi_stmt_txn: bool,
         real_time_recency_ts: Option<Timestamp>,
@@ -2346,7 +2346,7 @@ impl Coordinator {
                     // Determine a timestamp that will be valid for anything in any schema
                     // referenced by the first query.
                     let id_bundle =
-                        self.timedomain_for(source_ids, &timeline_context, conn_id, cluster_id)?;
+                        self.timedomain_for(&source_ids, &timeline_context, conn_id, cluster_id)?;
                     // We want to prevent compaction of the indexes consulted by
                     // determine_timestamp, not the ones listed in the query.
                     let timestamp = self.determine_timestamp(
@@ -2488,6 +2488,7 @@ impl Coordinator {
             conn_id,
             source_arity: source.arity(),
             id_bundle,
+            source_ids,
         })
     }
 

@@ -20,6 +20,7 @@ use tracing::Level;
 use tracing::{event, warn};
 
 use mz_audit_log::VersionedEvent;
+use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ClusterId;
 use mz_ore::retry::Retry;
 use mz_ore::task;
@@ -96,6 +97,7 @@ impl Coordinator {
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
+        let mut peeks_to_drop = vec![];
 
         for op in &ops {
             if let catalog::Op::DropItem(id) = op {
@@ -198,7 +200,7 @@ impl Coordinator {
             }
         }
 
-        let removed_relations: BTreeSet<_> = sources_to_drop
+        let relations_to_drop: BTreeSet<_> = sources_to_drop
             .iter()
             .chain(log_sources_to_drop.iter().map(|(_, id)| id))
             .chain(tables_to_drop.iter())
@@ -206,11 +208,12 @@ impl Coordinator {
             .chain(indexes_to_drop.iter().map(|(_, id)| id))
             .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
             .collect();
+        // Clean up any active subscribes that rely on dropped relations.
         for (sink_id, active_subscribe) in &self.active_subscribes {
             if let Some(id) = active_subscribe
                 .depends_on
                 .iter()
-                .find(|id| removed_relations.contains(id))
+                .find(|id| relations_to_drop.contains(id))
             {
                 let conn_id = active_subscribe.conn_id;
                 let entry = self.catalog.get_entry(id);
@@ -222,6 +225,20 @@ impl Coordinator {
                         global_id: *sink_id,
                     },
                 ));
+            }
+        }
+        // Clean up any pending peeks that rely on dropped relations.
+        for (uuid, pending_peek) in &self.pending_peeks {
+            if let Some(id) = pending_peek
+                .depends_on
+                .iter()
+                .find(|id| relations_to_drop.contains(id))
+            {
+                let entry = self.catalog.get_entry(id);
+                let name = self
+                    .catalog
+                    .resolve_full_name(entry.name(), Some(pending_peek.conn_id));
+                peeks_to_drop.push((name.to_string(), uuid.clone()));
             }
         }
 
@@ -309,6 +326,20 @@ impl Coordinator {
                     }
                 }
                 self.drop_compute_sinks(subscribe_sinks_to_drop);
+            }
+            if !peeks_to_drop.is_empty() {
+                for (dropped_name, uuid) in peeks_to_drop {
+                    if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
+                        self.controller
+                            .active_compute()
+                            .cancel_peeks(pending_peek.cluster_id, vec![uuid].into_iter().collect())
+                            .unwrap_or_terminate("unable to cancel peek");
+                        // Client may have left.
+                        let _ = pending_peek.sender.send(PeekResponse::Error(format!(
+                            "query could not complete because {dropped_name} was dropped"
+                        )));
+                    }
+                }
             }
             if !indexes_to_drop.is_empty() {
                 self.drop_indexes(indexes_to_drop);
