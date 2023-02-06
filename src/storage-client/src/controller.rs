@@ -73,6 +73,7 @@ use crate::types::sources::{IngestionDescription, SourceData, SourceExport};
 
 mod collection_mgmt;
 mod command_wals;
+mod durable_controller_state;
 mod persist_handles;
 mod rehydration;
 mod statistics;

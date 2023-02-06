@@ -4834,6 +4834,7 @@ dependencies = [
  "rdkafka",
  "regex",
  "serde",
+ "serde_json",
  "thiserror",
  "timely",
  "tokio",
