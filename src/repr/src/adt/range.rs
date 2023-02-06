@@ -294,6 +294,28 @@ where
             _ => false,
         }
     }
+
+    pub fn union(&self, other: &Range<B>) -> Result<Range<B>, InvalidRangeError> {
+        // Handle self or other being empty
+        let (s, o) = match (self.inner, other.inner) {
+            (None, None) => return Ok(Range { inner: None }),
+            (inner @ Some(_), None) | (None, inner @ Some(_)) => return Ok(Range { inner }),
+            (Some(s), Some(o)) => {
+                // if not overlapping or adjacent, then result would not present continuity, so error.
+                if !(self.overlaps(other) || self.adjacent(other)) {
+                    return Err(InvalidRangeError::DiscontiguousUnion);
+                }
+                (s, o)
+            }
+        };
+
+        let lower = std::cmp::min(s.lower, o.lower);
+        let upper = std::cmp::max(s.upper, o.upper);
+
+        Ok(Range {
+            inner: Some(RangeInner { lower, upper }),
+        })
+    }
 }
 
 impl<'a> Range<Datum<'a>> {
@@ -571,6 +593,7 @@ pub enum InvalidRangeError {
     MisorderedRangeBounds,
     CanonicalizationOverflow(String),
     InvalidRangeBoundFlags,
+    DiscontiguousUnion,
 }
 
 impl Display for InvalidRangeError {
@@ -583,6 +606,9 @@ impl Display for InvalidRangeError {
                 write!(f, "{} out of range", t)
             }
             InvalidRangeError::InvalidRangeBoundFlags => f.write_str("invalid range bound flags"),
+            InvalidRangeError::DiscontiguousUnion => {
+                f.write_str("result of range union would not be contiguous")
+            }
         }
     }
 }
@@ -608,6 +634,7 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
             InvalidRangeError::MisorderedRangeBounds => MisorderedRangeBounds(()),
             InvalidRangeError::CanonicalizationOverflow(s) => CanonicalizationOverflow(s.clone()),
             InvalidRangeError::InvalidRangeBoundFlags => InvalidRangeBoundFlags(()),
+            InvalidRangeError::DiscontiguousUnion => DiscontiguousUnion(()),
         };
         ProtoInvalidRangeError { kind: Some(kind) }
     }
@@ -619,6 +646,7 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
                 MisorderedRangeBounds(()) => InvalidRangeError::MisorderedRangeBounds,
                 CanonicalizationOverflow(s) => InvalidRangeError::CanonicalizationOverflow(s),
                 InvalidRangeBoundFlags(()) => InvalidRangeError::InvalidRangeBoundFlags,
+                DiscontiguousUnion(()) => InvalidRangeError::DiscontiguousUnion,
             }),
             None => Err(TryFromProtoError::missing_field(
                 "`ProtoInvalidRangeError::kind`",

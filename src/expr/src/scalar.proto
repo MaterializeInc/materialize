@@ -596,6 +596,7 @@ message ProtoBinaryFunc {
         google.protobuf.Empty range_overleft = 177;
         google.protobuf.Empty range_overright = 178;
         google.protobuf.Empty range_adjacent = 179;
+        google.protobuf.Empty range_union = 180;
     }
 }
 
