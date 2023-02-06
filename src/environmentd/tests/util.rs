@@ -75,7 +75,7 @@
 // END LINT CONFIG
 
 use std::error::Error;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -96,7 +96,7 @@ use tokio_postgres::Client;
 use tower_http::cors::AllowOrigin;
 
 use mz_controller::ControllerConfig;
-use mz_environmentd::TlsMode;
+use mz_environmentd::{TlsMode, WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::metrics::MetricsRegistry;
@@ -111,6 +111,8 @@ use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
+use tungstenite::stream::MaybeTlsStream;
+use tungstenite::{Message, WebSocket};
 
 pub static KAFKA_ADDRS: Lazy<String> =
     Lazy::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
@@ -610,4 +612,30 @@ pub fn wait_for_view_population(
         "SET transaction_isolation = '{current_isolation}'"
     ))?;
     Ok(())
+}
+
+pub fn auth_with_ws(ws: &mut WebSocket<MaybeTlsStream<TcpStream>>) {
+    ws.write_message(Message::Text(
+        serde_json::to_string(&WebSocketAuth::Basic {
+            user: "materialize".into(),
+            password: "".into(),
+        })
+        .unwrap(),
+    ))
+    .unwrap();
+    // Wait for initial ready response.
+    loop {
+        let resp = ws.read_message().unwrap();
+        match resp {
+            Message::Text(msg) => {
+                let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
+                match msg {
+                    WebSocketResponse::ReadyForQuery(_) => break,
+                    _ => {}
+                }
+            }
+            Message::Ping(_) => continue,
+            _ => panic!("unexpected response: {:?}", resp),
+        }
+    }
 }
