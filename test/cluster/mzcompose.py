@@ -611,6 +611,7 @@ def workflow_test_remote_storage(c: Composition) -> None:
             "cockroach",
             "materialized",
             "clusterd1",
+            "clusterd2",
             "zookeeper",
             "kafka",
             "schema-registry",
@@ -622,10 +623,14 @@ def workflow_test_remote_storage(c: Composition) -> None:
         c.up("materialized")
         c.run("testdrive", "storage/02-after-environmentd-restart.td")
 
+        # just kill one of the clusterd's and make sure we can recover.
+        # `clusterd2` will die on its own.
         c.kill("clusterd1")
         c.run("testdrive", "storage/03-while-clusterd-down.td")
 
+        # Bring back both clusterd's
         c.up("clusterd1")
+        c.up("clusterd2")
         c.run("testdrive", "storage/04-after-clusterd-restart.td")
 
 
