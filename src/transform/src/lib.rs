@@ -127,7 +127,6 @@ pub mod reduction_pushdown;
 pub mod redundant_join;
 pub mod semijoin_idempotence;
 pub mod threshold_elision;
-pub mod topk_elision;
 pub mod union_cancel;
 
 pub mod dataflow;
@@ -402,9 +401,8 @@ impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     pub fn logical_optimizer() -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            Box::new(crate::normalize::Normalize::new()),
             // 1. Structure-agnostic cleanup
-            Box::new(crate::topk_elision::TopKElision),
+            Box::new(crate::normalize::Normalize::new()),
             Box::new(crate::nonnull_requirements::NonNullRequirements::default()),
             // 2. Collapse constants, joins, unions, and lets as much as possible.
             // TODO: lift filters/maps to maximize ability to collapse

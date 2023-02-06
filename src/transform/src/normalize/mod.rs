@@ -66,7 +66,8 @@ impl crate::Transform for Normalize {
             &mut |expr: &mut MirRelationExpr| {
                 // (a) Might enable Map fusion in the next step.
                 crate::canonicalization::FlatMapToMap::action(expr);
-                // (b) Fuse various like-kinded operators.
+                crate::canonicalization::TopKElision::action(expr);
+                // (b) Fuse various like-kinded operators. Might enable furhter canonicalization.
                 crate::fusion::Fusion::action(expr);
                 // (c) Fuse join trees (might lift in-between Filters).
                 crate::fusion::join::Join::action(expr)?;
