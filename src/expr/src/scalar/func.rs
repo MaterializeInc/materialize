@@ -32,11 +32,11 @@ use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
 
 use mz_lowertest::MzReflect;
-use mz_ore::cast;
 use mz_ore::cast::CastFrom;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::option::OptionExt;
 use mz_ore::result::ResultExt;
+use mz_ore::{cast, soft_assert};
 use mz_pgrepr::Type;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
@@ -1286,6 +1286,16 @@ range_fn!(overleft);
 range_fn!(overright);
 range_fn!(adjacent);
 
+fn range_union<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let l = a.unwrap_range();
+    let r = b.unwrap_range();
+    l.union(&r)?.into_result(temp_storage)
+}
+
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
 }
@@ -1935,6 +1945,7 @@ pub enum BinaryFunc {
     RangeOverleft,
     RangeOverright,
     RangeAdjacent,
+    RangeUnion,
 }
 
 impl BinaryFunc {
@@ -2248,6 +2259,7 @@ impl BinaryFunc {
             BinaryFunc::RangeOverleft => Ok(eager!(range_overleft)),
             BinaryFunc::RangeOverright => Ok(eager!(range_overright)),
             BinaryFunc::RangeAdjacent => Ok(eager!(range_adjacent)),
+            BinaryFunc::RangeUnion => eager!(range_union, temp_storage),
         }
     }
 
@@ -2409,6 +2421,14 @@ impl BinaryFunc {
             | RangeOverleft
             | RangeOverright
             | RangeAdjacent => ScalarType::Bool.nullable(in_nullable),
+
+            RangeUnion => {
+                soft_assert!(
+                    input1_type.scalar_type.without_modifiers()
+                        == input2_type.scalar_type.without_modifiers()
+                );
+                input1_type.scalar_type.without_modifiers().nullable(true)
+            }
         }
     }
 
@@ -2540,6 +2560,7 @@ impl BinaryFunc {
                 | RangeOverleft
                 | RangeOverright
                 | RangeAdjacent
+                | RangeUnion
         )
     }
 
@@ -2676,7 +2697,8 @@ impl BinaryFunc {
             | RangeBefore
             | RangeOverleft
             | RangeOverright
-            | RangeAdjacent => true,
+            | RangeAdjacent
+            | RangeUnion => true,
             ToCharTimestamp
             | ToCharTimestampTz
             | DateBinTimestamp
@@ -2944,6 +2966,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::RangeOverleft => f.write_str("&<"),
             BinaryFunc::RangeOverright => f.write_str("&>"),
             BinaryFunc::RangeAdjacent => f.write_str("-|-"),
+            BinaryFunc::RangeUnion => f.write_str("+"),
         }
     }
 }
@@ -3154,6 +3177,7 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::RangeOverleft).boxed(),
             Just(BinaryFunc::RangeOverright).boxed(),
             Just(BinaryFunc::RangeAdjacent).boxed(),
+            Just(BinaryFunc::RangeUnion).boxed(),
         ])
     }
 }
@@ -3343,6 +3367,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::RangeOverleft => RangeOverleft(()),
             BinaryFunc::RangeOverright => RangeOverright(()),
             BinaryFunc::RangeAdjacent => RangeAdjacent(()),
+            BinaryFunc::RangeUnion => RangeUnion(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -3538,6 +3563,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 RangeOverleft(()) => Ok(BinaryFunc::RangeOverleft),
                 RangeOverright(()) => Ok(BinaryFunc::RangeOverright),
                 RangeAdjacent(()) => Ok(BinaryFunc::RangeAdjacent),
+                RangeUnion(()) => Ok(BinaryFunc::RangeUnion),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))

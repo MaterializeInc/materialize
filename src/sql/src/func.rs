@@ -3290,6 +3290,7 @@ static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
             }, 1849;
             params!(Numeric, Numeric) => AddNumeric, 1758;
+            params!(RangeAny, RangeAny) => RangeUnion => RangeAny, 3898;
         },
         "-" => Scalar {
             params!(Int16) => UnaryFunc::NegInt16(func::NegInt16), 559;
