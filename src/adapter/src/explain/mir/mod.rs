@@ -11,17 +11,17 @@
 //!
 //! The specialized [`Explain`] implementation for an [`MirRelationExpr`]
 //! wrapped in an [`Explainable`] newtype struct allows us to interpret more
-//! [`ExplainConfig`] options. This is the case because attribute derivation and
-//! let normalization are defined in [`mz_transform`] and conssequently are not
-//! available for the default [`Explain`] implementation for [`MirRelationExpr`]
-//! in [`mz_expr`].
+//! [`mz_repr::explain::ExplainConfig`] options. This is the case because
+//! attribute derivation and let normalization are defined in [`mz_transform`]
+//! and conssequently are not available for the default [`Explain`]
+//! implementation for [`MirRelationExpr`] in [`mz_expr`].
 
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_expr::explain::{
     enforce_linear_chains, ExplainContext, ExplainMultiPlan, ExplainSinglePlan,
 };
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
-use mz_repr::explain::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
+use mz_repr::explain::{Explain, ExplainError, UnsupportedFormat};
 use mz_transform::attribute::annotate_plan;
 use mz_transform::normalize_lets::normalize_lets;
 
@@ -36,38 +36,29 @@ impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
 
     type Dot = UnsupportedFormat;
 
-    fn explain_text(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Text, ExplainError> {
-        self.as_explain_single_plan(config, context)
+    fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_single_plan(context)
     }
 
-    fn explain_json(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Json, ExplainError> {
-        self.as_explain_single_plan(config, context)
+    fn explain_json(&'a mut self, context: &'a Self::Context) -> Result<Self::Json, ExplainError> {
+        self.as_explain_single_plan(context)
     }
 }
 
 impl<'a> Explainable<'a, MirRelationExpr> {
     fn as_explain_single_plan(
         &'a mut self,
-        config: &'a ExplainConfig,
         context: &'a ExplainContext<'a>,
     ) -> Result<ExplainSinglePlan<'a, MirRelationExpr>, ExplainError> {
         // normalize the representation as linear chains
-        // (this implies !config.raw_plans by construction)
-        if config.linear_chains {
+        // (this implies !context.config.raw_plans by construction)
+        if context.config.linear_chains {
             enforce_linear_chains(self.0)?;
         };
         // unless raw plans are explicitly requested
         // normalize the representation of nested Let bindings
         // and enforce sequential Let binding IDs
-        if !config.raw_plans {
+        if !context.config.raw_plans {
             normalize_lets(self.0).map_err(|e| ExplainError::UnknownError(e.to_string()))?;
         }
 
@@ -87,27 +78,18 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelatio
 
     type Dot = UnsupportedFormat;
 
-    fn explain_text(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Text, ExplainError> {
-        self.as_explain_multi_plan(config, context)
+    fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(context)
     }
 
-    fn explain_json(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Text, ExplainError> {
-        self.as_explain_multi_plan(config, context)
+    fn explain_json(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(context)
     }
 }
 
 impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
     fn as_explain_multi_plan(
         &'a mut self,
-        config: &'a ExplainConfig,
         context: &'a ExplainContext<'a>,
     ) -> Result<ExplainMultiPlan<'a, MirRelationExpr>, ExplainError> {
         let plans = self
@@ -119,14 +101,14 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
                 let plan = build_desc.plan.as_inner_mut();
 
                 // normalize the representation as linear chains
-                // (this implies !config.raw_plans by construction)
-                if config.linear_chains {
+                // (this implies !context.config.raw_plans by construction)
+                if context.config.linear_chains {
                     enforce_linear_chains(plan)?;
                 };
                 // unless raw plans are explicitly requested
                 // normalize the representation of nested Let bindings
                 // and enforce sequential Let binding IDs
-                if !config.raw_plans {
+                if !context.config.raw_plans {
                     normalize_lets(plan).map_err(|e| ExplainError::UnknownError(e.to_string()))?;
                 }
 

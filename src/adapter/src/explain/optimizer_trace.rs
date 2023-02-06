@@ -9,11 +9,10 @@
 
 //! Tracing utilities for explainable plans.
 
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 
 use mz_compute_client::{plan::Plan, types::dataflows::DataflowDescription};
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
-use mz_repr::explain::text::{text_string, DisplayText};
 use mz_repr::explain::tracing::{PlanTrace, TraceEntry};
 use mz_repr::explain::{Explain, ExplainConfig, ExplainError, ExplainFormat};
 use mz_sql::plan::{HirRelationExpr, HirScalarExpr};
@@ -112,7 +111,7 @@ impl OptimizerTrace {
         };
         let fast_path_plan = match fast_path_plan {
             Some(mut plan) if !context.config.no_fast_path => {
-                Some(Explainable::new(&mut plan).explain(&format, context.config, &context)?)
+                Some(Explainable::new(&mut plan).explain(&format, &context)?)
             }
             _ => None,
         };
@@ -172,11 +171,7 @@ impl OptimizerTrace {
                         instant: entry.instant,
                         duration: entry.duration,
                         path: entry.path,
-                        plan: Explainable::new(&mut entry.plan).explain(
-                            format,
-                            context.config,
-                            context,
-                        )?,
+                        plan: Explainable::new(&mut entry.plan).explain(format, context)?,
                     }),
                 })
                 .collect()
@@ -189,7 +184,7 @@ impl OptimizerTrace {
     fn drain_scalar_entries<T>(&self) -> Vec<TraceEntry<String>>
     where
         T: Clone + Debug + 'static,
-        T: DisplayText,
+        T: Display,
     {
         if let Some(trace) = self.0.downcast_ref::<PlanTrace<T>>() {
             trace
@@ -199,7 +194,7 @@ impl OptimizerTrace {
                     instant: entry.instant,
                     duration: entry.duration,
                     path: entry.path,
-                    plan: text_string(&entry.plan),
+                    plan: entry.plan.to_string(),
                 })
                 .collect()
         } else {

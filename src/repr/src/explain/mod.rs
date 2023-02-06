@@ -247,13 +247,12 @@ pub trait Explain<'a>: 'a {
     fn explain(
         &'a mut self,
         format: &'a ExplainFormat,
-        config: &'a ExplainConfig,
         context: &'a Self::Context,
     ) -> Result<String, ExplainError> {
         match format {
-            ExplainFormat::Text => self.explain_text(config, context).map(|e| text_string(&e)),
-            ExplainFormat::Json => self.explain_json(config, context).map(|e| json_string(&e)),
-            ExplainFormat::Dot => self.explain_dot(config, context).map(|e| dot_string(&e)),
+            ExplainFormat::Text => self.explain_text(context).map(|e| text_string(&e)),
+            ExplainFormat::Json => self.explain_json(context).map(|e| json_string(&e)),
+            ExplainFormat::Dot => self.explain_dot(context).map(|e| dot_string(&e)),
         }
     }
 
@@ -269,11 +268,7 @@ pub trait Explain<'a>: 'a {
     /// implementation should silently ignore this paramter and
     /// proceed without returning a [`Result::Err`].
     #[allow(unused_variables)]
-    fn explain_text(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Text, ExplainError> {
+    fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
         Err(ExplainError::UnsupportedFormat(ExplainFormat::Text))
     }
 
@@ -289,11 +284,7 @@ pub trait Explain<'a>: 'a {
     /// implementation should silently ignore this paramter and
     /// proceed without returning a [`Result::Err`].
     #[allow(unused_variables)]
-    fn explain_json(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Json, ExplainError> {
+    fn explain_json(&'a mut self, context: &'a Self::Context) -> Result<Self::Json, ExplainError> {
         Err(ExplainError::UnsupportedFormat(ExplainFormat::Json))
     }
 
@@ -309,11 +300,7 @@ pub trait Explain<'a>: 'a {
     /// implementation should silently ignore this paramter and
     /// proceed without returning a [`Result::Err`].
     #[allow(unused_variables)]
-    fn explain_dot(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Dot, ExplainError> {
+    fn explain_dot(&'a mut self, context: &'a Self::Context) -> Result<Self::Dot, ExplainError> {
         Err(ExplainError::UnsupportedFormat(ExplainFormat::Dot))
     }
 }
@@ -530,6 +517,7 @@ mod tests {
 
     struct ExplainContext<'a> {
         env: &'a mut Environment,
+        config: &'a ExplainConfig,
         frontiers: Frontiers<u64>,
     }
 
@@ -541,7 +529,6 @@ mod tests {
 
     struct TestExplanation<'a> {
         expr: &'a TestExpr,
-        config: &'a ExplainConfig,
         context: &'a ExplainContext<'a>,
     }
 
@@ -551,7 +538,7 @@ mod tests {
             let rhs = &self.expr.rhs;
             writeln!(f, "expr = {lhs} + {rhs}")?;
 
-            if self.config.timing {
+            if self.context.config.timing {
                 let since = &self.context.frontiers.since;
                 let upper = &self.context.frontiers.upper;
                 writeln!(f, "at t ∊ [{since}, {upper})")?;
@@ -572,12 +559,10 @@ mod tests {
 
         fn explain_text(
             &'a mut self,
-            config: &'a super::ExplainConfig,
             context: &'a Self::Context,
         ) -> Result<Self::Text, ExplainError> {
             Ok(TestExplanation {
                 expr: self,
-                config,
                 context,
             })
         }
@@ -590,7 +575,7 @@ mod tests {
         let mut expr = TestExpr { lhs: 1, rhs: 2 };
 
         let format = ExplainFormat::Text;
-        let config = ExplainConfig {
+        let config = &ExplainConfig {
             arity: false,
             join_impls: false,
             keys: false,
@@ -603,9 +588,13 @@ mod tests {
             timing: true,
             types: false,
         };
-        let context = ExplainContext { env, frontiers };
+        let context = ExplainContext {
+            env,
+            config,
+            frontiers,
+        };
 
-        expr.explain(&format, &config, &context)
+        expr.explain(&format, &context)
     }
 
     #[test]

@@ -212,7 +212,7 @@ mod tests {
                 };
 
                 Explainable(&mut rel.clone())
-                    .explain(&ExplainFormat::Text, &config, &context)
+                    .explain(&ExplainFormat::Text, &context)
                     .unwrap()
             }
         }
@@ -586,7 +586,7 @@ mod tests {
 mod explain {
     use mz_expr::explain::{enforce_linear_chains, ExplainContext, ExplainSinglePlan};
     use mz_expr::MirRelationExpr;
-    use mz_repr::explain::{Explain, ExplainConfig, ExplainError, UnsupportedFormat};
+    use mz_repr::explain::{Explain, ExplainError, UnsupportedFormat};
     use mz_transform::attribute::annotate_plan;
     use mz_transform::normalize_lets::normalize_lets;
 
@@ -605,28 +605,26 @@ mod explain {
 
         fn explain_text(
             &'a mut self,
-            config: &'a ExplainConfig,
             context: &'a Self::Context,
         ) -> Result<Self::Text, ExplainError> {
-            self.as_explain_single_plan(config, context)
+            self.as_explain_single_plan(context)
         }
     }
 
     impl<'a> Explainable<'a, MirRelationExpr> {
         fn as_explain_single_plan(
             &'a mut self,
-            config: &'a ExplainConfig,
             context: &'a ExplainContext<'a>,
         ) -> Result<ExplainSinglePlan<'a, MirRelationExpr>, ExplainError> {
             // normalize the representation as linear chains
-            // (this implies !config.raw_plans by construction)
-            if config.linear_chains {
+            // (this implies !context.config.raw_plans by construction)
+            if context.config.linear_chains {
                 enforce_linear_chains(self.0)?;
             };
             // unless raw plans are explicitly requested
             // normalize the representation of nested Let bindings
             // and enforce sequential Let binding IDs
-            if !config.raw_plans {
+            if !context.config.raw_plans {
                 normalize_lets(self.0).map_err(|e| ExplainError::UnknownError(e.to_string()))?;
             }
 

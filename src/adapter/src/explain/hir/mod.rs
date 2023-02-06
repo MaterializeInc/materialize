@@ -9,7 +9,7 @@
 
 //! `EXPLAIN` support for HIR structures.
 
-use mz_repr::explain::{Explain, ExplainConfig, ExplainError};
+use mz_repr::explain::{Explain, ExplainError};
 use mz_sql::plan::HirRelationExpr;
 
 use super::Explainable;
@@ -23,27 +23,15 @@ impl<'a> Explain<'a> for Explainable<'a, HirRelationExpr> {
 
     type Dot = <HirRelationExpr as Explain<'a>>::Dot;
 
-    fn explain_text(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Text, ExplainError> {
-        self.0.explain_text(config, context)
+    fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.0.explain_text(context)
     }
 
-    fn explain_json(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Json, ExplainError> {
-        self.0.explain_json(config, context)
+    fn explain_json(&'a mut self, context: &'a Self::Context) -> Result<Self::Json, ExplainError> {
+        self.0.explain_json(context)
     }
 
-    fn explain_dot(
-        &'a mut self,
-        config: &'a ExplainConfig,
-        context: &'a Self::Context,
-    ) -> Result<Self::Dot, ExplainError> {
-        self.0.explain_dot(config, context)
+    fn explain_dot(&'a mut self, context: &'a Self::Context) -> Result<Self::Dot, ExplainError> {
+        self.0.explain_dot(context)
     }
 }
