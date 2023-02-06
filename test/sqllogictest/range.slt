@@ -366,7 +366,7 @@ FROM
 			('[  1,)'),
 			('[1  ,)'),
 			('[  1  ,)'),
-('[1,  2)'),
+            ('[1,  2)'),
 			('[1,2  )'),
 			('[1,  2  )'),
 			('[1,)  '),
@@ -962,6 +962,134 @@ query T
 SELECT ('(,)'::int4range + '[1,)'::int4range)::text
 ----
 (,)
+
+#
+# int4range intersection
+
+query T
+SELECT (null * 'empty'::int4range)::text
+----
+NULL
+
+query T
+SELECT ('empty'::int4range * 'empty'::int4range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int4range * '(,-1)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int4range * 'empty'::int4range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int4range * '(,-1)'::int4range)::text
+----
+(,-1)
+
+query T
+SELECT ('empty'::int4range * '(,-1)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int4range * '[-2,2)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int4range * '[1,)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int4range * '(,)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int4range * 'empty'::int4range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int4range * '[-2,2)'::int4range)::text
+----
+[-2,-1)
+
+query T
+SELECT ('(,-1)'::int4range * '[1,)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int4range * '(,)'::int4range)::text
+----
+(,-1)
+
+query T
+SELECT ('[-2,2)'::int4range * 'empty'::int4range)::text
+----
+empty
+
+query T
+SELECT ('[-2,2)'::int4range * '(,-1)'::int4range)::text
+----
+[-2,-1)
+
+query T
+SELECT ('[-2,2)'::int4range * '[1,)'::int4range)::text
+----
+[1,2)
+
+query T
+SELECT ('[-2,2)'::int4range * '(,)'::int4range)::text
+----
+[-2,2)
+
+query T
+SELECT ('[1,)'::int4range * 'empty'::int4range)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::int4range * '(,-1)'::int4range)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::int4range * '[-2,2)'::int4range)::text
+----
+[1,2)
+
+query T
+SELECT ('[1,)'::int4range * '(,)'::int4range)::text
+----
+[1,)
+
+query T
+SELECT ('(,)'::int4range * 'empty'::int4range)::text
+----
+empty
+
+query T
+SELECT ('(,)'::int4range * '(,-1)'::int4range)::text
+----
+(,-1)
+
+query T
+SELECT ('(,)'::int4range * '[-2,2)'::int4range)::text
+----
+[-2,2)
+
+query T
+SELECT ('(,)'::int4range * '[1,)'::int4range)::text
+----
+[1,)
 
 #
 # int8range
@@ -1855,6 +1983,134 @@ SELECT ('(,)'::int8range + '[1,)'::int8range)::text
 (,)
 
 #
+# int8range intersection
+
+query T
+SELECT (null * 'empty'::int8range)::text
+----
+NULL
+
+query T
+SELECT ('empty'::int8range * 'empty'::int8range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int8range * '(,-1)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int8range * 'empty'::int8range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int8range * '(,-1)'::int8range)::text
+----
+(,-1)
+
+query T
+SELECT ('empty'::int8range * '(,-1)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int8range * '[-2,2)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int8range * '[1,)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('empty'::int8range * '(,)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int8range * 'empty'::int8range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int8range * '[-2,2)'::int8range)::text
+----
+[-2,-1)
+
+query T
+SELECT ('(,-1)'::int8range * '[1,)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::int8range * '(,)'::int8range)::text
+----
+(,-1)
+
+query T
+SELECT ('[-2,2)'::int8range * 'empty'::int8range)::text
+----
+empty
+
+query T
+SELECT ('[-2,2)'::int8range * '(,-1)'::int8range)::text
+----
+[-2,-1)
+
+query T
+SELECT ('[-2,2)'::int8range * '[1,)'::int8range)::text
+----
+[1,2)
+
+query T
+SELECT ('[-2,2)'::int8range * '(,)'::int8range)::text
+----
+[-2,2)
+
+query T
+SELECT ('[1,)'::int8range * 'empty'::int8range)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::int8range * '(,-1)'::int8range)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::int8range * '[-2,2)'::int8range)::text
+----
+[1,2)
+
+query T
+SELECT ('[1,)'::int8range * '(,)'::int8range)::text
+----
+[1,)
+
+query T
+SELECT ('(,)'::int8range * 'empty'::int8range)::text
+----
+empty
+
+query T
+SELECT ('(,)'::int8range * '(,-1)'::int8range)::text
+----
+(,-1)
+
+query T
+SELECT ('(,)'::int8range * '[-2,2)'::int8range)::text
+----
+[-2,2)
+
+query T
+SELECT ('(,)'::int8range * '[1,)'::int8range)::text
+----
+[1,)
+
+#
 # daterange
 
 query T
@@ -2673,6 +2929,128 @@ SELECT ('(,)'::daterange + '[1970-01-02,)'::daterange)::text
 ----
 (,)
 
+#
+# daterange intersection
+
+query T
+SELECT ('empty'::daterange * 'empty'::daterange)::text
+----
+empty
+
+query T
+SELECT ('empty'::daterange * '(,1969-12-31)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('(,1969-12-31)'::daterange * 'empty'::daterange)::text
+----
+empty
+
+query T
+SELECT ('(,1969-12-31)'::daterange * '(,1969-12-31)'::daterange)::text
+----
+(,1969-12-31)
+
+query T
+SELECT ('empty'::daterange * '(,1969-12-31)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('empty'::daterange * '[1969-12-30,1970-01-03)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('empty'::daterange * '[1970-01-02,)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('empty'::daterange * '(,)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('(,1969-12-31)'::daterange * 'empty'::daterange)::text
+----
+empty
+
+query T
+SELECT ('(,1969-12-31)'::daterange * '[1969-12-30,1970-01-03)'::daterange)::text
+----
+[1969-12-30,1969-12-31)
+
+query T
+SELECT ('(,1969-12-31)'::daterange * '[1970-01-02,)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('(,1969-12-31)'::daterange * '(,)'::daterange)::text
+----
+(,1969-12-31)
+
+query T
+SELECT ('[1969-12-30,1970-01-03)'::daterange * 'empty'::daterange)::text
+----
+empty
+
+query T
+SELECT ('[1969-12-30,1970-01-03)'::daterange * '(,1969-12-31)'::daterange)::text
+----
+[1969-12-30,1969-12-31)
+
+query T
+SELECT ('[1969-12-30,1970-01-03)'::daterange * '[1970-01-02,)'::daterange)::text
+----
+[1970-01-02,1970-01-03)
+
+query T
+SELECT ('[1969-12-30,1970-01-03)'::daterange * '(,)'::daterange)::text
+----
+[1969-12-30,1970-01-03)
+
+query T
+SELECT ('[1970-01-02,)'::daterange * 'empty'::daterange)::text
+----
+empty
+
+query T
+SELECT ('[1970-01-02,)'::daterange * '(,1969-12-31)'::daterange)::text
+----
+empty
+
+query T
+SELECT ('[1970-01-02,)'::daterange * '[1969-12-30,1970-01-03)'::daterange)::text
+----
+[1970-01-02,1970-01-03)
+
+query T
+SELECT ('[1970-01-02,)'::daterange * '(,)'::daterange)::text
+----
+[1970-01-02,)
+
+query T
+SELECT ('(,)'::daterange * 'empty'::daterange)::text
+----
+empty
+
+query T
+SELECT ('(,)'::daterange * '(,1969-12-31)'::daterange)::text
+----
+(,1969-12-31)
+
+query T
+SELECT ('(,)'::daterange * '[1969-12-30,1970-01-03)'::daterange)::text
+----
+[1969-12-30,1970-01-03)
+
+query T
+SELECT ('(,)'::daterange * '[1970-01-02,)'::daterange)::text
+----
+[1970-01-02,)
 
 #
 # numrange
@@ -3829,3 +4207,306 @@ query T
 SELECT ('(,)'::numrange + '(1,)'::numrange)::text
 ----
 (,)
+
+#
+# numrange intersection
+
+query T
+SELECT ('empty'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange * '(,-1]'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1]'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1]'::numrange * '(,-1]'::numrange)::text
+----
+(,-1]
+
+query T
+SELECT ('empty'::numrange * '(,-1]'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange * '(,-1)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange * '(-2,2)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange * '[-2,2]'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange * '[1,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange * '(1,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('empty'::numrange * '(,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1]'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1]'::numrange * '(,-1)'::numrange)::text
+----
+(,-1)
+
+query T
+SELECT ('(,-1]'::numrange * '(-2,2)'::numrange)::text
+----
+(-2,-1]
+
+query T
+SELECT ('(,-1]'::numrange * '[-2,2]'::numrange)::text
+----
+[-2,-1]
+
+query T
+SELECT ('(,-1]'::numrange * '[1,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1]'::numrange * '(1,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1]'::numrange * '(,)'::numrange)::text
+----
+(,-1]
+
+query T
+SELECT ('(,-1)'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::numrange * '(,-1]'::numrange)::text
+----
+(,-1)
+
+query T
+SELECT ('(,-1)'::numrange * '(-2,2)'::numrange)::text
+----
+(-2,-1)
+
+query T
+SELECT ('(,-1)'::numrange * '[-2,2]'::numrange)::text
+----
+[-2,-1)
+
+query T
+SELECT ('(,-1)'::numrange * '[1,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::numrange * '(1,)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,-1)'::numrange * '(,)'::numrange)::text
+----
+(,-1)
+
+query T
+SELECT ('(-2,2)'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(-2,2)'::numrange * '(,-1]'::numrange)::text
+----
+(-2,-1]
+
+query T
+SELECT ('(-2,2)'::numrange * '(,-1)'::numrange)::text
+----
+(-2,-1)
+
+query T
+SELECT ('(-2,2)'::numrange * '[-2,2]'::numrange)::text
+----
+(-2,2)
+
+query T
+SELECT ('(-2,2)'::numrange * '[1,)'::numrange)::text
+----
+[1,2)
+
+query T
+SELECT ('(-2,2)'::numrange * '(1,)'::numrange)::text
+----
+(1,2)
+
+query T
+SELECT ('(-2,2)'::numrange * '(,)'::numrange)::text
+----
+(-2,2)
+
+query T
+SELECT ('[-2,2]'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('[-2,2]'::numrange * '(,-1]'::numrange)::text
+----
+[-2,-1]
+
+query T
+SELECT ('[-2,2]'::numrange * '(,-1)'::numrange)::text
+----
+[-2,-1)
+
+query T
+SELECT ('[-2,2]'::numrange * '(-2,2)'::numrange)::text
+----
+(-2,2)
+
+query T
+SELECT ('[-2,2]'::numrange * '[1,)'::numrange)::text
+----
+[1,2]
+
+query T
+SELECT ('[-2,2]'::numrange * '(1,)'::numrange)::text
+----
+(1,2]
+
+query T
+SELECT ('[-2,2]'::numrange * '(,)'::numrange)::text
+----
+[-2,2]
+
+query T
+SELECT ('[1,)'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::numrange * '(,-1]'::numrange)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::numrange * '(,-1)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('[1,)'::numrange * '(-2,2)'::numrange)::text
+----
+[1,2)
+
+query T
+SELECT ('[1,)'::numrange * '[-2,2]'::numrange)::text
+----
+[1,2]
+
+query T
+SELECT ('[1,)'::numrange * '(1,)'::numrange)::text
+----
+(1,)
+
+query T
+SELECT ('[1,)'::numrange * '(,)'::numrange)::text
+----
+[1,)
+
+query T
+SELECT ('(1,)'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(1,)'::numrange * '(,-1]'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(1,)'::numrange * '(,-1)'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(1,)'::numrange * '(-2,2)'::numrange)::text
+----
+(1,2)
+
+query T
+SELECT ('(1,)'::numrange * '[-2,2]'::numrange)::text
+----
+(1,2]
+
+query T
+SELECT ('(1,)'::numrange * '[1,)'::numrange)::text
+----
+(1,)
+
+query T
+SELECT ('(1,)'::numrange * '(,)'::numrange)::text
+----
+(1,)
+
+query T
+SELECT ('(,)'::numrange * 'empty'::numrange)::text
+----
+empty
+
+query T
+SELECT ('(,)'::numrange * '(,-1]'::numrange)::text
+----
+(,-1]
+
+query T
+SELECT ('(,)'::numrange * '(,-1)'::numrange)::text
+----
+(,-1)
+
+query T
+SELECT ('(,)'::numrange * '(-2,2)'::numrange)::text
+----
+(-2,2)
+
+query T
+SELECT ('(,)'::numrange * '[-2,2]'::numrange)::text
+----
+[-2,2]
+
+query T
+SELECT ('(,)'::numrange * '[1,)'::numrange)::text
+----
+[1,)
+
+query T
+SELECT ('(,)'::numrange * '(1,)'::numrange)::text
+----
+(1,)

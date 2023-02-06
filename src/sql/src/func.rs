@@ -3336,6 +3336,7 @@ static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, MulInterval)))
             }, 1584;
             params!(Numeric, Numeric) => MulNumeric, 1760;
+            params!(RangeAny, RangeAny) => RangeIntersection => RangeAny, 3900;
         },
         "/" => Scalar {
             params!(Int16, Int16) => DivInt16, 527;
