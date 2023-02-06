@@ -85,11 +85,12 @@ where
             sinks: BTreeMap::new(),
             uppers: BTreeMap::new(),
             initialized: false,
+            current_epoch: ClusterStartupEpoch::new(envd_epoch, 0),
             config: Default::default(),
             persist,
             metrics,
         };
-        let task = mz_ore::task::spawn(|| "rehydration", async move { task.run(envd_epoch).await });
+        let task = mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
         RehydratingStorageClient {
             command_tx,
             response_rx: UnboundedReceiverStream::new(response_rx),
@@ -146,6 +147,8 @@ struct RehydrationTask<T> {
     /// Set to `true` once [`StorageCommand::InitializationComplete`] has been
     /// observed.
     initialized: bool,
+    /// The current epoch for the replica we are connecting to.
+    current_epoch: ClusterStartupEpoch,
     /// Storage configuration that has been observed.
     config: StorageParameters,
     /// A handle to Persist
@@ -180,14 +183,12 @@ where
     T: Timestamp + Lattice + Codec64,
     StorageGrpcClient: StorageClient<T>,
 {
-    async fn run(&mut self, envd_epoch: NonZeroI64) {
+    async fn run(&mut self) {
         let mut state = RehydrationTaskState::AwaitAddress;
         loop {
             state = match state {
                 RehydrationTaskState::AwaitAddress => self.step_await_address().await,
-                RehydrationTaskState::Rehydrate { location } => {
-                    self.step_rehydrate(location, envd_epoch).await
-                }
+                RehydrationTaskState::Rehydrate { location } => self.step_rehydrate(location).await,
                 RehydrationTaskState::Pump { location, client } => {
                     self.step_pump(location, client).await
                 }
@@ -213,7 +214,6 @@ where
     async fn step_rehydrate(
         &mut self,
         location: ClusterReplicaLocation,
-        envd_epoch: NonZeroI64,
     ) -> RehydrationTaskState<T> {
         // Reconnect to the storage replica.
         let stream = Retry::default()
@@ -281,11 +281,15 @@ where
                 }
             };
 
+            // The first epoch we actually send to the cluster will be `1`, just like compute.
+            let new_epoch = ClusterStartupEpoch::new(
+                self.current_epoch.envd(),
+                self.current_epoch.replica() + 1,
+            );
+            self.current_epoch = new_epoch;
             let timely_command = StorageCommand::CreateTimely {
                 config: timely_config,
-                // The replica epoch is unused by storage, and won't
-                // be used till multi-replica storage is supported.
-                epoch: ClusterStartupEpoch::new(envd_epoch, 0),
+                epoch: new_epoch,
             };
 
             break (client, timely_command);

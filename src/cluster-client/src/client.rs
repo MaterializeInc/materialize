@@ -93,6 +93,14 @@ impl ClusterStartupEpoch {
             replica,
         }
     }
+
+    pub fn envd(&self) -> NonZeroI64 {
+        self.envd
+    }
+
+    pub fn replica(&self) -> u64 {
+        self.replica
+    }
 }
 
 impl std::fmt::Display for ClusterStartupEpoch {
