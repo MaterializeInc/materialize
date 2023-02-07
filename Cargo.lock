@@ -4179,6 +4179,7 @@ dependencies = [
  "openssl",
  "openssl-sys",
  "postgres-openssl",
+ "prometheus",
  "prost",
  "prost-build",
  "protobuf-src",

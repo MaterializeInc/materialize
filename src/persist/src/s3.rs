@@ -45,6 +45,7 @@ use crate::metrics::S3BlobMetrics;
 /// Configuration for opening an [S3Blob].
 #[derive(Clone, Debug)]
 pub struct S3BlobConfig {
+    metrics: S3BlobMetrics,
     client: S3Client,
     bucket: String,
     prefix: String,
@@ -148,7 +149,10 @@ impl S3BlobConfig {
         }
 
         // NB: we must always use the custom sleep impl if we use the timeout marker values
-        loader = loader.sleep_impl(MetricsSleep { knobs, metrics });
+        loader = loader.sleep_impl(MetricsSleep {
+            knobs,
+            metrics: metrics.clone(),
+        });
         loader = loader.timeout_config(
             TimeoutConfig::builder()
                 // maximum time allowed for a top-level S3 API call (including internal retries)
@@ -164,6 +168,7 @@ impl S3BlobConfig {
 
         let client = mz_aws_s3_util::new_client(&loader.load().await);
         Ok(S3BlobConfig {
+            metrics,
             client,
             bucket,
             prefix,
@@ -272,6 +277,7 @@ impl S3BlobConfig {
 /// Implementation of [Blob] backed by S3.
 #[derive(Debug)]
 pub struct S3Blob {
+    metrics: S3BlobMetrics,
     client: S3Client,
     bucket: String,
     prefix: String,
@@ -286,6 +292,7 @@ impl S3Blob {
     /// Opens the given location for non-exclusive read-write access.
     pub async fn open(config: S3BlobConfig) -> Result<Self, ExternalError> {
         let ret = S3Blob {
+            metrics: config.metrics,
             client: config.client,
             bucket: config.bucket,
             prefix: config.prefix,
@@ -341,6 +348,7 @@ impl Blob for S3Blob {
         // the headers before the full data body has completed. This gives us
         // the number of parts. We can then proceed to fetch the body of the
         // first request concurrently with the rest of the parts of the object.
+        self.metrics.get_part.inc();
         let object = self
             .client
             .get_object()
@@ -400,16 +408,16 @@ impl Blob for S3Blob {
             for part_num in 2..=num_parts {
                 // TODO: Add the key and part number once this can be annotated
                 // with metadata.
-                let part_fut = async_runtime.spawn_named(
-                    || "persist_s3blob_get_header",
+                let part_fut = async_runtime.spawn_named(|| "persist_s3blob_get_header", {
+                    self.metrics.get_part.inc();
                     self.client
                         .get_object()
                         .bucket(&self.bucket)
                         .key(&path)
                         .part_number(part_num)
                         .send()
-                        .map(move |res| (start_headers.elapsed(), res)),
-                );
+                        .map(move |res| (start_headers.elapsed(), res))
+                });
                 part_futs.push(part_fut);
             }
 
@@ -537,6 +545,7 @@ impl Blob for S3Blob {
         let strippable_root_prefix = format!("{}/", self.prefix);
 
         loop {
+            self.metrics.list_objects.inc();
             let resp = self
                 .client
                 .list_objects_v2()
@@ -600,6 +609,7 @@ impl Blob for S3Blob {
         // deletion. This return value is only used for metrics, so it's
         // unfortunate, but fine.
         let path = self.get_path(key);
+        self.metrics.delete_head.inc();
         let head_res = self
             .client
             .head_object()
@@ -612,6 +622,7 @@ impl Blob for S3Blob {
             Err(SdkError::ServiceError(err)) if err.err().is_not_found() => return Ok(None),
             Err(err) => return Err(ExternalError::from(anyhow!("s3 delete head err: {}", err))),
         };
+        self.metrics.delete_object.inc();
         let _ = self
             .client
             .delete_object()
@@ -631,6 +642,7 @@ impl S3Blob {
 
         let value_len = value.len();
         let part_span = trace_span!("s3set_single", payload_len = value_len);
+        self.metrics.set_single.inc();
         self.client
             .put_object()
             .bucket(&self.bucket)
@@ -657,6 +669,7 @@ impl S3Blob {
 
         // Start the multi part request and get an upload id.
         trace!("s3 PutObject multi start {}b", value.len());
+        self.metrics.set_multi_create.inc();
         let upload_res = self
             .client
             .create_multipart_upload()
@@ -691,16 +704,19 @@ impl S3Blob {
                 // TODO: Add the key and part number once this can be annotated
                 // with metadata.
                 || "persist_s3blob_put_part",
-                self.client
-                    .upload_part()
-                    .bucket(&self.bucket)
-                    .key(&path)
-                    .upload_id(upload_id)
-                    .part_number(part_num as i32)
-                    .body(ByteStream::from(value.slice(part_range)))
-                    .send()
-                    .instrument(part_span)
-                    .map(move |res| (start_parts.elapsed(), res)),
+                {
+                    self.metrics.set_multi_part.inc();
+                    self.client
+                        .upload_part()
+                        .bucket(&self.bucket)
+                        .key(&path)
+                        .upload_id(upload_id)
+                        .part_number(part_num as i32)
+                        .body(ByteStream::from(value.slice(part_range)))
+                        .send()
+                        .instrument(part_span)
+                        .map(move |res| (start_parts.elapsed(), res))
+                },
             );
             part_futs.push((part_num, part_fut));
         }
@@ -759,6 +775,7 @@ impl S3Blob {
         // abort_multipart_upload work, but it would be complex and affect perf.
         // Let's see how far we can get without it.
         let start_complete = Instant::now();
+        self.metrics.set_multi_complete.inc();
         self.client
             .complete_multipart_upload()
             .bucket(&self.bucket)
@@ -953,6 +970,7 @@ mod tests {
             let config = config.clone();
             async move {
                 let config = S3BlobConfig {
+                    metrics: config.metrics.clone(),
                     client: config.client.clone(),
                     bucket: config.bucket.clone(),
                     prefix: format!("{}/s3_blob_impl_test/{}", config.prefix, path),
