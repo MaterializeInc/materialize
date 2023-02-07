@@ -31,7 +31,7 @@ Capturing discussions is an important aspect to understand how an opinion was fo
 We need to capture both, and Notion doesn't give us a good way to capture discussions and specific versions.
 
 Materialize defaults to leading discussions in the open, unless it's not permissible.
-This ensures that we uphold a high standard, and it gives engineers outside visibility into their work.
+This ensures that we uphold a high standard, and it increases the visibility of each engineer's contributions.
 Designs in Notion do not achieve this goal.
 
 The most important aspect is that this process provides a benefit to the engineer and the company.
@@ -49,7 +49,7 @@ Updating the design process does not aim at introducing an RFC-style process.
 It is something to consider in the future, but seems to be too heavyweight at the moment.
 Additionally, it would require tooling to enforce certain state transitions, which we don't have the capacity for at the moment.
 
-Notable example for RFC-style processes follow:
+Notable examples for RFC-style processes follow:
 * Rust's RFC process aims at creating high-quality designs, while giving authors the confidence that they get the attention they deserve.
   It is rather heavy-weight and has an own bot to ensure proper state transitions and to nag reviewers.
   We can learn from it that good guidance seems to result in better design.
@@ -69,6 +69,10 @@ This raises the question of why we did not follow it recently.
 To address this, we propose the following steps, some of which are part of the change around this document:
 * Revisit the design doc [README](./README.md) to make expectations clearer.
 * Update the [pull request template](/.github/pull_request_template.md) to include a step reminding engineers to think about design documents.
+
+Specifically, the current interpretation of design documents is to write one for large changes, where it is not clear what large means.
+Instead, we propose that each change should come with a design doc unless it is small enough to be non-contentious or immediately clear what needs to be done.
+By default, engineers should write design docs.
 
 ## Alternatives
 
