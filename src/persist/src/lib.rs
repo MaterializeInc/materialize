@@ -90,6 +90,7 @@ pub mod error;
 pub mod file;
 pub mod gen;
 pub mod indexed;
+pub mod intercept;
 pub mod location;
 pub mod mem;
 pub mod metrics;
@@ -98,6 +99,3 @@ pub mod retry;
 pub mod s3;
 pub mod unreliable;
 pub mod workload;
-
-#[cfg(any(test, debug_assertions))]
-pub mod intercept;
