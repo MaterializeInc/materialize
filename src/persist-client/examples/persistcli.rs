@@ -92,7 +92,6 @@ use tracing::{info_span, Instrument};
 
 pub mod maelstrom;
 pub mod open_loop;
-pub mod source_example;
 
 const BUILD_INFO: BuildInfo = build_info!();
 
@@ -110,7 +109,6 @@ struct Args {
 enum Command {
     Maelstrom(crate::maelstrom::Args),
     OpenLoop(crate::open_loop::Args),
-    SourceExample(crate::source_example::Args),
     Inspect(mz_persist_client::cli::inspect::InspectArgs),
     Admin(mz_persist_client::cli::admin::AdminArgs),
 }
@@ -156,9 +154,6 @@ fn main() {
         }),
         Command::OpenLoop(args) => {
             runtime.block_on(crate::open_loop::run(args).instrument(root_span))
-        }
-        Command::SourceExample(args) => {
-            runtime.block_on(crate::source_example::run(args).instrument(root_span))
         }
         Command::Inspect(command) => {
             runtime.block_on(mz_persist_client::cli::inspect::run(command).instrument(root_span))
