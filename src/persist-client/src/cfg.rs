@@ -130,6 +130,9 @@ impl PersistConfig {
                 state_versions_recent_live_diffs_limit: AtomicUsize::new(usize::cast_from(
                     30 * Self::NEED_ROLLUP_THRESHOLD,
                 )),
+                sink_minimum_batch_updates: AtomicUsize::new(
+                    Self::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
+                ),
             }),
             compaction_enabled: !compaction_disabled,
             compaction_concurrency_limit: 5,
@@ -144,6 +147,15 @@ impl PersistConfig {
             // conditionally enabled by the process orchestrator.
             hostname: std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_owned()),
         }
+    }
+
+    /// The minimum number of updates that justify writing out a batch in `persist_sink`'s
+    /// `write_batches` operator. (If there are fewer than this minimum number of updates,
+    /// they'll be forwarded on to `append_batch` to be combined and written there.)
+    pub fn sink_minimum_batch_updates(&self) -> usize {
+        self.dynamic
+            .sink_minimum_batch_updates
+            .load(DynamicConfig::LOAD_ORDERING)
     }
 
     /// Returns a new instance of [PersistConfig] for tests.
@@ -230,6 +242,7 @@ pub struct DynamicConfig {
     compaction_memory_bound_bytes: AtomicUsize,
     gc_blob_delete_concurrency_limit: AtomicUsize,
     state_versions_recent_live_diffs_limit: AtomicUsize,
+    sink_minimum_batch_updates: AtomicUsize,
 
     // TODO: Figure out how to make these dynamic.
     compaction_minimum_timeout: Duration,
@@ -386,6 +399,8 @@ pub struct PersistParameters {
     pub blob_target_size: Option<usize>,
     /// Configures [`DynamicConfig::compaction_minimum_timeout`].
     pub compaction_minimum_timeout: Option<Duration>,
+    /// Configures [`PersistConfig::sink_minimum_batch_updates`].
+    pub sink_minimum_batch_updates: Option<usize>,
 }
 
 impl PersistParameters {
@@ -396,16 +411,21 @@ impl PersistParameters {
         let Self {
             blob_target_size: self_blob_target_size,
             compaction_minimum_timeout: self_compaction_minimum_timeout,
+            sink_minimum_batch_updates: self_sink_minimum_batch_updates,
         } = self;
         let Self {
             blob_target_size: other_blob_target_size,
             compaction_minimum_timeout: other_compaction_minimum_timeout,
+            sink_minimum_batch_updates: other_sink_minimum_batch_updates,
         } = other;
         if let Some(v) = other_blob_target_size {
             *self_blob_target_size = Some(v);
         }
         if let Some(v) = other_compaction_minimum_timeout {
             *self_compaction_minimum_timeout = Some(v);
+        }
+        if let Some(v) = other_sink_minimum_batch_updates {
+            *self_sink_minimum_batch_updates = Some(v);
         }
     }
 
@@ -418,8 +438,11 @@ impl PersistParameters {
         let Self {
             blob_target_size,
             compaction_minimum_timeout,
+            sink_minimum_batch_updates,
         } = self;
-        blob_target_size.is_none() && compaction_minimum_timeout.is_none()
+        blob_target_size.is_none()
+            && compaction_minimum_timeout.is_none()
+            && sink_minimum_batch_updates.is_none()
     }
 
     /// Applies the parameter values to persist's in-memory config object.
@@ -432,6 +455,7 @@ impl PersistParameters {
         let Self {
             blob_target_size,
             compaction_minimum_timeout,
+            sink_minimum_batch_updates,
         } = self;
         if let Some(blob_target_size) = blob_target_size {
             cfg.dynamic
@@ -441,6 +465,11 @@ impl PersistParameters {
         if let Some(_compaction_minimum_timeout) = compaction_minimum_timeout {
             // TODO: Figure out how to represent Durations in DynamicConfig.
         }
+        if let Some(sink_minimum_batch_updates) = sink_minimum_batch_updates {
+            cfg.dynamic
+                .sink_minimum_batch_updates
+                .store(*sink_minimum_batch_updates, DynamicConfig::STORE_ORDERING);
+        }
     }
 }
 
@@ -449,6 +478,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
         ProtoPersistParameters {
             blob_target_size: self.blob_target_size.into_proto(),
             compaction_minimum_timeout: self.compaction_minimum_timeout.into_proto(),
+            sink_minimum_batch_updates: self.sink_minimum_batch_updates.into_proto(),
         }
     }
 
@@ -456,6 +486,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
         Ok(Self {
             blob_target_size: proto.blob_target_size.into_rust()?,
             compaction_minimum_timeout: proto.compaction_minimum_timeout.into_rust()?,
+            sink_minimum_batch_updates: proto.sink_minimum_batch_updates.into_rust()?,
         })
     }
 }

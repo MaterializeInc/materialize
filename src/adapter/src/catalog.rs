@@ -5873,6 +5873,7 @@ impl Catalog {
         PersistParameters {
             blob_target_size: Some(config.persist_blob_target_size()),
             compaction_minimum_timeout: Some(config.persist_compaction_minimum_timeout()),
+            sink_minimum_batch_updates: Some(config.persist_sink_minimum_batch_updates()),
         }
     }
 }
