@@ -3319,6 +3319,7 @@ static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(Time, Interval) => SubTimeInterval, 1801;
             params!(Jsonb, Int64) => JsonbDeleteInt64, 3286;
             params!(Jsonb, String) => JsonbDeleteString, 3285;
+            params!(RangeAny, RangeAny) => RangeDifference => RangeAny, 3899;
             // TODO(jamii) there should be corresponding overloads for
             // Array(Int64) and Array(String)
         },

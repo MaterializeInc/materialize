@@ -1306,6 +1306,16 @@ fn range_intersection<'a>(
     l.intersection(&r).into_result(temp_storage)
 }
 
+fn range_difference<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let l = a.unwrap_range();
+    let r = b.unwrap_range();
+    l.difference(&r)?.into_result(temp_storage)
+}
+
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
 }
@@ -1957,6 +1967,7 @@ pub enum BinaryFunc {
     RangeAdjacent,
     RangeUnion,
     RangeIntersection,
+    RangeDifference,
 }
 
 impl BinaryFunc {
@@ -2272,6 +2283,7 @@ impl BinaryFunc {
             BinaryFunc::RangeAdjacent => Ok(eager!(range_adjacent)),
             BinaryFunc::RangeUnion => eager!(range_union, temp_storage),
             BinaryFunc::RangeIntersection => eager!(range_intersection, temp_storage),
+            BinaryFunc::RangeDifference => eager!(range_difference, temp_storage),
         }
     }
 
@@ -2434,7 +2446,7 @@ impl BinaryFunc {
             | RangeOverright
             | RangeAdjacent => ScalarType::Bool.nullable(in_nullable),
 
-            RangeUnion | RangeIntersection => {
+            RangeUnion | RangeIntersection | RangeDifference => {
                 soft_assert!(
                     input1_type.scalar_type.without_modifiers()
                         == input2_type.scalar_type.without_modifiers()
@@ -2574,6 +2586,7 @@ impl BinaryFunc {
                 | RangeAdjacent
                 | RangeUnion
                 | RangeIntersection
+                | RangeDifference
         )
     }
 
@@ -2712,7 +2725,8 @@ impl BinaryFunc {
             | RangeOverright
             | RangeAdjacent
             | RangeUnion
-            | RangeIntersection => true,
+            | RangeIntersection
+            | RangeDifference => true,
             ToCharTimestamp
             | ToCharTimestampTz
             | DateBinTimestamp
@@ -2982,6 +2996,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::RangeAdjacent => f.write_str("-|-"),
             BinaryFunc::RangeUnion => f.write_str("+"),
             BinaryFunc::RangeIntersection => f.write_str("*"),
+            BinaryFunc::RangeDifference => f.write_str("-"),
         }
     }
 }
@@ -3194,6 +3209,7 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::RangeAdjacent).boxed(),
             Just(BinaryFunc::RangeUnion).boxed(),
             Just(BinaryFunc::RangeIntersection).boxed(),
+            Just(BinaryFunc::RangeDifference).boxed(),
         ])
     }
 }
@@ -3385,6 +3401,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::RangeAdjacent => RangeAdjacent(()),
             BinaryFunc::RangeUnion => RangeUnion(()),
             BinaryFunc::RangeIntersection => RangeIntersection(()),
+            BinaryFunc::RangeDifference => RangeDifference(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -3582,6 +3599,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 RangeAdjacent(()) => Ok(BinaryFunc::RangeAdjacent),
                 RangeUnion(()) => Ok(BinaryFunc::RangeUnion),
                 RangeIntersection(()) => Ok(BinaryFunc::RangeIntersection),
+                RangeDifference(()) => Ok(BinaryFunc::RangeDifference),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))
