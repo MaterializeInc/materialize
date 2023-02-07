@@ -36,8 +36,8 @@ use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
-    CompareAndAppendBreak, CriticalReaderState, HollowBatch, IdempotencyToken, LeasedReaderState,
-    NoOpStateTransition, Since, StateCollections, Upper, WriterState,
+    CompareAndAppendBreak, CriticalReaderState, HollowBatch, HollowRollup, IdempotencyToken,
+    LeasedReaderState, NoOpStateTransition, Since, StateCollections, Upper, WriterState,
 };
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
@@ -101,7 +101,7 @@ where
     pub async fn add_rollup_for_current_seqno(&mut self) {
         let rollup = self.applier.write_rollup_blob(&RollupId::new()).await;
         let applied = self
-            .add_and_remove_rollups((rollup.seqno, &rollup.key), &[])
+            .add_and_remove_rollups((rollup.seqno, &rollup.to_hollow()), &[])
             .await;
         if !applied {
             // Someone else already wrote a rollup at this seqno, so ours didn't
@@ -115,7 +115,7 @@ where
 
     pub async fn add_and_remove_rollups(
         &mut self,
-        add_rollup: (SeqNo, &PartialRollupKey),
+        add_rollup: (SeqNo, &HollowRollup),
         remove_rollups: &[(SeqNo, PartialRollupKey)],
     ) -> bool {
         // See the big SUBTLE comment in [Self::merge_res] for what's going on

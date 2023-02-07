@@ -30,7 +30,7 @@ use crate::internal::encoding::UntypedState;
 use crate::internal::machine::{retry_determinate, retry_external};
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId};
-use crate::internal::state::{NoOpStateTransition, State, TypedState};
+use crate::internal::state::{HollowRollup, NoOpStateTransition, State, TypedState};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
 
@@ -106,6 +106,15 @@ pub struct EncodedRollup {
     buf: Bytes,
 }
 
+impl EncodedRollup {
+    pub fn to_hollow(&self) -> HollowRollup {
+        HollowRollup {
+            key: self.key.clone(),
+            encoded_size_bytes: Some(self.buf.len()),
+        }
+    }
+}
+
 impl StateVersions {
     pub fn new(
         cfg: PersistConfig,
@@ -176,15 +185,19 @@ impl StateVersions {
                 // ourselves and get an expectation mismatch. Use the actual
                 // fetched state to determine if our rollup actually made it in
                 // and decide whether to delete based on that.
-                let (_, rollup_key) = initial_state.latest_rollup();
+                let (_, rollup) = initial_state.latest_rollup();
                 let should_delete_rollup = match state.as_ref() {
-                    Ok(state) => !state.collections.rollups.values().any(|x| x == rollup_key),
+                    Ok(state) => !state
+                        .collections
+                        .rollups
+                        .values()
+                        .any(|x| &x.key == &rollup.key),
                     // If the codecs don't match, then we definitely didn't
                     // write the state.
                     Err(_codec_mismatch) => true,
                 };
                 if should_delete_rollup {
-                    self.delete_rollup(&shard_id, rollup_key).await;
+                    self.delete_rollup(&shard_id, &rollup.key).await;
                 }
 
                 state
@@ -570,10 +583,16 @@ impl StateVersions {
             (self.cfg.now)(),
         );
         let rollup_seqno = empty_state.seqno.next();
-        let rollup_key = PartialRollupKey::new(rollup_seqno, &RollupId::new());
+        let rollup = HollowRollup {
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            // Chicken-and-egg problem here. We don't know the size of the
+            // rollup until we encode it, but it includes a reference back to
+            // itself.
+            encoded_size_bytes: None,
+        };
         let (applied, initial_state) = match empty_state
             .clone_apply(&self.cfg, &mut |_, _, state| {
-                state.add_and_remove_rollups((rollup_seqno, &rollup_key), &[])
+                state.add_and_remove_rollups((rollup_seqno, &rollup), &[])
             }) {
             Continue(x) => x,
             Break(NoOpStateTransition(_)) => {
@@ -585,7 +604,7 @@ impl StateVersions {
             "add_and_remove_rollups should apply to the empty state"
         );
 
-        let rollup = self.encode_rollup_blob(shard_metrics, &initial_state, rollup_key);
+        let rollup = self.encode_rollup_blob(shard_metrics, &initial_state, rollup.key);
         let () = self.write_rollup_blob(&rollup).await;
         assert_eq!(initial_state.seqno, rollup.seqno);
 
@@ -668,8 +687,8 @@ impl StateVersions {
         });
 
         let state = self.fetch_current_state::<T>(shard_id, live_diffs).await;
-        if let Some(rollup_key) = state.rollups().get(&seqno) {
-            return self.fetch_rollup_at_key(shard_id, rollup_key).await;
+        if let Some(rollup) = state.rollups().get(&seqno) {
+            return self.fetch_rollup_at_key(shard_id, &rollup.key).await;
         }
 
         // MIGRATION: We maintain an invariant that the _current state_ contains
@@ -704,11 +723,10 @@ impl StateVersions {
         // bailing us out. After the next deploy, this should initially start at
         // > 0 and then settle down to 0. After the next prod envs wipe, we can
         // remove the migration.
-        let rollup_key =
-            rollup_key_for_migration.expect("someone should have a key for this rollup");
+        let rollup = rollup_key_for_migration.expect("someone should have a key for this rollup");
         tracing::info!("only found rollup for {} {} via migration", shard_id, seqno);
         self.metrics.state.rollup_at_seqno_migration.inc();
-        self.fetch_rollup_at_key(shard_id, &rollup_key).await
+        self.fetch_rollup_at_key(shard_id, &rollup.key).await
     }
 
     /// Fetches the rollup at the given key, if it exists.

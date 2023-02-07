@@ -202,6 +202,15 @@ impl<T: Ord> Ord for HollowBatch<T> {
     }
 }
 
+/// A pointer to a rollup stored externally.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HollowRollup {
+    /// Pointer usable to retrieve the rollup.
+    pub key: PartialRollupKey,
+    /// The encoded size of this rollup, if known.
+    pub encoded_size_bytes: Option<usize>,
+}
+
 /// A sentinel for a state transition that was a no-op.
 ///
 /// Critically, this also indicates that the no-op state transition was not
@@ -219,7 +228,7 @@ pub struct StateCollections<T> {
     pub(crate) last_gc_req: SeqNo,
 
     // - Invariant: There is a rollup with `seqno <= self.seqno_since`.
-    pub(crate) rollups: BTreeMap<SeqNo, PartialRollupKey>,
+    pub(crate) rollups: BTreeMap<SeqNo, HollowRollup>,
 
     pub(crate) leased_readers: BTreeMap<LeasedReaderId, LeasedReaderState<T>>,
     pub(crate) critical_readers: BTreeMap<CriticalReaderId, CriticalReaderState<T>>,
@@ -249,21 +258,21 @@ where
 {
     pub fn add_and_remove_rollups(
         &mut self,
-        add_rollup: (SeqNo, &PartialRollupKey),
+        add_rollup: (SeqNo, &HollowRollup),
         remove_rollups: &[(SeqNo, PartialRollupKey)],
     ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
-        let (rollup_seqno, rollup_key) = add_rollup;
+        let (rollup_seqno, rollup) = add_rollup;
         let applied = match self.rollups.get(&rollup_seqno) {
-            Some(x) => x == rollup_key,
+            Some(x) => x.key == rollup.key,
             None => {
-                self.rollups.insert(rollup_seqno, rollup_key.to_owned());
+                self.rollups.insert(rollup_seqno, rollup.to_owned());
                 true
             }
         };
         for (seqno, key) in remove_rollups {
             let removed_key = self.rollups.remove(seqno);
             debug_assert!(
-                removed_key.as_ref().map_or(true, |x| x == key),
+                removed_key.as_ref().map_or(true, |x| &x.key == key),
                 "{} vs {:?}",
                 key,
                 removed_key
@@ -1024,7 +1033,7 @@ where
         self.collections.trace.batch_size_metrics()
     }
 
-    pub fn latest_rollup(&self) -> (&SeqNo, &PartialRollupKey) {
+    pub fn latest_rollup(&self) -> (&SeqNo, &HollowRollup) {
         // We maintain the invariant that every version of state has at least
         // one rollup.
         self.collections

@@ -35,6 +35,11 @@ message ProtoHollowBatch {
     repeated string deprecated_keys = 2;
 }
 
+message ProtoHollowRollup {
+    string key = 1;
+    optional uint64 encoded_size_bytes = 2;
+}
+
 message ProtoTrace {
     ProtoU64Antichain since = 1;
     repeated ProtoHollowBatch spine = 2;
@@ -80,16 +85,21 @@ message ProtoStateRollup {
     uint64 walltime_ms = 15;
     string hostname = 14;
     uint64 last_gc_req = 10;
-    map<uint64, string> rollups = 12;
+    map<uint64, ProtoHollowRollup> rollups = 16;
 
     ProtoTrace trace = 7;
     map<string, ProtoLeasedReaderState> leased_readers = 8;
     map<string, ProtoCriticalReaderState> critical_readers = 13;
     map<string, ProtoWriterState> writers = 9;
+
+    // MIGRATION: We previously stored rollups as a `SeqNo -> string Key` map,
+    // but now the value is a `struct HollowRollup`.
+    map<uint64, string> deprecated_rollups = 12;
 }
 
 enum ProtoStateField {
-    ROLLUPS = 0;
+    DEPRECATED_ROLLUPS = 0; // Proto doesn't let us reorder this down, sadly
+    ROLLUPS = 8;
     HOSTNAME = 7;
     LAST_GC_REQ = 1;
     LEASED_READERS = 2;
