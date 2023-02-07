@@ -68,6 +68,10 @@ indexes in each cluster you are referencing the materialized view in.
 this exists+add detail about using indexes to optimize materialized view
 stacking."
 
+### Limitations
+
+You cannot use a `NATURAL JOIN` or `*` expression in the same materialized view as a system object.
+
 ## Examples
 
 ### Creating a materialized view
