@@ -10,7 +10,7 @@
 # Build a cross-compiling toolchain that targets the oldest version of Linux
 # that we support.
 
-FROM ubuntu:jammy-20221130 AS crosstool
+FROM ubuntu:jammy-20230126 AS crosstool
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -68,7 +68,7 @@ RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
 # Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
-FROM ubuntu:jammy-20221130
+FROM ubuntu:jammy-20230126
 ARG ARCH_GCC
 ARG ARCH_GO
 
