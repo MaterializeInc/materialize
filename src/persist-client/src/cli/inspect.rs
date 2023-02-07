@@ -250,7 +250,7 @@ pub async fn fetch_state_rollups(args: &StateArgs) -> Result<impl serde::Seriali
 
     let mut rollup_keys = BTreeSet::new();
     let mut state_iter = state_versions
-        .fetch_all_live_states::<u64>(&shard_id)
+        .fetch_all_live_states::<u64>(shard_id)
         .await
         .check_ts_codec()?;
     while let Some(v) = state_iter.next() {
@@ -289,7 +289,7 @@ pub async fn fetch_state_diffs(
 
     let mut live_states = vec![];
     let mut state_iter = state_versions
-        .fetch_all_live_states::<u64>(&shard_id)
+        .fetch_all_live_states::<u64>(shard_id)
         .await
         .check_ts_codec()?;
     while let Some(_) = state_iter.next() {
@@ -469,7 +469,7 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
         .await?;
 
     let mut state_iter = state_versions
-        .fetch_all_live_states::<u64>(&shard_id)
+        .fetch_all_live_states::<u64>(shard_id)
         .await
         .check_ts_codec()?;
 
@@ -519,7 +519,7 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
         .await?;
 
     let mut state_iter = state_versions
-        .fetch_all_live_states::<u64>(&shard_id)
+        .fetch_all_live_states::<u64>(shard_id)
         .await
         .check_ts_codec()?;
 

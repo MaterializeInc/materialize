@@ -141,7 +141,7 @@ impl StateVersions {
             return self
                 .fetch_current_state(&shard_id, recent_live_diffs.0)
                 .await
-                .check_codecs();
+                .check_codecs(&shard_id);
         }
 
         // Shard is not initialized, try initializing it.
@@ -167,7 +167,7 @@ impl StateVersions {
                 let state = self
                     .fetch_current_state(&shard_id, live_diffs)
                     .await
-                    .check_codecs();
+                    .check_codecs(&shard_id);
 
                 // Clean up the rollup blob that we were trying to reference.
                 //
@@ -381,7 +381,7 @@ impl StateVersions {
             *state = self
                 .fetch_current_state(&state.shard_id, recent_live_diffs.0)
                 .await
-                .check_codecs()?;
+                .check_codecs(&state.shard_id)?;
             Ok(())
         }
     }
@@ -389,7 +389,7 @@ impl StateVersions {
     /// Returns an iterator over all live states for the requested shard.
     ///
     /// Panics if called on an uninitialized shard.
-    pub async fn fetch_all_live_states<T>(&self, shard_id: &ShardId) -> UntypedStateVersionsIter<T>
+    pub async fn fetch_all_live_states<T>(&self, shard_id: ShardId) -> UntypedStateVersionsIter<T>
     where
         T: Timestamp + Lattice + Codec64,
     {
@@ -398,14 +398,18 @@ impl StateVersions {
             .retries
             .fetch_live_states
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
-        let mut all_live_diffs = self.fetch_all_live_diffs(shard_id).await;
+        let mut all_live_diffs = self.fetch_all_live_diffs(&shard_id).await;
         loop {
             let earliest_live_diff = match all_live_diffs.0.first() {
                 Some(x) => x,
                 None => panic!("fetch_live_states should only be called on an initialized shard"),
             };
             let state = match self
-                .fetch_rollup_at_seqno(shard_id, all_live_diffs.0.clone(), earliest_live_diff.seqno)
+                .fetch_rollup_at_seqno(
+                    &shard_id,
+                    all_live_diffs.0.clone(),
+                    earliest_live_diff.seqno,
+                )
                 .await
             {
                 Some(x) => x,
@@ -418,7 +422,7 @@ impl StateVersions {
                     // Intentionally don't sleep on retry.
                     retry.retries.inc();
                     let earliest_before_refetch = earliest_live_diff.seqno;
-                    all_live_diffs = self.fetch_all_live_diffs(shard_id).await;
+                    all_live_diffs = self.fetch_all_live_diffs(&shard_id).await;
 
                     // We should only hit the race condition that leads to a
                     // refetch if the set of live diffs changed out from under
@@ -439,6 +443,7 @@ impl StateVersions {
             };
             assert_eq!(earliest_live_diff.seqno, state.seqno());
             return UntypedStateVersionsIter {
+                shard_id,
                 cfg: self.cfg.clone(),
                 metrics: Arc::clone(&self.metrics),
                 state,
@@ -739,6 +744,7 @@ impl StateVersions {
 }
 
 pub struct UntypedStateVersionsIter<T> {
+    shard_id: ShardId,
     cfg: PersistConfig,
     metrics: Arc<Metrics>,
     state: UntypedState<T>,
@@ -749,7 +755,7 @@ impl<T: Timestamp + Lattice + Codec64> UntypedStateVersionsIter<T> {
     pub fn check_codecs<K: Codec, V: Codec, D: Codec64>(
         self,
     ) -> Result<TypedStateVersionsIter<K, V, T, D>, Box<CodecMismatch>> {
-        let state = self.state.check_codecs()?;
+        let state = self.state.check_codecs(&self.shard_id)?;
         Ok(TypedStateVersionsIter::new(
             self.cfg,
             self.metrics,
@@ -762,7 +768,7 @@ impl<T: Timestamp + Lattice + Codec64> UntypedStateVersionsIter<T> {
         let key_codec = self.state.key_codec.clone();
         let val_codec = self.state.val_codec.clone();
         let diff_codec = self.state.diff_codec.clone();
-        let state = self.state.check_ts_codec()?;
+        let state = self.state.check_ts_codec(&self.shard_id)?;
         Ok(StateVersionsIter::new(
             self.cfg,
             self.metrics,

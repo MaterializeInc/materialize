@@ -581,7 +581,11 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
 
     pub fn check_codecs<K: Codec, V: Codec, D: Codec64>(
         self,
+        shard_id: &ShardId,
     ) -> Result<TypedState<K, V, T, D>, Box<CodecMismatch>> {
+        // Also defensively check that the shard_id on the state we fetched
+        // matches the shard_id we were trying to fetch.
+        assert_eq!(shard_id, &self.state.shard_id);
         if K::codec_name() != self.key_codec
             || V::codec_name() != self.val_codec
             || T::codec_name() != self.ts_codec
@@ -610,7 +614,10 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
         })
     }
 
-    pub(crate) fn check_ts_codec(self) -> Result<State<T>, CodecMismatchT> {
+    pub(crate) fn check_ts_codec(self, shard_id: &ShardId) -> Result<State<T>, CodecMismatchT> {
+        // Also defensively check that the shard_id on the state we fetched
+        // matches the shard_id we were trying to fetch.
+        assert_eq!(shard_id, &self.state.shard_id);
         if T::codec_name() != self.ts_codec {
             return Err(CodecMismatchT {
                 requested: T::codec_name(),
@@ -1000,21 +1007,21 @@ mod tests {
         let v3 = semver::Version::new(3, 0, 0);
 
         // Code version v2 evaluates and writes out some State.
-        let state =
-            TypedState::<(), (), u64, i64>::new(v2.clone(), ShardId::new(), "".to_owned(), 0);
+        let shard_id = ShardId::new();
+        let state = TypedState::<(), (), u64, i64>::new(v2.clone(), shard_id, "".to_owned(), 0);
         let mut buf = Vec::new();
         state.encode(&mut buf);
 
         // We can read it back using persist code v2 and v3.
         assert_eq!(
             UntypedState::<u64>::decode(&v2, &buf)
-                .check_codecs()
+                .check_codecs(&shard_id)
                 .as_ref(),
             Ok(&state)
         );
         assert_eq!(
             UntypedState::<u64>::decode(&v3, &buf)
-                .check_codecs()
+                .check_codecs(&shard_id)
                 .as_ref(),
             Ok(&state)
         );

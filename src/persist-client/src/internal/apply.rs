@@ -312,7 +312,7 @@ where
                             *state = state_versions
                                 .fetch_current_state(&state.shard_id, all_live_diffs)
                                 .await
-                                .check_codecs()
+                                .check_codecs(&state.shard_id)
                                 .expect("shard codecs should not change");
                         }
 

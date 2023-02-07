@@ -1048,7 +1048,7 @@ pub mod datadriven {
 
         let mut states = datadriven
             .state_versions
-            .fetch_all_live_states::<u64>(&datadriven.shard_id)
+            .fetch_all_live_states::<u64>(datadriven.shard_id)
             .await
             .check_ts_codec()
             .expect("shard codecs should not change");
