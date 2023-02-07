@@ -21,6 +21,8 @@ use mz_expr::func;
 use mz_ore::collections::CollectionExt;
 use mz_pgrepr::oid;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
+use mz_sql_parser::ast::visit::{self, Visit};
+use mz_sql_parser::ast::{Expr, JoinConstraint, Query, Raw, SelectItem};
 
 use crate::ast::{SelectStatement, Statement};
 use crate::catalog::{CatalogType, TypeCategory, TypeReference};
@@ -322,6 +324,7 @@ pub fn sql_impl(
 ) -> impl Fn(&QueryContext, Vec<ScalarType>) -> Result<HirScalarExpr, PlanError> {
     let expr = mz_sql_parser::parser::parse_expr(expr)
         .expect("static function definition failed to parse");
+    SqlImplFuncValidator::validate_expr(&expr);
     move |qcx, types| {
         // Reconstruct an expression context where the parameter types are
         // bound to the types of the expressions in `args`.
@@ -335,7 +338,13 @@ pub fn sql_impl(
         );
         let qcx = QueryContext::root(&scx, qcx.lifetime);
 
-        let (mut expr, _) = names::resolve(qcx.scx.catalog, expr.clone())?;
+        let (mut expr, _) = names::resolve(
+            qcx.scx.catalog,
+            scx.column_disambiguation_metadata
+                .borrow_mut()
+                .statement_tagger_mut(),
+            expr.clone(),
+        )?;
         // Desugar the expression
         transform_ast::transform(&scx, &mut expr)?;
 
@@ -400,6 +409,7 @@ fn sql_impl_table_func_inner(
         Statement::Select(SelectStatement { query, as_of: None }) => query,
         _ => panic!("static function definition expected SELECT statement"),
     };
+    SqlImplFuncValidator::validate_query(&query);
     let invoke = move |qcx: &QueryContext, types: Vec<ScalarType>| {
         // Reconstruct an expression context where the parameter types are
         // bound to the types of the expressions in `args`.
@@ -414,7 +424,14 @@ fn sql_impl_table_func_inner(
         let mut qcx = QueryContext::root(&scx, qcx.lifetime);
 
         let query = query.clone();
-        let (mut query, _) = names::resolve(qcx.scx.catalog, query)?;
+        let (mut query, _) = names::resolve(
+            qcx.scx.catalog,
+            qcx.scx
+                .column_disambiguation_metadata
+                .borrow_mut()
+                .statement_tagger_mut(),
+            query,
+        )?;
         transform_ast::transform(&scx, &mut query)?;
 
         query::plan_nested_query(&mut qcx, &query)
@@ -443,6 +460,52 @@ fn experimental_sql_impl_table_func(
     sql: &'static str,
 ) -> Operation<TableFuncPlan> {
     sql_impl_table_func_inner(sql, Some(feature))
+}
+
+/// Validates that a function implemented in SQL only uses allowed expressions.
+struct SqlImplFuncValidator {}
+
+impl SqlImplFuncValidator {
+    fn validate_query(query: &Query<Raw>) {
+        let mut sql_impl_func_validator = SqlImplFuncValidator {};
+        sql_impl_func_validator.visit_query(query);
+    }
+
+    fn validate_expr(expr: &Expr<Raw>) {
+        let mut sql_impl_func_validator = SqlImplFuncValidator {};
+        sql_impl_func_validator.visit_expr(expr);
+    }
+}
+
+impl<'ast> Visit<'ast, Raw> for SqlImplFuncValidator {
+    fn visit_select_item(&mut self, select_item: &'ast SelectItem<Raw>) {
+        match select_item {
+            SelectItem::Wildcard { .. }
+            | SelectItem::Expr {
+                expr: Expr::WildcardAccess { .. },
+                ..
+            }
+            | SelectItem::Expr {
+                expr: Expr::QualifiedWildcard { .. },
+                ..
+            } => panic!(
+                "Do not use `*` to implement functions, it makes the output columns ambiguous and \
+                easy to accidentally change"
+            ),
+            SelectItem::Expr { .. } => {}
+        }
+        visit::visit_select_item(self, select_item);
+    }
+
+    fn visit_join_constraint(&mut self, join_constraint: &'ast JoinConstraint<Raw>) {
+        if let JoinConstraint::Natural { id: _ } = join_constraint {
+            panic!(
+                "Do not use `NATURAL JOIN` to implement functions, it makes the output columns \
+                ambiguous and easy to accidentally change"
+            );
+        }
+        visit::visit_join_constraint(self, join_constraint);
+    }
 }
 
 /// Describes a single function's implementation.
@@ -2803,28 +2866,28 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "date_bin_hopping" => Table {
             // (hop, width, timestamp)
             params!(Interval, Interval, Timestamp) => experimental_sql_impl_table_func("date_bin_hopping", "
-                    SELECT *
+                    SELECT date_bin_hopping
                     FROM pg_catalog.generate_series(
                         pg_catalog.date_bin($1, $3 + $1, '1970-01-01') - $2, $3, $1
                     ) AS dbh(date_bin_hopping)
                 ") => ReturnType::set_of(Timestamp.into()), oid::FUNC_MZ_DATE_BIN_HOPPING_UNIX_EPOCH_TS_OID;
             // (hop, width, timestamp)
             params!(Interval, Interval, TimestampTz) => experimental_sql_impl_table_func("date_bin_hopping", "
-                    SELECT *
+                    SELECT date_bin_hopping
                     FROM pg_catalog.generate_series(
                         pg_catalog.date_bin($1, $3 + $1, '1970-01-01') - $2, $3, $1
                     ) AS dbh(date_bin_hopping)
                 ") => ReturnType::set_of(TimestampTz.into()), oid::FUNC_MZ_DATE_BIN_HOPPING_UNIX_EPOCH_TSTZ_OID;
             // (hop, width, timestamp, origin)
             params!(Interval, Interval, Timestamp, Timestamp) => experimental_sql_impl_table_func("date_bin_hopping", "
-                    SELECT *
+                    SELECT date_bin_hopping
                     FROM pg_catalog.generate_series(
                         pg_catalog.date_bin($1, $3 + $1, $4) - $2, $3, $1
                     ) AS dbh(date_bin_hopping)
                 ") => ReturnType::set_of(Timestamp.into()), oid::FUNC_MZ_DATE_BIN_HOPPING_TS_OID;
             // (hop, width, timestamp, origin)
             params!(Interval, Interval, TimestampTz, TimestampTz) => experimental_sql_impl_table_func("date_bin_hopping", "
-                    SELECT *
+                    SELECT date_bin_hopping
                     FROM pg_catalog.generate_series(
                         pg_catalog.date_bin($1, $3 + $1, $4) - $2, $3, $1
                     ) AS dbh(date_bin_hopping)

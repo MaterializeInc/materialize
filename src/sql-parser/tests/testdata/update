@@ -28,4 +28,4 @@ UPDATE t SET a = 1, b = 2, c = 3 WHERE d
 ----
 UPDATE t SET a = 1, b = 2, c = 3 WHERE d
 =>
-Update(UpdateStatement { table_name: Name(UnresolvedObjectName([Ident("t")])), assignments: [Assignment { id: Ident("a"), value: Value(Number("1")) }, Assignment { id: Ident("b"), value: Value(Number("2")) }, Assignment { id: Ident("c"), value: Value(Number("3")) }], selection: Some(Identifier([Ident("d")])) })
+Update(UpdateStatement { table_name: Name(UnresolvedObjectName([Ident("t")])), assignments: [Assignment { id: Ident("a"), value: Value(Number("1")) }, Assignment { id: Ident("b"), value: Value(Number("2")) }, Assignment { id: Ident("c"), value: Value(Number("3")) }], selection: Some(Identifier { names: [Ident("d")], id: () }) })

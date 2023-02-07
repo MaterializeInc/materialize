@@ -58,7 +58,7 @@ INSERT INTO customer WITH foo AS (SELECT 1) SELECT * FROM foo UNION VALUES (1)
 ----
 INSERT INTO customer WITH foo AS (SELECT 1) SELECT * FROM foo UNION VALUES (1)
 =>
-Insert(InsertStatement { table_name: Name(UnresolvedObjectName([Ident("customer")])), columns: [], source: Query(Query { ctes: Simple([Cte { alias: TableAlias { name: Ident("foo"), columns: [], strict: false }, id: (), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]), body: SetOperation { op: Union, all: false, left: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), right: Values(Values([[Value(Number("1"))]])) }, order_by: [], limit: None, offset: None }), returning: [] })
+Insert(InsertStatement { table_name: Name(UnresolvedObjectName([Ident("customer")])), columns: [], source: Query(Query { ctes: Simple([Cte { alias: TableAlias { name: Ident("foo"), columns: [], strict: false }, id: (), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]), body: SetOperation { op: Union, all: false, left: Select(Select { distinct: None, projection: [Wildcard { id: () }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("foo")])), alias: None, id: () }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), right: Values(Values([[Value(Number("1"))]])) }, order_by: [], limit: None, offset: None }), returning: [] })
 
 parse-statement
 INSERT INTO customer DEFAULT VALUES
@@ -79,7 +79,7 @@ INSERT INTO t DEFAULT VALUES RETURNING *, *, i, a AS x
 ----
 INSERT INTO t DEFAULT VALUES RETURNING *, *, i, a AS x
 =>
-Insert(InsertStatement { table_name: Name(UnresolvedObjectName([Ident("t")])), columns: [], source: DefaultValues, returning: [Wildcard, Wildcard, Expr { expr: Identifier([Ident("i")]), alias: None }, Expr { expr: Identifier([Ident("a")]), alias: Some(Ident("x")) }] })
+Insert(InsertStatement { table_name: Name(UnresolvedObjectName([Ident("t")])), columns: [], source: DefaultValues, returning: [Wildcard { id: () }, Wildcard { id: () }, Expr { expr: Identifier { names: [Ident("i")], id: () }, alias: None }, Expr { expr: Identifier { names: [Ident("a")], id: () }, alias: Some(Ident("x")) }] })
 
 parse-statement
 INSERT INTO t DEFAULT VALUES RETURNING * as x

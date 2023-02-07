@@ -64,10 +64,12 @@ use crate::names::{
     RoleId, SchemaId,
 };
 
+pub use self::column_disambiguate::StatementTagger;
 pub use self::expr::{
     AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
 };
 
+pub(crate) mod column_disambiguate;
 pub(crate) mod error;
 pub(crate) mod explain;
 pub(crate) mod expr;

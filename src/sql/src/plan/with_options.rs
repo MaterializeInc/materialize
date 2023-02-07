@@ -19,8 +19,8 @@ use mz_repr::GlobalId;
 use mz_storage_client::types::connections::StringOrSecret;
 
 use crate::ast::{AstInfo, IntervalValue, UnresolvedObjectName, Value, WithOptionValue};
-use crate::names::{ResolvedDataType, ResolvedObjectName};
-use crate::plan::{Aug, PlanError};
+use crate::names::{Aug, ResolvedDataType, ResolvedObjectName};
+use crate::plan::PlanError;
 
 pub trait TryFromValue<T>: Sized {
     fn try_from_value(v: T) -> Result<Self, PlanError>;

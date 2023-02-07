@@ -219,8 +219,23 @@ pub fn plan_prepare(
 ) -> Result<Plan, PlanError> {
     // TODO: PREPARE supports specifying param types.
     let param_types = [];
-    let (stmt_resolved, _) = names::resolve(scx.catalog, *stmt.clone())?;
-    let desc = describe(scx.pcx()?, scx.catalog, stmt_resolved, &param_types)?;
+    let (stmt_resolved, _) = names::resolve(
+        scx.catalog,
+        scx.column_disambiguation_metadata
+            .borrow_mut()
+            .statement_tagger_mut(),
+        *stmt.clone(),
+    )?;
+    let desc = describe(
+        scx.pcx()?,
+        scx.catalog,
+        stmt_resolved,
+        &param_types,
+        scx.column_disambiguation_metadata
+            .borrow_mut()
+            .statement_tagger_mut()
+            .clone(),
+    )?;
     Ok(Plan::Prepare(PreparePlan {
         name: name.to_string(),
         stmt: *stmt,

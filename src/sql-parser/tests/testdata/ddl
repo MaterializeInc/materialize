@@ -29,7 +29,7 @@ CREATE TABLE uk_cities (
 ----
 CREATE TABLE uk_cities (name varchar(100) NOT NULL, lat float8 NULL, lng float8, constrained int4 NULL CONSTRAINT pkey PRIMARY KEY NOT NULL UNIQUE CHECK (constrained > 0), ref int4 REFERENCES othertable (a, b))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("uk_cities")]), columns: [ColumnDef { name: Ident("name"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [100] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("lat"), data_type: Other { name: Name(UnresolvedObjectName([Ident("float8")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Null }] }, ColumnDef { name: Ident("lng"), data_type: Other { name: Name(UnresolvedObjectName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("constrained"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Null }, ColumnOptionDef { name: Some(Ident("pkey")), option: Unique { is_primary: true } }, ColumnOptionDef { name: None, option: NotNull }, ColumnOptionDef { name: None, option: Unique { is_primary: false } }, ColumnOptionDef { name: None, option: Check(Op { op: Op { namespace: [], op: ">" }, expr1: Identifier([Ident("constrained")]), expr2: Some(Value(Number("0"))) }) }] }, ColumnDef { name: Ident("ref"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: ForeignKey { foreign_table: UnresolvedObjectName([Ident("othertable")]), referred_columns: [Ident("a"), Ident("b")] } }] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("uk_cities")]), columns: [ColumnDef { name: Ident("name"), data_type: Other { name: Name(UnresolvedObjectName([Ident("varchar")])), typ_mod: [100] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("lat"), data_type: Other { name: Name(UnresolvedObjectName([Ident("float8")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Null }] }, ColumnDef { name: Ident("lng"), data_type: Other { name: Name(UnresolvedObjectName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("constrained"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Null }, ColumnOptionDef { name: Some(Ident("pkey")), option: Unique { is_primary: true } }, ColumnOptionDef { name: None, option: NotNull }, ColumnOptionDef { name: None, option: Unique { is_primary: false } }, ColumnOptionDef { name: None, option: Check(Op { op: Op { namespace: [], op: ">" }, expr1: Identifier { names: [Ident("constrained")], id: () }, expr2: Some(Value(Number("0"))) }) }] }, ColumnDef { name: Ident("ref"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: ForeignKey { foreign_table: UnresolvedObjectName([Ident("othertable")]), referred_columns: [Ident("a"), Ident("b")] } }] }], constraints: [], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE t (a int NOT NULL GARBAGE)
@@ -127,7 +127,7 @@ CREATE TEMPORARY TABLE foo (id int, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) 
 ----
 CREATE TEMPORARY TABLE foo (id int4, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> ''))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: Op { op: Op { namespace: [], op: "<>" }, expr1: Function(Function { name: UnresolvedObjectName([Ident("rtrim")]), args: Args { args: [Function(Function { name: UnresolvedObjectName([Ident("ltrim")]), args: Args { args: [Identifier([Ident("ref_code")])], order_by: [] }, filter: None, over: None, distinct: false })], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(String(""))) } }], if_not_exists: false, temporary: true })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: Op { op: Op { namespace: [], op: "<>" }, expr1: Function(Function { name: UnresolvedObjectName([Ident("rtrim")]), args: Args { args: [Function(Function { name: UnresolvedObjectName([Ident("ltrim")]), args: Args { args: [Identifier { names: [Ident("ref_code")], id: () }], order_by: [] }, filter: None, over: None, distinct: false })], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(String(""))) } }], if_not_exists: false, temporary: true })
 
 parse-statement
 CREATE TABLE foo (id int, PRIMARY KEY (foo, bar))
@@ -155,21 +155,21 @@ CREATE TABLE foo (id int, CHECK (end_date > start_date OR end_date IS NULL))
 ----
 CREATE TABLE foo (id int4, CHECK (end_date > start_date OR end_date IS NULL))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: Op { namespace: [], op: ">" }, expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsExpr { expr: Identifier([Ident("end_date")]), construct: Null, negated: false } } }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: Op { namespace: [], op: ">" }, expr1: Identifier { names: [Ident("end_date")], id: () }, expr2: Some(Identifier { names: [Ident("start_date")], id: () }) }, right: IsExpr { expr: Identifier { names: [Ident("end_date")], id: () }, construct: Null, negated: false } } }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, CHECK (end_date > start_date OR end_date IS UNKNOWN))
 ----
 CREATE TABLE foo (id int4, CHECK (end_date > start_date OR end_date IS UNKNOWN))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: Op { namespace: [], op: ">" }, expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsExpr { expr: Identifier([Ident("end_date")]), construct: Unknown, negated: false } } }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: Op { namespace: [], op: ">" }, expr1: Identifier { names: [Ident("end_date")], id: () }, expr2: Some(Identifier { names: [Ident("start_date")], id: () }) }, right: IsExpr { expr: Identifier { names: [Ident("end_date")], id: () }, construct: Unknown, negated: false } } }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TABLE foo (id int, CHECK (start_date IS TRUE))
 ----
 CREATE TABLE foo (id int4, CHECK (start_date IS TRUE))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: IsExpr { expr: Identifier([Ident("start_date")]), construct: True, negated: false } }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: IsExpr { expr: Identifier { names: [Ident("start_date")], id: () }, construct: True, negated: false } }], if_not_exists: false, temporary: false })
 
 parse-statement
 CREATE TEMP TABLE t (c schema.type)
@@ -281,21 +281,21 @@ CREATE VIEW myschema.myview AS SELECT foo FROM bar
 ----
 CREATE VIEW myschema.myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier { names: [Ident("foo")], id: () }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None, id: () }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar
 ----
 CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { if_exists: Error, temporary: true, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myview")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Error, temporary: true, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myview")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier { names: [Ident("foo")], id: () }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None, id: () }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE TEMP VIEW myview AS SELECT foo FROM bar
 ----
 CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { if_exists: Error, temporary: true, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myview")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Error, temporary: true, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myview")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier { names: [Ident("foo")], id: () }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None, id: () }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE OR REPLACE VIEW v AS SELECT 1
@@ -330,14 +330,14 @@ CREATE VIEW IF NOT EXISTS myschema.myview AS SELECT foo FROM bar
 ----
 CREATE VIEW IF NOT EXISTS myschema.myview AS SELECT foo FROM bar
 =>
-CreateView(CreateViewStatement { if_exists: Skip, temporary: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+CreateView(CreateViewStatement { if_exists: Skip, temporary: false, definition: ViewDefinition { name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier { names: [Ident("foo")], id: () }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None, id: () }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
 
 parse-statement
 CREATE MATERIALIZED VIEW myschema.myview AS SELECT foo FROM bar
 ----
 CREATE MATERIALIZED VIEW myschema.myview AS SELECT foo FROM bar
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier { names: [Ident("foo")], id: () }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None, id: () }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
 
 parse-statement
 CREATE OR REPLACE MATERIALIZED VIEW v AS SELECT 1
@@ -513,56 +513,56 @@ CREATE INDEX foo ON myschema.bar (a, b)
 ----
 CREATE INDEX foo ON myschema.bar (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier { names: [Ident("a")], id: () }, Identifier { names: [Ident("b")], id: () }]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX foo ON myschema.bar USING arrangement (a, b)
 ----
 CREATE INDEX foo ON myschema.bar (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier { names: [Ident("a")], id: () }, Identifier { names: [Ident("b")], id: () }]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX foo ON myschema.bar (a, b) WITH (LOGICAL COMPACTION WINDOW = 0)
 ----
 CREATE INDEX foo ON myschema.bar (a, b) WITH (LOGICAL COMPACTION WINDOW = 0)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [IndexOption { name: LogicalCompactionWindow, value: Some(Value(Number("0"))) }], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier { names: [Ident("a")], id: () }, Identifier { names: [Ident("b")], id: () }]), with_options: [IndexOption { name: LogicalCompactionWindow, value: Some(Value(Number("0"))) }], if_not_exists: false })
 
 parse-statement
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 ----
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("baz")])), key_parts: Some([Function(Function { name: UnresolvedObjectName([Ident("ascii")]), args: Args { args: [Identifier([Ident("x")])], order_by: [] }, filter: None, over: None, distinct: false }), IsExpr { expr: Identifier([Ident("a")]), construct: Null, negated: true }, Nested(Exists(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("boop")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("boop"), Ident("z")]), expr2: Some(Identifier([Ident("z")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })), Identifier([Ident("delta")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("baz")])), key_parts: Some([Function(Function { name: UnresolvedObjectName([Ident("ascii")]), args: Args { args: [Identifier { names: [Ident("x")], id: () }], order_by: [] }, filter: None, over: None, distinct: false }), IsExpr { expr: Identifier { names: [Ident("a")], id: () }, construct: Null, negated: true }, Nested(Exists(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier { names: [Ident("y")], id: () }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("boop")])), alias: None, id: () }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier { names: [Ident("boop"), Ident("z")], id: () }, expr2: Some(Identifier { names: [Ident("z")], id: () }) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })), Identifier { names: [Ident("delta")], id: () }]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX ind ON tab ((col + 1))
 ----
 CREATE INDEX ind ON tab ((col + 1))
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("ind")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("tab")])), key_parts: Some([Nested(Op { op: Op { namespace: [], op: "+" }, expr1: Identifier([Ident("col")]), expr2: Some(Value(Number("1"))) })]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("ind")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("tab")])), key_parts: Some([Nested(Op { op: Op { namespace: [], op: "+" }, expr1: Identifier { names: [Ident("col")], id: () }, expr2: Some(Value(Number("1"))) })]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX qualifiers ON no_parentheses (alpha.omega)
 ----
 CREATE INDEX qualifiers ON no_parentheses (alpha.omega)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("qualifiers")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("no_parentheses")])), key_parts: Some([Identifier([Ident("alpha"), Ident("omega")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("qualifiers")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("no_parentheses")])), key_parts: Some([Identifier { names: [Ident("alpha"), Ident("omega")], id: () }]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX foo IN CLUSTER bar ON myschema.bar (a, b)
 ----
 CREATE INDEX foo IN CLUSTER bar ON myschema.bar (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Unresolved(Ident("bar"))), on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Unresolved(Ident("bar"))), on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier { names: [Ident("a")], id: () }, Identifier { names: [Ident("b")], id: () }]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX foo IN CLUSTER [1] ON myschema.bar (a, b)
 ----
 CREATE INDEX foo IN CLUSTER [1] ON myschema.bar (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Resolved("1")), on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: Some(Resolved("1")), on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier { names: [Ident("a")], id: () }, Identifier { names: [Ident("b")], id: () }]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE DEFAULT INDEX ON tab
@@ -597,7 +597,7 @@ CREATE INDEX ON tab (a, b)
 ----
 CREATE INDEX ON tab (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("tab")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("tab")])), key_parts: Some([Identifier { names: [Ident("a")], id: () }, Identifier { names: [Ident("b")], id: () }]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX IF NOT EXISTS ON tab (a, b)
@@ -793,7 +793,7 @@ SUBSCRIBE (SELECT * FROM a)
 ----
 SUBSCRIBE (SELECT * FROM a)
 =>
-Subscribe(SubscribeStatement { relation: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None, up_to: None })
+Subscribe(SubscribeStatement { relation: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: () }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None, id: () }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None, up_to: None })
 
 parse-statement
 SUBSCRIBE foo.bar AS OF now() UP TO now() + interval '1' day

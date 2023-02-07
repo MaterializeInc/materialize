@@ -562,7 +562,7 @@ const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
 
 /// Boolean flag indicating that the remote configuration was synchronized at
 /// least once with the persistent [SessionVars].
-pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
+pub const CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("config_has_synced_once"),
     value: &false,
     description: "Boolean flag indicating that the remote configuration was synchronized at least once (Materialize).",
@@ -580,7 +580,7 @@ static ENABLE_WITH_MUTUALLY_RECURSIVE: ServerVar<bool> = ServerVar {
 };
 
 /// Feature flag indicating whether real time recency is enabled.
-static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
+const REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("real_time_recency"),
     value: &false,
     description: "Feature flag indicating whether real time recency is enabled (Materialize).",
@@ -588,7 +588,7 @@ static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     safe: false,
 };
 
-static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
+const EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("emit_timestamp_notice"),
     value: &false,
     description:
@@ -597,7 +597,7 @@ static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
-static EMIT_TRACE_ID_NOTICE: ServerVar<bool> = ServerVar {
+const EMIT_TRACE_ID_NOTICE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("emit_trace_id_notice"),
     value: &false,
     description:
@@ -606,7 +606,7 @@ static EMIT_TRACE_ID_NOTICE: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
-static MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = ServerVar {
+const MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = ServerVar {
     name: UncasedStr::new("mock_audit_event_timestamp"),
     value: &None,
     description: "Mocked timestamp to use for audit events for testing purposes",
@@ -646,6 +646,14 @@ pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
         "Whether to force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize).",
     internal: false,
     safe: true,
+};
+
+const ENABLE_DISAMBIGUATE_COLUMNS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_disambiguate_columns"),
+    value: &false,
+    description: "Feature flag to rewrite views and materialized views to avoid any potentially ambiguous column references, DO NOT turn this on, it doesn't work (Materialize).",
+    internal: true,
+    safe: false,
 };
 
 /// Represents the input to a variable.
@@ -1360,6 +1368,7 @@ impl Default for SystemVars {
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
             .with_var(&ENABLE_RBAC_CHECKS)
             .with_var(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
+            .with_var(&ENABLE_DISAMBIGUATE_COLUMNS)
     }
 }
 
@@ -1658,6 +1667,11 @@ impl SystemVars {
     /// Note: this is generally intended to be set via LaunchDarkly
     pub fn enable_auto_route_introspection_queries(&self) -> bool {
         *self.expect_value(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
+    }
+
+    /// Returns the `enable_disambiguate_columns` configuration parameter.
+    pub fn enable_disambiguate_columns(&self) -> bool {
+        *self.expect_value(&ENABLE_DISAMBIGUATE_COLUMNS)
     }
 }
 

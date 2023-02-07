@@ -86,7 +86,7 @@ EXPLAIN OPTIMIZED PLAN AS TEXT FOR WITH a AS (SELECT 1) SELECT * FROM a
 ----
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR WITH a AS (SELECT 1) SELECT * FROM a
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, config_flags: [], format: Text, no_errors: false, explainee: Query(Query { ctes: Simple([Cte { alias: TableAlias { name: Ident("a"), columns: [], strict: false }, id: (), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) })
+Explain(ExplainStatement { stage: OptimizedPlan, config_flags: [], format: Text, no_errors: false, explainee: Query(Query { ctes: Simple([Cte { alias: TableAlias { name: Ident("a"), columns: [], strict: false }, id: (), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]), body: Select(Select { distinct: None, projection: [Wildcard { id: () }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None, id: () }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) })
 
 # regression test for #16029
 parse-statement
@@ -94,7 +94,7 @@ EXPLAIN WITH a AS (SELECT 1) SELECT * FROM a
 ----
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR WITH a AS (SELECT 1) SELECT * FROM a
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, config_flags: [], format: Text, no_errors: false, explainee: Query(Query { ctes: Simple([Cte { alias: TableAlias { name: Ident("a"), columns: [], strict: false }, id: (), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) })
+Explain(ExplainStatement { stage: OptimizedPlan, config_flags: [], format: Text, no_errors: false, explainee: Query(Query { ctes: Simple([Cte { alias: TableAlias { name: Ident("a"), columns: [], strict: false }, id: (), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]), body: Select(Select { distinct: None, projection: [Wildcard { id: () }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None, id: () }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) })
 
 parse-statement
 EXPLAIN TIMESTAMP FOR SELECT 1
@@ -108,7 +108,7 @@ EXPLAIN AS JSON SELECT * FROM foo
 ----
 EXPLAIN OPTIMIZED PLAN AS JSON FOR SELECT * FROM foo
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, config_flags: [], format: Json, no_errors: false, explainee: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) })
+Explain(ExplainStatement { stage: OptimizedPlan, config_flags: [], format: Json, no_errors: false, explainee: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard { id: () }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("foo")])), alias: None, id: () }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) })
 
 parse-statement
 EXPLAIN OPTIMIZER TRACE WITH (est_cost) AS TEXT FOR BROKEN SELECT 1 + 1

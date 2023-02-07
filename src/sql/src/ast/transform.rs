@@ -225,10 +225,10 @@ impl<'a> QueryIdentAgg<'a> {
 impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
     fn visit_expr(&mut self, e: &'ast Expr<Raw>) {
         match e {
-            Expr::Identifier(i) => {
-                self.check_failure(i);
-                if let Some(p) = i.iter().rposition(|e| e == self.name) {
-                    if p == i.len() - 1 {
+            Expr::Identifier { names, id: _ } => {
+                self.check_failure(names);
+                if let Some(p) = names.iter().rposition(|e| e == self.name) {
+                    if p == names.len() - 1 {
                         // `self.name` used as a column if it's in the final
                         // position here, e.g. `SELECT view.col FROM ...`
                         self.err = Some(ambiguous_err(self.name, "column"));
@@ -237,7 +237,10 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
                     self.min_qual_depth = std::cmp::min(p + 1, self.min_qual_depth);
                 }
             }
-            Expr::QualifiedWildcard(i) => {
+            Expr::QualifiedWildcard {
+                qualifier: i,
+                id: _,
+            } => {
                 self.check_failure(i);
                 if let Some(p) = i.iter().rposition(|e| e == self.name) {
                     self.min_qual_depth = std::cmp::min(p + 1, self.min_qual_depth);
@@ -321,13 +324,16 @@ impl CreateSqlRewriter {
 impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
     fn visit_expr_mut(&mut self, e: &'ast mut Expr<Raw>) {
         match e {
-            Expr::Identifier(id) => {
-                // The last ID component is a column name that should not be
+            Expr::Identifier { names, id: _ } => {
+                // The last names component is a column name that should not be
                 // considered in the rewrite.
-                let i = id.len() - 1;
-                self.maybe_rewrite_idents(&mut id[..i]);
+                let i = names.len() - 1;
+                self.maybe_rewrite_idents(&mut names[..i]);
             }
-            Expr::QualifiedWildcard(id) => {
+            Expr::QualifiedWildcard {
+                qualifier: id,
+                id: _,
+            } => {
                 self.maybe_rewrite_idents(id);
             }
             _ => visit_mut::visit_expr_mut(self, e),

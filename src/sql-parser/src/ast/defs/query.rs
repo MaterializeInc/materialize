@@ -22,6 +22,8 @@ use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::mem;
 
+use derivative::Derivative;
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, Expr, FunctionArgs, Ident, ShowStatement, UnresolvedObjectName, WithOptionValue,
@@ -427,12 +429,27 @@ impl<T: AstInfo> AstDisplay for CteMutRecColumnDef<T> {
 impl_display_t!(CteMutRecColumnDef);
 
 /// One item of the comma-separated list following `SELECT`
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Derivative)]
+#[derivative(
+    Eq,
+    PartialEq,
+    Ord = "feature_allow_slow_enum",
+    PartialOrd = "feature_allow_slow_enum",
+    Hash
+)]
 pub enum SelectItem<T: AstInfo> {
     /// An expression, optionally followed by `[ AS ] alias`.
     Expr { expr: Expr<T>, alias: Option<Ident> },
     /// An unqualified `*`.
-    Wildcard,
+    Wildcard {
+        #[derivative(
+            PartialEq = "ignore",
+            Hash = "ignore",
+            Ord = "ignore",
+            PartialOrd = "ignore"
+        )]
+        id: T::NodeId,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for SelectItem<T> {
@@ -445,7 +462,7 @@ impl<T: AstInfo> AstDisplay for SelectItem<T> {
                     f.write_node(alias);
                 }
             }
-            SelectItem::Wildcard => f.write_str("*"),
+            SelectItem::Wildcard { id: _ } => f.write_str("*"),
         }
     }
 }
@@ -468,12 +485,17 @@ impl<T: AstInfo> AstDisplay for TableWithJoins<T> {
 impl_display_t!(TableWithJoins);
 
 impl<T: AstInfo> TableWithJoins<T> {
-    pub fn subquery(query: Query<T>, alias: TableAlias) -> TableWithJoins<T> {
+    pub fn subquery(
+        query: Query<T>,
+        alias: TableAlias,
+        table_factor_id: T::NodeId,
+    ) -> TableWithJoins<T> {
         TableWithJoins {
             relation: TableFactor::Derived {
                 lateral: false,
                 subquery: Box::new(query),
                 alias: Some(alias),
+                id: table_factor_id,
             },
             joins: vec![],
         }
@@ -481,26 +503,61 @@ impl<T: AstInfo> TableWithJoins<T> {
 }
 
 /// A table name or a parenthesized subquery with an optional alias
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Derivative)]
+#[derivative(
+    Eq,
+    PartialEq,
+    Ord = "feature_allow_slow_enum",
+    PartialOrd = "feature_allow_slow_enum",
+    Hash
+)]
 pub enum TableFactor<T: AstInfo> {
     Table {
         name: T::ObjectName,
         alias: Option<TableAlias>,
+        #[derivative(
+            PartialEq = "ignore",
+            Hash = "ignore",
+            Ord = "ignore",
+            PartialOrd = "ignore"
+        )]
+        id: T::NodeId,
     },
     Function {
         function: TableFunction<T>,
         alias: Option<TableAlias>,
         with_ordinality: bool,
+        #[derivative(
+            PartialEq = "ignore",
+            Hash = "ignore",
+            Ord = "ignore",
+            PartialOrd = "ignore"
+        )]
+        id: T::NodeId,
     },
     RowsFrom {
         functions: Vec<TableFunction<T>>,
         alias: Option<TableAlias>,
         with_ordinality: bool,
+        #[derivative(
+            PartialEq = "ignore",
+            Hash = "ignore",
+            Ord = "ignore",
+            PartialOrd = "ignore"
+        )]
+        id: T::NodeId,
     },
     Derived {
         lateral: bool,
         subquery: Box<Query<T>>,
         alias: Option<TableAlias>,
+        #[derivative(
+            PartialEq = "ignore",
+            Hash = "ignore",
+            Ord = "ignore",
+            PartialOrd = "ignore"
+        )]
+        id: T::NodeId,
     },
     /// Represents a parenthesized join expression, such as
     /// `(foo <JOIN> bar [ <JOIN> baz ... ])`.
@@ -509,13 +566,52 @@ pub enum TableFactor<T: AstInfo> {
     NestedJoin {
         join: Box<TableWithJoins<T>>,
         alias: Option<TableAlias>,
+        #[derivative(
+            PartialEq = "ignore",
+            Hash = "ignore",
+            Ord = "ignore",
+            PartialOrd = "ignore"
+        )]
+        id: T::NodeId,
     },
+}
+
+impl<T: AstInfo> TableFactor<T> {
+    pub fn alias(&self) -> &Option<TableAlias> {
+        match self {
+            TableFactor::Table { alias, .. }
+            | TableFactor::Function { alias, .. }
+            | TableFactor::RowsFrom { alias, .. }
+            | TableFactor::Derived { alias, .. }
+            | TableFactor::NestedJoin { alias, .. } => alias,
+        }
+    }
+
+    pub fn alias_mut(&mut self) -> &mut Option<TableAlias> {
+        match self {
+            TableFactor::Table { alias, .. }
+            | TableFactor::Function { alias, .. }
+            | TableFactor::RowsFrom { alias, .. }
+            | TableFactor::Derived { alias, .. }
+            | TableFactor::NestedJoin { alias, .. } => alias,
+        }
+    }
+
+    pub fn id(&self) -> &T::NodeId {
+        match self {
+            TableFactor::Table { id, .. }
+            | TableFactor::Function { id, .. }
+            | TableFactor::RowsFrom { id, .. }
+            | TableFactor::Derived { id, .. }
+            | TableFactor::NestedJoin { id, .. } => id,
+        }
+    }
 }
 
 impl<T: AstInfo> AstDisplay for TableFactor<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            TableFactor::Table { name, alias } => {
+            TableFactor::Table { name, alias, id: _ } => {
                 f.write_node(name);
                 if let Some(alias) = alias {
                     f.write_str(" AS ");
@@ -526,6 +622,7 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
                 function,
                 alias,
                 with_ordinality,
+                id: _,
             } => {
                 f.write_node(function);
                 if let Some(alias) = &alias {
@@ -540,6 +637,7 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
                 functions,
                 alias,
                 with_ordinality,
+                id: _,
             } => {
                 f.write_str("ROWS FROM (");
                 f.write_node(&display::comma_separated(functions));
@@ -556,6 +654,7 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
                 lateral,
                 subquery,
                 alias,
+                id: _,
             } => {
                 if *lateral {
                     f.write_str("LATERAL ");
@@ -568,7 +667,7 @@ impl<T: AstInfo> AstDisplay for TableFactor<T> {
                     f.write_node(alias);
                 }
             }
-            TableFactor::NestedJoin { join, alias } => {
+            TableFactor::NestedJoin { join, alias, id: _ } => {
                 f.write_str("(");
                 f.write_node(join);
                 f.write_str(")");
@@ -631,7 +730,7 @@ impl<T: AstInfo> AstDisplay for Join<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         fn prefix<T: AstInfo>(constraint: &JoinConstraint<T>) -> &'static str {
             match constraint {
-                JoinConstraint::Natural => "NATURAL ",
+                JoinConstraint::Natural { id: _ } => "NATURAL ",
                 _ => "",
             }
         }
@@ -705,11 +804,26 @@ pub enum JoinOperator<T: AstInfo> {
     CrossJoin,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Derivative)]
+#[derivative(
+    Eq,
+    PartialEq,
+    Ord = "feature_allow_slow_enum",
+    PartialOrd = "feature_allow_slow_enum",
+    Hash
+)]
 pub enum JoinConstraint<T: AstInfo> {
     On(Expr<T>),
     Using(Vec<Ident>),
-    Natural,
+    Natural {
+        #[derivative(
+            PartialEq = "ignore",
+            Hash = "ignore",
+            Ord = "ignore",
+            PartialOrd = "ignore"
+        )]
+        id: T::NodeId,
+    },
 }
 
 /// SQL ORDER BY expression

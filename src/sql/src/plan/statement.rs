@@ -32,7 +32,7 @@ use crate::names::{
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::{query, with_options};
+use crate::plan::{query, with_options, StatementTagger};
 use crate::plan::{Params, Plan, PlanContext, PlanKind};
 
 pub(crate) mod ddl;
@@ -42,6 +42,7 @@ mod scl;
 pub(crate) mod show;
 mod tcl;
 
+use crate::plan::column_disambiguate::ColumnDisambiguationMetadata;
 pub(crate) use ddl::PgConfigOptionExtracted;
 
 /// Describes the output of a SQL statement.
@@ -93,6 +94,7 @@ pub fn describe(
     catalog: &dyn SessionCatalog,
     stmt: Statement<Aug>,
     param_types_in: &[Option<ScalarType>],
+    statement_tagger: StatementTagger,
 ) -> Result<StatementDesc, PlanError> {
     let mut param_types = BTreeMap::new();
     for (i, ty) in param_types_in.iter().enumerate() {
@@ -101,11 +103,13 @@ pub fn describe(
         }
     }
 
-    let scx = StatementContext {
+    let mut scx = StatementContext {
         pcx: Some(pcx),
         catalog,
         param_types: RefCell::new(param_types),
-        ambiguous_columns: RefCell::new(false),
+        column_disambiguation_metadata: RefCell::new(ColumnDisambiguationMetadata::new(
+            statement_tagger,
+        )),
     };
 
     let desc = match stmt {
@@ -191,7 +195,7 @@ pub fn describe(
         }
 
         // DML statements.
-        Statement::Copy(stmt) => dml::describe_copy(&scx, stmt)?,
+        Statement::Copy(stmt) => dml::describe_copy(&mut scx, stmt)?,
         Statement::Delete(stmt) => dml::describe_delete(&scx, stmt)?,
         Statement::Explain(stmt) => dml::describe_explain(&scx, stmt)?,
         Statement::Insert(stmt) => dml::describe_insert(&scx, stmt)?,
@@ -229,6 +233,7 @@ pub fn plan(
     catalog: &dyn SessionCatalog,
     stmt: Statement<Aug>,
     params: &Params,
+    statement_tagger: StatementTagger,
 ) -> Result<Plan, PlanError> {
     let param_types = params
         .types
@@ -243,7 +248,9 @@ pub fn plan(
         pcx,
         catalog,
         param_types: RefCell::new(param_types),
-        ambiguous_columns: RefCell::new(false),
+        column_disambiguation_metadata: RefCell::new(ColumnDisambiguationMetadata::new(
+            statement_tagger,
+        )),
     };
 
     let plan = match stmt {
@@ -404,9 +411,8 @@ pub struct StatementContext<'a> {
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
     pub param_types: RefCell<BTreeMap<usize, ScalarType>>,
-    /// Whether the statement contains an expression that can make the exact column list
-    /// ambiguous. For example `NATURAL JOIN` or `SELECT *`. This is filled in as planning occurs.
-    pub ambiguous_columns: RefCell<bool>,
+    /// Metadata that will be filled in during planning so we can remove ambiguous column references.
+    pub column_disambiguation_metadata: RefCell<ColumnDisambiguationMetadata>,
 }
 
 impl<'a> StatementContext<'a> {
@@ -414,11 +420,15 @@ impl<'a> StatementContext<'a> {
         pcx: Option<&'a PlanContext>,
         catalog: &'a dyn SessionCatalog,
     ) -> StatementContext<'a> {
+        let statement_tagger =
+            StatementTagger::new(catalog.system_vars().enable_disambiguate_columns());
         StatementContext {
             pcx,
             catalog,
             param_types: Default::default(),
-            ambiguous_columns: RefCell::new(false),
+            column_disambiguation_metadata: RefCell::new(ColumnDisambiguationMetadata::new(
+                statement_tagger,
+            )),
         }
     }
 
@@ -696,7 +706,13 @@ impl<'a> StatementContext<'a> {
             ty = "pg_catalog.jsonb".into();
         }
         let data_type = mz_sql_parser::parser::parse_data_type(&ty)?;
-        let (data_type, _) = names::resolve(self.catalog, data_type)?;
+        let (data_type, _) = names::resolve(
+            self.catalog,
+            self.column_disambiguation_metadata
+                .borrow_mut()
+                .statement_tagger_mut(),
+            data_type,
+        )?;
         Ok(data_type)
     }
 
@@ -818,5 +834,9 @@ impl<'a> StatementContext<'a> {
         }
 
         Ok((columns, table_constraints))
+    }
+
+    pub fn node_id(&self) -> Option<u64> {
+        self.column_disambiguation_metadata.borrow_mut().node_id()
     }
 }

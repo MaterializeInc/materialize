@@ -70,6 +70,10 @@ use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
 use crate::names::{Aug, PartialObjectName, ResolvedDataType, ResolvedObjectName};
 use crate::normalize;
+
+use crate::plan::column_disambiguate::{
+    collect_natural_join_expansions, collect_table_factor_expansions, collect_wildcard_expansions,
+};
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, BinaryFunc,
@@ -82,7 +86,7 @@ use crate::plan::scope::{Scope, ScopeItem};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
 use crate::plan::with_options::TryFromValue;
-use crate::plan::{transform_ast, PlanContext, SendRowsPlan};
+use crate::plan::{column_disambiguate, transform_ast, PlanContext, SendRowsPlan};
 use crate::plan::{Params, QueryWhen};
 
 use super::statement::show;
@@ -105,12 +109,21 @@ pub struct PlannedQuery<E> {
 #[tracing::instrument(target = "compiler", level = "trace", name = "ast_to_hir", skip_all)]
 pub fn plan_root_query(
     scx: &StatementContext,
-    mut query: Query<Aug>,
+    query: &mut Query<Aug>,
     lifetime: QueryLifetime,
 ) -> Result<PlannedQuery<HirRelationExpr>, PlanError> {
-    transform_ast::transform(scx, &mut query)?;
+    transform_ast::transform(scx, query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
-    let (mut expr, scope, mut finishing) = plan_query(&mut qcx, &query)?;
+    let planned_query = plan_query(&mut qcx, query)?;
+    if scx.catalog.system_vars().enable_disambiguate_columns() {
+        column_disambiguate::disambiguate_columns(scx, query);
+        debug_assert_eq!(
+            &planned_query,
+            &plan_query(&mut qcx, query).expect("re-planning query failed"),
+            "re-planning the dismbiguated query resulted in a different plan"
+        );
+    }
+    let (mut expr, scope, mut finishing) = planned_query;
 
     // Attempt to push the finishing's ordering past its projection. This allows
     // data to be projected down on the workers rather than the coordinator. It
@@ -557,7 +570,7 @@ pub fn plan_update_query(
 }
 
 pub fn plan_mutation_query_inner(
-    qcx: QueryContext,
+    mut qcx: QueryContext,
     table_name: ResolvedObjectName,
     alias: Option<TableAlias>,
     using: Vec<TableWithJoins<Aug>>,
@@ -607,7 +620,7 @@ pub fn plan_mutation_query_inner(
             get = get.filter(vec![expr]);
         }
     } else {
-        get = handle_mutation_using_clause(&qcx, selection, using, get, scope.clone())?;
+        get = handle_mutation_using_clause(&mut qcx, selection, using, get, scope.clone())?;
     }
 
     let mut sets = BTreeMap::new();
@@ -666,7 +679,7 @@ pub fn plan_mutation_query_inner(
 // subqueries.
 // https://github.com/postgres/postgres/commit/158b7fa6a34006bdc70b515e14e120d3e896589b
 fn handle_mutation_using_clause(
-    qcx: &QueryContext,
+    qcx: &mut QueryContext,
     selection: Option<Expr<Aug>>,
     using: Vec<TableWithJoins<Aug>>,
     get: HirRelationExpr,
@@ -686,6 +699,7 @@ fn handle_mutation_using_clause(
                     relation: TableFactor::NestedJoin {
                         join: Box::new(twj),
                         alias: None,
+                        id: None,
                     },
                     join_operator: JoinOperator::CrossJoin,
                 },
@@ -1646,7 +1660,7 @@ generate_extracted_config!(SelectOption, (ExpectedGroupSize, u64));
 /// where expressions in the ORDER BY clause can refer to *both* input columns
 /// and output columns.
 fn plan_view_select(
-    qcx: &QueryContext,
+    qcx: &mut QueryContext,
     mut s: Select<Aug>,
     mut order_by_exprs: Vec<OrderByExpr<Aug>>,
 ) -> Result<SelectPlan, PlanError> {
@@ -1673,6 +1687,7 @@ fn plan_view_select(
                     relation: TableFactor::NestedJoin {
                         join: Box::new(twj.clone()),
                         alias: None,
+                        id: None,
                     },
                     join_operator: JoinOperator::CrossJoin,
                 },
@@ -1720,7 +1735,7 @@ fn plan_view_select(
 
     // Step 4. Expand SELECT clause.
     let projection = {
-        let ecx = &ExprContext {
+        let ecx = &mut ExprContext {
             qcx,
             name: "SELECT clause",
             scope: &from_scope,
@@ -1731,7 +1746,7 @@ fn plan_view_select(
         };
         let mut out = vec![];
         for si in &s.projection {
-            if *si == SelectItem::Wildcard && s.from.is_empty() {
+            if matches!(*si, SelectItem::Wildcard { .. }) && s.from.is_empty() {
                 sql_bail!("SELECT * with no tables specified is not valid");
             }
             out.extend(expand_select_item(ecx, si, &table_func_names)?);
@@ -2144,7 +2159,7 @@ fn plan_group_by_expr<'a>(
     // The `foo` can refer to *either* an input column or an output column. If
     // both exist, the input column is preferred.
     match group_expr {
-        Expr::Identifier(names) => match plan_identifier(ecx, names) {
+        Expr::Identifier { names, id } => match plan_identifier(ecx, names, id) {
             Err(PlanError::UnknownColumn {
                 table: None,
                 column,
@@ -2232,7 +2247,7 @@ fn plan_order_by_or_distinct_expr(
         return Ok(HirScalarExpr::column(output_columns[i].0));
     }
 
-    if let Expr::Identifier(names) = expr {
+    if let Expr::Identifier { names, id: _ } = expr {
         if let [name] = &names[..] {
             let name = normalize::column_name(name.clone());
             let mut iter = output_columns.iter().filter(|(_, n)| **n == name);
@@ -2268,29 +2283,32 @@ fn plan_table_factor(
     qcx: &QueryContext,
     table_factor: &TableFactor<Aug>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    match table_factor {
-        TableFactor::Table { name, alias } => {
+    let (expr, mut scope) = match table_factor {
+        TableFactor::Table { name, alias, id: _ } => {
             let (expr, scope) = qcx.resolve_table_name(name.clone())?;
             let scope = plan_table_alias(scope, alias.as_ref())?;
-            Ok((expr, scope))
+            (expr, scope)
         }
 
         TableFactor::Function {
             function,
             alias,
             with_ordinality,
-        } => plan_solitary_table_function(qcx, function, alias.as_ref(), *with_ordinality),
+            id: _,
+        } => plan_solitary_table_function(qcx, function, alias.as_ref(), *with_ordinality)?,
 
         TableFactor::RowsFrom {
             functions,
             alias,
             with_ordinality,
-        } => plan_rows_from(qcx, functions, alias.as_ref(), *with_ordinality),
+            id: _,
+        } => plan_rows_from(qcx, functions, alias.as_ref(), *with_ordinality)?,
 
         TableFactor::Derived {
             lateral,
             subquery,
             alias,
+            id: _,
         } => {
             let mut qcx = (*qcx).clone();
             if !lateral {
@@ -2307,15 +2325,24 @@ fn plan_table_factor(
             qcx.outer_scopes[0].lateral_barrier = true;
             let (expr, scope) = plan_nested_query(&mut qcx, subquery)?;
             let scope = plan_table_alias(scope, alias.as_ref())?;
-            Ok((expr, scope))
+            (expr, scope)
         }
 
-        TableFactor::NestedJoin { join, alias } => {
+        TableFactor::NestedJoin { join, alias, id: _ } => {
             let (expr, scope) = plan_table_with_joins(qcx, join)?;
             let scope = plan_table_alias(scope, alias.as_ref())?;
-            Ok((expr, scope))
+            (expr, scope)
         }
-    }
+    };
+
+    collect_table_factor_expansions(
+        &mut qcx.scx.column_disambiguation_metadata.borrow_mut(),
+        &mut qcx.using_columns.borrow_mut(),
+        &mut scope,
+        table_factor.id(),
+    );
+
+    Ok((expr, scope))
 }
 
 /// Plans a `ROWS FROM` expression.
@@ -2714,7 +2741,7 @@ fn invent_column_name(
         table_func_names: &BTreeMap<String, Ident>,
     ) -> Option<(ColumnName, NameQuality)> {
         match expr {
-            Expr::Identifier(names) => {
+            Expr::Identifier { names, id: _ } => {
                 if let [name] = names.as_slice() {
                     if let Some(table_func_name) = table_func_names.get(name.as_str()) {
                         return Some((
@@ -2808,10 +2835,13 @@ fn expand_select_item<'a>(
 ) -> Result<Vec<(ExpandedSelectItem<'a>, ColumnName)>, PlanError> {
     match s {
         SelectItem::Expr {
-            expr: Expr::QualifiedWildcard(table_name),
+            expr:
+                Expr::QualifiedWildcard {
+                    qualifier: table_name,
+                    id,
+                },
             alias: _,
         } => {
-            *ecx.qcx.scx.ambiguous_columns.borrow_mut() = true;
             let table_name =
                 normalize::unresolved_object_name(UnresolvedObjectName(table_name.clone()))?;
             let out: Vec<_> = ecx
@@ -2828,13 +2858,20 @@ fn expand_select_item<'a>(
             if out.is_empty() {
                 sql_bail!("no table named '{}' in scope", table_name);
             }
+            collect_wildcard_expansions(
+                &mut ecx.qcx.scx.column_disambiguation_metadata.borrow_mut(),
+                ecx.scope
+                    .items
+                    .iter()
+                    .filter(|item| item.is_from_table(&table_name)),
+                id,
+            );
             Ok(out)
         }
         SelectItem::Expr {
-            expr: Expr::WildcardAccess(sql_expr),
+            expr: Expr::WildcardAccess { expr: sql_expr, id },
             alias: _,
         } => {
-            *ecx.qcx.scx.ambiguous_columns.borrow_mut() = true;
             // A bit silly to have to plan the expression here just to get its
             // type, since we throw away the planned expression, but fixing this
             // requires a separate semantic analysis phase. Luckily this is an
@@ -2846,8 +2883,9 @@ fn expand_select_item<'a>(
                 ty => sql_bail!("type {} is not composite", ecx.humanize_scalar_type(&ty)),
             };
             let mut skip_cols: BTreeSet<ColumnName> = BTreeSet::new();
-            if let Expr::Identifier(ident) = sql_expr.as_ref() {
-                if let [name] = ident.as_slice() {
+            let mut scope_items = Vec::new();
+            if let Expr::Identifier { names, id: _ } = sql_expr.as_ref() {
+                if let [name] = names.as_slice() {
                     if let Ok(items) = ecx.scope.items_from_table(
                         &[],
                         &PartialObjectName {
@@ -2861,12 +2899,14 @@ fn expand_select_item<'a>(
                                 .is_exists_column_for_a_table_function_that_was_in_the_target_list
                             {
                                 skip_cols.insert(item.column_name.clone());
+                            } else {
+                                scope_items.push(item);
                             }
                         }
                     }
                 }
             }
-            let items = fields
+            let items: Vec<_> = fields
                 .iter()
                 .filter_map(|(name, _ty)| {
                     if skip_cols.contains(name) {
@@ -2876,14 +2916,19 @@ fn expand_select_item<'a>(
                             expr: sql_expr.clone(),
                             field: Ident::new(name.as_str()),
                         }));
+
                         Some((item, name.clone()))
                     }
                 })
                 .collect();
+            collect_wildcard_expansions(
+                &mut ecx.qcx.scx.column_disambiguation_metadata.borrow_mut(),
+                scope_items.into_iter(),
+                id,
+            );
             Ok(items)
         }
-        SelectItem::Wildcard => {
-            *ecx.qcx.scx.ambiguous_columns.borrow_mut() = true;
+        SelectItem::Wildcard { id } => {
             let items: Vec<_> = ecx
                 .scope
                 .items
@@ -2895,7 +2940,11 @@ fn expand_select_item<'a>(
                     (ExpandedSelectItem::InputOrdinal(i), name)
                 })
                 .collect();
-
+            collect_wildcard_expansions(
+                &mut ecx.qcx.scx.column_disambiguation_metadata.borrow_mut(),
+                ecx.scope.items.iter(),
+                id,
+            );
             Ok(items)
         }
         SelectItem::Expr { expr, alias } => {
@@ -2968,17 +3017,19 @@ fn plan_join(
             right_scope,
             kind,
         )?,
-        JoinConstraint::Natural => {
-            // We shouldn't need to set ambiguous_columns on both the right and left qcx since they
-            // have the same scx. However, it doesn't hurt to be safe.
-            *left_qcx.scx.ambiguous_columns.borrow_mut() = true;
-            *right_qcx.scx.ambiguous_columns.borrow_mut() = true;
+        JoinConstraint::Natural { id } => {
             let left_column_names = left_scope.column_names();
             let right_column_names: BTreeSet<_> = right_scope.column_names().collect();
             let column_names: Vec<_> = left_column_names
                 .filter(|col| right_column_names.contains(col))
                 .cloned()
                 .collect();
+            // left and right qcx both contain the same scx, so we arbitrarily choose the left.
+            collect_natural_join_expansions(
+                &mut left_qcx.scx.column_disambiguation_metadata.borrow_mut(),
+                &column_names,
+                id,
+            );
             plan_using_constraint(
                 &column_names,
                 left_qcx,
@@ -3105,6 +3156,10 @@ fn plan_using_constraint(
         both_scope.items[c].allow_unqualified_references = false;
     }
 
+    for c in &join_cols {
+        both_scope.items[*c].using_column = true;
+    }
+
     // Reproject all returned elements to the front of the list.
     let project_key = join_cols
         .into_iter()
@@ -3158,9 +3213,11 @@ fn plan_expr_inner<'a>(
 
     match e {
         // Names.
-        Expr::Identifier(names) | Expr::QualifiedWildcard(names) => {
-            Ok(plan_identifier(ecx, names)?.into())
-        }
+        Expr::Identifier { names, id } => Ok(plan_identifier(ecx, names, id)?.into()),
+        Expr::QualifiedWildcard {
+            qualifier: names,
+            id: _,
+        } => Ok(plan_identifier(ecx, names, &None)?.into()),
 
         // Literals.
         Expr::Value(val) => plan_literal(val),
@@ -3203,7 +3260,7 @@ fn plan_expr_inner<'a>(
         )?
         .into()),
         Expr::FieldAccess { expr, field } => plan_field_access(ecx, expr, field),
-        Expr::WildcardAccess(expr) => plan_expr(ecx, expr),
+        Expr::WildcardAccess { expr, id: _ } => plan_expr(ecx, expr),
         Expr::Subscript { expr, positions } => plan_subscript(ecx, expr, positions),
         Expr::Like {
             expr,
@@ -4206,22 +4263,38 @@ fn plan_aggregate(
     })
 }
 
-fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, PlanError> {
+fn plan_identifier(
+    ecx: &ExprContext,
+    names: &[Ident],
+    id: &Option<u64>,
+) -> Result<HirScalarExpr, PlanError> {
     let mut names = names.to_vec();
     let col_name = normalize::column_name(names.pop().unwrap());
 
     // If the name is qualified, it must refer to a column in a table.
     if !names.is_empty() {
         let table_name = normalize::unresolved_object_name(UnresolvedObjectName(names))?;
-        let i = ecx
-            .scope
-            .resolve_table_column(&ecx.qcx.outer_scopes, &table_name, &col_name)?;
+        let (i, table_name) =
+            ecx.scope
+                .resolve_table_column(&ecx.qcx.outer_scopes, &table_name, &col_name)?;
+        ecx.qcx
+            .scx
+            .column_disambiguation_metadata
+            .borrow_mut()
+            .insert_column_reference(id, &table_name, &col_name);
         return Ok(HirScalarExpr::Column(i));
     }
 
     // If the name is unqualified, first check if it refers to a column.
     match ecx.scope.resolve_column(&ecx.qcx.outer_scopes, &col_name) {
-        Ok(i) => return Ok(HirScalarExpr::Column(i)),
+        Ok((i, table_name)) => {
+            ecx.qcx
+                .scx
+                .column_disambiguation_metadata
+                .borrow_mut()
+                .insert_column_reference(id, &table_name, &col_name);
+            return Ok(HirScalarExpr::Column(i));
+        }
         Err(PlanError::UnknownColumn { .. }) => (),
         Err(e) => return Err(e),
     }
@@ -5115,7 +5188,10 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
                     .tables
                     .entry(func)
                     .or_insert_with(|| format!("table_func_{}", Uuid::new_v4()));
-                *expr = Expr::Identifier(vec![Ident::from(id.clone())]);
+                *expr = Expr::Identifier {
+                    names: vec![Ident::from(id.clone())],
+                    id: None,
+                };
             }
         }
         if let Some(context) = disallowed_context {
@@ -5168,6 +5244,10 @@ pub struct QueryContext<'a> {
     pub outer_relation_types: Vec<RelationType>,
     /// CTEs for this query, mapping their assigned LocalIds to their definition.
     pub ctes: BTreeMap<LocalId, CteDesc>,
+    /// Columns that are in a USING join.
+    ///
+    /// Used for experimental column disambiguation.
+    pub using_columns: RefCell<BTreeSet<ColumnName>>,
     pub recursion_guard: RecursionGuard,
 }
 
@@ -5185,6 +5265,7 @@ impl<'a> QueryContext<'a> {
             outer_scopes: vec![],
             outer_relation_types: vec![],
             ctes: BTreeMap::new(),
+            using_columns: Default::default(),
             recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
     }
@@ -5208,6 +5289,7 @@ impl<'a> QueryContext<'a> {
             outer_scopes,
             outer_relation_types,
             ctes,
+            using_columns: Default::default(),
             recursion_guard: self.recursion_guard.clone(),
         }
     }

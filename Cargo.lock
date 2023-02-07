@@ -4604,6 +4604,7 @@ dependencies = [
  "anyhow",
  "bytesize",
  "datadriven",
+ "derivative",
  "enum-kinds",
  "itertools",
  "mz-ore",
