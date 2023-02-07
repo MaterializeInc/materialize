@@ -138,6 +138,7 @@ pub enum PlanError {
         name: String,
         supported_azs: BTreeSet<String>,
     },
+    InvalidSchemaName,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -373,6 +374,7 @@ impl fmt::Display for PlanError {
                 })
             },
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
+            Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
         }
     }
 }

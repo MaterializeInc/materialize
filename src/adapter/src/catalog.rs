@@ -6576,13 +6576,16 @@ mod tests {
 
     use mz_controller::clusters::ClusterId;
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
+    use mz_ore::collections::CollectionExt;
     use mz_ore::now::NOW_ZERO;
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
     use mz_sql::catalog::CatalogDatabase;
+    use mz_sql::names;
     use mz_sql::names::{
         ObjectQualifiers, PartialObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier,
         SchemaSpecifier,
     };
+    use mz_sql::plan::StatementContext;
     use mz_sql::DEFAULT_SCHEMA;
     use mz_sql_parser::ast::Expr;
     use mz_stash::Stash;
@@ -7487,5 +7490,30 @@ mod tests {
             })
             .await
         }
+    }
+
+    #[tokio::test]
+    async fn test_normalized_create() {
+        Catalog::with_debug(NOW_ZERO.clone(), |catalog| {
+            let catalog = catalog.for_system_session();
+            let scx = &mut StatementContext::new(None, &catalog);
+
+            let parsed = mz_sql_parser::parser::parse_statements(
+                "create view public.foo as select 1 as bar",
+            )
+            .expect("")
+            .into_element();
+
+            let (stmt, _) = names::resolve(scx.catalog, parsed).expect("");
+
+            // Ensure that all identifiers are quoted.
+            assert_eq!(
+                r#"CREATE VIEW "materialize"."public"."foo" AS SELECT 1 AS "bar""#,
+                mz_sql::normalize::create_statement(scx, stmt).expect(""),
+            );
+
+            async {}
+        })
+        .await;
     }
 }

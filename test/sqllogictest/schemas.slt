@@ -41,6 +41,9 @@ SELECT current_schemas(true)
 ----
 {mz_catalog,pg_catalog}
 
+statement error no schema has been selected to create in
+CREATE TABLE t (i INT)
+
 statement ok
 CREATE SCHEMA foo
 ----
@@ -59,6 +62,14 @@ query T
 SELECT current_schemas(true)
 ----
 {mz_catalog,pg_catalog,foo}
+
+statement ok
+CREATE TABLE t (i INT)
+
+query T
+SELECT count(*) from t
+----
+0
 
 statement ok
 SET search_path = pg_catalog
