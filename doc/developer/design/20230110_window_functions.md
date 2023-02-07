@@ -61,7 +61,7 @@ SELECT sensor_id, time, AVG(measurement_value)
 FROM measurements;
 ``` 
 
-There is also a _frame exclusion_ option, which excludes certain rows near the current row fom the frame. `EXCLUDE CURRENT ROW` excludes the current row. `EXCLUDE GROUP` excludes the current row's peer group (also excluding the current row). `EXCLUDE TIES` excludes the current row's peer group, except for the current row itself. `EXCLUDE NO OTHERS` specifies the default behavior, i.e., no exclusions.
+There is also the _frame exclusion_ option, which excludes certain rows near the current row from the frame. `EXCLUDE CURRENT ROW` excludes the current row. `EXCLUDE GROUP` excludes the current row's peer group (also excluding the current row). `EXCLUDE TIES` excludes the current row's peer group, except for the current row itself. `EXCLUDE NO OTHERS` specifies the default behavior, i.e., no exclusions.
 
 For more details, see Postgres' documentation on window functions:
 - Syntax: https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-WINDOW-FUNCTIONS
@@ -120,7 +120,7 @@ from cities;
              Get materialize.public.cities                                                       +
 ```
 
-To avoid creating a new enum variant in MirRelationExpr, we will recognize the above pattern during the MIR-to-LIR lowering, and create a new LIR enum variant for window functions. I estimate this pattern recognition to need about 15-20 if/match statements. It can happen that this pattern recognition approach turns out to be too brittle: we might accidentally leave out cases when the pattern is slightly different due to unrelated MIR transforms, plus we might break it from time to time with unrelated MIR transform changes. If this happens, then we might reconsider creating a new MIR enum variant later. (Which would be easier after the optimizer refactoring/cleanup.) For an extended discussion on alternative representations in HIR/MIR/LIR, see the [Alternatives](#alternatives) section.
+To avoid creating a new enum variant in MirRelationExpr, we will recognize the above pattern during the MIR-to-LIR lowering, and create a new LIR enum variant for window functions. I estimate this pattern recognition to need about 15-20 if/match statements. It can happen that this pattern recognition approach turns out to be too brittle: we might accidentally leave out cases when the pattern is slightly different due to unrelated MIR transforms, plus we might break it from time to time with unrelated MIR transform changes. If this happens, then we might reconsider creating a new MIR enum variant later. (Which would be easier after the optimizer refactoring/cleanup.) For an extended discussion on alternative representations in HIR/MIR/LIR, see the [Representing window functions in each of the IRs](#Representing-window-functions-in-each-of-the-IRs) section.
 
 Also, we will want to entirely transform away certain window function patterns, most notably, the ROW_NUMBER-to-TopK transform. For this, we need to canonicalize scalar expressions, which I think we usually do in MIR. This means that this transform should happen on MIR. This will start by again recognizing the above general windowing pattern, and then performing pattern recognition of the TopK pattern.
 
@@ -269,16 +269,33 @@ We'll have to generalize DD's Prefix Sum to orderings over types other than a si
 - Date/Time types are just a few integers. We’ll concatenate their bits.
 - I don’t know how to handle strings, so these are out of scope for now. (Not seen in user queries yet.)
 
-## Alternatives
+# Alternatives
 
-### Where to put the idiom recognition?
+## Rendering alternatives
+
+This document proposes using prefix sum (with extensions/generalizations) to use for the efficient rendering of window functions, but there are several alternatives to this.
+
+### Not supporting window functions at all
+
+Many of our users are requesting window function support. See a collected list here: https://www.notion.so/materialize/Window-Functions-Use-Cases-6ad1846a7da942dc8fa28997d9c220dd
+Therefore, I think we should support window functions.
+
+### Staying with the current implementation
+
+One of the main goals of Materialize is to be scalable. However, the current implementation becomes extremely inefficient with large window partitions. This is because it recomputes results for an entire window partition even when just one element changes in the partition. Users would run into this limitation quite often.
+
+### Creating a custom DD operator with a custom data structure
+
+TODO
+
+## Where to put the idiom recognition?
 
 We could do the idiom recognition in the rendering instead of the MIR-to-LIR lowering. However, the lowering seems to be a more natural place for it:
 - We shouldn't have conditional code in the rendering, and this idiom recognition will be a giant piece of conditional code,
 - We want EXPLAIN PHYSICAL PLAN to show how we'll execute a window function.
 - We need to know the type of the ORDER BY columns, which we don't know in LIR. (Although we could add extra type info to window function calls.)
 
-### Implement Prefix Sum in MIR (involving `LetRec`) instead of a large chunk of custom rendering code
+## Implement Prefix Sum in MIR (involving `LetRec`) instead of a large chunk of custom rendering code
 
 The main plan for implementing Prefix Sum is to implement it directly on DD (and represent it as one node in LIR). An alternative would be to implement Prefix Sum on MIR: The joins, reduces, iterations, etc. would be constructed not by directly calling DD functions in the rendering, but by MIR joins, MIR reduces, MIR LetRec, etc. In this case, the window function handling code would mainly operate in the HIR-to-MIR lowering: it would translate HIR's WindowExpr to MirRelationExpr.
 
@@ -296,7 +313,7 @@ Contra:
 - We would need to add several scalar functions for integer bit manipulations, e.g., for extracting set bits from integers.
 - When directly writing DD code, we have access to all the power of DD, potentially enabling access to better performance than through the compiler pipeline from MIR.
 
-### Representing window functions in each of the IRs
+## Representing window functions in each of the IRs
 
 There are several options for how to represent window functions in HIR, MIR, and LIR. For each of the IRs, I can see 3 options:
 
@@ -304,7 +321,7 @@ There are several options for how to represent window functions in HIR, MIR, and
 2. Hide away window functions in scalar expressions. (the current way in HIR)
 3. Reuse an existing relation expression enum variant, e.g., `Reduce`.
 
-#### HIR
+### HIR
 
 In HIR, the window functions are currently in the scalar expressions (option 2. from above), but it’s possible to change this.
 
@@ -315,7 +332,7 @@ In HIR, the window functions are currently in the scalar expressions (option 2. 
     - It’s already implemented this way, so if there is no strong argument for 1. or 3., then I’d like to just leave it as it is.
 3. *Reusing `Reduce`*
 
-#### MIR
+### MIR
 
 We need an MIR representation for two things:
 
@@ -354,7 +371,7 @@ We need an MIR representation for two things:
       - `LiteralLifting`: The two inlinings at the beginning could be reused. (But those are already copy-pasted ~5 times, so they should rather be factored out into a function, and then they could be called when processing a new enum variant for window functions.)
       - …
 
-#### LIR
+### LIR
 
 1. We could add a dedicated LIR `Plan` enum variant. This sounds like the right approach to me, because window functions will have a pretty specific rendering (Prefix Sum) that’s distinct from all other operators, and LIR is supposed to be a close representation of what we are about to render.
 2. (We can pretty much rule out hiding them in scalar expressions at this point, because scalar expressions get absorbed into operators in all kinds of ways, and we don't want to separately handle window functions all over the place.)
