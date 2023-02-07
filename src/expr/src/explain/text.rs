@@ -69,6 +69,10 @@ where
                 self.context.config,
             );
 
+            if no > 0 {
+                writeln!(f, "")?;
+            }
+
             writeln!(f, "{}{}:", ctx.indent, id)?;
             ctx.indented(|ctx| {
                 match &self.context.finishing {

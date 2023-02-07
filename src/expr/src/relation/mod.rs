@@ -28,7 +28,7 @@ use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::text::text_string_at;
-use mz_repr::explain::{DummyHumanizer, ExplainConfig, PlanRenderingContext};
+use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
 use crate::visit::{Visit, VisitChildren};
@@ -1349,25 +1349,20 @@ impl MirRelationExpr {
         None
     }
 
-    /// Pretty-print this MirRelationExpr to a string.
+    /// Pretty-print this [MirRelationExpr] to a string.
     pub fn pretty(&self) -> String {
+        let config = ExplainConfig::default();
+        self.explain(&config, None)
+    }
+
+    /// Pretty-print this [MirRelationExpr] to a string using a custom
+    /// [ExplainConfig] and an optionally provided [ExprHumanizer].
+    pub fn explain(&self, config: &ExplainConfig, humanizer: Option<&dyn ExprHumanizer>) -> String {
         text_string_at(self, || PlanRenderingContext {
             indent: Indent::default(),
-            humanizer: &DummyHumanizer,
+            humanizer: humanizer.unwrap_or(&DummyHumanizer),
             annotations: BTreeMap::default(),
-            config: &ExplainConfig {
-                arity: false,
-                join_impls: true,
-                keys: false,
-                linear_chains: false,
-                non_negative: false,
-                no_fast_path: true,
-                raw_plans: true,
-                raw_syntax: true,
-                subtree_size: false,
-                timing: false,
-                types: false,
-            },
+            config,
         })
     }
 

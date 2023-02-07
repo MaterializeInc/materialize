@@ -2797,18 +2797,19 @@ impl Coordinator {
 
                 self.validate_timeline_context(decorrelated_plan.depends_on())?;
 
-                let mut dataflow = tracing::span!(Level::INFO, "local").in_scope(
-                    || -> Result<_, AdapterError> {
-                        let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
-                        let mut dataflow = DataflowDesc::new("explanation".to_string());
-                        self.dataflow_builder(cluster).import_view_into_dataflow(
-                            &explainee_id,
-                            &optimized_plan,
-                            &mut dataflow,
-                        )?;
-                        mz_repr::explain::trace_plan(&dataflow);
-                        Ok(dataflow)
-                    },
+                let optimized_plan = tracing::span!(Level::INFO, "local").in_scope(|| {
+                    let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
+                    if let Ok(ref optimized_plan) = optimized_plan {
+                        trace_plan(optimized_plan);
+                    }
+                    optimized_plan
+                })?;
+
+                let mut dataflow = DataflowDesc::new("explanation".to_string());
+                self.dataflow_builder(cluster).import_view_into_dataflow(
+                    &explainee_id,
+                    &optimized_plan,
+                    &mut dataflow,
                 )?;
 
                 mz_transform::optimize_dataflow(&mut dataflow, &self.index_oracle(cluster))?;

@@ -162,6 +162,24 @@ pub struct ExplainConfig {
     pub types: bool,
 }
 
+impl Default for ExplainConfig {
+    fn default() -> Self {
+        Self {
+            arity: false,
+            join_impls: true,
+            keys: false,
+            linear_chains: false,
+            non_negative: false,
+            no_fast_path: true,
+            raw_plans: true,
+            raw_syntax: true,
+            subtree_size: false,
+            timing: false,
+            types: false,
+        }
+    }
+}
+
 impl ExplainConfig {
     pub fn requires_attributes(&self) -> bool {
         self.subtree_size || self.non_negative || self.arity || self.types || self.keys
