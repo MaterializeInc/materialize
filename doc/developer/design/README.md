@@ -55,7 +55,7 @@ thinking. Err on the side of writing a design document.
 4. Address comments, discuss, and iterate on the document in the PR.
 5. Gather explicit approvals from relevant stakeholders.
    Typically, there is a small set of people who have a vested interest in the area the design touches.
-   If it's not clear who that is, ask a TL, EM, or in #engineering.
+   If it's not clear who that is, ask a TL, EM, or in #eng-general.
 
 ### Finalization
 6. Announce the intent to close commenting on the design document in #eng-announce.
