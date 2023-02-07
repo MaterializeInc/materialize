@@ -337,6 +337,63 @@ where
             inner: Some(RangeInner { lower, upper }),
         }
     }
+
+    // Function requires canonicalization so must be taken into `Range<Datum>`,
+    // which can be taken back into `Range<DatumNested>` by the caller if need
+    // be.
+    pub fn difference(&self, other: &Range<B>) -> Result<Range<Datum<'a>>, InvalidRangeError> {
+        use std::cmp::Ordering::*;
+
+        // Difference op does nothing if no overlap.
+        if !self.overlaps(other) {
+            return Ok(self.into_bounds(Datum::from));
+        }
+
+        let (s, o) = match (self.inner, other.inner) {
+            (None, _) | (_, None) => unreachable!("already returned from overlap check"),
+            (Some(s), Some(o)) => (s, o),
+        };
+
+        let ll = s.lower.cmp(&o.lower);
+        let uu = s.upper.cmp(&o.upper);
+
+        let r = match (ll, uu) {
+            // `self` totally contains `other`
+            (Less, Greater) => return Err(InvalidRangeError::DiscontiguousDifference),
+            // `other` totally contains `self`
+            (Greater | Equal, Less | Equal) => Range { inner: None },
+            (Greater | Equal, Greater) => {
+                let lower = RangeBound {
+                    inclusive: !o.upper.inclusive,
+                    bound: o.upper.bound,
+                };
+                Range {
+                    inner: Some(RangeInner {
+                        lower,
+                        upper: s.upper,
+                    }),
+                }
+            }
+            (Less, Less | Equal) => {
+                let upper = RangeBound {
+                    inclusive: !o.lower.inclusive,
+                    bound: o.lower.bound,
+                };
+                Range {
+                    inner: Some(RangeInner {
+                        lower: s.lower,
+                        upper,
+                    }),
+                }
+            }
+        };
+
+        let mut r = r.into_bounds(Datum::from);
+
+        r.canonicalize()?;
+
+        Ok(r)
+    }
 }
 
 impl<'a> Range<Datum<'a>> {
@@ -615,6 +672,7 @@ pub enum InvalidRangeError {
     CanonicalizationOverflow(String),
     InvalidRangeBoundFlags,
     DiscontiguousUnion,
+    DiscontiguousDifference,
 }
 
 impl Display for InvalidRangeError {
@@ -629,6 +687,9 @@ impl Display for InvalidRangeError {
             InvalidRangeError::InvalidRangeBoundFlags => f.write_str("invalid range bound flags"),
             InvalidRangeError::DiscontiguousUnion => {
                 f.write_str("result of range union would not be contiguous")
+            }
+            InvalidRangeError::DiscontiguousDifference => {
+                f.write_str("result of range difference would not be contiguous")
             }
         }
     }
@@ -656,6 +717,7 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
             InvalidRangeError::CanonicalizationOverflow(s) => CanonicalizationOverflow(s.clone()),
             InvalidRangeError::InvalidRangeBoundFlags => InvalidRangeBoundFlags(()),
             InvalidRangeError::DiscontiguousUnion => DiscontiguousUnion(()),
+            InvalidRangeError::DiscontiguousDifference => DiscontiguousDifference(()),
         };
         ProtoInvalidRangeError { kind: Some(kind) }
     }
@@ -668,6 +730,7 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
                 CanonicalizationOverflow(s) => InvalidRangeError::CanonicalizationOverflow(s),
                 InvalidRangeBoundFlags(()) => InvalidRangeError::InvalidRangeBoundFlags,
                 DiscontiguousUnion(()) => InvalidRangeError::DiscontiguousUnion,
+                DiscontiguousDifference(()) => InvalidRangeError::DiscontiguousDifference,
             }),
             None => Err(TryFromProtoError::missing_field(
                 "`ProtoInvalidRangeError::kind`",

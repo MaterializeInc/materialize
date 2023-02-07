@@ -598,6 +598,7 @@ message ProtoBinaryFunc {
         google.protobuf.Empty range_adjacent = 179;
         google.protobuf.Empty range_union = 180;
         google.protobuf.Empty range_intersection = 181;
+        google.protobuf.Empty range_difference = 182;
     }
 }
 
