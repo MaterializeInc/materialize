@@ -228,7 +228,13 @@ where
             futures.collect().await
         }
 
-        let delete_semaphore = Semaphore::new(machine.applier.cfg.gc_blob_delete_concurrency_limit);
+        let delete_semaphore = Semaphore::new(
+            machine
+                .applier
+                .cfg
+                .dynamic
+                .gc_blob_delete_concurrency_limit(),
+        );
 
         let mut step_start = Instant::now();
         let mut report_step_timing = |counter: &Counter| {

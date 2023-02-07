@@ -963,9 +963,7 @@ impl StorageState {
             StorageCommand::InitializationComplete => (),
             StorageCommand::UpdateConfiguration(params) => {
                 tracing::info!("Applying configuration update: {params:?}");
-
-                // TODO(#16753): apply config to `self.storage_state.persist_clients`
-                let _ = params.persist;
+                params.persist.apply(self.persist_clients.cfg());
             }
             StorageCommand::CreateSources(ingestions) => {
                 for ingestion in ingestions {

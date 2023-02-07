@@ -183,6 +183,25 @@ pub enum Added {
     RecordAndParts,
 }
 
+/// A snapshot of dynamic configs to make it easier to reason about an individual
+/// run of BatchBuilder.
+#[derive(Debug, Clone)]
+pub struct BatchBuilderConfig {
+    pub(crate) blob_target_size: usize,
+    pub(crate) batch_builder_max_outstanding_parts: usize,
+}
+
+impl From<&PersistConfig> for BatchBuilderConfig {
+    fn from(value: &PersistConfig) -> Self {
+        BatchBuilderConfig {
+            blob_target_size: value.dynamic.blob_target_size(),
+            batch_builder_max_outstanding_parts: value
+                .dynamic
+                .batch_builder_max_outstanding_parts(),
+        }
+    }
+}
+
 /// A builder for [Batches](Batch) that allows adding updates piece by piece and
 /// then finishing it.
 #[derive(Debug)]
@@ -223,7 +242,7 @@ where
     D: Semigroup + Codec64,
 {
     pub(crate) fn new(
-        cfg: PersistConfig,
+        cfg: BatchBuilderConfig,
         metrics: Arc<Metrics>,
         batch_write_metrics: BatchWriteMetrics,
         lower: Antichain<T>,
@@ -359,9 +378,10 @@ where
         }
     }
 
-    /// Flushes the current part to Blob storage, first consolidating and then columnar encoding
-    /// the updates. It is the caller's responsibility to chunk `current_part` to be no greater
-    /// than [crate::PersistConfig::blob_target_size], and must absolutely be less than
+    /// Flushes the current part to Blob storage, first consolidating and then
+    /// columnar encoding the updates. It is the caller's responsibility to
+    /// chunk `current_part` to be no greater than
+    /// [BatchBuilderConfig::blob_target_size], and must absolutely be less than
     /// [mz_persist::indexed::columnar::KEY_VAL_DATA_MAX_LEN]
     async fn flush_part(&mut self, columnar: ColumnarRecords) {
         let num_updates = columnar.len();
@@ -728,12 +748,12 @@ mod tests {
             (("3".to_owned(), "three".to_owned()), 3, 1),
         ];
 
-        let mut cache = PersistClientCache::new_no_metrics();
+        let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own
         // batch. Set max_outstanding to a small value that's >1 to test various
         // edge cases below.
-        cache.cfg.batch_builder_max_outstanding_parts = 2;
-        cache.cfg.blob_target_size = 0;
+        cache.cfg.dynamic.set_blob_target_size(0);
+        cache.cfg.dynamic.set_batch_builder_max_outstanding_parts(2);
         let client = cache
             .open(PersistLocation {
                 blob_uri: "mem://".to_owned(),
@@ -796,9 +816,9 @@ mod tests {
     async fn batch_builder_keys() {
         mz_ore::test::init_logging();
 
-        let mut cache = PersistClientCache::new_no_metrics();
+        let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
-        cache.cfg.blob_target_size = 0;
+        cache.cfg.dynamic.set_blob_target_size(0);
         let client = cache
             .open(PersistLocation {
                 blob_uri: "mem://".to_owned(),

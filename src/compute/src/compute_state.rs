@@ -161,8 +161,9 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             self.compute_state.max_result_size = v;
         }
 
-        // TODO(#16753): apply config to `self.compute_state.persist_clients`
-        let _ = params.persist;
+        params
+            .persist
+            .apply(self.compute_state.persist_clients.cfg())
     }
 
     fn handle_create_dataflows(

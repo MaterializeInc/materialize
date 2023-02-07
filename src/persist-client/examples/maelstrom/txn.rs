@@ -646,7 +646,7 @@ impl Service for TransactorService {
         // always downgrade the since of critical handles when asked
         config.critical_downgrade_interval = Duration::from_secs(0);
         // set a live diff scan limit such that we'll explore both the fast and slow paths
-        config.state_versions_recent_live_diffs_limit = 5;
+        config.set_state_versions_recent_live_diffs_limit(5);
         let consensus = match &args.consensus_uri {
             Some(consensus_uri) => {
                 let cfg = ConsensusConfig::try_from(

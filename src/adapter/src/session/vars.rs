@@ -359,7 +359,7 @@ static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<String>>> = Lazy::new(|
     safe: true,
 });
 
-/// Controls [`PersistConfig::blob_target_size`].
+/// Controls [`mz_persist_client::cfg::DynamicConfig::blob_target_size`].
 const PERSIST_BLOB_TARGET_SIZE: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_blob_target_size"),
     value: &PersistConfig::DEFAULT_BLOB_TARGET_SIZE,
@@ -368,7 +368,7 @@ const PERSIST_BLOB_TARGET_SIZE: ServerVar<usize> = ServerVar {
     safe: true,
 };
 
-/// Controls [`PersistConfig::compaction_minimum_timeout`].
+/// Controls [`mz_persist_client::cfg::DynamicConfig::compaction_minimum_timeout`].
 const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_compaction_minimum_timeout"),
     value: &PersistConfig::DEFAULT_COMPACTION_MINIMUM_TIMEOUT,
