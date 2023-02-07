@@ -166,6 +166,9 @@ impl PersistConfig {
     /// Default value for [`DynamicConfig::compaction_minimum_timeout`].
     pub const DEFAULT_COMPACTION_MINIMUM_TIMEOUT: Duration = Duration::from_secs(90);
 
+    /// Default value for [`PersistConfig::sink_minimum_batch_updates`].
+    pub const DEFAULT_SINK_MINIMUM_BATCH_UPDATES: usize = 0;
+
     // Move this to a PersistConfig field when we actually have read leases.
     //
     // MIGRATION: Remove this once we remove the ReaderState <->
