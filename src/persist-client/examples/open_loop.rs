@@ -107,7 +107,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     {
         let metrics_registry = metrics_registry.clone();
         info!(
-            "serving internal HTTP server on {}",
+            "serving internal HTTP server on http://{}/metrics",
             args.internal_http_listen_addr
         );
         mz_ore::task::spawn(
