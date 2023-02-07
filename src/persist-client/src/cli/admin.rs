@@ -388,11 +388,9 @@ async fn make_machine(
 
     loop {
         let state_res = state_versions
-            .fetch_current_state::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>(
-                &shard_id,
-                versions.0.clone(),
-            )
-            .await;
+            .fetch_current_state::<u64>(&shard_id, versions.0.clone())
+            .await
+            .check_codecs::<crate::cli::inspect::K, crate::cli::inspect::V, i64>(&shard_id);
         let state = match state_res {
             Ok(state) => state,
             Err(codec) => {

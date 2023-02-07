@@ -211,25 +211,10 @@ pub async fn fetch_latest_state(args: &StateArgs) -> Result<impl serde::Serializ
     let versions = state_versions
         .fetch_recent_live_diffs::<u64>(&shard_id)
         .await;
-
-    let state = match state_versions
-        .fetch_current_state::<K, V, u64, D>(&shard_id, versions.0.clone())
+    let state = state_versions
+        .fetch_current_state::<u64>(&shard_id, versions.0.clone())
         .await
-    {
-        Ok(s) => s.into_proto(),
-        Err(codec) => {
-            {
-                let mut kvtd = KVTD_CODECS.lock().expect("lockable");
-                *kvtd = codec.actual;
-            }
-            state_versions
-                .fetch_current_state::<K, V, u64, D>(&shard_id, versions.0)
-                .await
-                .expect("codecs match")
-                .into_proto()
-        }
-    };
-
+        .into_proto();
     Ok(state)
 }
 
@@ -264,22 +249,10 @@ pub async fn fetch_state_rollups(args: &StateArgs) -> Result<impl serde::Seriali
     let state_versions = args.open().await?;
 
     let mut rollup_keys = BTreeSet::new();
-    let mut state_iter = match state_versions
-        .fetch_all_live_states::<K, V, u64, D>(&shard_id)
+    let mut state_iter = state_versions
+        .fetch_all_live_states::<u64>(shard_id)
         .await
-    {
-        Ok(state_iter) => state_iter,
-        Err(codec) => {
-            {
-                let mut kvtd = KVTD_CODECS.lock().expect("lockable");
-                *kvtd = codec.actual;
-            }
-            state_versions
-                .fetch_all_live_states::<K, V, u64, D>(&shard_id)
-                .await?
-        }
-    };
-
+        .check_ts_codec()?;
     while let Some(v) = state_iter.next() {
         for key in v.collections.rollups.values() {
             rollup_keys.insert(key.clone());
@@ -315,24 +288,12 @@ pub async fn fetch_state_diffs(
     let state_versions = args.open().await?;
 
     let mut live_states = vec![];
-    let mut state_iter = match state_versions
-        .fetch_all_live_states::<K, V, u64, D>(&shard_id)
+    let mut state_iter = state_versions
+        .fetch_all_live_states::<u64>(shard_id)
         .await
-    {
-        Ok(state_iter) => state_iter,
-        Err(codec) => {
-            {
-                let mut kvtd = KVTD_CODECS.lock().expect("lockable");
-                *kvtd = codec.actual;
-            }
-            state_versions
-                .fetch_all_live_states::<K, V, u64, D>(&shard_id)
-                .await?
-        }
-    };
-
-    while let Some(v) = state_iter.next() {
-        live_states.push(v.into_proto());
+        .check_ts_codec()?;
+    while let Some(_) = state_iter.next() {
+        live_states.push(state_iter.into_proto());
     }
 
     Ok(live_states)
@@ -507,21 +468,10 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
         )
         .await?;
 
-    let mut state_iter = match state_versions
-        .fetch_all_live_states::<K, V, u64, D>(&shard_id)
+    let mut state_iter = state_versions
+        .fetch_all_live_states::<u64>(shard_id)
         .await
-    {
-        Ok(state_iter) => state_iter,
-        Err(codec) => {
-            {
-                let mut kvtd = KVTD_CODECS.lock().expect("lockable");
-                *kvtd = codec.actual;
-            }
-            state_versions
-                .fetch_all_live_states::<K, V, u64, D>(&shard_id)
-                .await?
-        }
-    };
+        .check_ts_codec()?;
 
     let mut known_parts = BTreeSet::new();
     let mut known_rollups = BTreeSet::new();
@@ -568,21 +518,10 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
         })
         .await?;
 
-    let mut state_iter = match state_versions
-        .fetch_all_live_states::<K, V, u64, D>(&shard_id)
+    let mut state_iter = state_versions
+        .fetch_all_live_states::<u64>(shard_id)
         .await
-    {
-        Ok(state_iter) => state_iter,
-        Err(codec) => {
-            {
-                let mut kvtd = KVTD_CODECS.lock().expect("lockable");
-                *kvtd = codec.actual;
-            }
-            state_versions
-                .fetch_all_live_states::<K, V, u64, D>(&shard_id)
-                .await?
-        }
-    };
+        .check_ts_codec()?;
 
     let mut referenced_parts = BTreeMap::new();
     let mut referenced_rollups = BTreeSet::new();

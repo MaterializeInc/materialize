@@ -26,7 +26,7 @@ use crate::error::CodecMismatch;
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
-use crate::internal::state::{HollowBatch, Since, State, StateCollections, Upper};
+use crate::internal::state::{HollowBatch, Since, StateCollections, TypedState, Upper};
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
@@ -48,7 +48,7 @@ pub struct Applier<K, V, T, D> {
     //
     // NB: This is very intentionally not pub(crate) so that it's easy to reason
     // very locally about the duration of Mutex holds.
-    state: State<K, V, T, D>,
+    state: TypedState<K, V, T, D>,
 }
 
 // Impl Clone regardless of the type params.
@@ -100,7 +100,7 @@ where
     }
 
     // TODO: Remove usages of this.
-    pub fn state(&self) -> &State<K, V, T, D> {
+    pub fn state(&self) -> &TypedState<K, V, T, D> {
         &self.state
     }
 
@@ -160,7 +160,7 @@ where
         E,
         WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
     >(
-        state: &mut State<K, V, T, D>,
+        state: &mut TypedState<K, V, T, D>,
         cmd: &CmdMetrics,
         mut work_fn: WorkFn,
         cfg: &PersistConfig,
@@ -312,6 +312,7 @@ where
                             *state = state_versions
                                 .fetch_current_state(&state.shard_id, all_live_diffs)
                                 .await
+                                .check_codecs(&state.shard_id)
                                 .expect("shard codecs should not change");
                         }
 

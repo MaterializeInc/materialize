@@ -251,8 +251,12 @@ where
         let mut states = machine
             .applier
             .state_versions
-            .fetch_all_live_states::<K, V, T, D>(&req.shard_id)
+            .fetch_all_live_states::<T>(req.shard_id)
             .await
+            // TODO: Consider pulling the K, V, D params off of GC. If we do,
+            // then we should be able to delete TypedStateVersionsIter (and
+            // probably merge UntypedStateVersionsIter into StateVersionsIter).
+            .check_codecs::<K, V, D>()
             .expect("shard codecs should not change");
 
         debug!(

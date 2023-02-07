@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
+use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
@@ -838,7 +839,9 @@ where
 }
 
 // TODO: Document invariants.
-pub struct State<K, V, T, D> {
+#[derive(Debug)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
+pub struct State<T> {
     pub(crate) applier_version: semver::Version,
     pub(crate) shard_id: ShardId,
 
@@ -850,6 +853,12 @@ pub struct State<K, V, T, D> {
     /// debugging.
     pub(crate) hostname: String,
     pub(crate) collections: StateCollections<T>,
+}
+
+/// A newtype wrapper of State that guarantees the K, V, and D codecs match the
+/// ones in durable storage.
+pub struct TypedState<K, V, T, D> {
+    pub(crate) state: State<T>,
 
     // According to the docs, PhantomData is to "mark things that act like they
     // own a T". State doesn't actually own K, V, or D, just the ability to
@@ -861,79 +870,129 @@ pub struct State<K, V, T, D> {
     pub(crate) _phantom: PhantomData<fn() -> (K, V, D)>,
 }
 
-impl<K, V, T: Clone, D> State<K, V, T, D> {
+impl<K, V, T: Clone, D> TypedState<K, V, T, D> {
     pub(crate) fn clone(&self, applier_version: Version, hostname: String) -> Self {
-        Self {
-            applier_version,
-            shard_id: self.shard_id.clone(),
-            seqno: self.seqno.clone(),
-            walltime_ms: self.walltime_ms,
-            hostname,
-            collections: self.collections.clone(),
-            _phantom: self._phantom.clone(),
+        TypedState {
+            state: State {
+                applier_version,
+                shard_id: self.shard_id.clone(),
+                seqno: self.seqno.clone(),
+                walltime_ms: self.walltime_ms,
+                hostname,
+                collections: self.collections.clone(),
+            },
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<K, V, T: Debug, D> Debug for State<K, V, T, D> {
+impl<K, V, T: Debug, D> Debug for TypedState<K, V, T, D> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         // Deconstruct self so we get a compile failure if new fields
         // are added.
-        let State {
-            applier_version,
-            shard_id,
-            seqno,
-            walltime_ms,
-            hostname,
-            collections,
-            _phantom,
-        } = self;
-        f.debug_struct("State")
-            .field("applier_version", applier_version)
-            .field("shard_id", shard_id)
-            .field("seqno", seqno)
-            .field("walltime_ms", walltime_ms)
-            .field("hostname", hostname)
-            .field("collections", collections)
-            .field("_phantom", _phantom)
-            .finish()
+        let TypedState { state, _phantom } = self;
+        f.debug_struct("TypedState").field("state", state).finish()
     }
 }
 
 // Impl PartialEq regardless of the type params.
 #[cfg(any(test, debug_assertions))]
-impl<K, V, T: PartialEq, D> PartialEq for State<K, V, T, D> {
+impl<K, V, T: PartialEq, D> PartialEq for TypedState<K, V, T, D> {
     fn eq(&self, other: &Self) -> bool {
         // Deconstruct self and other so we get a compile failure if new fields
         // are added.
-        let State {
-            applier_version: self_applier_version,
-            shard_id: self_shard_id,
-            seqno: self_seqno,
-            walltime_ms: self_walltime_ms,
-            hostname: self_hostname,
-            collections: self_collections,
-            _phantom: _,
+        let TypedState {
+            state: self_state,
+            _phantom,
         } = self;
-        let State {
-            applier_version: other_applier_version,
-            shard_id: other_shard_id,
-            seqno: other_seqno,
-            walltime_ms: other_walltime_ms,
-            hostname: other_hostname,
-            collections: other_collections,
-            _phantom: _,
+        let TypedState {
+            state: other_state,
+            _phantom,
         } = other;
-        self_applier_version == other_applier_version
-            && self_shard_id == other_shard_id
-            && self_seqno == other_seqno
-            && self_walltime_ms == other_walltime_ms
-            && self_hostname == other_hostname
-            && self_collections == other_collections
+        self_state == other_state
     }
 }
 
-impl<K, V, T, D> State<K, V, T, D>
+impl<K, V, T, D> Deref for TypedState<K, V, T, D> {
+    type Target = State<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl<K, V, T, D> DerefMut for TypedState<K, V, T, D> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
+}
+
+impl<K, V, T, D> TypedState<K, V, T, D>
+where
+    K: Codec,
+    V: Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Codec64,
+{
+    pub fn new(
+        applier_version: Version,
+        shard_id: ShardId,
+        hostname: String,
+        walltime_ms: u64,
+    ) -> Self {
+        let state = State {
+            applier_version,
+            shard_id,
+            seqno: SeqNo::minimum(),
+            walltime_ms,
+            hostname,
+            collections: StateCollections {
+                last_gc_req: SeqNo::minimum(),
+                rollups: BTreeMap::new(),
+                leased_readers: BTreeMap::new(),
+                critical_readers: BTreeMap::new(),
+                writers: BTreeMap::new(),
+                trace: Trace::default(),
+            },
+        };
+        TypedState {
+            state,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn clone_apply<R, E, WorkFn>(
+        &self,
+        cfg: &PersistConfig,
+        work_fn: &mut WorkFn,
+    ) -> ControlFlow<E, (R, Self)>
+    where
+        WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
+    {
+        let mut new_state = State {
+            applier_version: cfg.build_version.clone(),
+            shard_id: self.shard_id,
+            seqno: self.seqno.next(),
+            walltime_ms: (cfg.now)(),
+            hostname: cfg.hostname.clone(),
+            collections: self.collections.clone(),
+        };
+        // Make sure walltime_ms is strictly increasing, in case clocks are
+        // offset.
+        if new_state.walltime_ms <= self.walltime_ms {
+            new_state.walltime_ms = self.walltime_ms + 1;
+        }
+
+        let work_ret = work_fn(new_state.seqno, cfg, &mut new_state.collections)?;
+        let new_state = TypedState {
+            state: new_state,
+            _phantom: PhantomData,
+        };
+        Continue((work_ret, new_state))
+    }
+}
+
+impl<T> State<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
@@ -983,38 +1042,6 @@ where
         }
         // critical_readers don't hold a seqno capability.
         seqno_since
-    }
-}
-
-impl<K, V, T, D> State<K, V, T, D>
-where
-    K: Codec,
-    V: Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Codec64,
-{
-    pub fn new(
-        applier_version: Version,
-        shard_id: ShardId,
-        hostname: String,
-        walltime_ms: u64,
-    ) -> Self {
-        State {
-            applier_version,
-            shard_id,
-            seqno: SeqNo::minimum(),
-            walltime_ms,
-            hostname,
-            collections: StateCollections {
-                last_gc_req: SeqNo::minimum(),
-                rollups: BTreeMap::new(),
-                leased_readers: BTreeMap::new(),
-                critical_readers: BTreeMap::new(),
-                writers: BTreeMap::new(),
-                trace: Trace::default(),
-            },
-            _phantom: PhantomData,
-        }
     }
 
     // Returns whether the cmd proposing this state has been selected to perform
@@ -1072,33 +1099,6 @@ where
     /// Return the number of gc-ineligible state versions.
     pub fn seqnos_held(&self) -> usize {
         usize::cast_from(self.seqno.0.saturating_sub(self.seqno_since().0))
-    }
-
-    pub fn clone_apply<R, E, WorkFn>(
-        &self,
-        cfg: &PersistConfig,
-        work_fn: &mut WorkFn,
-    ) -> ControlFlow<E, (R, Self)>
-    where
-        WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
-    {
-        let mut new_state = State {
-            applier_version: cfg.build_version.clone(),
-            shard_id: self.shard_id,
-            seqno: self.seqno.next(),
-            walltime_ms: (cfg.now)(),
-            hostname: cfg.hostname.clone(),
-            collections: self.collections.clone(),
-            _phantom: PhantomData,
-        };
-        // Make sure walltime_ms is strictly increasing, in case clocks are
-        // offset.
-        if new_state.walltime_ms <= self.walltime_ms {
-            new_state.walltime_ms = self.walltime_ms + 1;
-        }
-
-        let work_ret = work_fn(new_state.seqno, cfg, &mut new_state.collections)?;
-        Continue((work_ret, new_state))
     }
 
     /// Expire all readers and writers up to the given walltime_ms.
@@ -1243,7 +1243,7 @@ mod tests {
 
     #[test]
     fn downgrade_since() {
-        let mut state = State::<(), (), u64, i64>::new(
+        let mut state = TypedState::<(), (), u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
             "".to_owned(),
@@ -1394,7 +1394,7 @@ mod tests {
     #[test]
     fn compare_and_append() {
         mz_ore::test::init_logging();
-        let mut state = State::<String, String, u64, i64>::new(
+        let state = &mut TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
             "".to_owned(),
@@ -1482,7 +1482,7 @@ mod tests {
         mz_ore::test::init_logging();
         let now = SYSTEM_TIME.clone();
 
-        let mut state = State::<String, String, u64, i64>::new(
+        let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
             "".to_owned(),
@@ -1630,7 +1630,7 @@ mod tests {
     fn next_listen_batch() {
         mz_ore::test::init_logging();
 
-        let mut state = State::<String, String, u64, i64>::new(
+        let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
             "".to_owned(),
@@ -1696,7 +1696,7 @@ mod tests {
     fn expire_writer() {
         mz_ore::test::init_logging();
 
-        let mut state = State::<String, String, u64, i64>::new(
+        let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
             "".to_owned(),
@@ -1774,7 +1774,7 @@ mod tests {
     #[test]
     fn maybe_gc() {
         mz_ore::test::init_logging();
-        let mut state = State::<String, String, u64, i64>::new(
+        let mut state = TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
             ShardId::new(),
             "".to_owned(),

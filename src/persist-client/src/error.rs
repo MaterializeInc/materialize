@@ -227,6 +227,26 @@ impl<T> From<Box<CodecMismatch>> for InvalidUsage<T> {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct CodecMismatchT {
+    /// The requested T codec.
+    pub(crate) requested: String,
+    /// The actual T codec in durable storage.
+    pub(crate) actual: String,
+}
+
+impl std::error::Error for CodecMismatchT {}
+
+impl std::fmt::Display for CodecMismatchT {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "requested ts codec {:?} did not match one in durable storage {:?}",
+            self.requested, self.actual
+        )
+    }
+}
+
 /// An error returned from [crate::write::WriteHandle::compare_and_append] (and
 /// variants) when the expected upper didn't match the actual current upper of
 /// the shard.
