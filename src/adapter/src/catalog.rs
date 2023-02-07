@@ -1277,6 +1277,7 @@ pub struct ConnCatalog<'a> {
     conn_id: ConnectionId,
     cluster: String,
     database: Option<DatabaseId>,
+    // Schemas from the session's search_path var that exist in the catalog.
     search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
     user: User,
     prepared_statements: Option<Cow<'a, BTreeMap<String, PreparedStatement>>>,
@@ -1303,6 +1304,11 @@ impl ConnCatalog<'_> {
         }
     }
 
+    /// Returns the schemas:
+    /// - mz_catalog
+    /// - pg_catalog
+    /// - temp (if requested)
+    /// - schemas of the search_path session var that exist
     fn effective_search_path(
         &self,
         include_temp_schema: bool,
@@ -6198,7 +6204,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     SchemaSpecifier::Id(self.state.get_pg_catalog_schema_id().clone());
 
                 let res = if self
-                    .effective_search_path(true)
+                    .search_path
                     .iter()
                     .any(|(_, schema)| schema == &pg_catalog_schema)
                 {
