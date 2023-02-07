@@ -1615,6 +1615,12 @@ pub fn plan_view(
     params: &Params,
     temporary: bool,
 ) -> Result<(QualifiedObjectName, View), PlanError> {
+    let query::PlannedQuery {
+        mut expr,
+        mut desc,
+        finishing,
+    } = query::plan_root_query(scx, &mut def.query, QueryLifetime::Static)?;
+
     let create_sql = normalize::create_statement(
         scx,
         Statement::CreateView(CreateViewStatement {
@@ -1627,14 +1633,8 @@ pub fn plan_view(
     let ViewDefinition {
         name,
         columns,
-        query,
+        query: _,
     } = def;
-
-    let query::PlannedQuery {
-        mut expr,
-        mut desc,
-        finishing,
-    } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
 
     expr.bind_parameters(params)?;
     //TODO: materialize#724 - persist finishing information with the view?
@@ -1697,7 +1697,10 @@ pub fn plan_create_view(
         view,
         replace,
         if_not_exists: *if_exists == IfExistsBehavior::Skip,
-        ambiguous_columns: *scx.ambiguous_columns.borrow(),
+        ambiguous_columns: scx
+            .column_disambiguation_metadata
+            .borrow()
+            .ambiguous_column_ref(),
     }))
 }
 
@@ -1722,17 +1725,17 @@ pub fn plan_create_materialized_view(
         print_name: None,
     });
 
-    let create_sql =
-        normalize::create_statement(scx, Statement::CreateMaterializedView(stmt.clone()))?;
-
-    let partial_name = normalize::unresolved_object_name(stmt.name)?;
+    let partial_name = normalize::unresolved_object_name(stmt.name.clone())?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
 
     let query::PlannedQuery {
         mut expr,
         mut desc,
         finishing,
-    } = query::plan_root_query(scx, stmt.query, QueryLifetime::Static)?;
+    } = query::plan_root_query(scx, &mut stmt.query, QueryLifetime::Static)?;
+
+    let create_sql =
+        normalize::create_statement(scx, Statement::CreateMaterializedView(stmt.clone()))?;
 
     expr.bind_parameters(params)?;
     expr.finish(finishing);
@@ -1778,7 +1781,10 @@ pub fn plan_create_materialized_view(
         },
         replace,
         if_not_exists,
-        ambiguous_columns: *scx.ambiguous_columns.borrow(),
+        ambiguous_columns: scx
+            .column_disambiguation_metadata
+            .borrow()
+            .ambiguous_column_ref(),
     }))
 }
 
@@ -2206,7 +2212,10 @@ pub fn plan_create_index(
                 .default_key()
                 .iter()
                 .map(|i| match on_desc.get_unambiguous_name(*i) {
-                    Some(n) => Expr::Identifier(vec![Ident::new(n.to_string())]),
+                    Some(n) => Expr::Identifier {
+                        names: vec![Ident::new(n.to_string())],
+                        id: None,
+                    },
                     _ => Expr::Value(Value::Number((i + 1).to_string())),
                 })
                 .collect()
@@ -2387,6 +2396,7 @@ pub fn plan_create_type(
 
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
     if scx.item_exists(&name) {
+        let name = scx.catalog.resolve_full_name(&name);
         sql_bail!("catalog item '{}' already exists", name);
     }
 

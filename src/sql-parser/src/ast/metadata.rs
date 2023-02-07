@@ -52,6 +52,8 @@ pub trait AstInfo: Clone {
     type DataType: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// The type stored next to CTEs for their assigned ID.
     type CteId: Clone + Hash + Debug + Eq + Ord;
+    /// The type that uniquely identifies a node in the AST.
+    type NodeId: Clone + Hash + Debug + Eq + Ord + Default;
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Default)]
@@ -65,6 +67,7 @@ impl AstInfo for Raw {
     type ClusterName = RawClusterName;
     type DataType = RawDataType;
     type CteId = ();
+    type NodeId = ();
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]

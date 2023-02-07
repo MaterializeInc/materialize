@@ -4391,10 +4391,16 @@ impl<'a> Parser<'a> {
                     self.prev_token();
                     self.parse_function(UnresolvedObjectName(id_parts))
                 } else {
-                    Ok(Expr::Identifier(id_parts))
+                    Ok(Expr::Identifier {
+                        names: id_parts,
+                        id: (),
+                    })
                 }
             }
-            _ => Ok(Expr::Identifier(id_parts)),
+            _ => Ok(Expr::Identifier {
+                names: id_parts,
+                id: (),
+            }),
         }
     }
 

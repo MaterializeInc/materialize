@@ -66,3 +66,64 @@ SELECT mz_connections.* FROM mz_connections LIMIT 0;
 query TI
 SELECT * FROM (SELECT id, oid FROM mz_sources) LIMIT 0;
 ----
+
+mode standard
+
+statement ok
+CREATE TABLE t (a INT, b INT);
+
+statement ok
+CREATE VIEW v as SELECT a, (a + 5), avg(b) FROM t WHERE a > 5 GROUP BY a HAVING t.a > 10 ORDER BY a;
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "materialize"."public"."t"."a", "materialize"."public"."t"."a" + 5, "mz_internal"."mz_avg_promotion"("pg_catalog"."sum"("materialize"."public"."t"."b")) / CASE WHEN "pg_catalog"."count"("materialize"."public"."t"."b") = 0 THEN NULL ELSE "pg_catalog"."count"("materialize"."public"."t"."b") END AS "avg" FROM "materialize"."public"."t" WHERE "materialize"."public"."t"."a" > 5 GROUP BY "materialize"."public"."t"."a" HAVING "materialize"."public"."t"."a" > 10 ORDER BY "materialize"."public"."t"."a"
+
+statement ok
+CREATE MATERIALIZED VIEW mv as SELECT a, (a + 5), avg(b) FROM t WHERE a > 5 GROUP BY a HAVING t.a > 10 ORDER BY a;
+
+query TT
+SHOW CREATE MATERIALIZED VIEW mv
+----
+materialize.public.mv
+CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "default" AS SELECT "materialize"."public"."t"."a", "materialize"."public"."t"."a" + 5, "mz_internal"."mz_avg_promotion"("pg_catalog"."sum"("materialize"."public"."t"."b")) / CASE WHEN "pg_catalog"."count"("materialize"."public"."t"."b") = 0 THEN NULL ELSE "pg_catalog"."count"("materialize"."public"."t"."b") END AS "avg" FROM "materialize"."public"."t" WHERE "materialize"."public"."t"."a" > 5 GROUP BY "materialize"."public"."t"."a" HAVING "materialize"."public"."t"."a" > 10 ORDER BY "materialize"."public"."t"."a"
+
+statement ok
+DROP VIEW v;
+
+statement ok
+DROP MATERIALIZED VIEW mv
+
+# Nested identifiers
+
+statement ok
+CREATE TABLE t1 (c INT);
+
+statement ok
+CREATE TABLE t2 (c INT);
+
+statement ok
+CREATE VIEW v AS SELECT c || 'a' AS f1 , (SELECT c || 'a' AS f2 FROM t2 GROUP BY c || 'a') FROM t1 GROUP BY c || 'a';
+
+query TT
+SHOW CREATE VIEW v
+----
+materialize.public.v
+CREATE VIEW "materialize"."public"."v" AS SELECT "materialize"."public"."t1"."c" || 'a' AS "f1", (SELECT "materialize"."public"."t2"."c" || 'a' AS "f2" FROM "materialize"."public"."t2" GROUP BY "materialize"."public"."t2"."c" || 'a') FROM "materialize"."public"."t1" GROUP BY "materialize"."public"."t1"."c" || 'a'
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT c || 'a' AS f1 , (SELECT c || 'a' AS f2 FROM t2 GROUP BY c || 'a') FROM t1 GROUP BY c || 'a';
+
+query TT
+SHOW CREATE MATERIALIZED VIEW mv
+----
+materialize.public.mv
+CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "default" AS SELECT "materialize"."public"."t1"."c" || 'a' AS "f1", (SELECT "materialize"."public"."t2"."c" || 'a' AS "f2" FROM "materialize"."public"."t2" GROUP BY "materialize"."public"."t2"."c" || 'a') FROM "materialize"."public"."t1" GROUP BY "materialize"."public"."t1"."c" || 'a'
+
+statement ok
+DROP VIEW v
+
+statement ok
+DROP MATERIALIZED VIEW mv

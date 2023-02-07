@@ -13,8 +13,6 @@
 //! are much easier to perform in SQL. Someday, we'll want our own SQL IR,
 //! but for now we just use the parser's AST directly.
 
-use uuid::Uuid;
-
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
@@ -49,7 +47,7 @@ where
     f(&mut func_rewriter, ast);
     func_rewriter.status?;
 
-    let mut desugarer = Desugarer::new();
+    let mut desugarer = Desugarer::new(scx);
     f(&mut desugarer, ast);
     desugarer.status
 }
@@ -328,7 +326,10 @@ impl<'a> FuncRewriter<'a> {
             // Rewrites special keywords that SQL considers to be function calls
             // to actual function calls. For example, `SELECT current_timestamp`
             // is rewritten to `SELECT current_timestamp()`.
-            Expr::Identifier(ident) if ident.len() == 1 => {
+            Expr::Identifier {
+                names: ident,
+                id: _,
+            } if ident.len() == 1 => {
                 let ident = normalize::ident(ident[0].clone());
                 let fn_ident = match ident.as_str() {
                     "current_role" => Some("current_user"),
@@ -377,24 +378,26 @@ impl<'ast> VisitMut<'ast, Aug> for FuncRewriter<'_> {
 ///
 /// For example, `<expr> NOT IN (<subquery>)` is rewritten to `expr <> ALL
 /// (<subquery>)`.
-struct Desugarer {
+struct Desugarer<'a> {
+    scx: &'a StatementContext<'a>,
+    unique_id: u64,
     status: Result<(), PlanError>,
     recursion_guard: RecursionGuard,
 }
 
-impl CheckedRecursion for Desugarer {
+impl<'a> CheckedRecursion for Desugarer<'a> {
     fn recursion_guard(&self) -> &RecursionGuard {
         &self.recursion_guard
     }
 }
 
-impl<'ast> VisitMut<'ast, Aug> for Desugarer {
+impl<'ast> VisitMut<'ast, Aug> for Desugarer<'_> {
     fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Aug>) {
         self.visit_internal(Self::visit_expr_mut_internal, expr);
     }
 }
 
-impl Desugarer {
+impl<'a> Desugarer<'a> {
     fn visit_internal<F, X>(&mut self, f: F, x: X)
     where
         F: Fn(&mut Self, X) -> Result<(), PlanError>,
@@ -409,8 +412,10 @@ impl Desugarer {
         }
     }
 
-    fn new() -> Desugarer {
+    fn new(scx: &'a StatementContext<'a>) -> Desugarer<'a> {
         Desugarer {
+            scx,
+            unique_id: 0,
             status: Ok(()),
             recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
@@ -490,7 +495,10 @@ impl Desugarer {
                         joins: vec![],
                     })
                     .project(SelectItem::Expr {
-                        expr: Expr::Identifier(vec![binding]),
+                        expr: Expr::Identifier {
+                            names: vec![binding],
+                            id: Some(self.scx.node_id()),
+                        },
                         alias: None,
                     }),
             );
@@ -534,7 +542,7 @@ impl Desugarer {
             };
 
             let bindings: Vec<_> = (0..arity)
-                .map(|_| Ident::new(format!("right_{}", Uuid::new_v4())))
+                .map(|_| Ident::new(format!("right_{}", self.unique_id())))
                 .collect();
 
             let select = Select::default()
@@ -553,7 +561,10 @@ impl Desugarer {
                             Expr::Row {
                                 exprs: bindings
                                     .into_iter()
-                                    .map(|b| Expr::Identifier(vec![b]))
+                                    .map(|b| Expr::Identifier {
+                                        names: vec![b],
+                                        id: Some(self.scx.node_id()),
+                                    })
                                     .collect(),
                             },
                         )
@@ -639,5 +650,11 @@ impl Desugarer {
 
         visit_mut::visit_expr_mut(self, expr);
         Ok(())
+    }
+
+    fn unique_id(&mut self) -> u64 {
+        let id = self.unique_id;
+        self.unique_id += 1;
+        id
     }
 }

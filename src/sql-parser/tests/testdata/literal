@@ -30,12 +30,12 @@ Value(Null)
 parse-scalar
 "foo"
 ----
-Identifier([Ident("foo")])
+Identifier { names: [Ident("foo")], id: () }
 
 parse-scalar
 "f""oo"
 ----
-Identifier([Ident("f\"oo")])
+Identifier { names: [Ident("f\"oo")], id: () }
 
 parse-scalar roundtrip
 "f""oo"

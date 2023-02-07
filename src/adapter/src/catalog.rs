@@ -65,6 +65,7 @@ use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
     Plan, PlanContext, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
+    StatementTagger,
 };
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
@@ -527,9 +528,17 @@ impl CatalogState {
             prepared_statements: None,
         };
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
-        let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
+        let mut statement_tagger = StatementTagger::new();
+        let (stmt, depends_on) =
+            mz_sql::names::resolve(&session_catalog, &mut statement_tagger, stmt)?;
         let depends_on = depends_on.into_iter().collect();
-        let plan = mz_sql::plan::plan(None, &session_catalog, stmt, &Params::empty())?;
+        let plan = mz_sql::plan::plan(
+            None,
+            &session_catalog,
+            stmt,
+            &Params::empty(),
+            statement_tagger,
+        )?;
         Ok(match plan {
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let optimizer = Optimizer::logical_optimizer();
@@ -5581,9 +5590,17 @@ impl Catalog {
     ) -> Result<CatalogItem, AdapterError> {
         let session_catalog = self.for_system_session();
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
-        let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
+        let mut statement_tagger = StatementTagger::new();
+        let (stmt, depends_on) =
+            mz_sql::names::resolve(&session_catalog, &mut statement_tagger, stmt)?;
         let depends_on = depends_on.into_iter().collect();
-        let plan = mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty())?;
+        let plan = mz_sql::plan::plan(
+            pcx,
+            &session_catalog,
+            stmt,
+            &Params::empty(),
+            statement_tagger,
+        )?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
                 create_sql: table.create_sql,
@@ -6585,7 +6602,7 @@ mod tests {
         ObjectQualifiers, PartialObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier,
         SchemaSpecifier,
     };
-    use mz_sql::plan::StatementContext;
+    use mz_sql::plan::{StatementContext, StatementTagger};
     use mz_sql::DEFAULT_SCHEMA;
     use mz_sql_parser::ast::Expr;
     use mz_stash::Stash;
@@ -7504,7 +7521,8 @@ mod tests {
             .expect("")
             .into_element();
 
-            let (stmt, _) = names::resolve(scx.catalog, parsed).expect("");
+            let (stmt, _) =
+                names::resolve(scx.catalog, &mut StatementTagger::new(), parsed).expect("");
 
             // Ensure that all identifiers are quoted.
             assert_eq!(

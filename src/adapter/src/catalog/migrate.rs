@@ -13,8 +13,11 @@ use std::collections::BTreeMap;
 use mz_ore::collections::CollectionExt;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement};
+use mz_sql::normalize;
+use mz_sql::plan::{Params, QueryLifetime, StatementContext, StatementTagger};
+use mz_sql_parser::ast::{CreateMaterializedViewStatement, CreateViewStatement};
 
-use crate::catalog::{Catalog, SerializedCatalogItem};
+use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};
 
 use super::storage::Transaction;
 
@@ -60,9 +63,12 @@ pub(crate) async fn migrate(catalog: &mut Catalog) -> Result<(), anyhow::Error> 
     // it. You probably should be adding a basic AST migration above, unless
     // you are really certain you want one of these crazy migrations.
     let cat = Catalog::load_catalog_items(&mut tx, catalog)?;
-    let _conn_cat = cat.for_system_session();
+    let conn_cat = cat.for_system_session();
 
-    rewrite_items(&mut tx, |_item| Ok(()))?;
+    rewrite_items(&mut tx, |item| {
+        fully_qualify_column_references_rewrite(&conn_cat, item)?;
+        Ok(())
+    })?;
     tx.commit().await.map_err(|e| e.into())
 }
 
@@ -142,3 +148,39 @@ fn csr_url_path_rewrite(stmt: &mut mz_sql::ast::Statement<Raw>) {
 // ****************************************************************************
 // Semantic migrations -- Weird migrations that require access to the catalog
 // ****************************************************************************
+
+// Convert all column names to be fully qualified.
+fn fully_qualify_column_references_rewrite(
+    cat: &ConnCatalog,
+    stmt: &mut mz_sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    // Resolve Statement<Raw> to Statement<Aug>.
+    let mut statement_tagger = StatementTagger::new();
+    let (mut resolved_stmt, _depends_on) =
+        mz_sql::names::resolve_statement(cat, &mut statement_tagger, stmt.clone())?;
+
+    match &mut resolved_stmt {
+        Statement::CreateView(CreateViewStatement {
+            temporary,
+            definition,
+            ..
+        }) => {
+            let scx = StatementContext::new(None, cat);
+            // Planning the statement rewrites it with fully qualified columns.
+            let (_, view) =
+                mz_sql::plan::plan_view(&scx, definition, &Params::empty(), *temporary)?;
+            *stmt = mz_sql::parse::parse(&view.create_sql)?.into_element();
+        }
+        Statement::CreateMaterializedView(CreateMaterializedViewStatement { query, .. }) => {
+            let scx = StatementContext::new(None, cat);
+            // Planning the statement rewrites it with fully qualified columns.
+            let _ = mz_sql::plan::plan_root_query(&scx, query, QueryLifetime::Static)?;
+            let create_sql = normalize::create_statement(&scx, resolved_stmt)?;
+            *stmt = mz_sql::parse::parse(&create_sql)?.into_element();
+        }
+
+        _ => {}
+    }
+
+    Ok(())
+}

@@ -79,7 +79,7 @@ INSERT INTO t DEFAULT VALUES RETURNING *, *, i, a AS x
 ----
 INSERT INTO t DEFAULT VALUES RETURNING *, *, i, a AS x
 =>
-Insert(InsertStatement { table_name: Name(UnresolvedObjectName([Ident("t")])), columns: [], source: DefaultValues, returning: [Wildcard, Wildcard, Expr { expr: Identifier([Ident("i")]), alias: None }, Expr { expr: Identifier([Ident("a")]), alias: Some(Ident("x")) }] })
+Insert(InsertStatement { table_name: Name(UnresolvedObjectName([Ident("t")])), columns: [], source: DefaultValues, returning: [Wildcard, Wildcard, Expr { expr: Identifier { names: [Ident("i")], id: () }, alias: None }, Expr { expr: Identifier { names: [Ident("a")], id: () }, alias: Some(Ident("x")) }] })
 
 parse-statement
 INSERT INTO t DEFAULT VALUES RETURNING * as x

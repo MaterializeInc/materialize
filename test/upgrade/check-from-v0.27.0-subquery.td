@@ -11,4 +11,4 @@
 # CREATE a view containing subqueries/derived tables of various types
 
 > SHOW CREATE MATERIALIZED VIEW subquery_view;
-"materialize.public.subquery_view" "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"subquery_view\" IN CLUSTER \"default\" AS SELECT (SELECT 1) FROM (SELECT 2) AS \"derived\" WHERE 2 NOT IN (SELECT 3) AND NOT EXISTS (SELECT 4) AND 5 >= ALL (SELECT 6) AND 7 <ANY (SELECT 8)"
+"materialize.public.subquery_view" "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"subquery_view\" IN CLUSTER \"default\" AS SELECT (SELECT 1) FROM (SELECT 2) AS \"derived\" WHERE (SELECT \"mz_internal\".\"mz_all\"(NOT 2 = \"subquery\".\"right_0\") FROM (SELECT 3) AS \"subquery\" (\"right_0\")) AND NOT EXISTS (SELECT 4) AND (SELECT \"mz_internal\".\"mz_all\"(5 >= \"subquery\".\"right_1\") FROM (SELECT 6) AS \"subquery\" (\"right_1\")) AND (SELECT \"mz_internal\".\"mz_any\"(7 < \"subquery\".\"right_2\") FROM (SELECT 8) AS \"subquery\" (\"right_2\"))"

@@ -21,6 +21,8 @@
 use std::fmt;
 use std::mem;
 
+use derivative::Derivative;
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, Ident, OrderByExpr, Query, UnresolvedObjectName, Value};
 
@@ -29,10 +31,26 @@ use crate::ast::{AstInfo, Ident, OrderByExpr, Query, UnresolvedObjectName, Value
 /// The parser does not distinguish between expressions of different types
 /// (e.g. boolean vs string), so the caller must handle expressions of
 /// inappropriate type, like `WHERE 1` or `SELECT 1=1`, as necessary.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Derivative)]
+#[derivative(
+    Eq,
+    PartialEq,
+    Ord = "feature_allow_slow_enum",
+    PartialOrd = "feature_allow_slow_enum",
+    Hash
+)]
 pub enum Expr<T: AstInfo> {
     /// Identifier e.g. table name or column name
-    Identifier(Vec<Ident>),
+    Identifier {
+        names: Vec<Ident>,
+        #[derivative(
+            PartialEq = "ignore",
+            Hash = "ignore",
+            Ord = "ignore",
+            PartialOrd = "ignore"
+        )]
+        id: T::NodeId,
+    },
     /// Qualified wildcard, e.g. `alias.*` or `schema.table.*`.
     QualifiedWildcard(Vec<Ident>),
     /// A field access, like `(expr).foo`.
@@ -196,7 +214,7 @@ pub enum Expr<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for Expr<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Expr::Identifier(s) => f.write_node(&display::separated(s, ".")),
+            Expr::Identifier { names, id: _ } => f.write_node(&display::separated(names, ".")),
             Expr::QualifiedWildcard(q) => {
                 f.write_node(&display::separated(q, "."));
                 f.write_str(".*");
@@ -604,7 +622,13 @@ impl<T: AstInfo> Expr<T> {
     }
 
     pub fn take(&mut self) -> Expr<T> {
-        mem::replace(self, Expr::Identifier(vec![]))
+        mem::replace(
+            self,
+            Expr::Identifier {
+                names: vec![],
+                id: T::NodeId::default(),
+            },
+        )
     }
 }
 

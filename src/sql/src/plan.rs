@@ -57,6 +57,7 @@ use crate::names::{
     Aug, DatabaseId, FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaId,
 };
 
+pub(crate) mod column_disambiguate;
 pub(crate) mod error;
 pub(crate) mod explain;
 pub(crate) mod expr;
@@ -71,6 +72,7 @@ pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
+pub use self::column_disambiguate::StatementTagger;
 pub use self::expr::{
     AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
 };
@@ -78,7 +80,9 @@ pub use error::PlanError;
 pub use explain::normalize_subqueries;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 pub use optimize::OptimizerConfig;
+pub use query::plan_root_query;
 pub use query::{QueryContext, QueryLifetime};
+pub use statement::ddl::plan_view;
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.

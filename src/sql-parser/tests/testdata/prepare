@@ -32,7 +32,7 @@ EXECUTE a (a, 'b', 1 + 2)
 ----
 EXECUTE a (a, 'b', 1 + 2)
 =>
-Execute(ExecuteStatement { name: Ident("a"), params: [Identifier([Ident("a")]), Value(String("b")), Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }] })
+Execute(ExecuteStatement { name: Ident("a"), params: [Identifier { names: [Ident("a")], id: () }, Value(String("b")), Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }] })
 
 parse-statement
 DEALLOCATE a

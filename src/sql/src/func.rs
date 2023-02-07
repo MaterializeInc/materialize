@@ -337,7 +337,14 @@ pub fn sql_impl(
         );
         let qcx = QueryContext::root(&scx, qcx.lifetime);
 
-        let (mut expr, _) = names::resolve(qcx.scx.catalog, expr.clone())?;
+        let (mut expr, _) = names::resolve(
+            qcx.scx.catalog,
+            &mut scx
+                .column_disambiguation_metadata
+                .borrow_mut()
+                .statement_tagger,
+            expr.clone(),
+        )?;
         // Desugar the expression
         transform_ast::transform_expr(&scx, &mut expr)?;
 
@@ -416,7 +423,15 @@ fn sql_impl_table_func_inner(
         let mut qcx = QueryContext::root(&scx, qcx.lifetime);
 
         let query = query.clone();
-        let (mut query, _) = names::resolve(qcx.scx.catalog, query)?;
+        let (mut query, _) = names::resolve(
+            qcx.scx.catalog,
+            &mut qcx
+                .scx
+                .column_disambiguation_metadata
+                .borrow_mut()
+                .statement_tagger,
+            query,
+        )?;
         transform_ast::transform_query(&scx, &mut query)?;
 
         query::plan_nested_query(&mut qcx, &query)
