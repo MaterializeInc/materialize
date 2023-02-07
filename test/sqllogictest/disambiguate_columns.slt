@@ -9,34 +9,34 @@
 
 mode cockroach
 
-statement error ambiguous column references
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
 CREATE VIEW v AS SELECT * FROM mz_schemas;
 
-statement error ambiguous column references
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
 CREATE VIEW v AS SELECT id FROM mz_columns NATURAL JOIN mz_indexes;
 
-statement error ambiguous column references
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
 CREATE VIEW v AS SELECT (mz_tables).* FROM mz_tables;
 
-statement error ambiguous column references
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
 CREATE VIEW v AS SELECT mz_connections.* FROM mz_connections;
 
-statement error ambiguous column references
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
 CREATE VIEW v AS SELECT * FROM (SELECT id, oid FROM mz_sources);
 
-statement error ambiguous column references
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
 CREATE MATERIALIZED VIEW mv AS SELECT * FROM mz_schemas;
 
-statement error ambiguous column references
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
 CREATE MATERIALIZED VIEW mv AS SELECT id FROM mz_columns NATURAL JOIN mz_indexes;
 
-statement error ambiguous column references
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
 CREATE MATERIALIZED VIEW mv AS SELECT (mz_tables).* FROM mz_tables;
 
-statement error ambiguous column references
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
 CREATE MATERIALIZED VIEW mv AS SELECT mz_connections.* FROM mz_connections;
 
-statement error ambiguous column references
+statement error cannot use wildcard expansions or NATURAL JOINs in a view that depends on system objects
 CREATE MATERIALIZED VIEW mv AS SELECT * FROM (SELECT id, oid FROM mz_sources);
 
 statement ok

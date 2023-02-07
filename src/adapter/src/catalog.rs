@@ -2044,9 +2044,9 @@ impl CatalogEntry {
             | CatalogItem::Source(_)
             | CatalogItem::Log(_)
             | CatalogItem::View(_)
-            | CatalogItem::MaterializedView(_)
-            | CatalogItem::Index(_) => true,
+            | CatalogItem::MaterializedView(_) => true,
             CatalogItem::Sink(_)
+            | CatalogItem::Index(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)

@@ -407,7 +407,7 @@ pub struct StatementContext<'a> {
     /// occurs.
     pub param_types: RefCell<BTreeMap<usize, ScalarType>>,
     /// Whether the statement contains an expression that can make the exact column list
-    /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
+    /// ambiguous. For example `NATURAL JOIN` or `SELECT *`. This is filled in as planning occurs.
     pub ambiguous_columns: RefCell<bool>,
 }
 
