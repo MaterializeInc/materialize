@@ -24,8 +24,8 @@ use tracing::debug;
 use crate::critical::CriticalReaderId;
 use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
-    CriticalReaderState, HollowBatch, LeasedReaderState, ProtoStateField, ProtoStateFieldDiffType,
-    ProtoStateFieldDiffs, State, StateCollections, WriterState,
+    CriticalReaderState, HollowBatch, HollowRollup, LeasedReaderState, ProtoStateField,
+    ProtoStateFieldDiffType, ProtoStateFieldDiffs, State, StateCollections, WriterState,
 };
 use crate::internal::trace::{FueledMergeRes, Trace};
 use crate::read::LeasedReaderId;
@@ -68,7 +68,7 @@ pub struct StateDiff<T> {
     pub(crate) seqno_to: SeqNo,
     pub(crate) walltime_ms: u64,
     pub(crate) latest_rollup_key: PartialRollupKey,
-    pub(crate) rollups: Vec<StateFieldDiff<SeqNo, PartialRollupKey>>,
+    pub(crate) rollups: Vec<StateFieldDiff<SeqNo, HollowRollup>>,
     pub(crate) hostname: Vec<StateFieldDiff<(), String>>,
     pub(crate) last_gc_req: Vec<StateFieldDiff<(), SeqNo>>,
     pub(crate) leased_readers: Vec<StateFieldDiff<LeasedReaderId, LeasedReaderState<T>>>,
@@ -142,13 +142,13 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         } = to;
         assert_eq!(from_shard_id, to_shard_id);
 
-        let (_, latest_rollup_key) = to.latest_rollup();
+        let (_, latest_rollup) = to.latest_rollup();
         let mut diffs = Self::new(
             to_applier_version.clone(),
             *from_seqno,
             *to_seqno,
             *to_walltime_ms,
-            latest_rollup_key.clone(),
+            latest_rollup.key.clone(),
         );
         diff_field_single(from_hostname, to_hostname, &mut diffs.hostname);
         diff_field_single(from_last_gc_req, to_last_gc_req, &mut diffs.last_gc_req);
