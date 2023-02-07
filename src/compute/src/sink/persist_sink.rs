@@ -504,10 +504,6 @@ enum BatchOrData {
     },
 }
 
-/// If we'd otherwise write a batch smaller than this, flush the records over the output channel
-/// and let `append_batches` collect data from all the workers and batch it up itself.
-const MINIMUM_BATCH_SIZE: usize = 50;
-
 /// Writes `desired_stream - persist_stream` to persist, but only for updates
 /// that fall into batch a description that we get via `batch_descriptions`.
 /// This forwards a `HollowBatch` for any batch of updates that was written.
@@ -801,7 +797,9 @@ where
                         // We want to pass along the data directly if `to_append` is small, but to avoid
                         // having to iterate through everything twice we'll check if `correction`
                         // is small as a reasonable proxy.
-                        let batch_or_data = if correction.len() >= MINIMUM_BATCH_SIZE {
+                        let minimum_batch_updates =
+                            persist_clients.cfg().sink_minimum_batch_updates();
+                        let batch_or_data = if correction.len() >= minimum_batch_updates {
                             let batch = write
                                 .batch(
                                     to_append.map(|(data, time, diff)| {
