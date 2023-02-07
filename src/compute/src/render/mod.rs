@@ -300,7 +300,6 @@ pub fn build_compute_dataflow<A: Allocate>(
                             let oks_v = Variable::new(region, Product::new(Default::default(), 1));
                             let err_v = Variable::new(region, Product::new(Default::default(), 1));
 
-                            use differential_dataflow::operators::Consolidate;
                             context.insert_id(
                                 Id::Local(*id),
                                 CollectionBundle::from_collections(

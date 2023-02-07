@@ -360,7 +360,7 @@ pub fn construct<A: Allocate>(
 
         let frontier_delay = frontier_delay
             .as_collection()
-            // TODO(#16549): Use explicit arrangement
+            .arrange_named::<RowSpine<_, _, _, _>>("Arranged timely frontier_delay")
             .count_total_core::<i64>()
             .map({
                 move |((dataflow, source_id, worker, delay_pow), (sum, count))| {
@@ -396,7 +396,7 @@ pub fn construct<A: Allocate>(
         // Duration statistics derive from the non-rounded event times.
         let peek_duration = peek_duration
             .as_collection()
-            // TODO(#16549): Use explicit arrangement
+            .arrange_named::<RowSpine<_, _, _, _>>("Arranged timely peek_duration")
             .count_total_core()
             .map(|((worker, bucket), (sum, count))| {
                 Row::pack_slice(&[
