@@ -29,7 +29,7 @@ SELECT sensor_id, time, measurement_value, measurement_value - LAG(measurement_v
 FROM measurements;
 ```
 
-Certain window functions operate on a _window frame_, which is a subset of a partition. The default frame includes the rows from the first row of the partition up to the current row (or more accurately, to the last row of the peer group of the current row, where a peer group is a set of rows that are equal on both the PARTITION BY and the ORDER BY). For example, all aggregation functions can be used also as window functions (we will refer to this as _window aggregations_), where they aggregate values from inside the current window frame. The following query calculates a running total (prefix sum) of measurement values for each sensor (which wouldn't make sense for a temperature sensor, but makes sense for, e.g., a water flow sensor):
+Certain window functions operate on a _window frame_, which is a subset of a partition. The default frame includes the rows from the first row of the partition up to the current row (or more accurately, to the last row of the peer group of the current row, where a peer group is a set of rows that are equal on both the `PARTITION BY` and the `ORDER BY`). For example, all aggregation functions can be used also as window functions (we will refer to this as _window aggregations_), where they aggregate values from inside the current window frame. The following query calculates a running total (prefix sum) of measurement values for each sensor (which wouldn't make sense for a temperature sensor, but makes sense for, e.g., a water flow sensor):
 
 ```SQL
 SELECT sensor_id, time, SUM(measurement_value)
@@ -37,7 +37,35 @@ SELECT sensor_id, time, SUM(measurement_value)
 FROM measurements;
 ```
 
+Note that this query doesn't compute just one value for each partition. Instead, it calculates a value for each input row: the sum of the same sensor's measurements that happened no later than the current input row.
 
+We can also explicitly specify a frame, i.e., how far it extends from the current row, both backwards and forwards. One option is to say `UNBOUNDED PRECEDING` or `UNBOUNDED FOLLOWING`, meaning that the frame extends to the beginning or end of the current partition. Another option is to specify an offset. For example, the following query computes a moving average: 
+
+```SQL
+SELECT sensor_id, time, AVG(measurement_value)
+    OVER (ORDER BY time PARTITION BY sensor_id
+        ROWS BETWEEN 4 PRECEDING AND CURRENT ROW)
+FROM measurements;
+```
+
+In this query, the frame extends 4 rows backwards, and ends at the current row (thus containing at most 5 rows).
+
+The exact meaning of the offset depends on the _frame mode_:
+- In `ROWS` mode (such as above), the frame extends for the specified number of rows (or less, for rows near the beginning or end of the partition).
+- In `GROUPS` mode, the frame extends for the specified number of peer groups, where a peer group is a set of rows that are equal on both the `PARTITION BY` and the `ORDER BY`.
+- In `RANGE` mode, the frame extends to those rows whose difference from the current row on the `ORDER BY` column is not greater than the offset (only one ORDER BY column is allowed for this frame mode). For example, the following query computes a moving average with a frame size of 5 minutes:
+```SQL
+SELECT sensor_id, time, AVG(measurement_value)
+    OVER (ORDER BY time PARTITION BY sensor_id
+        RANGE BETWEEN '5 minutes' PRECEDING AND CURRENT ROW)
+FROM measurements;
+``` 
+
+There is also a _frame exclusion_ option, which excludes certain rows near the current row fom the frame. `EXCLUDE CURRENT ROW` excludes the current row. `EXCLUDE GROUP` excludes the current row's peer group (also excluding the current row). `EXCLUDE TIES` excludes the current row's peer group, except for the current row itself. `EXCLUDE NO OTHERS` specifies the default behavior, i.e., no exclusions.
+
+For more details, see Postgres' documentation on window functions:
+- Syntax: https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-WINDOW-FUNCTIONS
+- List of window functions: https://www.postgresql.org/docs/current/functions-window.html
 
 ## Goals
 
