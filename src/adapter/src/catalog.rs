@@ -1303,7 +1303,12 @@ impl ConnCatalog<'_> {
         }
     }
 
-    fn effective_search_path(
+    /// Returns the schemas:
+    /// - mz_catalog
+    /// - pg_catalog
+    /// - temp (if requested)
+    /// - all schemas from the session's search_path var that exist
+    pub fn effective_search_path(
         &self,
         include_temp_schema: bool,
     ) -> Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
@@ -3404,8 +3409,11 @@ impl Catalog {
     }
 
     pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
-        let database = self
-            .state
+        Self::for_session_state(&self.state, session)
+    }
+
+    pub fn for_session_state<'a>(state: &'a CatalogState, session: &'a Session) -> ConnCatalog<'a> {
+        let database = state
             .database_by_name
             .get(session.vars().database())
             .map(|id| id.clone());
@@ -3413,12 +3421,12 @@ impl Catalog {
             .vars()
             .search_path()
             .iter()
-            .map(|schema| self.resolve_schema(database.as_ref(), None, schema, session.conn_id()))
+            .map(|schema| state.resolve_schema(database.as_ref(), None, schema, session.conn_id()))
             .filter_map(|schema| schema.ok())
             .map(|schema| (schema.name().database.clone(), schema.id().clone()))
             .collect();
         ConnCatalog {
-            state: Cow::Borrowed(&self.state),
+            state: Cow::Borrowed(state),
             conn_id: session.conn_id(),
             cluster: session.vars().cluster().into(),
             database,
@@ -6256,6 +6264,10 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn active_cluster(&self) -> &str {
         &self.cluster
+    }
+
+    fn search_path(&self) -> &[(ResolvedDatabaseSpecifier, SchemaSpecifier)] {
+        &self.search_path
     }
 
     fn resolve_database(
