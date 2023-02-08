@@ -11,7 +11,9 @@ By “window functions”, this document means the `OVER` clause, e.g.,
 
 ## Window Functions
 
-SQL window functions (introduced in the SQL:2003 standard) compute a scalar value for each row, by using information from other rows. Which other rows are involved is determined by the function and an `OVER` clause that accompanies the window function call itself. For example, the following query prints each measurement and its difference from the previous measurement, where "previous" is determined by the ordering on the `time` field.
+Most of SQL is based on an unordered data model, but window functions provide access to an ordered view of data. Thereby, we can access concepts such as previous or next row, nearby rows, consecutive rows, etc. This enables certain computations that are otherwise hard to express with the rest of SQL, e.g., computing differences between consecutive rows.
+
+Window functions were introduced in the SQL:2003 standard. They compute a scalar value for each row, by using information from other, nearby rows. Exactly which other rows are involved is determined by the function and an `OVER` clause that accompanies the window function call itself. For example, the following query prints each measurement and its difference from the previous measurement, where "previous" is to be understood according to the ordering on the `time` field.
 ```SQL
 SELECT time, measurement_value, measurement_value - LAG(measurement_value) OVER (ORDER BY time)
 FROM measurements;
@@ -19,7 +21,7 @@ FROM measurements;
 The `LAG` window function computes the value of a scalar expression (here simply a reference to `measurement_value`) on data from the previous row (instead of the current row, which is normally what a scalar expression does). 
 The `OVER` clause has to directly follow the window function call (`LAG(...)` here). Note that this `ORDER BY` has no influence on the ordering of the result set of the query, it only influences the operation of `LAG`.
 
-Note that if the measurements follow each other at regular time intervals, then the same query can be written without a window function, simply with a self join. However, for arbitrary measurement times there is no good workaround without a window function.
+Note that if the measurements follow each other at regular time intervals, then the same query [can be written without a window function](https://materialize.com/docs/sql/patterns/window-functions/#laglead-for-time-series), with just a self join. However, for arbitrary measurement times there is no good workaround without a window function.
 
 We can also add a `PARTITION BY` clause inside the `OVER` clause. In this case, the window function will gather information only from those other rows that are in the same partition. For example, we can modify the above query for the situation when measurements are from multiple sensors, and we want to compute the differences only between measurements of the same sensor:
 
@@ -271,18 +273,21 @@ We'll have to generalize DD's Prefix Sum to orderings over types other than a si
 
 # Alternatives
 
+I will now discuss alternatives to various aspects of the design.
+
+## Not supporting window functions
+
+An easy way out would be to not support window functions at all. This alternative was seriously considered before, because supporting window functions seemed very hard, if not impossible. However, it turned out that [many users are requesting window function support](https://www.notion.so/materialize/Window-Functions-Use-Cases-6ad1846a7da942dc8fa28997d9c220dd). Also, we came up with efficient execution approaches that make supporting window functions feasible. Therefore, I think it is now clear that we should support window functions.
+
+## Staying with the current implementation
+
+We already have an implementation for several window functions. However, one of the main goals of Materialize is to be scalable, and our current implementation becomes extremely inefficient with large window partitions. This is because it recomputes results for an entire window partition even when just one element changes in the partition. This behavior breaks Materialize's core promise of reacting to small input changes with a small amount of computation. The issue is already quite severe with just a few hundred elements in window partitions, therefore users would run into this limitation quite often.
+
+The implementation suggested in this document would be scalable to huge window partition sizes. It parallelizes computations even inside a single partition, and therefore even partitions larger than one machine will be supported.
+
 ## Rendering alternatives
 
-This document proposes using prefix sum (with extensions/generalizations) to use for the efficient rendering of window functions, but there are several alternatives to this.
-
-### Not supporting window functions at all
-
-Many of our users are requesting window function support. See a collected list here: https://www.notion.so/materialize/Window-Functions-Use-Cases-6ad1846a7da942dc8fa28997d9c220dd
-Therefore, I think we should support window functions.
-
-### Staying with the current implementation
-
-One of the main goals of Materialize is to be scalable. However, the current implementation becomes extremely inefficient with large window partitions. This is because it recomputes results for an entire window partition even when just one element changes in the partition. Users would run into this limitation quite often.
+The main proposal of this document is to use prefix sum (with extensions/generalizations) for the efficient rendering of window functions, but there are some alternatives to this.
 
 ### Creating a custom DD operator with a custom data structure
 
@@ -290,32 +295,32 @@ TODO
 
 ## Where to put the idiom recognition?
 
-We could do the idiom recognition in the rendering instead of the MIR-to-LIR lowering. However, the lowering seems to be a more natural place for it:
-- We shouldn't have conditional code in the rendering, and this idiom recognition will be a giant piece of conditional code,
-- We want EXPLAIN PHYSICAL PLAN to show how we'll execute a window function.
-- We need to know the type of the ORDER BY columns, which we don't know in LIR. (Although we could add extra type info to window function calls.)
+This document proposes recognizing the windowing idiom (that the HIR-to-MIR lowering creates) in the MIR-to-LIR lowering. An alternative would be to do the idiom recognition in the rendering. In my opinion, the lowering is a more natural place for it, because:
+- We shouldn't have conditional code in the rendering, and this idiom recognition will be a giant piece of conditional code.
+- We want (at least) EXPLAIN PHYSICAL PLAN to show how we'll execute a window function.
+- We need to know the type of the ORDER BY columns, which we don't know in LIR. (Although we could add extra type info to window function calls to get around this issue.)
 
 ## Implement Prefix Sum in MIR (involving `LetRec`) instead of a large chunk of custom rendering code
 
-The main plan for implementing Prefix Sum is to implement it directly on DD (and represent it as one node in LIR). An alternative would be to implement Prefix Sum on MIR: The joins, reduces, iterations, etc. would be constructed not by directly calling DD functions in the rendering, but by MIR joins, MIR reduces, MIR LetRec, etc. In this case, the window function handling code would mainly operate in the HIR-to-MIR lowering: it would translate HIR's WindowExpr to MirRelationExpr.
+The main plan for implementing Prefix Sum is to implement it directly on DD (and represent it as one node in LIR). An alternative would be to implement Prefix Sum on MIR: Prefix Sum's internal joins, reduces, iterations, etc. would be constructed not by directly calling DD functions in the rendering, but by MIR joins, MIR reduces, MIR LetRec, etc. In this case, the window function handling code would mainly operate in the HIR-to-MIR lowering: it would translate HIR's WindowExpr to MirRelationExpr.
 
 Critically, the Prefix Sum algorithm involves iteration, needed for operating on the data-dependent number of levels of the tree data structure that is storing the sums. Iteration is possible to express in MIR using `LetRec`, which is our recently built infrastructure for WITH MUTUALLY RECURSIVE. However, [this infrastructure is in an experimental state at the moment](https://github.com/MaterializeInc/materialize/issues/17012). For example, the optimizer currently mostly skips the recursive parts of queries, leaving them unoptimized. This is a long way from the robust optimization that would be needed to support such a highly complex algorithm as our Prefix Sum. Therefore, I would not tie the success of the window function effort to `LetRec` at this time.
 
 Still, at some future time when we are confident in our optimizer's ability to robustly handle `LetRec`, we might revisit this decision. I'll list some pro and contra arguments for implementing Prefix Sum in MIR, putting aside the above immaturity of `LetRec`:
 
-Pro:
+Pros:
 - Prefix Sum could potentially benefit from later performance improvements from an evolving optimizer or rendering.
 - We wouldn't need to specially implement certain optimiziations for window functions, but would instead get them for free from the standard MIR optimizations. For example, [projection pushdown through window functions](https://github.com/MaterializeInc/materialize/issues/17522).
 - Optimizing Prefix Sum could be integrated with optimizing other parts of the query.
 
-Contra:
+Cons:
 - Creating MIR nodes is more cumbersome than calling DD functions. (column references by position instead of Rust variables, etc.)
 - We would need to add several scalar functions for integer bit manipulations, e.g., for extracting set bits from integers.
 - When directly writing DD code, we have access to all the power of DD, potentially enabling access to better performance than through the compiler pipeline from MIR.
 
 ## Representing window functions in each of the IRs
 
-There are several options for how to represent window functions in HIR, MIR, and LIR. For each of the IRs, I can see 3 options:
+Instead of recognizing the HIR-to-MIR lowering's window functions idiom during the MIR-to-LIR lowering, we could have an explicit representation of window functions in MIR. More generally, there are several options for how to represent window functions in HIR, MIR, and LIR. For each of the IRs, I can see 3 options:
 
 1. Create a new relation expression enum variant. This could be a dedicated variant just for window functions, or it could be a many-to-many Reduce, which would initially only handle window functions, but later we could also merge `TopK` into it. (Standard Reduce is N-to-1, TopK is N-to-K, a window function is N-to-N. There are differences also in output columns.)
 2. Hide away window functions in scalar expressions. (the current way in HIR)
@@ -334,10 +339,13 @@ In HIR, the window functions are currently in the scalar expressions (option 2. 
 
 ### MIR
 
-We need an MIR representation for two things:
+An explicit MIR representation could facilitate the following two things:
 
-- To get the window function expressions to rendering, where we’ll apply the prefix sum. (Alternatively, we could recover window functions from the patterns that get created when the current HIR lowering compiles away window functions.)
-- To have optimizer transforms for some important special cases of window functions, e.g., for TopK patterns. (Alternatively, we could apply these transforms in the HIR-to-MIR lowering.)
+- Getting the window function expressions to rendering, where we’ll apply prefix sum. (This would replace recovering window functions from the patterns that get created when the current HIR lowering compiles away window functions.)
+- Having optimizer transforms for some important special cases of window functions, e.g., for TopK patterns. (Alternatively, we could either rely on the same idiom recognition that the MIR-to-LIR lowering will rely on, or we could also apply these transforms in the HIR-to-MIR lowering.)
+
+The 3 representation options in MIR are:
+
 1. *Create a dedicated enum variant in `MirRelationExpr`:*
     - I think this is better than 2., because Map (and MirScalarExprs in general) should have the semantics that they can be evaluated by just looking at one input element, while a window function needs to look at large parts of a window partition. If we were to put window functions into scalar expressions, then we would need to check lots of existing code that is processing MirScalarExprs that they are not getting unpleasantly surprised by window functions.
     - Compared to 3., it might be easier to skip window functions in many transforms. This is both good and bad:
