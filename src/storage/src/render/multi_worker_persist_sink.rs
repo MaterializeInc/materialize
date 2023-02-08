@@ -89,10 +89,10 @@
 
 use std::any::Any;
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
@@ -116,6 +116,36 @@ use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuild
 
 use crate::source::types::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
+
+struct BatchBuilderAndCounts<K, V, T, D>
+where
+    T: timely::progress::Timestamp
+        + differential_dataflow::lattice::Lattice
+        + mz_persist_types::Codec64,
+{
+    builder: mz_persist_client::batch::BatchBuilder<K, V, T, D>,
+    inserts: u64,
+    retractions: u64,
+    error_inserts: u64,
+    error_retractions: u64,
+}
+
+impl<K, V, T, D> BatchBuilderAndCounts<K, V, T, D>
+where
+    T: timely::progress::Timestamp
+        + differential_dataflow::lattice::Lattice
+        + mz_persist_types::Codec64,
+{
+    fn new(bb: mz_persist_client::batch::BatchBuilder<K, V, T, D>) -> Self {
+        BatchBuilderAndCounts {
+            builder: bb,
+            inserts: 0,
+            retractions: 0,
+            error_inserts: 0,
+            error_retractions: 0,
+        }
+    }
+}
 
 /// Continuously writes the `desired_stream` into persist
 /// This is done via a multi-stage operator graph:
@@ -368,15 +398,25 @@ fn write_batches<G>(
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_clients: Arc<PersistClientCache>,
-) -> (Stream<G, WriterEnrichedHollowBatch<Timestamp>>, Rc<dyn Any>)
+) -> (
+    Stream<
+        G,
+        (
+            Antichain<Timestamp>,
+            Antichain<Timestamp>,
+            WriterEnrichedHollowBatch<Timestamp>,
+        ),
+    >,
+    Rc<dyn Any>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let worker_index = scope.index();
+
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
     let target_relation_desc = target.relation_desc.clone();
-
-    let worker_index = scope.index();
 
     let mut write_op =
         AsyncOperatorBuilder::new(format!("{} write_batches", operator_name), scope.clone());
@@ -392,10 +432,8 @@ where
     // upper_.
 
     let shutdown_button = write_op.build(move |_capabilities| async move {
-        // Contains `desired - persist`, reflecting the updates we would like to commit
-        // to `persist` in order to "correct" it to track `desired`. This collection is
-        // only modified by updates received from either the `desired` or `persist` inputs.
-        let mut correction = Vec::new();
+        // In-progress batches of data, keyed by timestamp.
+        let mut stashed_batches = BTreeMap::new();
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
@@ -488,7 +526,58 @@ where
                                     batch_descriptions_frontier,
                                 );
                             }
-                            correction.append(&mut data);
+
+                            // TODO: come up with a better default batch size here
+                            // (100 was chosen arbitrarily), and avoid having to make a batch
+                            // per-timestamp.
+                            for (row, ts, diff) in data.drain(..) {
+                                if write.upper().less_equal(&ts){
+                                    let builder = stashed_batches.entry(ts).or_insert_with(|| {
+                                        BatchBuilderAndCounts::new(
+                                            write.builder(
+                                                // SUBTLE:
+                                                // The choice of the minimum antichain here
+                                                // over one that contains `ts` may seem odd, but
+                                                // currently, in persist, appended batches must
+                                                // be supersets of the of the `compare_and_append`
+                                                // description. This means we must choose a lower
+                                                // that is not greater than any batch description
+                                                // that may be grouped with this batch later on.
+                                                Antichain::from_elem(
+                                                    Timestamp::minimum()
+                                                ),
+                                            ),
+                                        )
+                                    });
+
+                                    let is_value = row.is_ok();
+                                    builder
+                                        .builder
+                                        .add(&SourceData(row), &(), &ts, &diff)
+                                        .await
+                                        .expect("invalid usage");
+
+                                    // source_statistics.inc_updates_staged_by(1);
+
+                                    // Note that we assume `diff` is either +1 or -1 here, being anything
+                                    // else is a logic bug we can't handle at the metric layer. We also
+                                    // assume this addition doesn't overflow.
+                                    match (is_value, diff.is_positive()) {
+                                        (true, true) => {
+                                            builder.inserts += diff.unsigned_abs()
+                                        },
+                                        (true, false) => {
+                                            builder.retractions += diff.unsigned_abs()
+                                        },
+                                        (false, true) => {
+                                            builder.error_inserts += diff.unsigned_abs()
+                                        },
+                                        (false, false) => {
+                                            builder.error_retractions += diff.unsigned_abs()
+                                        },
+                                    }
+                                }
+                            }
 
                             continue;
                         }
@@ -543,28 +632,6 @@ where
                     ready_batches,
                 );
 
-                if !ready_batches.is_empty() {
-                    // Consolidate updates only when they are required by an
-                    // attempt to write out new updates. Otherwise, we might
-                    // spend a lot of time "consolidating" the same updates
-                    // over and over again, with no changes.
-                    consolidate_updates(&mut correction);
-
-                    // `correction` starts large as it diffs the initial snapshots,
-                    // but in steady state contains substantially fewer updates.
-                    // We should regularly shrink it to an appropriate size.
-                    // We use a 4x threshold here to ensure that we cannot enter
-                    // a resizing cycle without a linear-in-`correction.len()`
-                    // number of updates. E.g. a 2x threshold could result in
-                    // an allocation that must soon after be re-doubled back to
-                    // the current size, then halved, then doubled. We want that
-                    // pattern to require a linear number of updates rather than
-                    // a constant number.
-                    if correction.len() < correction.capacity() / 4 {
-                        correction.shrink_to_fit();
-                    }
-                }
-
                 for batch_description in ready_batches.into_iter() {
                     let cap = in_flight_batches.remove(&batch_description).unwrap();
 
@@ -579,17 +646,24 @@ where
 
                     let (batch_lower, batch_upper) = batch_description;
 
-                    let mut to_append = correction
-                        .iter()
-                        .filter(|(_, time, _)| {
+                    let mut finalized_timestamps: Vec<_> = stashed_batches
+                        .keys()
+                        .filter(|time| {
                             batch_lower.less_equal(time) && !batch_upper.less_equal(time)
                         })
-                        .map(|(data, time, diff)| ((SourceData(data.clone()), ()), time, diff))
-                        .peekable();
+                        .copied()
+                        .collect();
 
-                    let mut batch_tokens = if to_append.peek().is_some() {
-                        let batch = write
-                            .batch(to_append, batch_lower.clone(), batch_upper.clone())
+                    // TODO(guswynn): is this sorting required?
+                    finalized_timestamps.sort_unstable();
+
+                    let mut batch_tokens = vec![];
+                    for ts in finalized_timestamps {
+                        let batch = stashed_batches
+                            .remove(&ts)
+                            .unwrap()
+                            .builder
+                            .finish(batch_upper.clone())
                             .await
                             .expect("invalid usage");
 
@@ -598,15 +672,16 @@ where
                                 "persist_sink {collection_id}/{shard_id}: \
                                     wrote batch from worker {}: ({:?}, {:?})",
                                 worker_index,
-                                batch.lower(),
-                                batch.upper()
+                                batch_lower,
+                                batch_upper,
                             );
                         }
-
-                        vec![batch.into_writer_hollow_batch()]
-                    } else {
-                        vec![]
-                    };
+                        batch_tokens.push((
+                            batch_lower.clone(),
+                            batch_upper.clone(),
+                            batch.into_writer_hollow_batch(),
+                        ))
+                    }
 
                     let mut output = output.activate();
                     let mut session = output.session(&cap);
@@ -617,7 +692,8 @@ where
             } else {
                 trace!(
                     "persist_sink {collection_id}/{shard_id}: \
-                        cannot emit: current_upper: {:?}, desired_frontier: {:?}",
+                        cannot emit: current_upper: {:?}, \
+                        desired_frontier: {:?}",
                     current_upper,
                     desired_frontier
                 );
@@ -648,7 +724,14 @@ fn append_batches<G>(
     operator_name: String,
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    batches: &Stream<G, WriterEnrichedHollowBatch<Timestamp>>,
+    batches: &Stream<
+        G,
+        (
+            Antichain<Timestamp>,
+            Antichain<Timestamp>,
+            WriterEnrichedHollowBatch<Timestamp>,
+        ),
+    >,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &mut StorageState,
 ) -> Rc<dyn Any>
@@ -693,14 +776,11 @@ where
         // `Antichain` does not implement `Ord`, so we cannot use a `BTreeSet`. We need to search
         // through the set, so we cannot use the `mz_ore` wrapper either.
         #[allow(clippy::disallowed_types)]
-        let mut in_flight_descriptions = std::collections::HashSet::<
-            (Antichain<Timestamp>, Antichain<Timestamp>)
-        >::new();
+        let mut in_flight_descriptions =
+            std::collections::HashSet::<(Antichain<Timestamp>, Antichain<Timestamp>)>::new();
 
-        let mut in_flight_batches = HashMap::<
-            (Antichain<Timestamp>, Antichain<Timestamp>),
-            Vec<Batch<_, _, _, _>>,
-        >::new();
+        let mut in_flight_batches =
+            HashMap::<(Antichain<Timestamp>, Antichain<Timestamp>), Vec<Batch<_, _, _, _>>>::new();
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
         let persist_client = persist_clients
@@ -713,7 +793,7 @@ where
                 shard_id,
                 &format!("persist_sink::append_batches {}", collection_id),
                 Arc::new(target_relation_desc),
-                Arc::new(UnitSchema)
+                Arc::new(UnitSchema),
             )
             .await
             .expect("could not open persist shard");
@@ -726,8 +806,7 @@ where
             // VERY IMPORTANT: Only the active write worker must change the
             // shared upper. All other workers have already cleared this
             // upper above.
-            current_upper.borrow_mut().clone_from(write.upper()
-                                     );
+            current_upper.borrow_mut().clone_from(write.upper());
         } else {
             // The non-active workers report that they are done snapshotting.
             return;
@@ -756,7 +835,11 @@ where
                                     );
                                 }
 
-                                let is_new = in_flight_descriptions.insert(batch_description.clone());
+                                // This line has to be broken up, or
+                                // rustfmt fails in the whole function :(
+                                let is_new = in_flight_descriptions.insert(
+                                    batch_description.clone()
+                                );
 
                                 assert!(
                                     is_new,
@@ -777,9 +860,9 @@ where
                     match event {
                         Event::Data(_cap, data) => {
                             // Ingest new written batches
-                            for batch in data.drain(..) {
+                            for (lower, upper, batch) in data.drain(..) {
                                 let batch = write.batch_from_hollow_batch(batch);
-                                let batch_description = (batch.lower().clone(), batch.upper().clone());
+                                let batch_description = (lower, upper);
 
                                 let batches = in_flight_batches
                                     .entry(batch_description)
@@ -889,7 +972,7 @@ where
                         for batch in batches {
                             batch.delete().await;
                         }
-                        trace!(
+                        tracing::info!(
                             "persist_sink({}): invalid upper! \
                                 Tried to append batch ({:?} -> {:?}) but upper \
                                 is {:?}. This is not a problem, it just means \
