@@ -30,20 +30,9 @@ use crate::TransformArgs;
 
 /// Install replace certain `Get` operators with their `Let` value.
 #[derive(Debug)]
-pub struct Normalize {
-    normalize_lets: Box<crate::normalize_lets::NormalizeLets>,
-}
+pub struct NormalizeOps;
 
-impl Normalize {
-    /// Construct a new [`Normalize`] instance.
-    pub fn new() -> Normalize {
-        Normalize {
-            normalize_lets: Box::new(crate::normalize_lets::NormalizeLets::new(false)),
-        }
-    }
-}
-
-impl crate::Transform for Normalize {
+impl crate::Transform for NormalizeOps {
     fn recursion_safe(&self) -> bool {
         false
     }
@@ -52,19 +41,17 @@ impl crate::Transform for Normalize {
         target = "optimizer"
         level = "trace",
         skip_all,
-        fields(path.segment = "normalize")
+        fields(path.segment = "normalize_ops")
     )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        // (1) Normalize lets first. This might enable transforms in (2).
-        self.normalize_lets.transform_without_trace(relation)?;
-        // (2) Canonicalize and fuse various operators as a bottom-up transform.
+        // Canonicalize and fuse various operators as a bottom-up transforms.
         relation.try_visit_mut_post::<_, crate::TransformError>(
             &mut |expr: &mut MirRelationExpr| {
-                // (a) Might enable Map fusion in the next step.
+                // (a) Might enable fusion in the next step.
                 crate::canonicalization::FlatMapToMap::action(expr);
                 crate::canonicalization::TopKElision::action(expr);
                 // (b) Fuse various like-kinded operators. Might enable furhter canonicalization.
