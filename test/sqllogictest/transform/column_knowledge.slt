@@ -448,11 +448,10 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING 
 Explained Query:
   Return // { arity: 2 }
     Union // { arity: 2 }
-      Project (#1, #0) // { arity: 2 }
-        Map (234, 123) // { arity: 2 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 2 }
+      Map (123, 234) // { arity: 2 }
+        Negate // { arity: 0 }
+          Project () // { arity: 0 }
+            Get l0 // { arity: 2 }
       Get l0 // { arity: 2 }
       Get l0 // { arity: 2 }
   With
