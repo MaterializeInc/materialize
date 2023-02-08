@@ -82,6 +82,7 @@ where
             sources: BTreeMap::new(),
             sinks: BTreeMap::new(),
             uppers: BTreeMap::new(),
+            sinces: BTreeMap::new(),
             initialized: false,
             current_epoch: ClusterStartupEpoch::new(envd_epoch, 0),
             config: Default::default(),
@@ -142,6 +143,8 @@ struct RehydrationTask<T> {
     sinks: BTreeMap<GlobalId, CreateSinkCommand<T>>,
     /// The upper frontier information received.
     uppers: BTreeMap<GlobalId, Antichain<T>>,
+    /// The since frontiers that have been observed.
+    sinces: BTreeMap<GlobalId, Antichain<T>>,
     /// Set to `true` once [`StorageCommand::InitializationComplete`] has been
     /// observed.
     initialized: bool,
@@ -308,6 +311,12 @@ where
             StorageCommand::UpdateConfiguration(self.config.clone()),
             StorageCommand::CreateSources(self.sources.values().cloned().collect()),
             StorageCommand::CreateSinks(self.sinks.values().cloned().collect()),
+            StorageCommand::AllowCompaction(
+                self.sinces
+                    .iter()
+                    .map(|(id, since)| (*id, since.clone()))
+                    .collect(),
+            ),
         ];
         if self.initialized {
             commands.push(StorageCommand::InitializationComplete)
@@ -414,6 +423,9 @@ where
                 }
             }
             StorageCommand::AllowCompaction(frontiers) => {
+                // Remember for rehydration!
+                self.sinces.extend(frontiers.iter().cloned());
+
                 for (id, frontier) in frontiers {
                     match self.sinks.get_mut(id) {
                         Some(export) => {
@@ -453,6 +465,7 @@ where
                     self.sources.remove(id);
                     self.sinks.remove(id);
                     self.uppers.remove(id);
+                    self.sinces.remove(id);
                 }
                 Some(StorageResponse::DroppedIds(dropped_ids))
             }
