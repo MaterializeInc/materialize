@@ -216,6 +216,7 @@ use crate::source::types::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
 
 mod debezium;
+mod multi_worker_persist_sink;
 mod persist_sink;
 pub mod sinks;
 pub mod sources;
