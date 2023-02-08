@@ -43,10 +43,6 @@ connections. They are always created in the special `mz_temp` schema.
 Temporary views may depend upon other temporary database objects, but non-temporary
 views may not depend on temporary objects.
 
-### Limitations
-
-You cannot use a `NATURAL JOIN` or `*` expression in the same view as a system object.
-
 ## Examples
 
 ### Creating a view
