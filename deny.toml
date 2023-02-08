@@ -146,10 +146,6 @@ license-files = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-git = [
-    # Waiting on https://github.com/tokio-rs/axum/pull/1598 to make it into a
-    # release.
-    "https://github.com/tokio-rs/axum.git",
-
     # Waiting for a new release of strip-ansi-escapes that avoids the indirect
     # dependency on arrayvec v0.5.2 via a dependency on vte v0.10.1.
     "https://github.com/alacritty/vte",
