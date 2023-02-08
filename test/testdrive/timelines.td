@@ -155,7 +155,9 @@ contains:multiple timelines within one dataflow are not supported
 > CREATE VIEW values_system_view AS SELECT * FROM input_values_view, source_system;
 > CREATE VIEW values_system_user_view AS SELECT * FROM input_values_view, source_system_user;
 > CREATE VIEW values_cdcv2_view AS SELECT * FROM input_values_view, source_cdcv2;
-> CREATE VIEW values_mz_catalog_view (a, b, c, d, e, f, g, h, i, j, k) AS SELECT * FROM mz_relations, input_values_view, mz_views;
+> CREATE VIEW values_mz_catalog_view (a, b, c, d, e, f, g, h, i, j, k)
+  AS SELECT mz_relations.id, mz_relations.oid, mz_relations.schema_id, mz_relations.name, mz_relations.type, input_values_view.column1, mz_views.id, mz_views.oid, mz_views.schema_id, mz_views.name, mz_views.definition
+  FROM mz_relations, input_values_view, mz_views;
 
 # In case the environment has other replicas
 > SET cluster_replica = r1
@@ -168,11 +170,17 @@ contains:multiple timelines within one dataflow are not supported
 1
 
 # System things should be joinable only with system sources.
-! CREATE VIEW must_fail (a, b, c, d, e, f, g, h, i, j, k, l) AS SELECT * FROM mz_relations, mz_views, source_cdcv2;
+! CREATE VIEW must_fail (a, b, c, d, e, f, g, h, i, j, k, l)
+  AS SELECT mz_relations.id, mz_relations.oid, mz_relations.schema_id, mz_relations.name, mz_relations.type, mz_views.id, mz_views.oid, mz_views.schema_id, mz_views.name, mz_views.definition, source_cdcv2.id, source_cdcv2.price
+  FROM mz_relations, mz_views, source_cdcv2;
 contains:multiple timelines within one dataflow are not supported
-> CREATE VIEW various_system_no_cdcv2 (a, b, c, d, e, f, g, h, i, j, k) AS SELECT * FROM mz_relations, mz_views, source_system;
+> CREATE VIEW various_system_no_cdcv2 (a, b, c, d, e, f, g, h, i, j, k)
+  AS SELECT mz_relations.id, mz_relations.oid, mz_relations.schema_id, mz_relations.name, mz_relations.type, mz_views.id, mz_views.oid, mz_views.schema_id, mz_views.name, mz_views.definition, source_system.data
+  FROM mz_relations, mz_views, source_system;
 
-> CREATE VIEW various_system_table (a, b, c, d, e, f, g, h, i, j, k) AS SELECT * FROM mz_relations, mz_views, input_table;
+> CREATE VIEW various_system_table (a, b, c, d, e, f, g, h, i, j, k)
+  AS SELECT mz_relations.id, mz_relations.oid, mz_relations.schema_id, mz_relations.name, mz_relations.type, mz_views.id, mz_views.oid, mz_views.schema_id, mz_views.name, mz_views.definition, input_table.a
+  FROM mz_relations, mz_views, input_table;
 
 # EXPLAIN should complain too.
 ! EXPLAIN SELECT * FROM source_system, source_cdcv2;

@@ -36,6 +36,10 @@ pub enum AdapterError {
         as_of: mz_repr::Timestamp,
         up_to: mz_repr::Timestamp,
     },
+    /// Attempted to use a potentially ambiguous column reference expression with a system table.
+    // We don't allow this until https://github.com/MaterializeInc/materialize/issues/16650 is
+    // resolved because it prevents us from adding columns to system tables.
+    AmbiguousSystemColumnReference,
     /// An error occurred in a catalog operation.
     Catalog(catalog::Error),
     /// The cached plan or descriptor changed.
@@ -210,6 +214,10 @@ impl AdapterError {
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
+            AdapterError::AmbiguousSystemColumnReference => {
+                Some("This is a limitation in Materialize that will be lifted in a future release. \
+                See https://github.com/MaterializeInc/materialize/issues/16650 for details.".to_string())
+            },
             AdapterError::Catalog(c) => c.detail(),
             AdapterError::Eval(e) => e.detail(),
             AdapterError::RelationOutsideTimeDomain { relations, names } => Some(format!(
@@ -260,6 +268,11 @@ impl AdapterError {
     /// Reports a hint for the user about how the error could be fixed.
     pub fn hint(&self) -> Option<String> {
         match self {
+            AdapterError::AmbiguousSystemColumnReference => Some(
+                "Rewrite the view to refer to all columns by name. Expand all wildcards and \
+                convert all NATURAL JOINs to USING joins."
+                    .to_string(),
+            ),
             AdapterError::Catalog(c) => c.hint(),
             AdapterError::ConstrainedParameter {
                 valid_values: Some(valid_values),
@@ -328,6 +341,13 @@ impl fmt::Display for AdapterError {
                     f,
                     r#"subscription lower ("as of") bound is beyond its upper ("up to") bound: {} < {}"#,
                     up_to, as_of
+                )
+            }
+            AdapterError::AmbiguousSystemColumnReference => {
+                write!(
+                    f,
+                    "cannot use wildcard expansions or NATURAL JOINs in a view that depends on \
+                    system objects"
                 )
             }
             AdapterError::ModifyLinkedCluster { cluster_name, .. } => {

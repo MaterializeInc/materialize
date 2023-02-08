@@ -1618,7 +1618,7 @@ pub const MZ_SOURCE_STATUSES: BuiltinView = BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_source_statuses AS
 WITH latest_events AS (
-    SELECT DISTINCT ON(source_id) *
+    SELECT DISTINCT ON(source_id) occurred_at, source_id, status, error, details
     FROM mz_internal.mz_source_status_history
     ORDER BY source_id, occurred_at DESC
 )
@@ -1650,7 +1650,7 @@ pub const MZ_SINK_STATUSES: BuiltinView = BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_sink_statuses AS
 WITH latest_events AS (
-    SELECT DISTINCT ON(sink_id) *
+    SELECT DISTINCT ON(sink_id) occurred_at, sink_id, status, error, details
     FROM mz_internal.mz_sink_status_history
     ORDER BY sink_id, occurred_at DESC
 )
@@ -1952,7 +1952,7 @@ pub const PG_CLASS: BuiltinView = BuiltinView {
     0::pg_catalog.oid AS reltablespace,
     -- MZ doesn't use TOAST tables so reltoastrelid is filled with 0
     0::pg_catalog.oid AS reltoastrelid,
-    EXISTS (SELECT * FROM mz_catalog.mz_indexes where mz_indexes.on_id = class_objects.id) AS relhasindex,
+    EXISTS (SELECT id, oid, name, on_id, cluster_id FROM mz_catalog.mz_indexes where mz_indexes.on_id = class_objects.id) AS relhasindex,
     -- MZ doesn't have unlogged tables and because of (https://github.com/MaterializeInc/materialize/issues/8805)
     -- temporary objects don't show up here, so relpersistence is filled with 'p' for permanent.
     -- TODO(jkosh44): update this column when issue is resolved.
@@ -2219,7 +2219,7 @@ pub const PG_SETTINGS: BuiltinView = BuiltinView {
     name: "pg_settings",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_catalog.pg_settings AS SELECT
-    *
+    name, setting
 FROM (VALUES
     ('max_index_keys'::pg_catalog.text, '1000'::pg_catalog.text)
 ) AS _ (name, setting)",

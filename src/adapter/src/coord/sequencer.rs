@@ -1395,12 +1395,52 @@ impl Coordinator {
         );
     }
 
+    /// Validates that a view definition does not contain any expressions that may lead to
+    /// ambiguous column references to system tables. For example `NATURAL JOIN` or `SELECT *`.
+    ///
+    /// We prevent these expressions so that we can add columns to system tables without
+    /// changing the definition of the view.
+    ///
+    /// Here is a bit of a hand wavy proof as to why we only need to check the
+    /// immediate view definition for system objects and ambiguous column
+    /// references, and not the entire dependency tree:
+    ///
+    ///   - A view with no object references cannot have any ambiguous column
+    ///   references to a system object, because it has no system objects.
+    ///   - A view with a direct reference to a system object and a * or
+    ///   NATURAL JOIN will be rejected due to ambiguous column references.
+    ///   - A view with system objects but no * or NATURAL JOINs cannot have
+    ///   any ambiguous column references to a system object, because all column
+    ///   references are explicitly named.
+    ///   - A view with * or NATURAL JOINs, that doesn't directly reference a
+    ///   system object cannot have any ambiguous column references to a system
+    ///   object, because there are no system objects in the top level view and
+    ///   all sub-views are guaranteed to have no ambiguous column references to
+    ///   system objects.
+    fn validate_system_column_references(
+        &self,
+        uses_ambiguous_columns: bool,
+        depends_on: &Vec<GlobalId>,
+    ) -> Result<(), AdapterError> {
+        if uses_ambiguous_columns
+            && depends_on
+                .iter()
+                .any(|id| id.is_system() && self.catalog.get_entry(id).is_relation())
+        {
+            Err(AdapterError::AmbiguousSystemColumnReference)
+        } else {
+            Ok(())
+        }
+    }
+
     async fn sequence_create_view(
         &mut self,
         session: &mut Session,
         plan: CreateViewPlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
+        self.validate_system_column_references(plan.ambiguous_columns, &depends_on)?;
+
         let if_not_exists = plan.if_not_exists;
         let ops = self
             .generate_view_ops(
@@ -1484,6 +1524,7 @@ impl Coordinator {
                 },
             replace,
             if_not_exists,
+            ambiguous_columns,
         } = plan;
 
         if !self
@@ -1499,6 +1540,8 @@ impl Coordinator {
         }
 
         self.validate_timeline_context(depends_on.clone())?;
+
+        self.validate_system_column_references(ambiguous_columns, &depends_on)?;
 
         // Materialized views are not allowed to depend on log sources, as replicas
         // are not producing the same definite collection for these.

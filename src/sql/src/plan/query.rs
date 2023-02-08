@@ -2814,6 +2814,7 @@ fn expand_select_item<'a>(
             expr: Expr::QualifiedWildcard(table_name),
             alias: _,
         } => {
+            *ecx.qcx.scx.ambiguous_columns.borrow_mut() = true;
             let table_name =
                 normalize::unresolved_object_name(UnresolvedObjectName(table_name.clone()))?;
             let out: Vec<_> = ecx
@@ -2836,6 +2837,7 @@ fn expand_select_item<'a>(
             expr: Expr::WildcardAccess(sql_expr),
             alias: _,
         } => {
+            *ecx.qcx.scx.ambiguous_columns.borrow_mut() = true;
             // A bit silly to have to plan the expression here just to get its
             // type, since we throw away the planned expression, but fixing this
             // requires a separate semantic analysis phase. Luckily this is an
@@ -2884,6 +2886,7 @@ fn expand_select_item<'a>(
             Ok(items)
         }
         SelectItem::Wildcard => {
+            *ecx.qcx.scx.ambiguous_columns.borrow_mut() = true;
             let items: Vec<_> = ecx
                 .scope
                 .items
@@ -2969,6 +2972,10 @@ fn plan_join(
             kind,
         )?,
         JoinConstraint::Natural => {
+            // We shouldn't need to set ambiguous_columns on both the right and left qcx since they
+            // have the same scx. However, it doesn't hurt to be safe.
+            *left_qcx.scx.ambiguous_columns.borrow_mut() = true;
+            *right_qcx.scx.ambiguous_columns.borrow_mut() = true;
             let left_column_names = left_scope.column_names();
             let right_column_names: BTreeSet<_> = right_scope.column_names().collect();
             let column_names: Vec<_> = left_column_names

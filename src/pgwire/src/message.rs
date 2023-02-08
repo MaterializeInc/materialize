@@ -314,6 +314,7 @@ impl ErrorResponse {
             // DATA_EXCEPTION to match what Postgres returns for degenerate
             // range bounds
             AdapterError::AbsurdSubscribeBounds { .. } => SqlState::DATA_EXCEPTION,
+            AdapterError::AmbiguousSystemColumnReference => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::BadItemInStorageCluster { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Catalog(_) => SqlState::INTERNAL_ERROR,
             AdapterError::ChangedPlan => SqlState::FEATURE_NOT_SUPPORTED,
