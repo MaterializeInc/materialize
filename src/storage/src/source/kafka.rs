@@ -88,7 +88,7 @@ pub struct KafkaSourceReader {
     include_headers: bool,
     /// The latest status detected by the metadata refresh thread.
     health_status: Arc<Mutex<Option<HealthStatus>>>,
-    /// Per partition uapabilities used to produce messages
+    /// Per partition capabilities used to produce messages
     partition_data_capabilities:
         HashMap<PartitionId, Capability<Partitioned<PartitionId, MzOffset>>>,
     partition_upper_capabilities:

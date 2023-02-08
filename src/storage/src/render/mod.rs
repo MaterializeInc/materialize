@@ -31,7 +31,7 @@
 //! type is `IntoTime`. Timely dataflows are organized in scopes where each scope has an associated
 //! timestamp type that must refine the timestamp type of its parent scope. What "refines" means is
 //! defined by the [`timely::progress::timestamp::Refines`] trait in timely. `FromTime` however
-//! does not refine `IntoTime` nor does `IntoTime` refines `FromTime`.
+//! does not refine `IntoTime` nor does `IntoTime` refine `FromTime`.
 //!
 //! In order to acomplish this we split ingestion dataflows in two scopes, both of which are
 //! children of the root timely scope. The first scope is timestamped with `FromTime` and the
@@ -153,7 +153,7 @@
 //!
 //! Whenever a dataflow edge crosses the scope boundaries it must first be converted into a
 //! captured stream via the `[mz_timely_util::capture::UnboundedTokioCapture`] utility. This
-//! disassociated the stream and its progress information from the original timely scope and allows
+//! disassociates the stream and its progress information from the original timely scope and allows
 //! it to be read from a different place. The downside of this mechanism is that it's invisible to
 //! timely's progress tracking, but that seems like a necessary evil if we want to do reclocking.
 //!
@@ -174,7 +174,7 @@
 //!
 //! At this point we have a timely stream with correctly timestamped data in the mz time domain
 //! (`mz_repr::Timestamp`) which contains multiplexed messages for each of the potential subsources
-//! of this source. Each message selects the output it belongs to by setting output field in
+//! of this source. Each message selects the output it belongs to by setting the output field in
 //! [`crate::source::types::SourceMessage`]. By convention, the main source output is always output
 //! zero and subsources get the outputs from one onwards.
 //!
@@ -185,7 +185,7 @@
 //!
 //! #### Resumption frontier
 //!
-//! At the end each per-output dataflow fragment is an instance of `persist_sink`, which is
+//! At the end of each per-output dataflow fragment is an instance of `persist_sink`, which is
 //! responsible for writing the final `Row` data into the corresponding output shard. The durable
 //! upper of each of the output shards is then recombined in a way that calculates the minimum
 //! upper frontier between them. This is what we refer to as the "resumption frontier" or "resume
