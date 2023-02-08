@@ -235,7 +235,7 @@ For per-worker frontier information, see
 Field       | Type       | Meaning
 ------------|------------|--------
 `export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
-`import_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables) or [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views).
+`import_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables) or [`mz_compute_exports.export_id`](#mz_compute_exports).
 `time`      | [`mz_timestamp`] | The next timestamp at which the source instantiation may change.
 
 ### `mz_message_counts`
@@ -421,7 +421,7 @@ corresponding [dataflow] frontiers.
 Field       | Type          | Meaning
 ------------|---------------|--------
 `export_id` | [`text`]      | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
-`import_id` | [`text`]      | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](../mz_catalog#mz_sources) or [`mz_tables.id`](../mz_catalog#mz_tables) or [`mz_materialized_views.id`](../mz_catalog#mz_materialized_views).
+`import_id` | [`text`]      | The ID of the input source object for the dataflow. Corresponds to either [`mz_sources.id`](../mz_catalog#mz_sources) or [`mz_tables.id`](../mz_catalog#mz_tables) or [`mz_compute_exports.export_id`](#mz_compute_exports).
 `worker_id` | [`bigint`]    | The ID of the worker thread hosting the dataflow.
 `delay`     | [`interval`]  | The upper bound of the bucket as an interval.
 `count`     | [`bigint`]    | The (noncumulative) count of delay measurements in this bucket.
@@ -467,7 +467,7 @@ For frontier information aggregated across all workers, see
 Field       | Type       | Meaning
 ------------|------------|--------
 `export_id` | [`text`]   | The ID of the index or materialized view that created the dataflow. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports).
-`source_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables) or [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views).
+`source_id` | [`text`]   | The ID of the input source object for the dataflow. Corresponds to either [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables) or [`mz_compute_exports.export_id`](#mz_compute_exports).
 `worker_id` | [`bigint`] | The ID of the worker thread hosting the dataflow.
 `time`      | [`mz_timestamp`] | The next timestamp at which the dataflow may change.
 

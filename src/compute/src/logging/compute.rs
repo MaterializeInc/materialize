@@ -16,12 +16,16 @@ use std::time::Duration;
 
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::count::CountTotal;
+use differential_dataflow::trace::TraceReader;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::Filter;
+use timely::dataflow::operators::{Filter, InspectCore};
+use timely::dataflow::{Scope, StreamCore};
 use timely::logging::WorkerIdentifier;
+use timely::Container;
 use tracing::error;
 use uuid::Uuid;
 
@@ -495,4 +499,73 @@ pub fn construct<A: Allocate>(
     });
 
     traces
+}
+
+pub(crate) trait LogImportFrontiers {
+    fn log_import_frontiers(
+        self,
+        logger: Logger,
+        import_id: GlobalId,
+        export_ids: Vec<GlobalId>,
+    ) -> Self;
+}
+
+impl<G, C> LogImportFrontiers for StreamCore<G, C>
+where
+    G: Scope<Timestamp = Timestamp>,
+    C: Container,
+{
+    fn log_import_frontiers(
+        self,
+        logger: Logger,
+        import_id: GlobalId,
+        export_ids: Vec<GlobalId>,
+    ) -> Self {
+        let mut previous_time = None;
+        self.inspect_container(move |event| {
+            if let Err(frontier) = event {
+                if let Some(previous) = previous_time {
+                    for &export_id in export_ids.iter() {
+                        logger.log(ComputeEvent::ImportFrontier {
+                            import_id,
+                            export_id,
+                            time: previous,
+                            diff: -1,
+                        });
+                    }
+                }
+                if let Some(time) = frontier.get(0) {
+                    for &export_id in export_ids.iter() {
+                        logger.log(ComputeEvent::ImportFrontier {
+                            import_id,
+                            export_id,
+                            time: *time,
+                            diff: 1,
+                        });
+                    }
+                    previous_time = Some(*time);
+                } else {
+                    previous_time = None;
+                }
+            }
+        })
+    }
+}
+
+impl<G, Tr> LogImportFrontiers for Arranged<G, Tr>
+where
+    G: Scope<Timestamp = Timestamp>,
+    Tr: TraceReader + Clone,
+{
+    fn log_import_frontiers(
+        mut self,
+        logger: Logger,
+        import_id: GlobalId,
+        export_ids: Vec<GlobalId>,
+    ) -> Self {
+        self.stream = self
+            .stream
+            .log_import_frontiers(logger, import_id, export_ids);
+        self
+    }
 }

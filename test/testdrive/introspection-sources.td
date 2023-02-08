@@ -106,6 +106,34 @@ true
     time > 0
 16
 
+> CREATE MATERIALIZED VIEW mvv AS SELECT * FROM vv
+
+> SELECT COUNT(*)
+  FROM (SELECT DISTINCT delays.export_id, delays.import_id
+        FROM
+            mz_internal.mz_raw_worker_compute_delays AS delays)
+3
+
+> SELECT COUNT(*)
+  FROM (SELECT DISTINCT import_frontiers.export_id, import_frontiers.import_id
+        FROM
+            mz_internal.mz_worker_compute_import_frontiers AS import_frontiers)
+3
+
+> DROP MATERIALIZED VIEW mvv
+
+> SELECT COUNT(*)
+  FROM (SELECT DISTINCT delays.export_id, delays.import_id
+        FROM
+            mz_internal.mz_raw_worker_compute_delays AS delays)
+2
+
+> SELECT COUNT(*)
+  FROM (SELECT DISTINCT import_frontiers.export_id, import_frontiers.import_id
+        FROM
+            mz_internal.mz_worker_compute_import_frontiers AS import_frontiers)
+2
+
 > DROP INDEX vv_primary_idx
 
 > SELECT COUNT(*)
