@@ -115,8 +115,8 @@ pub mod monotonic;
 pub mod movement;
 pub mod nonnull_requirements;
 pub mod nonnullable;
-pub mod normalize;
 pub mod normalize_lets;
+pub mod normalize_ops;
 pub mod ordering;
 pub mod predicate_pushdown;
 pub mod projection_lifting;
@@ -383,6 +383,24 @@ impl Transform for FuseAndCollapse {
     }
 }
 
+/// Construct a normalizing transform that runs transforms that normalize the
+/// structure of the tree until a fixpoint.
+///
+/// Care needs to be taken to ensure that the fixpoint converges for every
+/// possible input tree. If this is not the case, there are two possibilities:
+/// 1. The rewrite loop runs enters an oscillating cycle.
+/// 2. The expression grows without bound.
+pub fn normalize() -> crate::Fixpoint {
+    crate::Fixpoint {
+        name: "normalize",
+        limit: 100,
+        transforms: vec![
+            Box::new(crate::normalize_lets::NormalizeLets::new(false)),
+            Box::new(crate::normalize_ops::NormalizeOps),
+        ],
+    }
+}
+
 /// A naive optimizer for relation expressions.
 ///
 /// The optimizer currently applies only peep-hole optimizations, from a limited
@@ -402,7 +420,7 @@ impl Optimizer {
     pub fn logical_optimizer() -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
             // 1. Structure-agnostic cleanup
-            Box::new(crate::normalize::Normalize::new()),
+            Box::new(normalize()),
             Box::new(crate::nonnull_requirements::NonNullRequirements::default()),
             // 2. Collapse constants, joins, unions, and lets as much as possible.
             // TODO: lift filters/maps to maximize ability to collapse
