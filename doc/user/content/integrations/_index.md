@@ -144,12 +144,12 @@ Materialize integrates with dbt through the [`dbt-materialize`](https://github.c
 
 ### SQL clients
 
-| Service      | Support level                    | Notes                                                                                                            |             |
-| ------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ----------- |
-| DBeaver      | {{< supportLevel production >}}  | Connect using the [PostgreSQL database driver](https://hevodata.com/learn/dbeaver-postgresql/#a5).               |             |
-| DataGrip IDE | {{< supportLevel in-progress >}} | Not supported yet {{% gh 9720 %}}. Subscribe via "Notify Me" to register interest.                               | [](#notify) |
-| pgAdmin      | {{< supportLevel in-progress >}} | Not supported yet {{% gh 5874 %}}. Subscribe via "Notify Me" to register interest.                               | [](#notify) |
-| TablePlus    | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://tableplus.com/blog/2019/09/jdbc-connection-strings.html). | [](#notify) |
+| Service      | Support level                    | Notes                                                                                                                                                                                                                                                                             |             |
+| ------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| DBeaver      | {{< supportLevel production >}}  | Connect using the [PostgreSQL database driver](https://hevodata.com/learn/dbeaver-postgresql/#a5).                                                                                                                                                                                |             |
+| DataGrip IDE | {{< supportLevel beta >}}        | Connect using the [PostgreSQL database driver](https://www.jetbrains.com/datagrip/features/postgresql/) with [introspection disabled](https://intellij-support.jetbrains.com/hc/en-us/community/posts/360010694760-How-to-turn-off-automatic-database-introspection-in-Datagrip). |             |
+| pgAdmin      | {{< supportLevel in-progress >}} | Not supported yet {{% gh 5874 %}}. Subscribe via "Notify Me" to register interest.                                                                                                                                                                                                | [](#notify) |
+| TablePlus    | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://tableplus.com/blog/2019/09/jdbc-connection-strings.html).                                                                                                                                                                  | [](#notify) |
 
 👋 _Is there another SQL client you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
 
