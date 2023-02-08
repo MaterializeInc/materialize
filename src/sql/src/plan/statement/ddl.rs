@@ -57,8 +57,8 @@ use mz_storage_client::types::sources::{
     GenericSourceConnection, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
     KinesisSourceConnection, LoadGenerator, LoadGeneratorSourceConnection,
     PostgresSourceConnection, PostgresSourcePublicationDetails,
-    ProtoPostgresSourcePublicationDetails, S3SourceConnection, SourceDesc, SourceEnvelope,
-    TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    ProtoPostgresSourcePublicationDetails, S3SourceConnection, SourceConnection, SourceDesc,
+    SourceEnvelope, TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 
 use crate::ast::display::AstDisplay;
@@ -506,7 +506,7 @@ pub fn plan_create_source(
                 }
             }
 
-            let connection = GenericSourceConnection::Kafka(connection);
+            let connection = GenericSourceConnection::from(connection);
 
             (connection, encoding, None)
         }
@@ -533,7 +533,7 @@ pub fn plan_create_source(
             };
 
             let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
-            let connection = GenericSourceConnection::Kinesis(KinesisSourceConnection {
+            let connection = GenericSourceConnection::from(KinesisSourceConnection {
                 connection_id: connection_item.id(),
                 stream_name,
                 aws,
@@ -574,7 +574,7 @@ pub fn plan_create_source(
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 sql_bail!("S3 sources do not support key decoding");
             }
-            let connection = GenericSourceConnection::S3(S3SourceConnection {
+            let connection = GenericSourceConnection::from(S3SourceConnection {
                 connection_id: connection_item.id(),
                 key_sources: converted_sources,
                 pattern: pattern
@@ -787,7 +787,7 @@ pub fn plan_create_source(
             let publication_details = PostgresSourcePublicationDetails::from_proto(details)
                 .map_err(|e| sql_err!("{}", e))?;
 
-            let connection = GenericSourceConnection::Postgres(PostgresSourceConnection {
+            let connection = GenericSourceConnection::from(PostgresSourceConnection {
                 connection,
                 connection_id: connection_item.id(),
                 table_casts,
@@ -818,17 +818,16 @@ pub fn plan_create_source(
 
             let encoding = load_generator.data_encoding();
 
-            let connection =
-                GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
-                    load_generator,
-                    tick_micros,
-                });
+            let connection = GenericSourceConnection::from(LoadGeneratorSourceConnection {
+                load_generator,
+                tick_micros,
+            });
 
             (connection, encoding, available_subsources)
         }
         CreateSourceConnection::TestScript { desc_json } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM TEST SCRIPT")?;
-            let connection = GenericSourceConnection::TestScript(TestScriptSourceConnection {
+            let connection = GenericSourceConnection::from(TestScriptSourceConnection {
                 desc_json: desc_json.clone(),
             });
             // we just use the encoding from the format and envelope
@@ -892,15 +891,13 @@ pub fn plan_create_source(
         subsource_exports.insert(target_id, *idx);
     }
 
-    if let GenericSourceConnection::Postgres(PostgresSourceConnection { table_casts, .. }) =
-        &mut external_connection
-    {
+    if let GenericSourceConnection::Postgres(conn) = &mut external_connection {
         // Now that we know which subsources sources we want, we can remove all
         // unused table casts from this connection; this represents the
         // authoritative statement about which publication tables should be
         // used within storage.
         let used_pos: BTreeSet<_> = subsource_exports.values().collect();
-        table_casts.retain(|pos, _| used_pos.contains(pos));
+        conn.table_casts.retain(|pos, _| used_pos.contains(pos));
     }
 
     let (key_desc, value_desc) = encoding.desc()?;

@@ -75,7 +75,7 @@ use mz_storage_client::types::parameters::StorageParameters;
 use mz_storage_client::types::sinks::{
     SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder,
 };
-use mz_storage_client::types::sources::{SourceDesc, SourceEnvelope, Timeline};
+use mz_storage_client::types::sources::{SourceConnection, SourceDesc, SourceEnvelope, Timeline};
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
@@ -1512,7 +1512,7 @@ impl Source {
     /// Type of the source.
     pub fn source_type(&self) -> &str {
         match &self.data_source {
-            DataSourceDesc::Ingestion(ingestion) => ingestion.desc.name(),
+            DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.name(),
             DataSourceDesc::Source => "subsource",
             DataSourceDesc::Introspection(_) => "source",
         }

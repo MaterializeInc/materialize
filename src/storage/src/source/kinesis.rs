@@ -16,7 +16,6 @@ use aws_sdk_kinesis::error::GetRecordsError;
 use aws_sdk_kinesis::output::GetRecordsOutput;
 use aws_sdk_kinesis::types::SdkError;
 use aws_sdk_kinesis::Client as KinesisClient;
-use once_cell::sync::Lazy;
 use prometheus::core::AtomicI64;
 use timely::dataflow::operators::Capability;
 use timely::progress::Antichain;
@@ -26,12 +25,12 @@ use tracing::error;
 
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceErrorDetails;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::{KinesisSourceConnection, MzOffset, KINESIS_PROGRESS_DESC};
+use mz_storage_client::types::sources::{KinesisSourceConnection, MzOffset};
 
 use crate::source::commit::LogCommitter;
 use crate::source::metrics::KinesisMetrics;
@@ -134,8 +133,6 @@ impl KinesisSourceReader {
 impl SourceConnectionBuilder for KinesisSourceConnection {
     type Reader = KinesisSourceReader;
     type OffsetCommitter = LogCommitter;
-
-    const REMAP_RELATION_DESC: Lazy<RelationDesc> = Lazy::new(|| KINESIS_PROGRESS_DESC.clone());
 
     fn into_reader(
         self,

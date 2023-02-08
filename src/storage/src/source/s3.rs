@@ -41,7 +41,6 @@ use aws_sdk_sqs::model::{ChangeMessageVisibilityBatchRequestEntry, Message as Sq
 use aws_sdk_sqs::Client as SqsClient;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use globset::GlobMatcher;
-use once_cell::sync::Lazy;
 use timely::dataflow::operators::Capability;
 use timely::progress::Antichain;
 use timely::scheduling::SyncActivator;
@@ -54,14 +53,12 @@ use tracing::{debug, error, trace, warn};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_ore::retry::{Retry, RetryReader};
 use mz_ore::task;
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_storage_client::types::connections::aws::AwsConfig;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::{
-    Compression, MzOffset, S3KeySource, S3SourceConnection, S3_PROGRESS_DESC,
-};
+use mz_storage_client::types::sources::{Compression, MzOffset, S3KeySource, S3SourceConnection};
 
 use self::metrics::{BucketMetrics, ScanBucketMetrics};
 use self::notifications::{Event, EventType, TestEvent};
@@ -815,8 +812,6 @@ where
 impl SourceConnectionBuilder for S3SourceConnection {
     type Reader = S3SourceReader;
     type OffsetCommitter = LogCommitter;
-
-    const REMAP_RELATION_DESC: Lazy<RelationDesc> = Lazy::new(|| S3_PROGRESS_DESC.clone());
 
     fn into_reader(
         self,

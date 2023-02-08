@@ -624,7 +624,7 @@ mod tests {
     use mz_persist_client::cfg::PersistConfig;
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
-    use mz_repr::{GlobalId, RelationDesc, Timestamp};
+    use mz_repr::{GlobalId, RelationDesc, ScalarType, Timestamp};
     use mz_storage_client::controller::CollectionMetadata;
     use mz_storage_client::types::sources::{MzOffset, SourceData};
     use mz_storage_client::util::remap_handle::RemapHandle;
@@ -637,6 +637,18 @@ mod tests {
         let mut persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         persistcfg.reader_lease_duration = PERSIST_READER_LEASE_TIMEOUT_MS;
         Arc::new(PersistClientCache::new(persistcfg, &MetricsRegistry::new()))
+    });
+
+    static PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+        RelationDesc::empty()
+            .with_column(
+                "partition",
+                ScalarType::Range {
+                    element_type: Box::new(ScalarType::Int32),
+                }
+                .nullable(false),
+            )
+            .with_column("offset", ScalarType::UInt64.nullable(true))
     });
 
     async fn make_test_operator(
@@ -676,7 +688,7 @@ mod tests {
             "unittest",
             0,
             1,
-            mz_storage_client::types::sources::KAFKA_PROGRESS_DESC.clone(),
+            PROGRESS_DESC.clone(),
         )
         .await
         .unwrap();
@@ -1347,7 +1359,7 @@ mod tests {
             .open_leased_reader::<SourceData, (), Timestamp, Diff>(
                 binding_shard,
                 "test_since_hold",
-                Arc::new(mz_storage_client::types::sources::KAFKA_PROGRESS_DESC.clone()),
+                Arc::new(PROGRESS_DESC.clone()),
                 Arc::new(UnitSchema),
             )
             .await

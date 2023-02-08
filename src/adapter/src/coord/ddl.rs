@@ -28,9 +28,7 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_storage_client::controller::{CreateExportToken, ExportDescription};
 use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
-use mz_storage_client::types::sources::{
-    GenericSourceConnection, PostgresSourceConnection, Timeline,
-};
+use mz_storage_client::types::sources::{GenericSourceConnection, Timeline};
 
 use crate::catalog::{
     CatalogItem, CatalogState, DataSourceDesc, Op, Sink, StorageSinkConnectionState,
@@ -109,19 +107,16 @@ impl Coordinator {
                         sources_to_drop.push(*id);
                         if let DataSourceDesc::Ingestion(ingestion) = &source.data_source {
                             match &ingestion.desc.connection {
-                                GenericSourceConnection::Postgres(PostgresSourceConnection {
-                                    connection,
-                                    publication_details,
-                                    ..
-                                }) => {
-                                    let config = connection
+                                GenericSourceConnection::Postgres(conn) => {
+                                    let config = conn
+                                        .connection
                                         .config(&*self.connection_context.secrets_reader)
                                         .await
                                         .unwrap_or_else(|e| {
                                             panic!("Postgres source {id} missing secrets: {e}")
                                         });
                                     replication_slots_to_drop
-                                        .push((config, publication_details.slot.clone()));
+                                        .push((config, conn.publication_details.slot.clone()));
                                 }
                                 _ => {}
                             }
