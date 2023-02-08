@@ -14,7 +14,7 @@ disable_list: true
 
 {{< warning >}}
 Views that directly reference these objects cannot include `NATURAL JOIN` or
-`*` expressions. Instead, Expand all wildcards and convert all `NATURAL JOIN`s
+`*` expressions. Instead, project the required columns and convert all `NATURAL JOIN`s
 to `USING` joins.
 {{< /warning >}}
 
