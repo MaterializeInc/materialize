@@ -54,9 +54,18 @@ pub enum ComputeEvent {
     /// Peek command, true for install and false for retire.
     Peek(Peek, bool),
     /// Available frontier information for dataflow exports.
-    Frontier(GlobalId, Timestamp, i64),
-    // Available frontier information for source instantiations.
-    SourceFrontier(GlobalId, GlobalId, Timestamp, i8),
+    Frontier {
+        id: GlobalId,
+        time: Timestamp,
+        diff: i8,
+    },
+    /// Available frontier information for dataflow imports.
+    ImportFrontier {
+        import_id: GlobalId,
+        export_id: GlobalId,
+        time: Timestamp,
+        diff: i8,
+    },
 }
 
 /// A logged peek event.
@@ -124,7 +133,7 @@ pub fn construct<A: Allocate>(
         demux.build(move |_capability| {
             let mut active_dataflows = BTreeMap::new();
             let mut peek_stash = BTreeMap::new();
-            let mut storage_sources = BTreeMap::<
+            let mut dataflow_imports = BTreeMap::<
                 (GlobalId, usize),
                 BTreeMap<GlobalId, (VecDeque<(mz_repr::Timestamp, u128)>, BTreeMap<u128, i32>)>,
             >::new();
@@ -184,16 +193,15 @@ pub fn construct<A: Allocate>(
                                             key.0, worker
                                         ),
                                     }
-                                    // dataflow may or may not be associated to a storage
-                                    // source instantiation. Report removal if so.
-                                    if let Some(source_map) = storage_sources.remove(key) {
-                                        for (source_id, (_, delay_map)) in source_map {
+                                    // Remove import frontier delay logging for this dataflow.
+                                    if let Some(import_map) = dataflow_imports.remove(key) {
+                                        for (import_id, (_, delay_map)) in import_map {
                                             for (delay_ns, delay_count) in delay_map {
                                                 let delay_pow = delay_ns.next_power_of_two();
                                                 let delay_ns: i128 =
                                                     delay_ns.try_into().expect("delay too big");
                                                 frontier_delay_session.give((
-                                                    (id, source_id, worker, delay_pow),
+                                                    (id, import_id, worker, delay_pow),
                                                     time_ms,
                                                     (
                                                         -(delay_ns * i128::from(delay_count)),
@@ -219,27 +227,32 @@ pub fn construct<A: Allocate>(
                                     ),
                                 }
                             }
-                            ComputeEvent::Frontier(name, logical, delta) => {
+                            ComputeEvent::Frontier {
+                                id,
+                                time: logical,
+                                diff,
+                            } => {
                                 // report dataflow frontier advancement
                                 frontier_session.give((
                                     Row::pack_slice(&[
-                                        Datum::String(&name.to_string()),
+                                        Datum::String(&id.to_string()),
                                         Datum::UInt64(u64::cast_from(worker)),
                                         Datum::MzTimestamp(logical),
                                     ]),
                                     time_ms,
-                                    delta,
+                                    i64::from(diff),
                                 ));
-                                if delta > 0 {
-                                    // check if we have a storage source associated to this dataflow
+                                if diff > 0 {
+                                    // check if we have imports associated to this dataflow
                                     // and report frontier advancement delays
-                                    let dataflow_key = (name, worker);
-                                    if let Some(source_map) = storage_sources.get_mut(&dataflow_key)
+                                    let dataflow_key = (id, worker);
+                                    if let Some(import_map) =
+                                        dataflow_imports.get_mut(&dataflow_key)
                                     {
-                                        for (source_id, (time_deque, delay_map)) in source_map {
+                                        for (import_id, (time_deque, delay_map)) in import_map {
                                             while let Some(current_front) = time_deque.pop_front() {
-                                                let source_logical = current_front.0;
-                                                if logical >= source_logical {
+                                                let import_logical = current_front.0;
+                                                if logical >= import_logical {
                                                     let elapsed_ns =
                                                         time.as_nanos() - current_front.1;
                                                     let delay_count =
@@ -251,7 +264,7 @@ pub fn construct<A: Allocate>(
                                                         .try_into()
                                                         .expect("elapsed_ns too big");
                                                     frontier_delay_session.give((
-                                                        (name, *source_id, worker, elapsed_pow),
+                                                        (id, *import_id, worker, elapsed_pow),
                                                         time_ms,
                                                         (elapsed_ns, 1),
                                                     ));
@@ -264,32 +277,37 @@ pub fn construct<A: Allocate>(
                                     }
                                 }
                             }
-                            ComputeEvent::SourceFrontier(dataflow, source_id, logical, delta) => {
-                                // report source instantiation frontier advancement
+                            ComputeEvent::ImportFrontier {
+                                import_id,
+                                export_id,
+                                time: logical,
+                                diff,
+                            } => {
+                                // report import frontier advancement
                                 source_frontier_session.give((
                                     Row::pack_slice(&[
-                                        Datum::String(&dataflow.to_string()),
-                                        Datum::String(&source_id.to_string()),
+                                        Datum::String(&export_id.to_string()),
+                                        Datum::String(&import_id.to_string()),
                                         Datum::UInt64(u64::cast_from(worker)),
                                         Datum::MzTimestamp(logical),
                                     ]),
                                     time_ms,
-                                    i64::from(delta),
+                                    i64::from(diff),
                                 ));
-                                if delta > 0 {
-                                    // we should record the source frontier here only if
+                                if diff > 0 {
+                                    // We should record the import frontier here only if
                                     // there is a corresponding active dataflow. This behavior
-                                    // arises because SourceFrontier events are generated by a
-                                    // dataflow inspect_container operator, which may outlive
+                                    // arises because `ImportFrontier` events are generated by a
+                                    // dataflow `inspect_container` operator, which may outlive
                                     // the corresponding trace or sink recording in the
-                                    // current ComputeState until Timely eventually drops it.
-                                    let dataflow_key = (dataflow, worker);
+                                    // current `ComputeState` until Timely eventually drops it.
+                                    let dataflow_key = (export_id, worker);
                                     if let Some(_) = active_dataflows.get(&dataflow_key) {
-                                        let source_map = storage_sources
+                                        let import_map = dataflow_imports
                                             .entry(dataflow_key)
                                             .or_insert_with(BTreeMap::new);
-                                        let time_entry = source_map
-                                            .entry(source_id)
+                                        let time_entry = import_map
+                                            .entry(import_id)
                                             .or_insert((VecDeque::new(), BTreeMap::new()));
                                         let time_deque = &mut time_entry.0;
                                         time_deque.push_back((logical, time.as_nanos()));
@@ -428,7 +446,7 @@ pub fn construct<A: Allocate>(
                 frontier_current,
             ),
             (
-                LogVariant::Compute(ComputeLog::SourceFrontierCurrent),
+                LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
                 source_frontier_current,
             ),
             (

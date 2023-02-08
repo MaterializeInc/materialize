@@ -419,22 +419,22 @@ where
         if let Err(frontier) = event {
             if let Some(previous) = previous_time {
                 for dataflow_id in dataflow_ids.iter() {
-                    logger.log(ComputeEvent::SourceFrontier(
-                        *dataflow_id,
-                        source_id,
-                        previous,
-                        -1,
-                    ));
+                    logger.log(ComputeEvent::ImportFrontier {
+                        import_id: source_id,
+                        export_id: *dataflow_id,
+                        time: previous,
+                        diff: -1,
+                    });
                 }
             }
             if let Some(time) = frontier.get(0) {
                 for dataflow_id in dataflow_ids.iter() {
-                    logger.log(ComputeEvent::SourceFrontier(
-                        *dataflow_id,
-                        source_id,
-                        *time,
-                        1,
-                    ));
+                    logger.log(ComputeEvent::ImportFrontier{
+                        import_id: source_id,
+                        export_id: *dataflow_id,
+                        time: *time,
+                        diff: 1,
+                    });
                 }
                 previous_time = Some(*time);
             } else {
