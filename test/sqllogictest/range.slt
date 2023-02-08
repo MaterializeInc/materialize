@@ -868,11 +868,6 @@ SELECT ('(,-1)'::int4range + '(,-1)'::int4range)::text
 (,-1)
 
 query T
-SELECT ('empty'::int4range + '(,-1)'::int4range)::text
-----
-(,-1)
-
-query T
 SELECT ('empty'::int4range + '[-2,2)'::int4range)::text
 ----
 [-2,2)
@@ -886,11 +881,6 @@ query T
 SELECT ('empty'::int4range + '(,)'::int4range)::text
 ----
 (,)
-
-query T
-SELECT ('(,-1)'::int4range + 'empty'::int4range)::text
-----
-(,-1)
 
 query T
 SELECT ('(,-1)'::int4range + '[-2,2)'::int4range)::text
@@ -992,11 +982,6 @@ SELECT ('(,-1)'::int4range * '(,-1)'::int4range)::text
 (,-1)
 
 query T
-SELECT ('empty'::int4range * '(,-1)'::int4range)::text
-----
-empty
-
-query T
 SELECT ('empty'::int4range * '[-2,2)'::int4range)::text
 ----
 empty
@@ -1008,11 +993,6 @@ empty
 
 query T
 SELECT ('empty'::int4range * '(,)'::int4range)::text
-----
-empty
-
-query T
-SELECT ('(,-1)'::int4range * 'empty'::int4range)::text
 ----
 empty
 
@@ -1120,11 +1100,6 @@ SELECT ('(,-1)'::int4range - '(,-1)'::int4range)::text
 empty
 
 query T
-SELECT ('empty'::int4range - '(,-1)'::int4range)::text
-----
-empty
-
-query T
 SELECT ('empty'::int4range - '[-2,2)'::int4range)::text
 ----
 empty
@@ -1138,11 +1113,6 @@ query T
 SELECT ('empty'::int4range - '(,)'::int4range)::text
 ----
 empty
-
-query T
-SELECT ('(,-1)'::int4range - 'empty'::int4range)::text
-----
-(,-1)
 
 query T
 SELECT ('(,-1)'::int4range - '[-2,2)'::int4range)::text
@@ -2013,11 +1983,6 @@ SELECT ('(,-1)'::int8range + '(,-1)'::int8range)::text
 (,-1)
 
 query T
-SELECT ('empty'::int8range + '(,-1)'::int8range)::text
-----
-(,-1)
-
-query T
 SELECT ('empty'::int8range + '[-2,2)'::int8range)::text
 ----
 [-2,2)
@@ -2031,11 +1996,6 @@ query T
 SELECT ('empty'::int8range + '(,)'::int8range)::text
 ----
 (,)
-
-query T
-SELECT ('(,-1)'::int8range + 'empty'::int8range)::text
-----
-(,-1)
 
 query T
 SELECT ('(,-1)'::int8range + '[-2,2)'::int8range)::text
@@ -2137,11 +2097,6 @@ SELECT ('(,-1)'::int8range * '(,-1)'::int8range)::text
 (,-1)
 
 query T
-SELECT ('empty'::int8range * '(,-1)'::int8range)::text
-----
-empty
-
-query T
 SELECT ('empty'::int8range * '[-2,2)'::int8range)::text
 ----
 empty
@@ -2153,11 +2108,6 @@ empty
 
 query T
 SELECT ('empty'::int8range * '(,)'::int8range)::text
-----
-empty
-
-query T
-SELECT ('(,-1)'::int8range * 'empty'::int8range)::text
 ----
 empty
 
@@ -2265,11 +2215,6 @@ SELECT ('(,-1)'::int8range - '(,-1)'::int8range)::text
 empty
 
 query T
-SELECT ('empty'::int8range - '(,-1)'::int8range)::text
-----
-empty
-
-query T
 SELECT ('empty'::int8range - '[-2,2)'::int8range)::text
 ----
 empty
@@ -2283,11 +2228,6 @@ query T
 SELECT ('empty'::int8range - '(,)'::int8range)::text
 ----
 empty
-
-query T
-SELECT ('(,-1)'::int8range - 'empty'::int8range)::text
-----
-(,-1)
 
 query T
 SELECT ('(,-1)'::int8range - '[-2,2)'::int8range)::text
@@ -3086,11 +3026,6 @@ SELECT ('(,1969-12-31)'::daterange + '(,1969-12-31)'::daterange)::text
 (,1969-12-31)
 
 query T
-SELECT ('empty'::daterange + '(,1969-12-31)'::daterange)::text
-----
-(,1969-12-31)
-
-query T
 SELECT ('empty'::daterange + '[1969-12-30,1970-01-03)'::daterange)::text
 ----
 [1969-12-30,1970-01-03)
@@ -3104,11 +3039,6 @@ query T
 SELECT ('empty'::daterange + '(,)'::daterange)::text
 ----
 (,)
-
-query T
-SELECT ('(,1969-12-31)'::daterange + 'empty'::daterange)::text
-----
-(,1969-12-31)
 
 query T
 SELECT ('(,1969-12-31)'::daterange + '[1969-12-30,1970-01-03)'::daterange)::text
@@ -3205,11 +3135,6 @@ SELECT ('(,1969-12-31)'::daterange * '(,1969-12-31)'::daterange)::text
 (,1969-12-31)
 
 query T
-SELECT ('empty'::daterange * '(,1969-12-31)'::daterange)::text
-----
-empty
-
-query T
 SELECT ('empty'::daterange * '[1969-12-30,1970-01-03)'::daterange)::text
 ----
 empty
@@ -3221,11 +3146,6 @@ empty
 
 query T
 SELECT ('empty'::daterange * '(,)'::daterange)::text
-----
-empty
-
-query T
-SELECT ('(,1969-12-31)'::daterange * 'empty'::daterange)::text
 ----
 empty
 
@@ -3328,11 +3248,6 @@ SELECT ('(,1969-12-31)'::daterange - '(,1969-12-31)'::daterange)::text
 empty
 
 query T
-SELECT ('empty'::daterange - '(,1969-12-31)'::daterange)::text
-----
-empty
-
-query T
 SELECT ('empty'::daterange - '[1969-12-30,1970-01-03)'::daterange)::text
 ----
 empty
@@ -3346,11 +3261,6 @@ query T
 SELECT ('empty'::daterange - '(,)'::daterange)::text
 ----
 empty
-
-query T
-SELECT ('(,1969-12-31)'::daterange - 'empty'::daterange)::text
-----
-(,1969-12-31)
 
 query T
 SELECT ('(,1969-12-31)'::daterange - '[1969-12-30,1970-01-03)'::daterange)::text
@@ -4310,17 +4220,7 @@ SELECT ('empty'::numrange + '(,-1]'::numrange)::text
 (,-1]
 
 query T
-SELECT ('(,-1]'::numrange + 'empty'::numrange)::text
-----
-(,-1]
-
-query T
 SELECT ('(,-1]'::numrange + '(,-1]'::numrange)::text
-----
-(,-1]
-
-query T
-SELECT ('empty'::numrange + '(,-1]'::numrange)::text
 ----
 (,-1]
 
@@ -4607,11 +4507,6 @@ SELECT ('(,-1]'::numrange * '(,-1]'::numrange)::text
 (,-1]
 
 query T
-SELECT ('empty'::numrange * '(,-1]'::numrange)::text
-----
-empty
-
-query T
 SELECT ('empty'::numrange * '(,-1)'::numrange)::text
 ----
 empty
@@ -4638,11 +4533,6 @@ empty
 
 query T
 SELECT ('empty'::numrange * '(,)'::numrange)::text
-----
-empty
-
-query T
-SELECT ('(,-1]'::numrange * 'empty'::numrange)::text
 ----
 empty
 
@@ -4900,17 +4790,7 @@ SELECT ('empty'::numrange - '(,-1]'::numrange)::text
 empty
 
 query T
-SELECT ('(,-1]'::numrange - 'empty'::numrange)::text
-----
-(,-1]
-
-query T
 SELECT ('(,-1]'::numrange - '(,-1]'::numrange)::text
-----
-empty
-
-query T
-SELECT ('empty'::numrange - '(,-1]'::numrange)::text
 ----
 empty
 
