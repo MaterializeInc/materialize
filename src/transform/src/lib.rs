@@ -396,6 +396,9 @@ pub fn normalize() -> crate::Fixpoint {
         transforms: vec![
             Box::new(crate::normalize_lets::NormalizeLets::new(false)),
             Box::new(crate::normalize_ops::NormalizeOps),
+            Box::new(crate::fusion::reduce::Reduce), // TODO: remove
+            Box::new(crate::compound::UnionNegateFusion), // TODO: remove
+            Box::new(crate::projection_lifting::ProjectionLifting::default()),
         ],
     }
 }
@@ -418,42 +421,66 @@ impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     pub fn logical_optimizer() -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            // 1. Structure-agnostic cleanup
-            Box::new(normalize()),
+            // Plan preparation
+            // - Enrich with derived predicates. This might enable FoldConstants
+            //   For example: NonNullRequirements converts `{ (null) }` to `{}`
             Box::new(crate::nonnull_requirements::NonNullRequirements::default()),
-            // 2. Collapse constants, joins, unions, and lets as much as possible.
-            // TODO: lift filters/maps to maximize ability to collapse
-            // things down?
+            // - Normalize input
+            Box::new(normalize()),
+            Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
+            // 2. Structural simplifications
             Box::new(crate::Fixpoint {
-                name: "fixpoint",
+                name: "remove_branches",
                 limit: 100,
-                transforms: vec![Box::new(crate::FuseAndCollapse::default())],
+                transforms: vec![
+                    // Remove Union branches that cancel each other.
+                    // This goes after union fusion so we can cancel out
+                    // more branches at a time.
+                    Box::new(crate::union_cancel::UnionBranchCancellation),
+                    // Removes redundant inputs from joins.
+                    // Note that this eliminates one redundant input per join,
+                    // so it is necessary to run this section in a loop.
+                    // TODO: (#6748) Predicate pushdown unlocks the ability to
+                    // remove some redundant joins but also prevents other
+                    // redundant joins from being removed. When predicate pushdown
+                    // no longer works against redundant join, check if it is still
+                    // necessary to run RedundantJoin here.
+                    Box::new(crate::redundant_join::RedundantJoin::default()),
+                    // Remove Threshold operators that have no effect.
+                    Box::new(crate::threshold_elision::ThresholdElision),
+                    // Normalize input (do we need this?)
+                    Box::new(normalize()),
+                    Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
+                ],
             }),
-            // 3. Structure-aware cleanup that needs to happen before ColumnKnowledge
-            Box::new(crate::threshold_elision::ThresholdElision),
             // 4. Move predicate information up and down the tree.
             //    This also fixes the shape of joins in the plan.
             Box::new(crate::Fixpoint {
-                name: "fixpoint",
+                name: "predicates",
                 limit: 100,
                 transforms: vec![
-                    // Predicate pushdown sets the equivalence classes of joins.
-                    Box::new(crate::predicate_pushdown::PredicatePushdown::default()),
-                    // Lifts the information `!isnull(col)`
-                    Box::new(crate::nonnullable::NonNullable),
-                    // Lifts the information `col = literal`
+                    // Lifts the information `col = literal`.
+                    // This might enable more PredicatePushdown cases so it's important
+                    // it runs first, as the two don't commute.
                     // TODO (#6613): this also tries to lift `!isnull(col)` but
                     // less well than the previous transform. Eliminate
                     // redundancy between the two transforms.
                     Box::new(crate::column_knowledge::ColumnKnowledge::default()),
+                    // Lifts the information `!isnull(col)`
+                    Box::new(crate::nonnullable::NonNullable),
+                    // Predicate pushdown sets the equivalence classes of joins.
+                    Box::new(crate::predicate_pushdown::PredicatePushdown::default()),
                     // Lifts the information `col1 = col2`
+                    // TODO (#17546): not sure whether the above statement is accurate.
+                    // We want to remove Demand either way (#14605) so in theory this
+                    // should not be contributing valuable information.
                     Box::new(crate::demand::Demand::default()),
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
             // 5. Reduce/Join simplifications.
             Box::new(crate::Fixpoint {
-                name: "fixpoint",
+                name: "join_and_reduce",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::semijoin_idempotence::SemijoinIdempotence),
