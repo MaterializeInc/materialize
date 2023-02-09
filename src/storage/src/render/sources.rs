@@ -65,6 +65,7 @@ pub fn render_source<RootG, G>(
     id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
     resume_upper: Antichain<G::Timestamp>,
+    source_resume_upper: Vec<Row>,
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
     Vec<(Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)>,
@@ -97,6 +98,7 @@ where
         // TODO(guswynn): avoid extra clones here
         base_metrics: storage_state.source_metrics.clone(),
         resume_upper: resume_upper.clone(),
+        source_resume_upper,
         storage_metadata: description.ingestion_metadata.clone(),
         persist_clients: Arc::clone(&storage_state.persist_clients),
         source_statistics: storage_state

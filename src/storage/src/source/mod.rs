@@ -41,7 +41,7 @@ mod kafka;
 mod kinesis;
 pub mod metrics;
 mod postgres;
-mod reclock;
+pub(crate) mod reclock;
 mod resumption;
 mod s3;
 mod source_reader_pipeline;
