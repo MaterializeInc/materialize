@@ -83,10 +83,10 @@ f 8 1
 part 0
 
 # compact b0, b1, b2 with enough memory for all runs, but a target size that can only hold 2 keys in mem at a time.
-# we expect `aaaa` to appear twice because we calculate part size by unconsolidated updates.
+# we expect `a` to appear twice because we calculate part size by unconsolidated updates.
 compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=50 memory_bound=1000
 ----
-parts=5 len=8
+parts=5 len=7
 
 fetch-batch input=b0_1_2
 ----
@@ -94,14 +94,13 @@ fetch-batch input=b0_1_2
 a 8 2
 <part 1>
 a 8 1
-b 8 1
 <part 2>
-b 8 1
-c 8 1
+b 8 2
 <part 3>
+c 8 1
 d 8 1
-e 8 1
 <part 4>
+e 8 1
 f 8 1
 <run 0>
 part 0

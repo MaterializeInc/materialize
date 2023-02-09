@@ -508,9 +508,9 @@ where
 
         self.current_part.push(((k_range, v_range), ts, diff));
 
-        // if we've filled up a batch part, flush out to blob to keep our memory usage capped.
-        if self.current_part_total_bytes() >= self.blob_target_size {
-            Some(self.drain())
+        // if we've overfilled a batch part, flush out to blob to keep our memory usage capped.
+        if self.current_part_total_bytes() > self.blob_target_size {
+            Some(self.drain_to(self.best_split()))
         } else {
             None
         }
@@ -555,8 +555,16 @@ where
     }
 
     fn drain(&mut self) -> ColumnarRecords {
+        self.drain_to(self.current_part.len())
+    }
+
+    fn drain_to(&mut self, idx: usize) -> ColumnarRecords {
         let mut updates = Vec::with_capacity(self.current_part.len());
-        for ((k_range, v_range), t, d) in self.current_part.drain(..) {
+        let mut key_end = 0;
+        let mut val_end = 0;
+        for ((k_range, v_range), t, d) in self.current_part.drain(..idx) {
+            key_end = k_range.end;
+            val_end = v_range.end;
             updates.push(((&self.key_buf[k_range], &self.val_buf[v_range]), t, d));
         }
 
@@ -568,33 +576,37 @@ where
                 .inc_by(start.elapsed().as_secs_f64());
         }
 
-        if updates.is_empty() {
-            self.key_buf.clear();
-            self.val_buf.clear();
-            return ColumnarRecordsBuilder::default().finish();
-        }
+        let columnar = if updates.is_empty() {
+            ColumnarRecordsBuilder::default().finish()
+        } else {
+            let start = Instant::now();
+            let mut builder = ColumnarRecordsBuilder::default();
+            builder.reserve_exact(
+                self.current_part.len(),
+                self.key_buf.len(),
+                self.val_buf.len(),
+            );
+            for ((k, v), t, d) in updates {
+                // if this fails, the individual record is too big to fit in a ColumnarRecords by itself.
+                // The limits are big, so this is a pretty extreme case that we intentionally don't handle
+                // right now.
+                assert!(builder.push(((k, v), t, D::encode(&d))));
+            }
+            let columnar = builder.finish();
+            self.batch_write_metrics
+                .step_columnar_encoding
+                .inc_by(start.elapsed().as_secs_f64());
+            columnar
+        };
 
-        let start = Instant::now();
-        let mut builder = ColumnarRecordsBuilder::default();
-        builder.reserve_exact(
-            self.current_part.len(),
-            self.key_buf.len(),
-            self.val_buf.len(),
-        );
-        for ((k, v), t, d) in updates {
-            // if this fails, the individual record is too big to fit in a ColumnarRecords by itself.
-            // The limits are big, so this is a pretty extreme case that we intentionally don't handle
-            // right now.
-            assert!(builder.push(((k, v), t, D::encode(&d))));
+        self.key_buf.drain(..key_end);
+        self.val_buf.drain(..val_end);
+        for ((k, v), _, _) in &mut self.current_part {
+            k.start -= key_end;
+            k.end -= key_end;
+            v.start -= val_end;
+            v.end -= val_end;
         }
-        let columnar = builder.finish();
-        self.batch_write_metrics
-            .step_columnar_encoding
-            .inc_by(start.elapsed().as_secs_f64());
-
-        self.key_buf.clear();
-        self.val_buf.clear();
-        assert_eq!(self.current_part.len(), 0);
 
         columnar
     }
