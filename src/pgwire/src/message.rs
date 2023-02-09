@@ -18,6 +18,7 @@ use mz_adapter::{AdapterError, AdapterNotice, StartupMessage};
 use mz_expr::EvalError;
 use mz_repr::{ColumnName, NotNullViolation, RelationDesc};
 use mz_sql::ast::NoticeSeverity;
+use mz_sql::plan::PlanError;
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -349,6 +350,7 @@ impl ErrorResponse {
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
             AdapterError::ParseError(_) => SqlState::SYNTAX_ERROR,
+            AdapterError::PlanError(PlanError::InvalidSchemaName) => SqlState::INVALID_SCHEMA_NAME,
             AdapterError::PlanError(_) => SqlState::INTERNAL_ERROR,
             AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,

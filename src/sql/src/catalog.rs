@@ -88,6 +88,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Returns the cluster to use if one is not explicitly specified.
     fn active_cluster(&self) -> &str;
 
+    /// Returns the resolved search paths for the current user. (Invalid search paths are skipped.)
+    fn search_path(&self) -> &[(ResolvedDatabaseSpecifier, SchemaSpecifier)];
+
     /// Returns the descriptor of the named prepared statement on the session, or
     /// None if the prepared statement does not exist.
     fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc>;
@@ -841,6 +844,10 @@ impl SessionCatalog for DummyCatalog {
 
     fn active_cluster(&self) -> &str {
         "dummy"
+    }
+
+    fn search_path(&self) -> &[(ResolvedDatabaseSpecifier, SchemaSpecifier)] {
+        &[]
     }
 
     fn get_prepared_statement_desc(&self, _: &str) -> Option<&StatementDesc> {
