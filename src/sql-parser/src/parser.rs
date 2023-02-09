@@ -20,12 +20,14 @@
 
 //! SQL Parser
 
+use bytesize::ByteSize;
 use std::error::Error;
 use std::fmt;
 
 use itertools::Itertools;
 use tracing::warn;
 
+use mz_ore::cast::u64_to_usize;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
@@ -40,6 +42,9 @@ use crate::lexer::{self, Token};
 // a healthy factor to be conservative.
 const RECURSION_LIMIT: usize = 128;
 
+/// Maximum allowed size for a batch of statements
+pub const MAX_STATEMENT_BATCH_SIZE: usize = u64_to_usize(bytesize::MB);
+
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
     ($parser:expr, $pos:expr, $MSG:expr) => {
@@ -48,6 +53,24 @@ macro_rules! parser_err {
     ($parser:expr, $pos:expr, $($arg:tt)*) => {
         Err($parser.error($pos, format!($($arg)*)))
     };
+}
+
+/// Parses a SQL string containing zero or more SQL statements.
+/// Statements larger than [`Self::MAX_STATEMENT_BATCH_SIZE`] are rejected.
+///
+/// The outer Result is for errors related to the statement size. The inner Result is for
+/// errors during the parsing.
+#[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
+pub fn parse_statements_with_limit(
+    sql: &str,
+) -> Result<Result<Vec<Statement<Raw>>, ParserError>, String> {
+    if sql.bytes().count() > MAX_STATEMENT_BATCH_SIZE {
+        return Err(format!(
+            "statement batch size cannot exceed {}",
+            ByteSize::b(u64::cast_from(MAX_STATEMENT_BATCH_SIZE))
+        ));
+    }
+    Ok(parse_statements(sql))
 }
 
 /// Parses a SQL string containing zero or more SQL statements.

@@ -759,13 +759,9 @@ fn test_max_request_size() {
 
 #[test]
 fn test_max_statement_batch_size() {
-    assert_eq!(
-        mz_pgwire::MAX_STATEMENT_BATCH_SIZE,
-        mz_environmentd::http::MAX_STATEMENT_BATCH_SIZE
-    );
     let statement = "SELECT 1;";
     let statement_size = statement.bytes().count();
-    let max_statement_size = mz_pgwire::MAX_STATEMENT_BATCH_SIZE;
+    let max_statement_size = mz_sql_parser::parser::MAX_STATEMENT_BATCH_SIZE;
     let max_statement_count = max_statement_size / statement_size + 1;
     let statements = iter::repeat(statement).take(max_statement_count).join("");
     let server = util::start_server(util::Config::default()).unwrap();

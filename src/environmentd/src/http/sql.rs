@@ -15,7 +15,6 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::Json;
-use bytesize::ByteSize;
 use futures::Future;
 use http::StatusCode;
 use itertools::izip;
@@ -28,8 +27,6 @@ use mz_adapter::session::{EndTransactionAction, RowBatchStream, TransactionStatu
 use mz_adapter::{ExecuteResponse, ExecuteResponseKind, PeekResponseUnary, SessionClient};
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::ToJson;
-use mz_ore::cast::u64_to_usize;
-use mz_ore::cast::CastFrom;
 use mz_ore::iter::IteratorExt;
 use mz_ore::result::ResultExt;
 use mz_pgwire::Severity;
@@ -41,9 +38,6 @@ use mz_sql::plan::Plan;
 use crate::http::{AuthedClient, MAX_REQUEST_SIZE};
 
 use super::{init_ws, WsState};
-
-/// Maximum allowed size for a batch of statements
-pub const MAX_STATEMENT_BATCH_SIZE: usize = u64_to_usize(bytesize::MB);
 
 pub async fn handle_sql(
     mut client: AuthedClient,
@@ -567,16 +561,10 @@ async fn execute_request<S: ResultSender>(
     }
 
     fn parse(query: &str) -> Result<Vec<Statement<Raw>>, anyhow::Error> {
-        // Do not move this check into `mz_sql::parse::parse`, that function is used
-        // in bootstrap and we do not want to reject statements that have already
-        // made it in to the catalog.
-        if query.bytes().count() > MAX_STATEMENT_BATCH_SIZE {
-            anyhow::bail!(
-                "statement batch size cannot exceed {}",
-                ByteSize::b(u64::cast_from(MAX_STATEMENT_BATCH_SIZE))
-            );
+        match mz_sql::parse::parse_with_limit(query) {
+            Ok(result) => result.map_err(|e| anyhow!(e)),
+            Err(e) => Err(anyhow!(e)),
         }
-        mz_sql::parse::parse(query).map_err(|e| anyhow!(e))
     }
 
     let mut stmt_groups = vec![];

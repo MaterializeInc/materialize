@@ -3723,6 +3723,7 @@ dependencies = [
  "mz-segment",
  "mz-service",
  "mz-sql",
+ "mz-sql-parser",
  "mz-stash",
  "mz-storage-client",
  "nix",
@@ -4600,6 +4601,7 @@ name = "mz-sql-parser"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bytesize",
  "datadriven",
  "enum-kinds",
  "itertools",

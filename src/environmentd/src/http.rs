@@ -61,8 +61,6 @@ mod probe;
 mod root;
 mod sql;
 
-pub use sql::MAX_STATEMENT_BATCH_SIZE;
-
 /// Maximum allowed size for a request.
 pub const MAX_REQUEST_SIZE: usize = u64_to_usize(2 * bytesize::MB);
 
