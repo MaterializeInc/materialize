@@ -94,6 +94,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{Collection, Hashable};
+use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
 use timely::dataflow::{Scope, Stream};
@@ -145,6 +146,14 @@ where
             error_retractions: 0,
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct HollowBatchAndMetadata {
+    lower: Antichain<Timestamp>,
+    upper: Antichain<Timestamp>,
+    batch: WriterEnrichedHollowBatch<Timestamp>,
+    len: u64,
 }
 
 /// Continuously writes the `desired_stream` into persist
@@ -200,6 +209,7 @@ where
         &batch_descriptions,
         &desired_collection.inner,
         Arc::clone(&persist_clients),
+        storage_state,
     );
 
     let append_token = append_batches(
@@ -398,17 +408,8 @@ fn write_batches<G>(
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_clients: Arc<PersistClientCache>,
-) -> (
-    Stream<
-        G,
-        (
-            Antichain<Timestamp>,
-            Antichain<Timestamp>,
-            WriterEnrichedHollowBatch<Timestamp>,
-        ),
-    >,
-    Rc<dyn Any>,
-)
+    storage_state: &mut StorageState,
+) -> (Stream<G, HollowBatchAndMetadata>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -417,6 +418,12 @@ where
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
     let target_relation_desc = target.relation_desc.clone();
+
+    let source_statistics = storage_state
+        .source_statistics
+        .get(&collection_id)
+        .expect("statistics initialized")
+        .clone();
 
     let mut write_op =
         AsyncOperatorBuilder::new(format!("{} write_batches", operator_name), scope.clone());
@@ -557,7 +564,7 @@ where
                                         .await
                                         .expect("invalid usage");
 
-                                    // source_statistics.inc_updates_staged_by(1);
+                                    source_statistics.inc_updates_staged_by(1);
 
                                     // Note that we assume `diff` is either +1 or -1 here, being anything
                                     // else is a logic bug we can't handle at the metric layer. We also
@@ -659,9 +666,8 @@ where
 
                     let mut batch_tokens = vec![];
                     for ts in finalized_timestamps {
-                        let batch = stashed_batches
-                            .remove(&ts)
-                            .unwrap()
+                        let batch_builder = stashed_batches.remove(&ts).unwrap();
+                        let batch = batch_builder
                             .builder
                             .finish(batch_upper.clone())
                             .await
@@ -676,11 +682,12 @@ where
                                 batch_upper,
                             );
                         }
-                        batch_tokens.push((
-                            batch_lower.clone(),
-                            batch_upper.clone(),
-                            batch.into_writer_hollow_batch(),
-                        ))
+                        batch_tokens.push(HollowBatchAndMetadata {
+                            lower: batch_lower.clone(),
+                            upper: batch_upper.clone(),
+                            batch: batch.into_writer_hollow_batch(),
+                            len: batch_builder.inserts + batch_builder.retractions,
+                        })
                     }
 
                     let mut output = output.activate();
@@ -724,14 +731,7 @@ fn append_batches<G>(
     operator_name: String,
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    batches: &Stream<
-        G,
-        (
-            Antichain<Timestamp>,
-            Antichain<Timestamp>,
-            WriterEnrichedHollowBatch<Timestamp>,
-        ),
-    >,
+    batches: &Stream<G, HollowBatchAndMetadata>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &mut StorageState,
 ) -> Rc<dyn Any>
@@ -763,6 +763,12 @@ where
         current_upper.borrow_mut().clear();
     }
 
+    let source_statistics = storage_state
+        .source_statistics
+        .get(&collection_id)
+        .expect("statistics initialized")
+        .clone();
+
     // This operator accepts the batch descriptions and tokens that represent
     // written batches. Written batches get appended to persist when we learn
     // from our input frontiers that we have seen all batches for a given batch
@@ -779,8 +785,11 @@ where
         let mut in_flight_descriptions =
             std::collections::HashSet::<(Antichain<Timestamp>, Antichain<Timestamp>)>::new();
 
-        let mut in_flight_batches =
-            HashMap::<(Antichain<Timestamp>, Antichain<Timestamp>), Vec<Batch<_, _, _, _>>>::new();
+        // In flight batches that haven't been `compare_and_append`'d yet, plus their lengths.
+        let mut in_flight_batches = HashMap::<
+            (Antichain<Timestamp>, Antichain<Timestamp>),
+            Vec<(Batch<_, _, _, _>, u64)>,
+        >::new();
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
         let persist_client = persist_clients
@@ -807,8 +816,10 @@ where
             // shared upper. All other workers have already cleared this
             // upper above.
             current_upper.borrow_mut().clone_from(write.upper());
+            source_statistics.initialize_snapshot_committed(write.upper());
         } else {
             // The non-active workers report that they are done snapshotting.
+            source_statistics.initialize_snapshot_committed(&Antichain::<Timestamp>::new());
             return;
         }
 
@@ -860,15 +871,20 @@ where
                     match event {
                         Event::Data(_cap, data) => {
                             // Ingest new written batches
-                            for (lower, upper, batch) in data.drain(..) {
-                                let batch = write.batch_from_hollow_batch(batch);
-                                let batch_description = (lower, upper);
+                            for batch_and_metadata in data.drain(..) {
+                                let batch = write.batch_from_hollow_batch(
+                                    batch_and_metadata.batch
+                                );
+                                let batch_description = (
+                                    batch_and_metadata.lower,
+                                    batch_and_metadata.upper
+                                );
 
                                 let batches = in_flight_batches
                                     .entry(batch_description)
                                     .or_insert_with(Vec::new);
 
-                                batches.push(batch);
+                                batches.push((batch, batch_and_metadata.len));
                             }
 
                             continue;
@@ -939,7 +955,14 @@ where
 
                 let (batch_lower, batch_upper) = done_batch_metadata;
 
-                let mut to_append = batches.iter_mut().collect::<Vec<_>>();
+                let mut total = 0;
+                let mut to_append = batches
+                    .iter_mut()
+                    .map(|(batch, len)| {
+                        total += *len;
+                        batch
+                    })
+                    .collect::<Vec<_>>();
 
                 let result = write
                     .compare_and_append_batch(
@@ -949,6 +972,8 @@ where
                     )
                     .await
                     .expect("Invalid usage");
+                source_statistics.inc_updates_committed_by(total);
+                source_statistics.update_snapshot_committed(&batch_upper);
 
                 if collection_id.is_user() {
                     trace!(
@@ -969,7 +994,7 @@ where
 
                         // Clean up in case we didn't manage to append the
                         // batches to persist.
-                        for batch in batches {
+                        for (batch, _) in batches {
                             batch.delete().await;
                         }
                         tracing::info!(
