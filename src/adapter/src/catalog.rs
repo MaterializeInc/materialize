@@ -2356,8 +2356,6 @@ impl Catalog {
             .into_iter()
             .partition(|(builtin, _)| matches!(builtin, Builtin::Index(_)));
 
-        let mut mz_object_dependencies_updates = vec![];
-
         {
             let span = tracing::span!(tracing::Level::DEBUG, "builtin_non_indexes");
             let _enter = span.enter();
@@ -2424,7 +2422,6 @@ impl Catalog {
                             )
                         });
                         let oid = catalog.allocate_oid()?;
-                        mz_object_dependencies_updates.push((id, item.uses().to_owned()));
                         catalog.state.insert_item(id, oid, name, item);
                     }
 
@@ -2572,7 +2569,6 @@ impl Catalog {
                             )
                         });
                     let oid = catalog.allocate_oid()?;
-                    mz_object_dependencies_updates.push((id, item.uses().to_owned()));
                     catalog.state.insert_item(id, oid, name, item);
                 }
                 Builtin::Log(_)
@@ -2681,12 +2677,6 @@ impl Catalog {
         }
         for (_name, role) in &catalog.state.roles {
             builtin_table_updates.push(catalog.state.pack_role_update(role, 1));
-        }
-        for (depender, dependees) in mz_object_dependencies_updates {
-            dependees.into_iter().for_each(|dependee| {
-                builtin_table_updates
-                    .push(catalog.state.pack_depends_update(depender, dependee, 1));
-            })
         }
         for (id, cluster) in &catalog.state.clusters_by_id {
             builtin_table_updates.push(catalog.state.pack_cluster_update(&cluster.name, 1));
@@ -4728,11 +4718,6 @@ impl Catalog {
                         let schema_id = name.qualifiers.schema_spec.clone().into();
                         let serialized_item = Self::serialize_item(&item);
                         tx.insert_item(id, schema_id, &name.item, serialized_item)?;
-
-                        // Fill the `mz_object_dependencies` table.
-                        for dependee in item.uses() {
-                            builtin_table_updates.push(state.pack_depends_update(id, *dependee, 1))
-                        }
                     }
 
                     if Self::should_audit_log_item(&item) {
@@ -4967,11 +4952,6 @@ impl Catalog {
                     let entry = state.get_entry(&id);
                     if !entry.item().is_temporary() {
                         tx.remove_item(id)?;
-
-                        // Clean up the `mz_object_dependencies` table.
-                        for dependee in entry.item().uses() {
-                            builtin_table_updates.push(state.pack_depends_update(id, *dependee, -1))
-                        }
                     }
 
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
