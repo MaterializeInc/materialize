@@ -139,7 +139,13 @@ pub fn construct<A: Allocate>(
             let mut peek_stash = BTreeMap::new();
             let mut dataflow_imports = BTreeMap::<
                 (GlobalId, usize),
-                BTreeMap<GlobalId, (VecDeque<(mz_repr::Timestamp, u128)>, BTreeMap<u128, (i128, i32)>)>,
+                BTreeMap<
+                    GlobalId,
+                    (
+                        VecDeque<(mz_repr::Timestamp, u128)>,
+                        BTreeMap<u128, (i128, i32)>,
+                    ),
+                >,
             >::new();
             move |_frontiers| {
                 let mut dataflow = dataflow_out.activate();
@@ -205,10 +211,7 @@ pub fn construct<A: Allocate>(
                                                 frontier_delay_session.give((
                                                     (id, import_id, worker, delay_pow),
                                                     time_ms,
-                                                    (
-                                                        -delay_sum,
-                                                        -delay_count,
-                                                    ),
+                                                    (-delay_sum, -delay_count),
                                                 ));
                                             }
                                         }
@@ -262,8 +265,9 @@ pub fn construct<A: Allocate>(
                                                     let elapsed_ns: i128 = elapsed_ns
                                                         .try_into()
                                                         .expect("elapsed_ns too big");
-                                                    let (delay_sum, delay_count) =
-                                                        delay_map.entry(elapsed_pow).or_insert((0, 0));
+                                                    let (delay_sum, delay_count) = delay_map
+                                                        .entry(elapsed_pow)
+                                                        .or_insert((0, 0));
                                                     *delay_sum += elapsed_ns;
                                                     *delay_count += 1;
                                                     frontier_delay_session.give((
