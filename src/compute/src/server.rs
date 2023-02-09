@@ -771,6 +771,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                 } else {
                                     new_dataflows.push(dataflow.clone());
                                 }
+
+                                compute_state.metrics.record_dataflow_reconciliation(
+                                    compatible,
+                                    uncompacted,
+                                    subscribe_free,
+                                );
                             } else {
                                 new_dataflows.push(dataflow.clone());
                             }
