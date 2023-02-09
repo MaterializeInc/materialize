@@ -94,7 +94,7 @@ use timely::progress::Antichain;
 mod postgres;
 mod transaction;
 
-pub use crate::postgres::{Stash, StashFactory};
+pub use crate::postgres::{DebugStashFactory, Stash, StashFactory};
 pub use crate::transaction::Transaction;
 
 pub type Diff = i64;
@@ -243,6 +243,14 @@ impl From<&str> for StashError {
     fn from(e: &str) -> StashError {
         StashError {
             inner: InternalStashError::Other(e.into()),
+        }
+    }
+}
+
+impl From<std::io::Error> for StashError {
+    fn from(e: std::io::Error) -> StashError {
+        StashError {
+            inner: InternalStashError::Other(e.to_string()),
         }
     }
 }

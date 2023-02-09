@@ -444,32 +444,9 @@ impl Stash {
         F: FnOnce(Stash) -> Fut,
         Fut: Future<Output = T>,
     {
-        let url =
-            std::env::var("COCKROACH_URL").expect("COCKROACH_URL environment variable is not set");
-        let rng: usize = rand::thread_rng().gen();
-        let schema = format!("schema_{rng}");
-        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
-
-        let (client, connection) = tokio_postgres::connect(&url, tls.clone()).await?;
-        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
-            if let Err(e) = connection.await {
-                tracing::error!("postgres stash connection error: {}", e);
-            }
-        });
-        client
-            .batch_execute(&format!("CREATE SCHEMA {schema}"))
-            .await?;
-
-        let factory = StashFactory::new(&MetricsRegistry::new());
-        let stash = factory.open(url, Some(schema.clone()), tls).await?;
-        let res = f(stash).await;
-
-        // Ignore errors when dropping, better to return `res`.
-        let _ = client
-            .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
-            .await;
-
-        Ok(res)
+        let factory = DebugStashFactory::new().await?;
+        let stash = factory.open_debug().await?;
+        Ok(f(stash).await)
     }
 
     /// Verifies stash invariants. Should only be called by tests.
@@ -1017,5 +994,88 @@ impl Consolidator {
         );
         self.client = Some(client);
         Ok(())
+    }
+}
+
+/// Stash factory to use for tests that allow creating multiple stashes.
+pub struct DebugStashFactory {
+    url: String,
+    schema: String,
+    tls: MakeTlsConnector,
+    stash_factory: StashFactory,
+}
+
+impl DebugStashFactory {
+    pub async fn new() -> Result<DebugStashFactory, StashError> {
+        let url =
+            std::env::var("COCKROACH_URL").expect("COCKROACH_URL environment variable is not set");
+        let rng: usize = rand::thread_rng().gen();
+        let schema = format!("schema_{rng}");
+        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
+
+        let (client, connection) = tokio_postgres::connect(&url, tls.clone()).await?;
+        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+            if let Err(e) = connection.await {
+                tracing::error!("postgres stash connection error: {e}");
+            }
+        });
+        client
+            .batch_execute(&format!("CREATE SCHEMA {schema}"))
+            .await?;
+
+        let stash_factory = StashFactory::new(&MetricsRegistry::new());
+
+        Ok(DebugStashFactory {
+            url,
+            schema,
+            tls,
+            stash_factory,
+        })
+    }
+
+    pub async fn open_debug(&self) -> Result<Stash, StashError> {
+        self.stash_factory
+            .open(
+                self.url.clone(),
+                Some(self.schema.clone()),
+                self.tls.clone(),
+            )
+            .await
+    }
+}
+
+impl Drop for DebugStashFactory {
+    fn drop(&mut self) {
+        let url = self.url.clone();
+        let schema = self.schema.clone();
+        let tls = self.tls.clone();
+        let result = std::thread::spawn(move || {
+            let async_runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            async_runtime.block_on(async {
+                let (client, connection) = tokio_postgres::connect(&url, tls).await?;
+                mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+                    if let Err(e) = connection.await {
+                        tracing::error!("postgres stash connection error: {e}");
+                    }
+                });
+                client
+                    .batch_execute(&format!("DROP SCHEMA {} CASCADE", &schema))
+                    .await?;
+                Ok::<_, StashError>(())
+            })
+        })
+        .join();
+
+        match result {
+            Ok(result) => {
+                if let Err(e) = result {
+                    tracing::error!("unable to cleanup debug stash: {e}");
+                }
+            }
+
+            Err(_) => tracing::error!("unable to cleanup debug stash"),
+        }
     }
 }
