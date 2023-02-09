@@ -203,10 +203,9 @@ pub fn construct<A: Allocate>(
                                             key.0, worker
                                         ),
                                     }
-                                    // dataflow may or may not be associated to a storage
-                                    // source instantiation. Report removal if so.
-                                    if let Some(source_map) = storage_sources.remove(key) {
-                                        for (import_id, (_, delay_map)) in source_map {
+                                    // Remove import frontier delay logging for this dataflow
+                                    if let Some(import_map) = dataflow_imports.remove(key) {
+                                        for (import_id, (_, delay_map)) in import_map {
                                             for (delay_pow, (delay_sum, delay_count)) in delay_map {
                                                 frontier_delay_session.give((
                                                     (id, import_id, worker, delay_pow),
