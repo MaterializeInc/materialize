@@ -336,17 +336,17 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                     // string Key` map, but now the value is a `struct
                     // HollowRollup`.
                     ProtoStateField::DeprecatedRollups => {
-                        field_diff_into_rust::<u64, String, _, _, _, _>(
-                            diff,
-                            &mut state_diff.rollups,
-                            |k| k.into_rust(),
-                            |v| {
-                                Ok(HollowRollup {
-                                    key: v.into_rust()?,
-                                    encoded_size_bytes: None,
-                                })
-                            },
-                        )?
+                        // field_diff_into_rust::<u64, String, _, _, _, _>(
+                        //     diff,
+                        //     &mut state_diff.rollups,
+                        //     |k| k.into_rust(),
+                        //     |v| {
+                        //         Ok(HollowRollup {
+                        //             key: v.into_rust()?,
+                        //             encoded_size_bytes: None,
+                        //         })
+                        //     },
+                        // )?
                     }
                     ProtoStateField::LeasedReaders => {
                         field_diff_into_rust::<String, ProtoLeasedReaderState, _, _, _, _>(
@@ -687,15 +687,15 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoStateRollup> for UntypedSta
         for (seqno, rollup) in x.rollups {
             rollups.insert(seqno.into_rust()?, rollup.into_rust()?);
         }
-        // for (seqno, key) in x.deprecated_rollups {
-        //     rollups.insert(
-        //         seqno.into_rust()?,
-        //         HollowRollup {
-        //             key: key.into_rust()?,
-        //             encoded_size_bytes: None,
-        //         },
-        //     );
-        // }
+        for (seqno, key) in x.deprecated_rollups {
+            rollups.insert(
+                seqno.into_rust()?,
+                HollowRollup {
+                    key: key.into_rust()?,
+                    encoded_size_bytes: None,
+                },
+            );
+        }
         let mut leased_readers = BTreeMap::new();
         for (id, state) in x.leased_readers {
             leased_readers.insert(id.into_rust()?, state.into_rust()?);
