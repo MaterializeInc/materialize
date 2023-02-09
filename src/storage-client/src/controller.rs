@@ -69,7 +69,7 @@ use crate::types::parameters::StorageParameters;
 use crate::types::sinks::{
     MetadataUnfilled, ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc,
 };
-use crate::types::sources::{IngestionDescription, SourceData, SourceExport};
+use crate::types::sources::{IngestionDescription, SourceData, SourceEnvelope, SourceExport};
 
 mod collection_mgmt;
 mod command_wals;
@@ -172,9 +172,10 @@ pub struct ExportDescription<T = mz_repr::Timestamp> {
 /// that compaction is being held back on `from_id` at least until `id` is created.  It should be
 /// held while the AS OF is determined.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CreateExportToken {
+pub struct CreateExportToken<T = mz_repr::Timestamp> {
     id: GlobalId,
     from_id: GlobalId,
+    acquired_since: Antichain<T>,
 }
 
 impl CreateExportToken {
@@ -268,7 +269,10 @@ pub trait StorageController: Debug + Send {
     /// Create the sinks described by the `ExportDescription`.
     async fn create_exports(
         &mut self,
-        exports: Vec<(CreateExportToken, ExportDescription<Self::Timestamp>)>,
+        exports: Vec<(
+            CreateExportToken<Self::Timestamp>,
+            ExportDescription<Self::Timestamp>,
+        )>,
     ) -> Result<(), StorageError>;
 
     /// Notify the storage controller to prepare for an export to be created
@@ -276,10 +280,10 @@ pub trait StorageController: Debug + Send {
         &mut self,
         id: GlobalId,
         from_id: GlobalId,
-    ) -> Result<CreateExportToken, StorageError>;
+    ) -> Result<CreateExportToken<Self::Timestamp>, StorageError>;
 
     /// Cancel the pending export
-    fn cancel_prepare_export(&mut self, token: CreateExportToken);
+    fn cancel_prepare_export(&mut self, token: CreateExportToken<Self::Timestamp>);
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
@@ -418,6 +422,33 @@ pub enum ReadPolicy<T> {
     /// Allows one to express multiple read policies, taking the least of
     /// the resulting frontiers.
     Multiple(Vec<ReadPolicy<T>>),
+}
+
+impl<T> ReadPolicy<T>
+where
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
+{
+    /// Creates a read policy that lags the write frontier "by one".
+    pub fn step_back() -> Self {
+        Self::LagWriteFrontier(Arc::new(move |upper| {
+            if upper.is_empty() {
+                Antichain::from_elem(Timestamp::minimum())
+            } else {
+                let stepped_back = upper
+                    .to_owned()
+                    .into_iter()
+                    .map(|time| {
+                        if time == T::minimum() {
+                            time
+                        } else {
+                            time.step_back().unwrap()
+                        }
+                    })
+                    .collect_vec();
+                stepped_back.into()
+            }
+        }))
+    }
 }
 
 impl ReadPolicy<mz_repr::Timestamp> {
@@ -637,7 +668,6 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     /// This is to prevent the re-binding of identifiers to other descriptions.
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
     pub(super) exports: BTreeMap<GlobalId, ExportState<T>>,
-    pub(super) exported_collections: BTreeMap<GlobalId, Vec<GlobalId>>,
     pub(super) stash: mz_stash::Stash,
     /// Write handle for persist shards.
     pub(super) persist_write_handles: persist_handles::PersistWriteWorker<T>,
@@ -869,7 +899,6 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
         Self {
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
-            exported_collections: BTreeMap::default(),
             stash,
             persist_write_handles,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
@@ -1076,10 +1105,13 @@ where
                     )
                     .await;
 
+                let storage_dependencies = this.get_collection_dependencies(&description);
+
                 let cs = CollectionState::new(
                     description.clone(),
                     since_handle.since().clone(),
                     write.upper().clone(),
+                    storage_dependencies,
                     metadata.clone(),
                 );
                 Ok::<_, anyhow::Error>((id, description, write, since_handle, cs))
@@ -1258,37 +1290,52 @@ where
         &mut self,
         id: GlobalId,
         from_id: GlobalId,
-    ) -> Result<CreateExportToken, StorageError> {
+    ) -> Result<CreateExportToken<T>, StorageError> {
         if let Ok(_export) = self.export(id) {
             return Err(StorageError::SourceIdReused(id));
         }
 
-        self.state
-            .exported_collections
-            .entry(from_id)
-            .or_default()
-            .push(id);
+        let acquired_since = self.install_read_capabilities(&[from_id])?;
 
-        Ok(CreateExportToken { id, from_id })
+        Ok(CreateExportToken {
+            id,
+            from_id,
+            acquired_since,
+        })
     }
 
-    fn cancel_prepare_export(&mut self, CreateExportToken { id, from_id }: CreateExportToken) {
-        self.state
-            .exported_collections
-            .get_mut(&from_id)
-            // Internal logic error NOT due to export not existing
-            .expect("Dangling exported collection")
-            .retain(|from_export_id| *from_export_id != id);
+    fn cancel_prepare_export(
+        &mut self,
+        CreateExportToken {
+            id: _,
+            from_id,
+            acquired_since,
+        }: CreateExportToken<T>,
+    ) {
+        // TODO: Better error handling/sanity checking.
+        let _ = self.remove_read_capabilities(acquired_since, &[from_id]);
     }
 
     async fn create_exports(
         &mut self,
-        exports: Vec<(CreateExportToken, ExportDescription<Self::Timestamp>)>,
+        exports: Vec<(
+            CreateExportToken<Self::Timestamp>,
+            ExportDescription<Self::Timestamp>,
+        )>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
         let mut dedup_hashmap = BTreeMap::<&_, &_>::new();
-        for (CreateExportToken { id, from_id }, desc) in exports.iter() {
+        for (
+            CreateExportToken {
+                id,
+                from_id,
+                acquired_since: _,
+            },
+            desc,
+        ) in exports.iter()
+        {
             if dedup_hashmap.insert(id, desc).is_some() {
+                // TODO: These should ne SinkIdReused, right?
                 return Err(StorageError::SourceIdReused(*id));
             }
             if let Ok(export) = self.export(*id) {
@@ -1299,30 +1346,58 @@ where
             if desc.sink.from != *from_id {
                 return Err(StorageError::SourceIdReused(*id));
             }
-            if self
-                .state
-                .exported_collections
-                .get(from_id)
-                // Internal logic error NOT due to export not existing
-                .expect("Dangling exported collection")
-                .iter()
-                .find(|from_export_id| *from_export_id == id)
-                .is_none()
-            {
-                return Err(StorageError::SourceIdReused(*id));
-            }
         }
 
-        for (CreateExportToken { id, from_id }, description) in exports {
-            self.state
-                .exports
-                .insert(id, ExportState::new(description.clone()));
+        for (
+            CreateExportToken {
+                id,
+                from_id,
+                acquired_since,
+            },
+            description,
+        ) in exports
+        {
+            // TODO(aljoscha): I _think_ this description is subtly wrong. But
+            // not completely sure.
+            //
+            // It's worth adding a quick note on write frontiers here.
+            //
+            // The write frontier that sinks communicate back to the controller
+            // indicates that all further writes will happen at a time `t` such
+            // that `!timely::ParitalOrder::less_than(&t, &write_frontier)` is
+            // true.  On restart, the sink will receive an SinkAsOf from this
+            // controller indicating that it should ignore everything at or
+            // before the `since` of the from collection. This will not miss any
+            // records because, if there were records not yet written out that
+            // have an uncompacted time of `since`, the write frontier
+            // previously reported from the sink must be less than `since` so we
+            // would not have compacted up to `since`! This is tested by the
+            // kafka persistence tests.
+            //
+            // Aljoscha: I think we don't need to step back here. The previous
+            // code was allowing the since to go right up to the reported sink
+            // upper. It's the sink code itself that makes sure to report "max
+            // timestamp written - 1", but we should double check.
+            let read_policy = ReadPolicy::step_back();
 
             let from_collection = self.collection(from_id)?;
             let from_storage_metadata = from_collection.collection_metadata.clone();
             // We've added the dependency above in `exported_collections` so this guaranteed not to change at least
             // until the sink is started up.
             let from_since = from_collection.implied_capability.clone();
+            assert!(PartialOrder::less_equal(&acquired_since, &from_since));
+
+            let storage_dependencies = vec![from_id];
+
+            self.state.exports.insert(
+                id,
+                ExportState::new(
+                    description.clone(),
+                    acquired_since,
+                    read_policy,
+                    storage_dependencies,
+                ),
+            );
 
             let as_of = MetadataExportFetcher::get_stash_collection()
                 .insert_key_without_overwrite(
@@ -1403,14 +1478,11 @@ where
                 Ok(export) => export,
                 Err(_) => continue,
             };
-            let from = export.from();
 
-            self.state
-                .exported_collections
-                .get_mut(&from)
-                // Internal logic error NOT due to export not existing
-                .expect("Dangling exported collection")
-                .retain(|from_export_id| *from_export_id != id);
+            let read_capability = export.read_capability.clone();
+            let storage_dependencies = export.storage_dependencies.clone();
+            // TODO: Better error handling/validation.
+            let _ = self.remove_read_capabilities(read_capability, &storage_dependencies);
 
             // Remove sink by removing its write frontier and arranging for deprovisioning.
             self.update_write_frontiers(&[(id, Antichain::new())]);
@@ -1486,17 +1558,30 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>) {
         let mut read_capability_changes = BTreeMap::default();
+
         for (id, policy) in policies.into_iter() {
-            if let Ok(mut updates) =
-                self.generate_new_capability_for_collection(id, |c| c.read_policy = policy)
-            {
-                if !updates.is_empty() {
-                    read_capability_changes.insert(id, updates);
+            let collection = self
+                .collection_mut(id)
+                .expect("Reference to absent collection");
+
+            let mut new_read_capability = policy.frontier(collection.write_frontier.borrow());
+
+            if timely::order::PartialOrder::less_equal(
+                &collection.implied_capability,
+                &new_read_capability,
+            ) {
+                let mut update = ChangeBatch::new();
+                update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
+                std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
+                update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
+                if !update.is_empty() {
+                    read_capability_changes.insert(id, update);
                 }
-            } else {
-                tracing::warn!("Reference to unregistered id: {:?}", id);
             }
+
+            collection.read_policy = policy;
         }
+
         if !read_capability_changes.is_empty() {
             self.update_read_capabilities(&mut read_capability_changes);
         }
@@ -1505,38 +1590,53 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     fn update_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<Self::Timestamp>)]) {
         let mut read_capability_changes = BTreeMap::default();
-        let mut collections = BTreeMap::new();
-        let mut exports = vec![];
 
         for (id, new_upper) in updates.iter() {
-            if let Ok(_) = self.collection(*id) {
-                collections.insert(*id, Some(new_upper));
-            } else if let Ok(_) = self.export(*id) {
-                exports.push((id, new_upper));
-            } else {
-                panic!("Reference to absent collection");
-            }
-        }
+            if let Ok(collection) = self.collection_mut(*id) {
+                if PartialOrder::less_than(&collection.write_frontier, new_upper) {
+                    collection.write_frontier = new_upper.clone();
+                }
 
-        // Exports come first so we can update the collections below based on any new export write frontiers
-        for (id, new_upper) in exports {
-            let export = self
-                .export_mut(*id)
-                .expect("Export previously validated to exist");
-            export.write_frontier.join_assign(new_upper);
-            collections.entry(export.from()).or_insert(None);
-        }
+                let mut new_read_capability = collection
+                    .read_policy
+                    .frontier(collection.write_frontier.borrow());
 
-        for (id, new_upper) in collections {
-            let mut update = self
-                .generate_new_capability_for_collection(id, |c| {
-                    if let Some(new_upper) = new_upper {
-                        c.write_frontier.join_assign(new_upper);
+                if timely::order::PartialOrder::less_equal(
+                    &collection.implied_capability,
+                    &new_read_capability,
+                ) {
+                    let mut update = ChangeBatch::new();
+                    update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
+                    std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
+                    update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
+
+                    if !update.is_empty() {
+                        read_capability_changes.insert(*id, update);
                     }
-                })
-                .expect("Collection previously validated to exist");
-            if !update.is_empty() {
-                read_capability_changes.insert(id, update);
+                }
+            } else if let Ok(export) = self.export_mut(*id) {
+                if PartialOrder::less_than(&export.write_frontier, new_upper) {
+                    export.write_frontier = new_upper.clone();
+                }
+
+                let mut new_read_capability =
+                    export.read_policy.frontier(export.write_frontier.borrow());
+
+                if timely::order::PartialOrder::less_equal(
+                    &export.read_capability,
+                    &new_read_capability,
+                ) {
+                    let mut update = ChangeBatch::new();
+                    update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
+                    std::mem::swap(&mut export.read_capability, &mut new_read_capability);
+                    update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
+
+                    if !update.is_empty() {
+                        read_capability_changes.insert(*id, update);
+                    }
+                }
+            } else {
+                panic!("Reference to absent collection {id}");
             }
         }
 
@@ -1552,6 +1652,7 @@ where
     ) {
         // Location to record consequences that we need to act on.
         let mut storage_net = BTreeMap::new();
+
         // Repeatedly extract the maximum id, and updates for it.
         while let Some(key) = updates.keys().rev().next().cloned() {
             let mut update = updates.remove(&key).unwrap();
@@ -1559,12 +1660,29 @@ where
                 let changes = collection.read_capabilities.update_iter(update.drain());
                 update.extend(changes);
 
+                for id in collection.storage_dependencies.iter() {
+                    updates
+                        .entry(*id)
+                        .or_insert_with(ChangeBatch::new)
+                        .extend(update.iter().cloned());
+                }
+
                 let (changes, frontier) = storage_net
                     .entry(key)
                     .or_insert_with(|| (ChangeBatch::new(), Antichain::new()));
 
                 changes.extend(update.drain());
                 *frontier = collection.read_capabilities.frontier().to_owned();
+            } else if let Ok(export) = self.export_mut(key) {
+                // Exports are not depended upon by other storage objects. We
+                // only need to report changes in our own read_capability to our
+                // dependencies.
+                for id in export.storage_dependencies.iter() {
+                    updates
+                        .entry(*id)
+                        .or_insert_with(ChangeBatch::new)
+                        .extend(update.iter().cloned());
+                }
             } else {
                 // This is confusing and we should probably error.
                 panic!("Unknown collection identifier {}", key);
@@ -1785,6 +1903,90 @@ where
         Ok(())
     }
 
+    /// Returns IDs for all storage collections that the given
+    /// `collection_description` depends on.
+    ///
+    /// TODO: @sean: This is where the remap shard would slot it.
+    fn get_collection_dependencies(
+        &self,
+        collection_description: &CollectionDescription<T>,
+    ) -> Vec<GlobalId> {
+        let mut result = Vec::new();
+
+        if let DataSource::Ingestion(ingestion) = &collection_description.data_source {
+            match &ingestion.desc.envelope {
+                SourceEnvelope::Debezium(envelope_debezium) => {
+                    let tx_metadata_topic = envelope_debezium.dedup.tx_metadata.clone();
+                    if let Some(tx_input) = tx_metadata_topic {
+                        result.push(tx_input.tx_metadata_global_id);
+                    }
+                }
+                // NOTE: We explicitly list envelopes instead of using a catch all to
+                // make sure that we change this when adding/removing and envelope.
+                SourceEnvelope::None(_) | SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2 => {
+                    // No storage dependencies.
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Install read capabilities on the given `storage_dependencies` and return
+    /// the frontier at which we are guaranteed to be able to read from all
+    /// dependencies.
+    fn install_read_capabilities(
+        &mut self,
+        storage_dependencies: &[GlobalId],
+    ) -> Result<Antichain<T>, StorageError> {
+        // First, determine the since frontier at which we can read from all
+        // dependencies.
+        let mut dependency_since = Antichain::from_elem(T::minimum());
+        for id in storage_dependencies {
+            let collection = self.collection(*id)?;
+            let since = collection.implied_capability.clone();
+            dependency_since.join_assign(&since);
+        }
+
+        let mut changes = ChangeBatch::new();
+        for time in dependency_since.iter() {
+            changes.update(time.clone(), 1);
+        }
+
+        // Then install holds for all dependencies at the determined since.
+        let mut storage_read_updates = storage_dependencies
+            .iter()
+            .map(|id| (*id, changes.clone()))
+            .collect();
+
+        self.update_read_capabilities(&mut storage_read_updates);
+
+        Ok(dependency_since)
+    }
+
+    /// Removes read holds that were previously acquired via
+    /// `install_read_capabilities`.
+    fn remove_read_capabilities(
+        &mut self,
+        capability: Antichain<T>,
+        storage_dependencies: &[GlobalId],
+    ) -> Result<(), StorageError> {
+        let mut changes = ChangeBatch::new();
+        for time in capability.iter() {
+            changes.update(time.clone(), -1);
+        }
+
+        // Remove holds for all dependencies, which we previously acquired.
+        let mut storage_read_updates = storage_dependencies
+            .iter()
+            .map(|id| (*id, changes.clone()))
+            .collect();
+
+        self.update_read_capabilities(&mut storage_read_updates);
+
+        Ok(())
+    }
+
     /// Acquires persist handles for the given `shard`. This will `halt!` the
     /// process if we cannot successfully acquire a critical handle with our
     /// current epoch.
@@ -1843,66 +2045,6 @@ where
         };
 
         (write, since_handle)
-    }
-
-    // Should only fail if collection doesn't exist. N.B. We can't just take in the mut ref because then the borrow checker wouldn't let us read state.
-    fn generate_new_capability_for_collection<F>(
-        &mut self,
-        id: GlobalId,
-        f: F,
-    ) -> Result<ChangeBatch<<Self as StorageController>::Timestamp>, StorageError>
-    where
-        F: FnOnce(&mut CollectionState<<Self as StorageController>::Timestamp>),
-    {
-        let collection = self
-            .state
-            .collections
-            .get_mut(&id)
-            .ok_or(StorageError::IdentifierMissing(id))?;
-        f(collection);
-
-        let mut update = ChangeBatch::new();
-
-        // Get read policy sent from the coordinator
-        let mut new_read_capability = collection
-            .read_policy
-            .frontier(collection.write_frontier.borrow());
-
-        // Also consider the write frontier of any exports.  It's worth adding a quick note on write frontiers here.
-        //
-        // The write frontier that sinks communicate back to the controller indicates that all further writes will
-        // happen at a time `t` such that `!timely::ParitalOrder::less_than(&t, &write_frontier)` is true.  On restart,
-        // the sink will receive an SinkAsOf from this controller indicating that it should ignore everything at or
-        // before the `since` of the from collection.  This will not miss any records because, if there were records not
-        // yet written out that have an uncompacted time of `since`, the write frontier previously reported from the
-        // sink must be less than `since` so we would not have compacted up to `since`!  This is tested by the kafka
-        // persistence tests.
-        for export_id in self
-            .state
-            .exported_collections
-            .get(&id)
-            .cloned()
-            .unwrap_or_default()
-        {
-            new_read_capability.meet_assign(
-                &self
-                    .state
-                    .exports
-                    .get(&export_id)
-                    .map(|state| state.write_frontier.clone())
-                    // If sink has not been fully initialized (only `prepare_export` but not
-                    // `create_export` has been called), hold back compaction completely.
-                    .unwrap_or_else(|| Antichain::from_elem(Timestamp::minimum())),
-            );
-        }
-
-        if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
-            update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
-            std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
-            update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
-        }
-
-        Ok(update)
     }
 
     /// Effectively truncates the `data_shard` associated with `global_id`
@@ -2239,6 +2381,9 @@ pub struct CollectionState<T> {
     /// The policy to use to downgrade `self.implied_capability`.
     pub read_policy: ReadPolicy<T>,
 
+    /// Storage identifiers on which this collection depends.
+    pub storage_dependencies: Vec<GlobalId>,
+
     /// Reported write frontier.
     pub write_frontier: Antichain<T>,
 
@@ -2251,6 +2396,7 @@ impl<T: Timestamp> CollectionState<T> {
         description: CollectionDescription<T>,
         since: Antichain<T>,
         write_frontier: Antichain<T>,
+        storage_dependencies: Vec<GlobalId>,
         metadata: CollectionMetadata,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
@@ -2260,6 +2406,7 @@ impl<T: Timestamp> CollectionState<T> {
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::ValidFrom(since),
+            storage_dependencies,
             write_frontier,
             collection_metadata: metadata,
         }
@@ -2281,18 +2428,34 @@ pub struct ExportState<T> {
     /// Description with which the export was created
     pub description: ExportDescription<T>,
 
+    /// The capability (hold on the since) that this export needs from its
+    /// dependencies (inputs).
+    pub read_capability: Antichain<T>,
+
+    /// The policy to use to downgrade `self.read_capability`.
+    pub read_policy: ReadPolicy<T>,
+
+    /// Storage identifiers on which this collection depends.
+    pub storage_dependencies: Vec<GlobalId>,
+
     /// Reported write frontier.
     pub write_frontier: Antichain<T>,
 }
+
 impl<T: Timestamp> ExportState<T> {
-    fn new(description: ExportDescription<T>) -> Self {
+    fn new(
+        description: ExportDescription<T>,
+        read_capability: Antichain<T>,
+        read_policy: ReadPolicy<T>,
+        storage_dependencies: Vec<GlobalId>,
+    ) -> Self {
         Self {
             description,
+            read_capability,
+            read_policy,
+            storage_dependencies,
             write_frontier: Antichain::from_elem(Timestamp::minimum()),
         }
-    }
-    fn from(&self) -> GlobalId {
-        self.description.sink.from
     }
 }
 
