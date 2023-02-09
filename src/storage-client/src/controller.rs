@@ -1105,13 +1105,13 @@ where
                     )
                     .await;
 
-                let storage_dependencies = this.get_collection_dependencies(&description);
+                let storage_dependents = this.get_collection_dependents(&description);
 
                 let cs = CollectionState::new(
                     description.clone(),
                     since_handle.since().clone(),
                     write.upper().clone(),
-                    storage_dependencies,
+                    storage_dependents,
                     metadata.clone(),
                 );
                 Ok::<_, anyhow::Error>((id, description, write, since_handle, cs))
@@ -1137,8 +1137,33 @@ where
         // This work mutates the controller state, so must be done serially. Because there
         // is no io-bound work, its very fast.
         for (id, description, write, since_handle, collection_state) in to_register {
+            let since = since_handle.since().clone();
+
             self.state.persist_write_handles.register(id, write);
             self.state.persist_read_handles.register(id, since_handle);
+
+            // Ensure that dependent collections' read policies do not
+            // inadvertently surpass the dependency's since.
+            self.set_read_policy(
+                collection_state
+                    .storage_dependents
+                    .clone()
+                    .into_iter()
+                    .map(|id| {
+                        // current implied capability is not in advance of
+                        // dependent since.
+                        assert!(PartialOrder::less_equal(
+                            &self
+                                .collection(id)
+                                .expect("known to exist")
+                                .implied_capability,
+                            &since
+                        ));
+
+                        (id, ReadPolicy::ValidFrom(since.clone()))
+                    })
+                    .collect(),
+            );
 
             self.state.collections.insert(id, collection_state);
 
@@ -1660,11 +1685,17 @@ where
                 let changes = collection.read_capabilities.update_iter(update.drain());
                 update.extend(changes);
 
-                for id in collection.storage_dependencies.iter() {
-                    updates
-                        .entry(*id)
-                        .or_insert_with(ChangeBatch::new)
-                        .extend(update.iter().cloned());
+                // Only mirror changes that do not close the dependent
+                // collections; dependency represents an upper bound, so
+                // outliving the dependency is fine because any value is less
+                // than the empty antichain.
+                if !collection.read_capabilities.frontier().is_empty() {
+                    for id in collection.storage_dependents.iter() {
+                        updates
+                            .entry(*id)
+                            .or_insert_with(ChangeBatch::new)
+                            .extend(update.iter().cloned());
+                    }
                 }
 
                 let (changes, frontier) = storage_net
@@ -1907,7 +1938,7 @@ where
     /// `collection_description` depends on.
     ///
     /// TODO: @sean: This is where the remap shard would slot it.
-    fn get_collection_dependencies(
+    fn get_collection_dependents(
         &self,
         collection_description: &CollectionDescription<T>,
     ) -> Vec<GlobalId> {
@@ -2381,8 +2412,8 @@ pub struct CollectionState<T> {
     /// The policy to use to downgrade `self.implied_capability`.
     pub read_policy: ReadPolicy<T>,
 
-    /// Storage identifiers on which this collection depends.
-    pub storage_dependencies: Vec<GlobalId>,
+    /// Storage identifiers which depend on this collection.
+    pub storage_dependents: Vec<GlobalId>,
 
     /// Reported write frontier.
     pub write_frontier: Antichain<T>,
@@ -2396,7 +2427,7 @@ impl<T: Timestamp> CollectionState<T> {
         description: CollectionDescription<T>,
         since: Antichain<T>,
         write_frontier: Antichain<T>,
-        storage_dependencies: Vec<GlobalId>,
+        storage_dependents: Vec<GlobalId>,
         metadata: CollectionMetadata,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
@@ -2406,7 +2437,7 @@ impl<T: Timestamp> CollectionState<T> {
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::ValidFrom(since),
-            storage_dependencies,
+            storage_dependents,
             write_frontier,
             collection_metadata: metadata,
         }
