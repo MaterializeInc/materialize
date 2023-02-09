@@ -687,15 +687,15 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoStateRollup> for UntypedSta
         for (seqno, rollup) in x.rollups {
             rollups.insert(seqno.into_rust()?, rollup.into_rust()?);
         }
-        for (seqno, key) in x.deprecated_rollups {
-            rollups.insert(
-                seqno.into_rust()?,
-                HollowRollup {
-                    key: key.into_rust()?,
-                    encoded_size_bytes: None,
-                },
-            );
-        }
+        // for (seqno, key) in x.deprecated_rollups {
+        //     rollups.insert(
+        //         seqno.into_rust()?,
+        //         HollowRollup {
+        //             key: key.into_rust()?,
+        //             encoded_size_bytes: None,
+        //         },
+        //     );
+        // }
         let mut leased_readers = BTreeMap::new();
         for (id, state) in x.leased_readers {
             leased_readers.insert(id.into_rust()?, state.into_rust()?);
