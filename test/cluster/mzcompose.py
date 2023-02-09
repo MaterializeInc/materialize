@@ -66,6 +66,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "pg-snapshot-resumption",
         "test-system-table-indexes",
         "test-replica-targeted-subscribe-abort",
+        "test-compute-reconciliation-reuse",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -789,3 +790,84 @@ def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
             c.run("testdrive", "pg-snapshot-partial-failure/04-add-more-data.td")
             c.up("storage")
             c.run("testdrive", "pg-snapshot-partial-failure/05-verify-data.td")
+
+
+def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
+    """
+    Test that compute reconciliation reuses existing dataflows.
+
+    Note that this is currently not working, due to #17594. This test
+    tests the current, undesired behavior and must be adjusted once
+    #17594 is fixed.
+    """
+
+    c.down(destroy_volumes=True)
+
+    c.up("materialized")
+    c.up("clusterd1")
+
+    # Helper function to get reconciliation metrics for clusterd.
+    def fetch_reconciliation_metrics() -> Tuple[int, int]:
+        metrics = c.exec(
+            "clusterd1", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+
+        reused = 0
+        replaced = 0
+        for metric in metrics.splitlines():
+            if metric.startswith("mz_compute_reconciliation_reused_dataflows"):
+                reused += int(metric.split()[1])
+            elif metric.startswith("mz_compute_reconciliation_replaced_dataflows"):
+                replaced += int(metric.split()[1])
+
+        return reused, replaced
+
+    # Set up a cluster and a number of dataflows that can be reconciled.
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            STORAGECTL ADDRESS 'clusterd1:2100',
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
+            WORKERS 1
+        ));
+        SET cluster = cluster1;
+
+        -- index on table
+        CREATE TABLE t1 (a int);
+        CREATE DEFAULT INDEX on t1;
+
+        -- index on view
+        CREATE VIEW v AS SELECT a + 1 FROM t1;
+        CREATE DEFAULT INDEX on v;
+
+        -- materialized view on table
+        CREATE TABLE t2 (a int);
+        CREATE MATERIALIZED VIEW mv1 AS SELECT a + 1 FROM t2;
+
+        -- materialized view on index
+        CREATE MATERIALIZED VIEW mv2 AS SELECT a + 1 FROM t1;
+        """
+    )
+
+    # Give the dataflows some time to make progress and get compacted.
+    # This is done to trigger the bug described in #17594.
+    time.sleep(10)
+
+    # Restart environmentd to trigger a reconciliation.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # Perform a query to ensure reconciliation has finished.
+    c.sql(
+        """
+        SET cluster = cluster1;
+        SELECT * FROM v;
+        """
+    )
+
+    reused, replaced = fetch_reconciliation_metrics()
+
+    # TODO(#17594): Flip these once the bug is fixed.
+    assert reused == 0
+    assert replaced == 4
