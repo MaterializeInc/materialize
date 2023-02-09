@@ -20,10 +20,10 @@
 
 //! SQL Parser
 
-use bytesize::ByteSize;
 use std::error::Error;
 use std::fmt;
 
+use bytesize::ByteSize;
 use itertools::Itertools;
 use tracing::warn;
 
@@ -32,6 +32,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use IsLateral::*;
+use IsOptional::*;
 
 use crate::ast::*;
 use crate::keywords::*;
@@ -56,7 +58,7 @@ macro_rules! parser_err {
 }
 
 /// Parses a SQL string containing zero or more SQL statements.
-/// Statements larger than [`Self::MAX_STATEMENT_BATCH_SIZE`] are rejected.
+/// Statements larger than [`MAX_STATEMENT_BATCH_SIZE`] are rejected.
 ///
 /// The outer Result is for errors related to the statement size. The inner Result is for
 /// errors during the parsing.
@@ -141,13 +143,11 @@ enum IsOptional {
     Optional,
     Mandatory,
 }
-use IsOptional::*;
 
 enum IsLateral {
     Lateral,
     NotLateral,
 }
-use IsLateral::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParserError {

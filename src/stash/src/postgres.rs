@@ -1019,3 +1019,9 @@ impl Consolidator {
         Ok(())
     }
 }
+
+struct DebugStashFactory {
+    url: String,
+    schema: String
+    tls: MakeTlsConnector
+}
