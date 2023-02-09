@@ -214,7 +214,7 @@ impl<T: TimestampManipulation> Session<T> {
 
         if let Some(isolation_level) = isolation_level {
             self.vars
-                .set("transaction_isolation", IsolationLevel::from(isolation_level).as_str(), true)
+                .set("transaction_isolation", &[IsolationLevel::from(isolation_level).as_str().into()], true)
                 .expect("transaction_isolation should be a valid var and isolation level is a valid value");
         }
 

@@ -47,7 +47,7 @@ pub enum AdapterError {
     /// The specified session parameter is constrained to a finite set of values.
     ConstrainedParameter {
         parameter: &'static (dyn Var + Send + Sync),
-        value: String,
+        values: Vec<String>,
         valid_values: Option<Vec<&'static str>>,
     },
     /// The cursor already exists.
@@ -57,6 +57,9 @@ pub enum AdapterError {
     /// An error occurred while planning the statement.
     Explain(ExplainError),
     /// The specified parameter is fixed to a single specific value.
+    ///
+    /// We allow setting the parameter to its fixed value for compatibility
+    /// with PostgreSQL-based tools.
     FixedValueParameter(&'static (dyn Var + Send + Sync)),
     /// The ID allocator exhausted all valid IDs.
     IdExhaustionError,
@@ -77,7 +80,7 @@ pub enum AdapterError {
     /// The value of the specified parameter is incorrect
     InvalidParameterValue {
         parameter: &'static (dyn Var + Send + Sync),
-        value: String,
+        values: Vec<String>,
         reason: String,
     },
     /// No such cluster replica size has been configured.
@@ -358,12 +361,16 @@ impl fmt::Display for AdapterError {
             AdapterError::ChangedPlan => f.write_str("cached plan must not change result type"),
             AdapterError::Catalog(e) => e.fmt(f),
             AdapterError::ConstrainedParameter {
-                parameter, value, ..
+                parameter, values, ..
             } => write!(
                 f,
                 "invalid value for parameter {}: {}",
                 parameter.name().quoted(),
-                value.quoted()
+                values
+                    .iter()
+                    .map(|v| v.quoted().to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
             ),
             AdapterError::DuplicateCursor(name) => {
                 write!(f, "cursor {} already exists", name.quoted())
@@ -396,13 +403,17 @@ impl fmt::Display for AdapterError {
             ),
             AdapterError::InvalidParameterValue {
                 parameter,
-                value,
+                values,
                 reason,
             } => write!(
                 f,
                 "parameter {} cannot have value {}: {}",
                 parameter.name().quoted(),
-                value.quoted(),
+                values
+                    .iter()
+                    .map(|v| v.quoted().to_string())
+                    .collect::<Vec<_>>()
+                    .join(","),
                 reason,
             ),
             AdapterError::InvalidClusterReplicaAz { az, expected: _ } => {

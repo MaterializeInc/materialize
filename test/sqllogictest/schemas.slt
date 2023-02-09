@@ -14,9 +14,13 @@ show search_path
 ----
 public
 
-# TODO: Check `search_path = 'bar', 'foo'` later once we correctly support multi
-# variable settings. That is, where the first schema of search_path doesn't exist
-# but the second does.
+statement ok
+SET search_path = foo
+
+query T
+show search_path
+----
+foo
 
 statement ok
 SET search_path = 'foo'
@@ -25,6 +29,14 @@ query T
 show search_path
 ----
 foo
+
+statement ok
+SET search_path = 'bar', foo, "blah"
+
+query T
+show search_path
+----
+bar, foo, blah
 
 query T
 SELECT current_schema()

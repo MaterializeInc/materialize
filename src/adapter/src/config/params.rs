@@ -10,8 +10,8 @@
 use std::collections::BTreeSet;
 
 use mz_sql::ast::{
-    AlterSystemResetStatement, AlterSystemSetStatement, Ident, Raw, SetVariableValue, Statement,
-    Value,
+    AlterSystemResetStatement, AlterSystemSetStatement, Ident, Raw, SetVariableTo,
+    SetVariableValue, Statement, Value,
 };
 
 use crate::session::vars::SystemVars;
@@ -158,7 +158,9 @@ impl ModifiedParameter {
             }),
             false => Statement::AlterSystemSet(AlterSystemSetStatement {
                 name: Ident::from(self.name.clone()),
-                value: SetVariableValue::Literal(Value::String(self.value.clone())),
+                to: SetVariableTo::Values(vec![SetVariableValue::Literal(Value::String(
+                    self.value.clone(),
+                ))]),
             }),
         }
     }

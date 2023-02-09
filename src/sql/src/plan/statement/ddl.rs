@@ -38,7 +38,7 @@ use mz_sql_parser::ast::{
     AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceStatement,
     AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
     CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredObjectName, SetVariableValue, SshConnectionOption, UnresolvedObjectName, Value,
+    DeferredObjectName, SshConnectionOption, UnresolvedObjectName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -115,6 +115,8 @@ use crate::plan::{
     Plan, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink, Source,
     SourceSinkClusterConfig, Table, Type, View,
 };
+
+use super::scl;
 
 pub fn describe_create_database(
     _: &StatementContext,
@@ -3903,13 +3905,10 @@ pub fn describe_alter_system_set(
 
 pub fn plan_alter_system_set(
     _: &StatementContext,
-    AlterSystemSetStatement { name, value }: AlterSystemSetStatement,
+    AlterSystemSetStatement { name, to }: AlterSystemSetStatement,
 ) -> Result<Plan, PlanError> {
     let name = name.to_string();
-    if matches!(&value, SetVariableValue::Literal(value) if matches!(value, mz_sql_parser::ast::Value::Null))
-    {
-        sql_bail!("Unable to set system configuration '{}' to NULL", name)
-    }
+    let value = scl::plan_set_variable_to(to)?;
     Ok(Plan::AlterSystemSet(AlterSystemSetPlan { name, value }))
 }
 

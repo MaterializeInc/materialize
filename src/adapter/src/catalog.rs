@@ -6801,7 +6801,7 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", "pg_catalog", false)
+                .set("search_path", &["pg_catalog".into()], false)
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
@@ -6828,7 +6828,7 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", "mz_catalog", false)
+                .set("search_path", &["mz_catalog".into()], false)
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
@@ -6855,7 +6855,7 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", "mz_temp", false)
+                .set("search_path", &["mz_temp".into()], false)
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(

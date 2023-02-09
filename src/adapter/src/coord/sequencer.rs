@@ -18,6 +18,7 @@ use anyhow::anyhow;
 use futures::future::BoxFuture;
 
 use maplit::btreeset;
+use mz_ore::collections::CollectionExt;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::{event, warn, Level};
@@ -54,7 +55,7 @@ use mz_sql::plan::{
     ExplainPlan, FetchPlan, IndexOption, InsertPlan, MaterializedView, MutationKind,
     OptimizerConfig, PeekPlan, Plan, PlanKind, QueryWhen, RaisePlan, ReadThenWritePlan,
     ResetVariablePlan, RotateKeysPlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, View,
+    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
@@ -1962,15 +1963,11 @@ impl Coordinator {
         session: &mut Session,
         plan: SetVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use mz_sql::ast::{SetVariableValue, Value};
-
         let vars = session.vars_mut();
         let (name, local) = (plan.name, plan.local);
-        let value = match plan.value {
-            SetVariableValue::Default => None,
-            SetVariableValue::Literal(Value::String(s)) => Some(s), // unquoted strings
-            SetVariableValue::Ident(ident) => Some(ident.into_string()), // pass-through unquoted idents
-            value => Some(value.to_string()), // or else use the AstDisplay for SetVariableValue
+        let values = match plan.value {
+            VariableValue::Default => None,
+            VariableValue::Values(values) => Some(values),
         };
 
         let var = vars.get(&name)?;
@@ -1978,38 +1975,36 @@ impl Coordinator {
             self.catalog.require_unsafe_mode(var.name())?;
         }
 
-        match &value {
-            Some(v) => {
-                vars.set(&name, v, local)?;
+        match values {
+            Some(values) => {
+                vars.set(&name, &values, local)?;
 
-                // Add notice if database or cluster value does not correspond to a catalog item.
-                if name.as_str() == DATABASE_VAR_NAME
-                    && matches!(
-                        self.catalog.resolve_database(v),
-                        Err(CatalogError::UnknownDatabase(_))
-                    )
-                {
-                    session.add_notice(AdapterNotice::DatabaseDoesNotExist {
-                        name: v.to_string(),
-                    });
-                } else if name.as_str() == CLUSTER_VAR_NAME
-                    && matches!(
-                        self.catalog.resolve_cluster(v),
-                        Err(CatalogError::UnknownCluster(_))
-                    )
-                {
-                    session.add_notice(AdapterNotice::ClusterDoesNotExist {
-                        name: v.to_string(),
-                    });
-                } else if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME {
-                    let v = v.to_lowercase();
-                    if v == IsolationLevel::ReadUncommitted.as_str()
-                        || v == IsolationLevel::ReadCommitted.as_str()
-                        || v == IsolationLevel::RepeatableRead.as_str()
+                if let Some(v) = values.first() {
+                    // Database or cluster value does not correspond to a catalog item.
+                    if name.as_str() == DATABASE_VAR_NAME
+                        && matches!(
+                            self.catalog.resolve_database(v),
+                            Err(CatalogError::UnknownDatabase(_))
+                        )
                     {
-                        session.add_notice(AdapterNotice::UnimplementedIsolationLevel {
-                            isolation_level: v,
-                        });
+                        session.add_notice(AdapterNotice::DatabaseDoesNotExist { name: v.clone() });
+                    } else if name.as_str() == CLUSTER_VAR_NAME
+                        && matches!(
+                            self.catalog.resolve_cluster(v),
+                            Err(CatalogError::UnknownCluster(_))
+                        )
+                    {
+                        session.add_notice(AdapterNotice::ClusterDoesNotExist { name: v.clone() });
+                    } else if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME {
+                        let v = v.to_lowercase();
+                        if v == IsolationLevel::ReadUncommitted.as_str()
+                            || v == IsolationLevel::ReadCommitted.as_str()
+                            || v == IsolationLevel::RepeatableRead.as_str()
+                        {
+                            session.add_notice(AdapterNotice::UnimplementedIsolationLevel {
+                                isolation_level: v,
+                            });
+                        }
                     }
                 }
             }
@@ -3816,7 +3811,6 @@ impl Coordinator {
         session: &Session,
         AlterSystemSetPlan { name, value }: AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use mz_sql::ast::{SetVariableValue, Value};
         self.is_user_allowed_to_alter_system(session)?;
         let var = self.catalog.state().get_system_configuration(&name)?;
         if !var.safe() {
@@ -3826,18 +3820,14 @@ impl Coordinator {
         let update_storage_config = session::vars::is_storage_config_var(&name);
         let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = match value {
-            SetVariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
-            SetVariableValue::Literal(Value::String(value)) => {
+            VariableValue::Values(values) => {
+                if values.len() != 1 {
+                    coord_bail!("ALTER SYSTEM ... SET takes only one argument");
+                }
+                let value = values.into_element();
                 catalog::Op::UpdateSystemConfiguration { name, value }
             }
-            SetVariableValue::Ident(ident) => catalog::Op::UpdateSystemConfiguration {
-                name,
-                value: ident.into_string(),
-            },
-            value => catalog::Op::UpdateSystemConfiguration {
-                name,
-                value: value.to_string(),
-            },
+            VariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
         };
         self.catalog_transact(Some(session), vec![op]).await?;
         if update_compute_config {
