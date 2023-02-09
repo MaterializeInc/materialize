@@ -457,8 +457,6 @@ struct BatchBuffer<D> {
 
     current_part: Vec<((Range<usize>, Range<usize>), [u8; 8], D)>,
     current_part_total_bytes: usize,
-    current_part_key_bytes: usize,
-    current_part_value_bytes: usize,
 }
 
 impl<D> BatchBuffer<D>
@@ -480,8 +478,6 @@ where
             val_buf: Default::default(),
             current_part: Default::default(),
             current_part_total_bytes: Default::default(),
-            current_part_key_bytes: Default::default(),
-            current_part_value_bytes: Default::default(),
         }
     }
 
@@ -508,8 +504,6 @@ where
         let ts = T::encode(ts);
 
         self.current_part_total_bytes += size;
-        self.current_part_key_bytes += k_range.len();
-        self.current_part_value_bytes += v_range.len();
         self.current_part.push(((k_range, v_range), ts, diff));
 
         // if we've filled up a batch part, flush out to blob to keep our memory usage capped.
@@ -544,8 +538,8 @@ where
         let mut builder = ColumnarRecordsBuilder::default();
         builder.reserve_exact(
             self.current_part.len(),
-            self.current_part_key_bytes,
-            self.current_part_value_bytes,
+            self.key_buf.len(),
+            self.val_buf.len(),
         );
         for ((k, v), t, d) in updates {
             // if this fails, the individual record is too big to fit in a ColumnarRecords by itself.
@@ -561,8 +555,6 @@ where
         self.key_buf.clear();
         self.val_buf.clear();
         self.current_part_total_bytes = 0;
-        self.current_part_key_bytes = 0;
-        self.current_part_value_bytes = 0;
         assert_eq!(self.current_part.len(), 0);
 
         columnar
