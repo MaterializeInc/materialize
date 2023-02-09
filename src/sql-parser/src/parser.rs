@@ -32,6 +32,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use IsLateral::*;
+use IsOptional::*;
 
 use crate::ast::*;
 use crate::keywords::*;
@@ -56,17 +58,26 @@ macro_rules! parser_err {
 }
 
 /// Parses a SQL string containing zero or more SQL statements.
+/// Statements larger than [`MAX_STATEMENT_BATCH_SIZE`] are rejected.
+///
+/// The outer Result is for errors related to the statement size. The inner Result is for
+/// errors during the parsing.
 #[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
-pub fn parse_statements(sql: &str) -> Result<Vec<Statement<Raw>>, ParserError> {
+pub fn parse_statements_with_limit(
+    sql: &str,
+) -> Result<Result<Vec<Statement<Raw>>, ParserError>, String> {
     if sql.bytes().count() > MAX_STATEMENT_BATCH_SIZE {
-        return Err(ParserError::new(
-            MAX_STATEMENT_BATCH_SIZE,
-            format!(
-                "statement batch size cannot exceed {}",
-                ByteSize::b(u64::cast_from(MAX_STATEMENT_BATCH_SIZE))
-            ),
+        return Err(format!(
+            "statement batch size cannot exceed {}",
+            ByteSize::b(u64::cast_from(MAX_STATEMENT_BATCH_SIZE))
         ));
     }
+    Ok(parse_statements(sql))
+}
+
+/// Parses a SQL string containing zero or more SQL statements.
+#[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
+pub fn parse_statements(sql: &str) -> Result<Vec<Statement<Raw>>, ParserError> {
     let tokens = lexer::lex(sql)?;
     Parser::new(sql, tokens).parse_statements()
 }
@@ -132,13 +143,11 @@ enum IsOptional {
     Optional,
     Mandatory,
 }
-use IsOptional::*;
 
 enum IsLateral {
     Lateral,
     NotLateral,
 }
-use IsLateral::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParserError {
