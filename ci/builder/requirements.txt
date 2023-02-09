@@ -24,7 +24,7 @@ mypy==0.991
 numpy==1.24.2
 pandas==1.5.2
 parameterized==0.8.1
-paramiko==2.12.0
+paramiko==3.0.0
 pdoc3==0.10.0
 pg8000==1.29.4
 prettytable==3.5.0
