@@ -1462,70 +1462,70 @@ ALTER SYSTEM SET wal_level TO logical
 ----
 ALTER SYSTEM SET wal_level = logical
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("wal_level"), value: Ident(Ident("logical")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("wal_level"), to: Values([Ident(Ident("logical"))]) })
 
 parse-statement
 ALTER SYSTEM SET wal_level = logical
 ----
 ALTER SYSTEM SET wal_level = logical
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("wal_level"), value: Ident(Ident("logical")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("wal_level"), to: Values([Ident(Ident("logical"))]) })
 
 parse-statement
 ALTER SYSTEM SET log_destination TO 'syslog'
 ----
 ALTER SYSTEM SET log_destination = 'syslog'
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("log_destination"), value: Literal(String("syslog")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("log_destination"), to: Values([Literal(String("syslog"))]) })
 
 parse-statement
 ALTER SYSTEM SET log_destination = 'syslog'
 ----
 ALTER SYSTEM SET log_destination = 'syslog'
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("log_destination"), value: Literal(String("syslog")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("log_destination"), to: Values([Literal(String("syslog"))]) })
 
 parse-statement
 ALTER SYSTEM SET shared_buffers TO 42
 ----
 ALTER SYSTEM SET shared_buffers = 42
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("shared_buffers"), value: Literal(Number("42")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("shared_buffers"), to: Values([Literal(Number("42"))]) })
 
 parse-statement
 ALTER SYSTEM SET shared_buffers = 42
 ----
 ALTER SYSTEM SET shared_buffers = 42
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("shared_buffers"), value: Literal(Number("42")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("shared_buffers"), to: Values([Literal(Number("42"))]) })
 
 parse-statement
 ALTER SYSTEM SET search_path TO default
 ----
 ALTER SYSTEM SET search_path = DEFAULT
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("search_path"), value: Default })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("search_path"), to: Default })
 
 parse-statement
 ALTER SYSTEM SET search_path = default
 ----
 ALTER SYSTEM SET search_path = DEFAULT
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("search_path"), value: Default })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("search_path"), to: Default })
 
 parse-statement
 ALTER SYSTEM SET log_connections TO 'default'
 ----
 ALTER SYSTEM SET log_connections = 'default'
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("log_connections"), value: Literal(String("default")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("log_connections"), to: Values([Literal(String("default"))]) })
 
 parse-statement
 ALTER SYSTEM SET log_connections = 'default'
 ----
 ALTER SYSTEM SET log_connections = 'default'
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("log_connections"), value: Literal(String("default")) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("log_connections"), to: Values([Literal(String("default"))]) })
 
 parse-statement
 ALTER SYSTEM SET some_array_key = [667, 668]
@@ -1539,14 +1539,14 @@ ALTER SYSTEM SET quantum_enabled = true
 ----
 ALTER SYSTEM SET quantum_enabled = true
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("quantum_enabled"), value: Literal(Boolean(true)) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("quantum_enabled"), to: Values([Literal(Boolean(true))]) })
 
 parse-statement
 ALTER SYSTEM SET use_optional = NULL
 ----
 ALTER SYSTEM SET use_optional = NULL
 =>
-AlterSystemSet(AlterSystemSetStatement { name: Ident("use_optional"), value: Literal(Null) })
+AlterSystemSet(AlterSystemSetStatement { name: Ident("use_optional"), to: Values([Literal(Null)]) })
 
 parse-statement
 ALTER SYSTEM SET key value

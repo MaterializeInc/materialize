@@ -347,77 +347,98 @@ SET a = b
 ----
 SET a = b
 =>
-SetVariable(SetVariableStatement { local: false, variable: Ident("a"), value: Ident(Ident("b")) })
+SetVariable(SetVariableStatement { local: false, variable: Ident("a"), to: Values([Ident(Ident("b"))]) })
 
 parse-statement
 SET a = 'b'
 ----
 SET a = 'b'
 =>
-SetVariable(SetVariableStatement { local: false, variable: Ident("a"), value: Literal(String("b")) })
+SetVariable(SetVariableStatement { local: false, variable: Ident("a"), to: Values([Literal(String("b"))]) })
 
 parse-statement
 SET a = 0
 ----
 SET a = 0
 =>
-SetVariable(SetVariableStatement { local: false, variable: Ident("a"), value: Literal(Number("0")) })
+SetVariable(SetVariableStatement { local: false, variable: Ident("a"), to: Values([Literal(Number("0"))]) })
 
 parse-statement
 SET a = default
 ----
 SET a = DEFAULT
 =>
-SetVariable(SetVariableStatement { local: false, variable: Ident("a"), value: Default })
+SetVariable(SetVariableStatement { local: false, variable: Ident("a"), to: Default })
 
 parse-statement
 SET a = 'default'
 ----
 SET a = 'default'
 =>
-SetVariable(SetVariableStatement { local: false, variable: Ident("a"), value: Literal(String("default")) })
+SetVariable(SetVariableStatement { local: false, variable: Ident("a"), to: Values([Literal(String("default"))]) })
 
 parse-statement
 SET LOCAL a = b
 ----
 SET LOCAL a = b
 =>
-SetVariable(SetVariableStatement { local: true, variable: Ident("a"), value: Ident(Ident("b")) })
+SetVariable(SetVariableStatement { local: true, variable: Ident("a"), to: Values([Ident(Ident("b"))]) })
 
 parse-statement
 SET TIME ZONE utc
 ----
 SET timezone = utc
 =>
-SetVariable(SetVariableStatement { local: false, variable: Ident("timezone"), value: Ident(Ident("utc")) })
+SetVariable(SetVariableStatement { local: false, variable: Ident("timezone"), to: Values([Ident(Ident("utc"))]) })
 
 parse-statement
 SET a TO b
 ----
 SET a = b
 =>
-SetVariable(SetVariableStatement { local: false, variable: Ident("a"), value: Ident(Ident("b")) })
+SetVariable(SetVariableStatement { local: false, variable: Ident("a"), to: Values([Ident(Ident("b"))]) })
 
 parse-statement
 SET SESSION a = b
 ----
 SET a = b
 =>
-SetVariable(SetVariableStatement { local: false, variable: Ident("a"), value: Ident(Ident("b")) })
+SetVariable(SetVariableStatement { local: false, variable: Ident("a"), to: Values([Ident(Ident("b"))]) })
 
 parse-statement
 SET tiMe ZoNE 7
 ----
 SET timezone = 7
 =>
-SetVariable(SetVariableStatement { local: false, variable: Ident("timezone"), value: Literal(Number("7")) })
+SetVariable(SetVariableStatement { local: false, variable: Ident("timezone"), to: Values([Literal(Number("7"))]) })
 
 parse-statement
 SET LOCAL tiMe ZoNE 7
 ----
 SET LOCAL timezone = 7
 =>
-SetVariable(SetVariableStatement { local: true, variable: Ident("timezone"), value: Literal(Number("7")) })
+SetVariable(SetVariableStatement { local: true, variable: Ident("timezone"), to: Values([Literal(Number("7"))]) })
+
+parse-statement
+SET a = b, c, d
+----
+SET a = b, c, d
+=>
+SetVariable(SetVariableStatement { local: false, variable: Ident("a"), to: Values([Ident(Ident("b")), Ident(Ident("c")), Ident(Ident("d"))]) })
+
+parse-statement
+SET a TO b, c, d
+----
+SET a = b, c, d
+=>
+SetVariable(SetVariableStatement { local: false, variable: Ident("a"), to: Values([Ident(Ident("b")), Ident(Ident("c")), Ident(Ident("d"))]) })
+
+parse-statement
+SET a = 1, '2', 3.0, four
+----
+SET a = 1, '2', 3.0, four
+=>
+SetVariable(SetVariableStatement { local: false, variable: Ident("a"), to: Values([Literal(Number("1")), Literal(String("2")), Literal(Number("3.0")), Ident(Ident("four"))]) })
 
 parse-statement
 SET

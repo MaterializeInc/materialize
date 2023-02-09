@@ -12,6 +12,7 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `DISCARD` and `SET`.
 
+use mz_sql_parser::ast::{SetVariableTo, SetVariableValue, Value};
 use uncased::UncasedStr;
 
 use mz_repr::adt::interval::Interval;
@@ -29,6 +30,7 @@ use crate::plan::with_options::TryFromValue;
 use crate::plan::{
     describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
     FetchPlan, Plan, PlanError, PreparePlan, ResetVariablePlan, SetVariablePlan, ShowVariablePlan,
+    VariableValue,
 };
 
 pub fn describe_set_variable(
@@ -43,14 +45,38 @@ pub fn plan_set_variable(
     SetVariableStatement {
         local,
         variable,
-        value,
+        to,
     }: SetVariableStatement,
 ) -> Result<Plan, PlanError> {
+    let value = plan_set_variable_to(to)?;
     Ok(Plan::SetVariable(SetVariablePlan {
-        name: variable.to_string(),
+        name: variable.into_string(),
         value,
         local,
     }))
+}
+
+pub fn plan_set_variable_to(to: SetVariableTo) -> Result<VariableValue, PlanError> {
+    match to {
+        SetVariableTo::Default => Ok(VariableValue::Default),
+        SetVariableTo::Values(values) => {
+            let mut out = vec![];
+            // Postgres flattens multiple SET values to a single string, and
+            // cares about the underlying variable's flags (guc_tables.c) when
+            // generating that string. We avoid needing to do that by passing a
+            // Vec instead. Each SET var is in charge of if it wants to split
+            // each member of the Vec or not.
+            for value in values {
+                out.push(match value {
+                    // lit.to_string will quote a Value::String, so get the unquoted version.
+                    SetVariableValue::Literal(Value::String(s)) => s,
+                    SetVariableValue::Literal(lit) => lit.to_string(),
+                    SetVariableValue::Ident(ident) => ident.into_string(),
+                });
+            }
+            Ok(VariableValue::Values(out))
+        }
+    }
 }
 
 pub fn describe_reset_variable(
