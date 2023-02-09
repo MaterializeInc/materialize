@@ -137,16 +137,17 @@ pub fn construct<A: Allocate>(
         demux.build(move |_capability| {
             let mut active_dataflows = BTreeMap::new();
             let mut peek_stash = BTreeMap::new();
-            let mut dataflow_imports = BTreeMap::<
-                (GlobalId, usize),
-                BTreeMap<
-                    GlobalId,
-                    (
-                        VecDeque<(mz_repr::Timestamp, u128)>,
-                        BTreeMap<u128, (i128, i32)>,
-                    ),
-                >,
-            >::new();
+            /// State for tracking dataflow frontier lag
+            struct ImportDelayData {
+                /// A list of input timestamps that have appeared on the input
+                /// frontier, but that the output frontier has not yet advanced beyond,
+                /// and the time at which we were informed of their availability
+                time_deque: VecDeque<(mz_repr::Timestamp, u128)>,
+                /// A histogram of emitted delays (bucket size to (bucket_sum, bucket_count))
+                delay_map: BTreeMap<u128, (i128, i32)>,
+            }
+            let mut dataflow_imports =
+                BTreeMap::<(GlobalId, usize), BTreeMap<GlobalId, ImportDelayData>>::new();
             move |_frontiers| {
                 let mut dataflow = dataflow_out.activate();
                 let mut dependency = dependency_out.activate();
@@ -205,7 +206,9 @@ pub fn construct<A: Allocate>(
                                     }
                                     // Remove import frontier delay logging for this dataflow
                                     if let Some(import_map) = dataflow_imports.remove(key) {
-                                        for (import_id, (_, delay_map)) in import_map {
+                                        for (import_id, ImportDelayData { delay_map, .. }) in
+                                            import_map
+                                        {
                                             for (delay_pow, (delay_sum, delay_count)) in delay_map {
                                                 frontier_delay_session.give((
                                                     (id, import_id, worker, delay_pow),
@@ -253,7 +256,14 @@ pub fn construct<A: Allocate>(
                                     if let Some(import_map) =
                                         dataflow_imports.get_mut(&dataflow_key)
                                     {
-                                        for (import_id, (time_deque, delay_map)) in import_map {
+                                        for (
+                                            import_id,
+                                            ImportDelayData {
+                                                time_deque,
+                                                delay_map,
+                                            },
+                                        ) in import_map
+                                        {
                                             while let Some(current_front) = time_deque.pop_front() {
                                                 let import_logical = current_front.0;
                                                 if logical >= import_logical {
@@ -312,11 +322,13 @@ pub fn construct<A: Allocate>(
                                         let import_map = dataflow_imports
                                             .entry(dataflow_key)
                                             .or_insert_with(BTreeMap::new);
-                                        let time_entry = import_map
-                                            .entry(import_id)
-                                            .or_insert((VecDeque::new(), BTreeMap::new()));
-                                        let time_deque = &mut time_entry.0;
-                                        time_deque.push_back((logical, time.as_nanos()));
+                                        let time_entry = import_map.entry(import_id).or_insert(
+                                            ImportDelayData {
+                                                time_deque: VecDeque::new(),
+                                                delay_map: BTreeMap::new(),
+                                            },
+                                        );
+                                        time_entry.time_deque.push_back((logical, time.as_nanos()));
                                     }
                                 }
                             }
