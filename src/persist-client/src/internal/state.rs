@@ -256,6 +256,13 @@ pub struct HollowRollup {
     pub encoded_size_bytes: Option<usize>,
 }
 
+/// A pointer to a blob stored externally.
+#[derive(Debug)]
+pub enum HollowBlobRef<'a, T> {
+    Batch(&'a HollowBatch<T>),
+    Rollup(&'a HollowRollup),
+}
+
 /// A sentinel for a state transition that was a no-op.
 ///
 /// Critically, this also indicates that the no-op state transition was not
@@ -1240,6 +1247,15 @@ where
             Some(self.seqno)
         } else {
             None
+        }
+    }
+
+    pub(crate) fn map_blobs<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
+        self.collections
+            .trace
+            .map_batches(|x| f(HollowBlobRef::Batch(x)));
+        for x in self.collections.rollups.values() {
+            f(HollowBlobRef::Rollup(x));
         }
     }
 }

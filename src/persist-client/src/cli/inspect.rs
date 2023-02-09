@@ -261,7 +261,7 @@ pub async fn fetch_state_rollups(args: &StateArgs) -> Result<impl serde::Seriali
         .fetch_all_live_states::<u64>(shard_id)
         .await
         .check_ts_codec()?;
-    while let Some(v) = state_iter.next() {
+    while let Some(v) = state_iter.next(|_| {}) {
         for rollup in v.collections.rollups.values() {
             rollup_keys.insert(rollup.key.clone());
         }
@@ -300,7 +300,7 @@ pub async fn fetch_state_diffs(
         .fetch_all_live_states::<u64>(shard_id)
         .await
         .check_ts_codec()?;
-    while let Some(_) = state_iter.next() {
+    while let Some(_) = state_iter.next(|_| {}) {
         live_states.push(state_iter.into_proto());
     }
 
@@ -558,7 +558,7 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
     let mut known_parts = BTreeSet::new();
     let mut known_rollups = BTreeSet::new();
     let mut known_writers = BTreeSet::new();
-    while let Some(v) = state_iter.next() {
+    while let Some(v) = state_iter.next(|_| {}) {
         for writer_id in v.collections.writers.keys() {
             known_writers.insert(writer_id.clone());
         }
@@ -607,7 +607,7 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
 
     let mut referenced_parts = BTreeMap::new();
     let mut referenced_rollups = BTreeSet::new();
-    while let Some(state) = state_iter.next() {
+    while let Some(state) = state_iter.next(|_| {}) {
         state.collections.trace.map_batches(|b| {
             for part in b.parts.iter() {
                 referenced_parts.insert(
