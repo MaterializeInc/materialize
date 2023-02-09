@@ -78,8 +78,8 @@
 //! Integration tests for Materialize server.
 
 use std::fmt::Write;
-use std::thread;
 use std::time::Duration;
+use std::{iter, thread};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
@@ -87,6 +87,7 @@ use http::StatusCode;
 use itertools::Itertools;
 use reqwest::blocking::Client;
 use reqwest::Url;
+use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message};
@@ -753,5 +754,86 @@ fn test_max_request_size() {
             err,
             Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)
         ));
+    }
+}
+
+#[test]
+fn test_max_statement_batch_size() {
+    let statement = "SELECT 1;";
+    let statement_size = statement.bytes().count();
+    let max_statement_size = mz_sql_parser::parser::MAX_STATEMENT_BATCH_SIZE;
+    let max_statement_count = max_statement_size / statement_size + 1;
+    let statements = iter::repeat(statement).take(max_statement_count).join("");
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    // pgwire
+    {
+        let mut client = server.connect(postgres::NoTls).unwrap();
+
+        let err = client
+            .batch_execute(&statements)
+            .expect_err("statement should be too large")
+            .unwrap_db_error();
+        assert_eq!(&SqlState::PROGRAM_LIMIT_EXCEEDED, err.code());
+        assert!(
+            err.message().contains("statement batch size cannot exceed"),
+            "error should indicate that the statement was too large: {}",
+            err.message()
+        );
+    }
+
+    // http
+    {
+        let http_url = Url::parse(&format!(
+            "http://{}/api/sql",
+            server.inner.http_local_addr()
+        ))
+        .unwrap();
+        let json = format!("{{\"query\":\"{statements}\"}}");
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        let res = Client::new().post(http_url).json(&json).send().unwrap();
+        assert!(
+            res.status().is_client_error(),
+            "statement should result in an error: {res:?}"
+        );
+        let text = res.text().unwrap();
+        assert!(
+            text.contains("statement batch size cannot exceed"),
+            "error should indicate that the statement was too large: {}",
+            text
+        );
+    }
+
+    // ws
+    {
+        let ws_url = Url::parse(&format!(
+            "ws://{}/api/experimental/sql",
+            server.inner.http_local_addr()
+        ))
+        .unwrap();
+        let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+        util::auth_with_ws(&mut ws);
+        let json = format!("{{\"query\":\"{statements}\"}}");
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        ws.write_message(Message::Text(json.to_string())).unwrap();
+
+        let msg = ws.read_message().unwrap();
+        let msg = msg.into_text().expect("response should be text");
+        let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
+        match msg {
+            WebSocketResponse::Error(err) => assert!(
+                err.contains("statement batch size cannot exceed"),
+                "error should indicate that the statement was too large: {}",
+                err
+            ),
+            msg @ WebSocketResponse::ReadyForQuery(_)
+            | msg @ WebSocketResponse::Notice(_)
+            | msg @ WebSocketResponse::Rows(_)
+            | msg @ WebSocketResponse::Row(_)
+            | msg @ WebSocketResponse::CommandComplete(_) => {
+                panic!("response should be error: {msg:?}")
+            }
+        }
     }
 }

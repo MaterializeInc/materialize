@@ -3723,6 +3723,7 @@ dependencies = [
  "mz-segment",
  "mz-service",
  "mz-sql",
+ "mz-sql-parser",
  "mz-stash",
  "mz-storage-client",
  "nix",
