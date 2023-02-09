@@ -100,4 +100,5 @@ pub use codec::MAX_REQUEST_SIZE;
 pub use message::Severity;
 pub use metrics::MetricsConfig;
 pub use protocol::match_handshake;
+pub use protocol::MAX_STATEMENT_BATCH_SIZE;
 pub use server::{Config, Server, TlsConfig, TlsMode};

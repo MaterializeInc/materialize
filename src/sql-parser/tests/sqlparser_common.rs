@@ -87,9 +87,7 @@
 // END LINT CONFIG
 
 use std::error::Error;
-use std::iter;
 
-use itertools::Itertools;
 use unicode_width::UnicodeWidthStr;
 
 use mz_ore::collections::CollectionExt;
@@ -98,7 +96,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawDataType, RawObjectName};
-use mz_sql_parser::parser::{self, parse_statements, ParserError, MAX_STATEMENT_BATCH_SIZE};
+use mz_sql_parser::parser::{self, ParserError};
 
 #[test]
 fn datadriven() {
@@ -351,17 +349,4 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
     assert_eq!(visitor.seen_idents, expected);
 
     Ok(())
-}
-
-#[test]
-fn test_max_statement_batch_size() {
-    let statement = "SELECT 1;";
-    let size = statement.bytes().count();
-    let max_statement_count = MAX_STATEMENT_BATCH_SIZE / size;
-    let statements = iter::repeat(statement).take(max_statement_count).join("");
-
-    assert!(parse_statements(&statements).is_ok());
-    let statements = format!("{statements}{statement}");
-    let err = parse_statements(&statements).expect_err("statements should be too big");
-    assert!(err.message.contains("statement batch size cannot exceed "));
 }
