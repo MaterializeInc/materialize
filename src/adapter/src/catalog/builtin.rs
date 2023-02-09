@@ -1201,7 +1201,7 @@ pub const MZ_WORKER_COMPUTE_FRONTIERS: BuiltinLog = BuiltinLog {
 pub const MZ_WORKER_COMPUTE_IMPORT_FRONTIERS: BuiltinLog = BuiltinLog {
     name: "mz_worker_compute_import_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
-    variant: LogVariant::Compute(ComputeLog::SourceFrontierCurrent),
+    variant: LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
 };
 
 pub const MZ_RAW_WORKER_COMPUTE_DELAYS: BuiltinLog = BuiltinLog {

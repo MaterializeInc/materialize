@@ -197,11 +197,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 // Log dataflow construction, frontier construction, and any dependencies.
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
                     logger.log(ComputeEvent::Dataflow(object_id, true));
-                    logger.log(ComputeEvent::Frontier(
-                        object_id,
-                        timely::progress::Timestamp::minimum(),
-                        1,
-                    ));
+                    logger.log(ComputeEvent::Frontier {
+                        id: object_id,
+                        time: timely::progress::Timestamp::minimum(),
+                        diff: 1,
+                    });
                     for import_id in dataflow.depends_on(collection_id) {
                         logger.log(ComputeEvent::DataflowDependency {
                             dataflow: object_id,
@@ -238,8 +238,8 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                     .expect("Dropped compute collection with no frontier");
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
                     logger.log(ComputeEvent::Dataflow(id, false));
-                    if let Some(time) = prev_frontier.get(0) {
-                        logger.log(ComputeEvent::Frontier(id, *time, -1));
+                    if let Some(&time) = prev_frontier.get(0) {
+                        logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
                     }
                 }
 
@@ -567,11 +567,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                     "existing frontier {frontier:?} for newly initialized logging export id {id}"
                 );
             }
-            logger.log(ComputeEvent::Frontier(
+            logger.log(ComputeEvent::Frontier {
                 id,
-                timely::progress::Timestamp::minimum(),
-                1,
-            ));
+                time: timely::progress::Timestamp::minimum(),
+                diff: 1,
+            });
         }
 
         self.compute_state.compute_logger = Some(logger);
@@ -609,11 +609,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             }
 
             if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                if let Some(time) = prev_frontier.get(0) {
-                    logger.log(ComputeEvent::Frontier(id, *time, -1));
+                if let Some(&time) = prev_frontier.get(0) {
+                    logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
                 }
-                if let Some(time) = new_frontier.get(0) {
-                    logger.log(ComputeEvent::Frontier(id, *time, 1));
+                if let Some(&time) = new_frontier.get(0) {
+                    logger.log(ComputeEvent::Frontier { id, time, diff: 1 });
                 }
             }
 
@@ -708,11 +708,19 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
                 assert!(PartialOrder::less_equal(prev_frontier, &new_frontier));
 
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                    if let Some(time) = prev_frontier.get(0) {
-                        logger.log(ComputeEvent::Frontier(sink_id, *time, -1));
+                    if let Some(&time) = prev_frontier.get(0) {
+                        logger.log(ComputeEvent::Frontier {
+                            id: sink_id,
+                            time,
+                            diff: -1,
+                        });
                     }
-                    if let Some(time) = new_frontier.get(0) {
-                        logger.log(ComputeEvent::Frontier(sink_id, *time, 1));
+                    if let Some(&time) = new_frontier.get(0) {
+                        logger.log(ComputeEvent::Frontier {
+                            id: sink_id,
+                            time,
+                            diff: 1,
+                        });
                     }
                 }
 
