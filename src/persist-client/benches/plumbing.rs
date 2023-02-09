@@ -214,8 +214,15 @@ pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data:
 
 pub fn bench_trace_push_batch(c: &mut Criterion) {
     let mut g = c.benchmark_group("trace");
-    const NUM_BATCHES: usize = 20_000;
-    g.bench_function(BenchmarkId::new("push_batch", NUM_BATCHES), |b| {
-        b.iter(|| trace_push_batch_one_iter(NUM_BATCHES));
+    // The larger number is a nice one when compiling with release optimizations
+    // and no debug_assertions, but it takes too long with cargo test
+    // --all-targets.
+    let num_batches = if cfg!(debug_assertions) {
+        1_000
+    } else {
+        20_000
+    };
+    g.bench_function(BenchmarkId::new("push_batch", num_batches), |b| {
+        b.iter(|| trace_push_batch_one_iter(num_batches));
     });
 }
