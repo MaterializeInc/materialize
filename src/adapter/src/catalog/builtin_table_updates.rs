@@ -61,7 +61,7 @@ pub struct BuiltinTableUpdate {
 }
 
 impl CatalogState {
-    pub(super) fn pack_depends_update(
+    pub fn pack_depends_update(
         &self,
         depender: GlobalId,
         dependee: GlobalId,
@@ -276,6 +276,13 @@ impl CatalogState {
                 self.pack_connection_update(id, oid, schema_id, name, connection, diff)
             }
         };
+
+        if !entry.item().is_temporary() {
+            // Populate or clean up the `mz_object_dependencies` table.
+            for dependee in entry.item().uses() {
+                updates.push(self.pack_depends_update(id, *dependee, diff))
+            }
+        }
 
         if let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name(), entry.conn_id())) {
             let defaults = match entry.item() {

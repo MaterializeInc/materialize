@@ -61,3 +61,25 @@ source          subsource
 conn     dep_conn
 -----------------
 pg_conn ssh_conn
+
+
+# Assert that we actually are populating all the system objects.
+> SELECT COUNT(*) > 200 FROM mz_internal.mz_object_dependencies WHERE object_id LIKE 's%'
+true
+
+# Ensure there are no duplicates
+> WITH cte AS (
+    SELECT * FROM mz_internal.mz_object_dependencies
+    GROUP BY object_id, referenced_object_id
+    HAVING count(*) > 1
+  )
+  SELECT count(*) FROM cte
+0
+
+# This isn't a full cycle check, but checks if 2 objects depend on each other
+> SELECT
+  COUNT(*)
+  FROM mz_internal.mz_object_dependencies AS first
+  JOIN mz_internal.mz_object_dependencies AS second
+  ON first.object_id = second.referenced_object_id AND first.referenced_object_id = second.object_id;
+0
