@@ -139,7 +139,7 @@ pub fn construct<A: Allocate>(
             let mut peek_stash = BTreeMap::new();
             let mut dataflow_imports = BTreeMap::<
                 (GlobalId, usize),
-                BTreeMap<GlobalId, (VecDeque<(mz_repr::Timestamp, u128)>, BTreeMap<u128, i32>)>,
+                BTreeMap<GlobalId, (VecDeque<(mz_repr::Timestamp, u128)>, BTreeMap<u128, (i128, i32)>)>,
             >::new();
             move |_frontiers| {
                 let mut dataflow = dataflow_out.activate();
@@ -197,18 +197,16 @@ pub fn construct<A: Allocate>(
                                             key.0, worker
                                         ),
                                     }
-                                    // Remove import frontier delay logging for this dataflow.
-                                    if let Some(import_map) = dataflow_imports.remove(key) {
-                                        for (import_id, (_, delay_map)) in import_map {
-                                            for (delay_ns, delay_count) in delay_map {
-                                                let delay_pow = delay_ns.next_power_of_two();
-                                                let delay_ns: i128 =
-                                                    delay_ns.try_into().expect("delay too big");
+                                    // dataflow may or may not be associated to a storage
+                                    // source instantiation. Report removal if so.
+                                    if let Some(source_map) = storage_sources.remove(key) {
+                                        for (import_id, (_, delay_map)) in source_map {
+                                            for (delay_pow, (delay_sum, delay_count)) in delay_map {
                                                 frontier_delay_session.give((
                                                     (id, import_id, worker, delay_pow),
                                                     time_ms,
                                                     (
-                                                        -(delay_ns * i128::from(delay_count)),
+                                                        -delay_sum,
                                                         -delay_count,
                                                     ),
                                                 ));
@@ -259,14 +257,15 @@ pub fn construct<A: Allocate>(
                                                 if logical >= import_logical {
                                                     let elapsed_ns =
                                                         time.as_nanos() - current_front.1;
-                                                    let delay_count =
-                                                        delay_map.entry(elapsed_ns).or_insert(0);
-                                                    *delay_count += 1;
                                                     let elapsed_pow =
                                                         elapsed_ns.next_power_of_two();
                                                     let elapsed_ns: i128 = elapsed_ns
                                                         .try_into()
                                                         .expect("elapsed_ns too big");
+                                                    let (delay_sum, delay_count) =
+                                                        delay_map.entry(elapsed_pow).or_insert((0, 0));
+                                                    *delay_sum += elapsed_ns;
+                                                    *delay_count += 1;
                                                     frontier_delay_session.give((
                                                         (id, *import_id, worker, elapsed_pow),
                                                         time_ms,
