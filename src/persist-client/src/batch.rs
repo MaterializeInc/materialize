@@ -456,7 +456,6 @@ struct BatchBuffer<D> {
     val_buf: Vec<u8>,
 
     current_part: Vec<((Range<usize>, Range<usize>), [u8; 8], D)>,
-    current_part_total_bytes: usize,
 }
 
 impl<D> BatchBuffer<D>
@@ -477,8 +476,13 @@ where
             key_buf: Default::default(),
             val_buf: Default::default(),
             current_part: Default::default(),
-            current_part_total_bytes: Default::default(),
         }
+    }
+
+    fn current_part_total_bytes(&self) -> usize {
+        self.key_buf.len()
+            + self.val_buf.len()
+            + self.current_part.len() * ColumnarRecordsBuilder::RECORD_OVERHEAD
     }
 
     fn push<K: Codec, V: Codec, T: Codec64>(
@@ -500,14 +504,12 @@ where
             .encode(|| V::encode(val, &mut self.val_buf));
         let k_range = initial_key_buf_len..self.key_buf.len();
         let v_range = initial_val_buf_len..self.val_buf.len();
-        let size = ColumnarRecordsBuilder::columnar_record_size(k_range.len(), v_range.len());
         let ts = T::encode(ts);
 
-        self.current_part_total_bytes += size;
         self.current_part.push(((k_range, v_range), ts, diff));
 
         // if we've filled up a batch part, flush out to blob to keep our memory usage capped.
-        if self.current_part_total_bytes >= self.blob_target_size {
+        if self.current_part_total_bytes() >= self.blob_target_size {
             Some(self.drain())
         } else {
             None
@@ -592,7 +594,6 @@ where
 
         self.key_buf.clear();
         self.val_buf.clear();
-        self.current_part_total_bytes = 0;
         assert_eq!(self.current_part.len(), 0);
 
         columnar

@@ -355,6 +355,9 @@ impl Default for ColumnarRecordsBuilder {
 }
 
 impl ColumnarRecordsBuilder {
+    /// The data required for each record, over and above the size of the key-value data itself.
+    pub const RECORD_OVERHEAD: usize = 2 * BYTES_PER_KEY_VAL_OFFSET + 2 * size_of::<u64>();
+
     /// The number of (potentially duplicated) ((Key, Val), Time, i64) records
     /// stored in Self.
     pub fn len(&self) -> usize {
