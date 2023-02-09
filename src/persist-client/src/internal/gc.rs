@@ -328,13 +328,13 @@ where
                     });
                     // We only need to detect deletable rollups in the last iter
                     // through the live_diffs loop because they accumulate in state.
-                    for (seqno, key) in state.collections.rollups.iter() {
+                    for (seqno, rollup) in state.collections.rollups.iter() {
                         // SUBTLE: We only guarantee that a rollup exists for the
                         // first live state. Anything before that is not allowed to
                         // be used and so is free to be deleted and removed from
                         // state.
                         if seqno < &earliest_live_seqno {
-                            deleteable_rollup_blobs.push((*seqno, key.clone()));
+                            deleteable_rollup_blobs.push((*seqno, rollup.key.clone()));
                         } else {
                             // We iterate in order, may as well short circuit the
                             // rollup loop.
@@ -382,12 +382,10 @@ where
         // lease timeouts whenever environmentd restarts).
         let state = states.state();
         assert_eq!(state.seqno, req.new_seqno_since);
-        let rollup_seqno = state.seqno;
-        let rollup_key = PartialRollupKey::new(rollup_seqno, &RollupId::new());
         let rollup = machine.applier.state_versions.encode_rollup_blob(
             &machine.applier.shard_metrics,
             state,
-            rollup_key,
+            PartialRollupKey::new(state.seqno, &RollupId::new()),
         );
         let () = machine
             .applier
@@ -395,7 +393,10 @@ where
             .write_rollup_blob(&rollup)
             .await;
         let applied = machine
-            .add_and_remove_rollups((rollup.seqno, &rollup.key), &deleteable_rollup_blobs)
+            .add_and_remove_rollups(
+                (rollup.seqno, &rollup.to_hollow()),
+                &deleteable_rollup_blobs,
+            )
             .await;
         // We raced with some other GC process to write this rollup out. Ours
         // wasn't registered, so delete it.
@@ -408,7 +409,7 @@ where
         }
         debug!(
             "gc {} wrote rollup at seqno {}. applied={}",
-            req.shard_id, rollup_seqno, applied
+            req.shard_id, rollup.seqno, applied
         );
         report_step_timing(&machine.applier.metrics.gc.steps.write_rollup_seconds);
 

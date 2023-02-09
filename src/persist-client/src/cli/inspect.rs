@@ -254,8 +254,8 @@ pub async fn fetch_state_rollups(args: &StateArgs) -> Result<impl serde::Seriali
         .await
         .check_ts_codec()?;
     while let Some(v) = state_iter.next() {
-        for key in v.collections.rollups.values() {
-            rollup_keys.insert(key.clone());
+        for rollup in v.collections.rollups.values() {
+            rollup_keys.insert(rollup.key.clone());
         }
     }
 
@@ -486,7 +486,7 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
             }
         }
         for rollup in v.collections.rollups.values() {
-            known_rollups.insert(rollup.clone());
+            known_rollups.insert(rollup.key.clone());
         }
     }
 
@@ -534,8 +534,8 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
                 );
             }
         });
-        for rollup_key in state.collections.rollups.values() {
-            referenced_rollups.insert(rollup_key.complete(&shard_id).to_string());
+        for rollup in state.collections.rollups.values() {
+            referenced_rollups.insert(rollup.key.complete(&shard_id).to_string());
         }
     }
 
@@ -549,8 +549,8 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
             );
         }
     });
-    for rollup_key in state_iter.state().collections.rollups.values() {
-        current_rollups.insert(rollup_key.complete(&shard_id).to_string());
+    for rollup in state_iter.state().collections.rollups.values() {
+        current_rollups.insert(rollup.key.complete(&shard_id).to_string());
     }
 
     // There's a bit of a race condition between fetching s3 and state, but

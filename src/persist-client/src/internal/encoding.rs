@@ -30,12 +30,12 @@ use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::metrics::Metrics;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
-    CriticalReaderState, HandleDebugState, HollowBatch, HollowBatchPart, IdempotencyToken,
-    LeasedReaderState, OpaqueState, ProtoCriticalReaderState, ProtoHandleDebugState,
-    ProtoHollowBatch, ProtoHollowBatchPart, ProtoLeasedReaderState, ProtoStateDiff,
-    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace,
-    ProtoU64Antichain, ProtoU64Description, ProtoWriterState, State, StateCollections, TypedState,
-    WriterState,
+    CriticalReaderState, HandleDebugState, HollowBatch, HollowBatchPart, HollowRollup,
+    IdempotencyToken, LeasedReaderState, OpaqueState, ProtoCriticalReaderState,
+    ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
+    ProtoLeasedReaderState, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType,
+    ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64Description,
+    ProtoWriterState, State, StateCollections, TypedState, WriterState,
 };
 use crate::internal::state_diff::{
     ProtoStateFieldDiff, StateDiff, StateFieldDiff, StateFieldValDiff,
@@ -324,12 +324,30 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                         |()| Ok(()),
                         |v| v.into_rust(),
                     )?,
-                    ProtoStateField::Rollups => field_diff_into_rust::<u64, String, _, _, _, _>(
-                        diff,
-                        &mut state_diff.rollups,
-                        |k| k.into_rust(),
-                        |v| v.into_rust(),
-                    )?,
+                    ProtoStateField::Rollups => {
+                        field_diff_into_rust::<u64, ProtoHollowRollup, _, _, _, _>(
+                            diff,
+                            &mut state_diff.rollups,
+                            |k| k.into_rust(),
+                            |v| v.into_rust(),
+                        )?
+                    }
+                    // MIGRATION: We previously stored rollups as a `SeqNo ->
+                    // string Key` map, but now the value is a `struct
+                    // HollowRollup`.
+                    ProtoStateField::DeprecatedRollups => {
+                        field_diff_into_rust::<u64, String, _, _, _, _>(
+                            diff,
+                            &mut state_diff.rollups,
+                            |k| k.into_rust(),
+                            |v| {
+                                Ok(HollowRollup {
+                                    key: v.into_rust()?,
+                                    encoded_size_bytes: None,
+                                })
+                            },
+                        )?
+                    }
                     ProtoStateField::LeasedReaders => {
                         field_diff_into_rust::<String, ProtoLeasedReaderState, _, _, _, _>(
                             diff,
@@ -517,6 +535,7 @@ where
                 .iter()
                 .map(|(seqno, key)| (seqno.into_proto(), key.into_proto()))
                 .collect(),
+            deprecated_rollups: Default::default(),
             leased_readers: self
                 .collections
                 .leased_readers
@@ -560,7 +579,7 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
         self.state.seqno
     }
 
-    pub fn rollups(&self) -> &BTreeMap<SeqNo, PartialRollupKey> {
+    pub fn rollups(&self) -> &BTreeMap<SeqNo, HollowRollup> {
         &self.state.collections.rollups
     }
 
@@ -665,8 +684,17 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoStateRollup> for UntypedSta
         };
 
         let mut rollups = BTreeMap::new();
-        for (seqno, key) in x.rollups {
-            rollups.insert(seqno.into_rust()?, key.into_rust()?);
+        for (seqno, rollup) in x.rollups {
+            rollups.insert(seqno.into_rust()?, rollup.into_rust()?);
+        }
+        for (seqno, key) in x.deprecated_rollups {
+            rollups.insert(
+                seqno.into_rust()?,
+                HollowRollup {
+                    key: key.into_rust()?,
+                    encoded_size_bytes: None,
+                },
+            );
         }
         let mut leased_readers = BTreeMap::new();
         for (id, state) in x.leased_readers {
@@ -919,6 +947,22 @@ impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
     }
 }
 
+impl RustType<ProtoHollowRollup> for HollowRollup {
+    fn into_proto(&self) -> ProtoHollowRollup {
+        ProtoHollowRollup {
+            key: self.key.into_proto(),
+            encoded_size_bytes: self.encoded_size_bytes.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoHollowRollup) -> Result<Self, TryFromProtoError> {
+        Ok(HollowRollup {
+            key: proto.key.into_rust()?,
+            encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
+        })
+    }
+}
+
 impl<T: Timestamp + Codec64> RustType<ProtoU64Description> for Description<T> {
     fn into_proto(&self) -> ProtoU64Description {
         ProtoU64Description {
@@ -991,11 +1035,13 @@ impl<T: Timestamp + Codec64> From<SerdeWriterEnrichedHollowBatch> for WriterEnri
 mod tests {
     use std::sync::atomic::Ordering;
 
+    use mz_build_info::DUMMY_BUILD_INFO;
     use mz_persist::location::SeqNo;
 
     use crate::internal::paths::PartialRollupKey;
     use crate::internal::state::HandleDebugState;
     use crate::internal::state_diff::StateDiff;
+    use crate::tests::new_test_client_cache;
     use crate::ShardId;
 
     use super::*;
@@ -1143,5 +1189,130 @@ mod tests {
             },
         };
         assert_eq!(<WriterState<u64>>::from_proto(proto).unwrap(), expected);
+    }
+
+    #[test]
+    fn state_migration_rollups() {
+        let r1 = HollowRollup {
+            key: PartialRollupKey("foo".to_owned()),
+            encoded_size_bytes: None,
+        };
+        let r2 = HollowRollup {
+            key: PartialRollupKey("bar".to_owned()),
+            encoded_size_bytes: Some(2),
+        };
+        let shard_id = ShardId::new();
+        let mut state = TypedState::<(), (), u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            shard_id,
+            "host".to_owned(),
+            0,
+        );
+        state.state.collections.rollups.insert(SeqNo(2), r2.clone());
+        let mut proto = state.into_proto();
+
+        // Manually add the old rollup encoding.
+        proto.deprecated_rollups.insert(1, r1.key.0.clone());
+
+        let state = UntypedState::<u64>::from_proto(proto).unwrap();
+        let state = state.check_codecs::<(), (), i64>(&shard_id).unwrap();
+        let expected = vec![(SeqNo(1), r1), (SeqNo(2), r2)];
+        assert_eq!(
+            state
+                .state
+                .collections
+                .rollups
+                .into_iter()
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[test]
+    fn state_diff_migration_rollups() {
+        let r1_rollup = HollowRollup {
+            key: PartialRollupKey("foo".to_owned()),
+            encoded_size_bytes: None,
+        };
+        let r1 = StateFieldDiff {
+            key: SeqNo(1),
+            val: StateFieldValDiff::Insert(r1_rollup.clone()),
+        };
+        let r2_rollup = HollowRollup {
+            key: PartialRollupKey("bar".to_owned()),
+            encoded_size_bytes: Some(2),
+        };
+        let r2 = StateFieldDiff {
+            key: SeqNo(2),
+            val: StateFieldValDiff::Insert(r2_rollup.clone()),
+        };
+        let r3_rollup = HollowRollup {
+            key: PartialRollupKey("baz".to_owned()),
+            encoded_size_bytes: None,
+        };
+        let r3 = StateFieldDiff {
+            key: SeqNo(3),
+            val: StateFieldValDiff::Delete(r3_rollup.clone()),
+        };
+        let mut diff = StateDiff::<u64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            SeqNo(4),
+            SeqNo(5),
+            0,
+            PartialRollupKey("ignored".to_owned()),
+        );
+        diff.rollups.push(r2.clone());
+        diff.rollups.push(r3.clone());
+        let mut diff_proto = diff.into_proto();
+
+        // Manually add the old rollup encoding.
+        field_diffs_into_proto(
+            ProtoStateField::DeprecatedRollups,
+            &[StateFieldDiff {
+                key: r1.key,
+                val: StateFieldValDiff::Insert(r1_rollup.key.clone()),
+            }],
+            diff_proto.field_diffs.as_mut().unwrap(),
+            |k| k.into_proto().encode_to_vec(),
+            |v| v.into_proto().encode_to_vec(),
+        );
+
+        let diff = StateDiff::<u64>::from_proto(diff_proto.clone()).unwrap();
+        assert_eq!(
+            diff.rollups.into_iter().collect::<Vec<_>>(),
+            vec![r2, r3, r1]
+        );
+
+        // Also make sure that a rollup delete in a diff applies cleanly to a
+        // state that had it in the deprecated field.
+        let shard_id = ShardId::new();
+        let mut state = TypedState::<(), (), u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            shard_id,
+            "host".to_owned(),
+            0,
+        );
+        state.state.seqno = SeqNo(4);
+        let mut state_proto = state.into_proto();
+        state_proto
+            .deprecated_rollups
+            .insert(3, r3_rollup.key.into_proto());
+        let state = UntypedState::<u64>::from_proto(state_proto).unwrap();
+        let mut state = state.check_codecs::<(), (), i64>(&shard_id).unwrap();
+        let cache = new_test_client_cache();
+        let encoded_diff = VersionedData {
+            seqno: SeqNo(5),
+            data: diff_proto.encode_to_vec().into(),
+        };
+        state.apply_encoded_diffs(cache.cfg(), &cache.metrics, std::iter::once(&encoded_diff));
+        assert_eq!(
+            state
+                .state
+                .collections
+                .rollups
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec![(SeqNo(1), r1_rollup), (SeqNo(2), r2_rollup)]
+        );
     }
 }
