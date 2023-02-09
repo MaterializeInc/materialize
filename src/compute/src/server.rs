@@ -48,6 +48,7 @@ use tracing::{info, warn};
 use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;
 use crate::compute_state::ComputeState;
+use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
 use crate::{TraceManager, TraceMetrics};
 
@@ -827,13 +828,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // so that they recommunicate that information as if from scratch.
 
             // Remove all pending peeks.
-            compute_state.pending_peeks.clear();
+            for (_, peek) in std::mem::take(&mut compute_state.pending_peeks) {
+                // Log dropping the peek request.
+                if let Some(logger) = compute_state.compute_logger.as_mut() {
+                    logger.log(ComputeEvent::Peek(peek.as_log_event(), false));
+                }
+            }
             // We compact away removed frontiers, and so only need to reset ids we continue to use.
             // We must remember, though, to compensate what already was sent to logging sources.
             for (&id, frontier) in compute_state.reported_frontiers.iter_mut() {
                 if let Some(logger) = &compute_state.compute_logger {
                     if let Some(&time) = frontier.get(0) {
-                        use crate::logging::compute::ComputeEvent;
                         logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
                         logger.log(ComputeEvent::Frontier {
                             id,
