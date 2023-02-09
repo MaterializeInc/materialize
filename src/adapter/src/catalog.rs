@@ -6676,14 +6676,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_catalog_revision() {
-        let debug_stash_factory = DebugStashFactory::new()
-            .await
-            .expect("unable to open debug stash factory");
+        let debug_stash_factory = DebugStashFactory::new().await;
         {
-            let stash = debug_stash_factory
-                .open_debug()
-                .await
-                .expect("unable to open debug stash");
+            let stash = debug_stash_factory.open_debug().await;
             let mut catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
                 .await
                 .expect("unable to open debug catalog");
@@ -6704,10 +6699,7 @@ mod tests {
             assert_eq!(catalog.transient_revision(), 2);
         }
         {
-            let stash = debug_stash_factory
-                .open_debug()
-                .await
-                .expect("unable to open debug stash");
+            let stash = debug_stash_factory.open_debug().await;
             let catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
                 .await
                 .expect("unable to open debug catalog");
@@ -7537,14 +7529,17 @@ mod tests {
         assert!(mz_sql_parser::parser::parse_statements(&create_sql).is_ok());
         assert!(mz_sql_parser::parser::parse_statements_with_limit(&create_sql).is_err());
 
-        let debug_stash_factory = DebugStashFactory::new().await.unwrap();
+        let debug_stash_factory = DebugStashFactory::new().await;
         let id = GlobalId::User(1);
         {
-            let stash = debug_stash_factory.open_debug().await.unwrap();
+            let stash = debug_stash_factory.open_debug().await;
             let mut catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
                 .await
                 .expect("unable to open debug catalog");
-            let item = catalog.state().parse_view_item(create_sql).unwrap();
+            let item = catalog
+                .state()
+                .parse_view_item(create_sql)
+                .expect("unable to parse view");
             catalog
                 .transact(
                     SYSTEM_TIME().into(),
@@ -7567,7 +7562,7 @@ mod tests {
                 .expect("failed to transact");
         }
         {
-            let stash = debug_stash_factory.open_debug().await.unwrap();
+            let stash = debug_stash_factory.open_debug().await;
             let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
                 .await
                 .expect("unable to open debug catalog");

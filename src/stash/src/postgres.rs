@@ -444,8 +444,8 @@ impl Stash {
         F: FnOnce(Stash) -> Fut,
         Fut: Future<Output = T>,
     {
-        let factory = DebugStashFactory::new().await?;
-        let stash = factory.open_debug().await?;
+        let factory = DebugStashFactory::try_new().await?;
+        let stash = factory.try_open_debug().await?;
         Ok(f(stash).await)
     }
 
@@ -1006,7 +1006,7 @@ pub struct DebugStashFactory {
 }
 
 impl DebugStashFactory {
-    pub async fn new() -> Result<DebugStashFactory, StashError> {
+    pub async fn try_new() -> Result<DebugStashFactory, StashError> {
         let url =
             std::env::var("COCKROACH_URL").expect("COCKROACH_URL environment variable is not set");
         let rng: usize = rand::thread_rng().gen();
@@ -1033,7 +1033,13 @@ impl DebugStashFactory {
         })
     }
 
-    pub async fn open_debug(&self) -> Result<Stash, StashError> {
+    pub async fn new() -> DebugStashFactory {
+        DebugStashFactory::try_new()
+            .await
+            .expect("unable to create debug stash factory")
+    }
+
+    pub async fn try_open_debug(&self) -> Result<Stash, StashError> {
         self.stash_factory
             .open(
                 self.url.clone(),
@@ -1041,6 +1047,12 @@ impl DebugStashFactory {
                 self.tls.clone(),
             )
             .await
+    }
+
+    pub async fn open_debug(&self) -> Stash {
+        self.try_open_debug()
+            .await
+            .expect("unable to open debug stash")
     }
 }
 
