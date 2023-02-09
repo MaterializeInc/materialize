@@ -514,6 +514,44 @@ where
         }
     }
 
+    /// If we have an oversized part, find a good location to split it up into two.
+    /// In our case, "good" means that we're splitting off at least one record (to
+    /// respect our size bound) and ideally between distinct kv pairs (so that
+    /// compacted parts are split nicely on kv boundaries).
+    fn best_split(&self) -> usize {
+        let num_updates = self.current_part.len();
+        if num_updates < 2 {
+            // No two key-value pairs to split; keep the whole thing in one part.
+            return num_updates;
+        }
+        let mut cut_index = num_updates - 1;
+
+        fn kv_at<D>(buf: &BatchBuffer<D>, idx: usize) -> (&[u8], &[u8]) {
+            let ((last_key, last_val), _, _) = &buf.current_part[idx];
+            (
+                &buf.key_buf[last_key.clone()],
+                &buf.val_buf[last_val.clone()],
+            )
+        }
+
+        let last_kv = kv_at(self, cut_index);
+
+        // NB: We can't binary search since don't guarantee that parts are sorted.
+        // Instead, we'll do a linear search for the first nonmatching KV.
+        while cut_index > 0 {
+            let kv = kv_at(self, cut_index - 1);
+            if kv != last_kv {
+                // Split between the non-matching key-values.
+                return cut_index;
+            }
+            cut_index -= 1;
+        }
+
+        // No good splits found! Split off the last element, so at least we're not overflowing
+        // the size limit.
+        num_updates - 1
+    }
+
     fn drain(&mut self) -> ColumnarRecords {
         let mut updates = Vec::with_capacity(self.current_part.len());
         for ((k_range, v_range), t, d) in self.current_part.drain(..) {
