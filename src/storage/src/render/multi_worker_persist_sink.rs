@@ -90,6 +90,7 @@
 use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::ops::AddAssign;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -118,32 +119,43 @@ use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuild
 use crate::source::types::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
 
-struct BatchBuilderAndCounts<K, V, T, D>
-where
-    T: timely::progress::Timestamp
-        + differential_dataflow::lattice::Lattice
-        + mz_persist_types::Codec64,
-{
-    builder: mz_persist_client::batch::BatchBuilder<K, V, T, D>,
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct BatchMetrics {
     inserts: u64,
     retractions: u64,
     error_inserts: u64,
     error_retractions: u64,
 }
 
-impl<K, V, T, D> BatchBuilderAndCounts<K, V, T, D>
+impl AddAssign<&BatchMetrics> for BatchMetrics {
+    fn add_assign(&mut self, rhs: &BatchMetrics) {
+        self.inserts += rhs.inserts;
+        self.retractions += rhs.retractions;
+        self.error_inserts += rhs.error_inserts;
+        self.error_retractions += rhs.error_retractions;
+    }
+}
+
+struct BatchBuilderAndMetdata<K, V, T, D>
+where
+    T: timely::progress::Timestamp
+        + differential_dataflow::lattice::Lattice
+        + mz_persist_types::Codec64,
+{
+    builder: mz_persist_client::batch::BatchBuilder<K, V, T, D>,
+    metrics: BatchMetrics,
+}
+
+impl<K, V, T, D> BatchBuilderAndMetdata<K, V, T, D>
 where
     T: timely::progress::Timestamp
         + differential_dataflow::lattice::Lattice
         + mz_persist_types::Codec64,
 {
     fn new(bb: mz_persist_client::batch::BatchBuilder<K, V, T, D>) -> Self {
-        BatchBuilderAndCounts {
+        BatchBuilderAndMetdata {
             builder: bb,
-            inserts: 0,
-            retractions: 0,
-            error_inserts: 0,
-            error_retractions: 0,
+            metrics: Default::default(),
         }
     }
 }
@@ -153,7 +165,7 @@ struct HollowBatchAndMetadata {
     lower: Antichain<Timestamp>,
     upper: Antichain<Timestamp>,
     batch: WriterEnrichedHollowBatch<Timestamp>,
-    len: u64,
+    metrics: BatchMetrics,
 }
 
 /// Continuously writes the `desired_stream` into persist
@@ -221,6 +233,8 @@ where
         &written_batches,
         persist_clients,
         storage_state,
+        output_index,
+        metrics,
     );
 
     Rc::new((mint_token, write_token, append_token))
@@ -307,8 +321,6 @@ where
                 write.upper().clone()
             } else {
                 // The non-active workers report that they are done snapshotting.
-
-                // TODO(in later pr): add metrics back
                 return;
             }
         };
@@ -540,7 +552,7 @@ where
                             for (row, ts, diff) in data.drain(..) {
                                 if write.upper().less_equal(&ts){
                                     let builder = stashed_batches.entry(ts).or_insert_with(|| {
-                                        BatchBuilderAndCounts::new(
+                                        BatchBuilderAndMetdata::new(
                                             write.builder(
                                                 // SUBTLE:
                                                 // The choice of the minimum antichain here
@@ -571,16 +583,16 @@ where
                                     // assume this addition doesn't overflow.
                                     match (is_value, diff.is_positive()) {
                                         (true, true) => {
-                                            builder.inserts += diff.unsigned_abs()
+                                            builder.metrics.inserts += diff.unsigned_abs()
                                         },
                                         (true, false) => {
-                                            builder.retractions += diff.unsigned_abs()
+                                            builder.metrics.retractions += diff.unsigned_abs()
                                         },
                                         (false, true) => {
-                                            builder.error_inserts += diff.unsigned_abs()
+                                            builder.metrics.error_inserts += diff.unsigned_abs()
                                         },
                                         (false, false) => {
-                                            builder.error_retractions += diff.unsigned_abs()
+                                            builder.metrics.error_retractions += diff.unsigned_abs()
                                         },
                                     }
                                 }
@@ -686,7 +698,7 @@ where
                             lower: batch_lower.clone(),
                             upper: batch_upper.clone(),
                             batch: batch.into_writer_hollow_batch(),
-                            len: batch_builder.inserts + batch_builder.retractions,
+                            metrics: batch_builder.metrics,
                         })
                     }
 
@@ -734,6 +746,8 @@ fn append_batches<G>(
     batches: &Stream<G, HollowBatchAndMetadata>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &mut StorageState,
+    output_index: usize,
+    metrics: SourcePersistSinkMetrics,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -785,10 +799,11 @@ where
         let mut in_flight_descriptions =
             std::collections::HashSet::<(Antichain<Timestamp>, Antichain<Timestamp>)>::new();
 
-        // In flight batches that haven't been `compare_and_append`'d yet, plus their lengths.
+        // In flight batches that haven't been `compare_and_append`'d yet, plus metrics about
+        // the batch.
         let mut in_flight_batches = HashMap::<
             (Antichain<Timestamp>, Antichain<Timestamp>),
-            Vec<(Batch<_, _, _, _>, u64)>,
+            Vec<(Batch<_, _, _, _>, BatchMetrics)>,
         >::new();
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
@@ -884,7 +899,7 @@ where
                                     .entry(batch_description)
                                     .or_insert_with(Vec::new);
 
-                                batches.push((batch, batch_and_metadata.len));
+                                batches.push((batch, batch_and_metadata.metrics));
                             }
 
                             continue;
@@ -955,11 +970,11 @@ where
 
                 let (batch_lower, batch_upper) = done_batch_metadata;
 
-                let mut total = 0;
+                let mut batch_metrics = BatchMetrics::default();
                 let mut to_append = batches
                     .iter_mut()
-                    .map(|(batch, len)| {
-                        total += *len;
+                    .map(|(batch, metrics)| {
+                        batch_metrics += metrics;
                         batch
                     })
                     .collect::<Vec<_>>();
@@ -972,8 +987,21 @@ where
                     )
                     .await
                     .expect("Invalid usage");
-                source_statistics.inc_updates_committed_by(total);
+
+                source_statistics
+                    .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
                 source_statistics.update_snapshot_committed(&batch_upper);
+
+                metrics.processed_batches.inc();
+                metrics.row_inserts.inc_by(batch_metrics.inserts);
+                metrics.row_retractions.inc_by(batch_metrics.retractions);
+                metrics.error_inserts.inc_by(batch_metrics.error_inserts);
+                metrics
+                    .error_retractions
+                    .inc_by(batch_metrics.error_retractions);
+                metrics
+                    .progress
+                    .set(mz_persist_client::metrics::encode_ts_metric(&batch_upper));
 
                 if collection_id.is_user() {
                     trace!(

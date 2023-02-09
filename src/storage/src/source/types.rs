@@ -316,6 +316,7 @@ impl SourcePersistSinkMetrics {
                 parent_source_id.to_string(),
                 output_index.to_string(),
                 shard.clone(),
+                worker_id.to_string(),
             ]),
             row_inserts: base
                 .source_specific
@@ -324,6 +325,7 @@ impl SourcePersistSinkMetrics {
                     parent_source_id.to_string(),
                     output_index.to_string(),
                     shard.clone(),
+                    worker_id.to_string(),
                 ]),
             row_retractions: base
                 .source_specific
@@ -332,6 +334,7 @@ impl SourcePersistSinkMetrics {
                     parent_source_id.to_string(),
                     output_index.to_string(),
                     shard.clone(),
+                    worker_id.to_string(),
                 ]),
             error_inserts: base
                 .source_specific
@@ -340,6 +343,7 @@ impl SourcePersistSinkMetrics {
                     parent_source_id.to_string(),
                     output_index.to_string(),
                     shard.clone(),
+                    worker_id.to_string(),
                 ]),
             error_retractions: base
                 .source_specific
@@ -348,6 +352,7 @@ impl SourcePersistSinkMetrics {
                     parent_source_id.to_string(),
                     output_index.to_string(),
                     shard.clone(),
+                    worker_id.to_string(),
                 ]),
             processed_batches: base
                 .source_specific
@@ -356,6 +361,7 @@ impl SourcePersistSinkMetrics {
                     parent_source_id.to_string(),
                     output_index.to_string(),
                     shard,
+                    worker_id.to_string(),
                 ]),
         }
     }
