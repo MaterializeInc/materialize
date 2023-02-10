@@ -9,6 +9,7 @@
 
 //! CLI introspection tools for persist
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
@@ -33,10 +34,11 @@ use serde_json::json;
 use crate::cli::admin::{make_blob, make_consensus};
 use crate::error::CodecConcreteType;
 use crate::fetch::EncodedPart;
+use crate::internal::encoding::UntypedState;
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey,
 };
-use crate::internal::state::{ProtoStateDiff, ProtoStateRollup};
+use crate::internal::state::{ProtoStateDiff, ProtoStateRollup, State};
 use crate::{Metrics, PersistConfig, ShardId, StateVersions};
 
 const READ_ALL_BUILD_INFO: BuildInfo = BuildInfo {
@@ -65,13 +67,16 @@ pub(crate) enum Command {
     StateRollups(StateArgs),
 
     /// Prints the count and size of blobs in an environment
-    BlobCount(BlobCountArgs),
+    BlobCount(BlobArgs),
 
     /// Prints blob batch part contents
     BlobBatchPart(BlobBatchPartArgs),
 
     /// Prints the unreferenced blobs across all shards
     UnreferencedBlobs(StateArgs),
+
+    /// Prints various statistics about the latest rollups for all the shards in an environment
+    ShardStats(BlobArgs),
 
     /// Prints information about blob usage for a shard
     BlobUsage(StateArgs),
@@ -154,6 +159,9 @@ pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
         }
         Command::BlobUsage(args) => {
             let () = blob_usage(&args).await?;
+        }
+        Command::ShardStats(args) => {
+            shard_stats(&args.blob_uri).await?;
         }
     }
 
@@ -389,9 +397,9 @@ pub async fn blob_batch_part(
     Ok(out)
 }
 
-/// Arguments for viewing the blobs of a given shard
+/// Arguments for commands that run only against the blob store.
 #[derive(Debug, Clone, clap::Parser)]
-pub struct BlobCountArgs {
+pub struct BlobArgs {
     /// Blob to use
     ///
     /// When connecting to a deployed environment's blob, the necessary connection glue must be in
@@ -437,6 +445,80 @@ pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow
         .await?;
 
     Ok(blob_counts)
+}
+
+/// Rummages through S3 to find the latest rollup for each shard, then calculates summary stats.
+pub async fn shard_stats(blob_uri: &str) -> anyhow::Result<()> {
+    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+    let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+    let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;
+
+    // Collect the latest rollup for every shard with the given blob_uri
+    let mut rollup_keys = BTreeMap::new();
+    blob.list_keys_and_metadata(&BlobKeyPrefix::All.to_string(), &mut |metadata| {
+        if let Ok((shard, PartialBlobKey::Rollup(seqno, rollup_id))) =
+            BlobKey::parse_ids(metadata.key)
+        {
+            let key = (seqno, rollup_id);
+            match rollup_keys.entry(shard) {
+                Entry::Vacant(v) => {
+                    v.insert(key);
+                }
+                Entry::Occupied(o) => {
+                    if key.0 > o.get().0 {
+                        *o.into_mut() = key;
+                    }
+                }
+            };
+        }
+    })
+    .await?;
+
+    println!("shard,bytes,parts,runs,batches,empty_batches,longest_run,byte_width,leased_readers,critical_readers,writers");
+    for (shard, (seqno, rollup)) in rollup_keys {
+        let rollup_key = PartialRollupKey::new(seqno, &rollup).complete(&shard);
+        // Basic stats about the trace.
+        let mut bytes = 0;
+        let mut parts = 0;
+        let mut runs = 0;
+        let mut batches = 0;
+        let mut empty_batches = 0;
+        let mut longest_run = 0;
+        // The sum of the largest part in every run, measured in bytes.
+        // A rough proxy for the worst-case amount of data we'd need to fetch to consolidate
+        // down a single key-value pair.
+        let mut byte_width = 0;
+
+        let Some(rollup) = blob.get(&rollup_key).await? else {
+            // Deleted between listing and now?
+            continue;
+        };
+
+        let state: State<u64> =
+            UntypedState::decode(&cfg.build_version, &rollup).check_ts_codec(&shard)?;
+
+        let leased_readers = state.collections.leased_readers.len();
+        let critical_readers = state.collections.critical_readers.len();
+        let writers = state.collections.writers.len();
+
+        state.collections.trace.map_batches(|b| {
+            bytes += b.parts.iter().map(|p| p.encoded_size_bytes).sum::<usize>();
+            parts += b.parts.len();
+            batches += 1;
+            if b.parts.is_empty() {
+                empty_batches += 1;
+            }
+            for run in b.runs() {
+                let largest_part = run.iter().map(|p| p.encoded_size_bytes).max().unwrap_or(0);
+                runs += 1;
+                longest_run = longest_run.max(run.len());
+                byte_width += largest_part;
+            }
+        });
+        println!("{shard},{bytes},{parts},{runs},{batches},{empty_batches},{longest_run},{byte_width},{leased_readers},{critical_readers},{writers}");
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Default, serde::Serialize)]
