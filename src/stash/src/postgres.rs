@@ -1078,6 +1078,8 @@ impl Drop for DebugStashFactory {
                 Ok::<_, StashError>(())
             })
         })
+        // Note that we are joining on a tokio task here, which blocks the current runtime from making other progress on the current worker thread.
+        // Because this only happens on shutdown and is only used in tests, we have determined that its okay
         .join();
 
         match result {
