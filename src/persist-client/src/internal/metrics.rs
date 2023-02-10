@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metric;
 use mz_ore::metrics::{
     ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
@@ -151,6 +151,7 @@ struct MetricsVecs {
     external_consensus_cas_mismatch_versions_bytes: IntCounter,
     external_consensus_truncated_count: IntCounter,
     external_blob_delete_noop_count: IntCounter,
+    external_blob_sizes: Histogram,
     external_rtt_latency: GaugeVec,
     external_op_latency: HistogramVec,
 
@@ -242,6 +243,11 @@ impl MetricsVecs {
             external_blob_delete_noop_count: registry.register(metric!(
                 name: "mz_persist_external_blob_delete_noop_count",
                 help: "count of blob delete calls that deleted a non-existent key",
+            )),
+            external_blob_sizes: registry.register(metric!(
+                name: "mz_persist_external_blob_sizes",
+                help: "histogram of blob sizes at put time",
+                buckets: mz_ore::stats::HISTOGRAM_BYTE_BUCKETS.to_vec(),
             )),
             external_rtt_latency: registry.register(metric!(
                 name: "mz_persist_external_rtt_latency",
@@ -421,6 +427,7 @@ impl MetricsVecs {
             list_keys: self.external_op_metrics("blob_list_keys", false),
             delete: self.external_op_metrics("blob_delete", false),
             delete_noop: self.external_blob_delete_noop_count.clone(),
+            blob_sizes: self.external_blob_sizes.clone(),
             rtt_latency: self.external_rtt_latency.with_label_values(&["blob"]),
         }
     }
@@ -1444,6 +1451,7 @@ pub struct BlobMetrics {
     list_keys: ExternalOpMetrics,
     delete: ExternalOpMetrics,
     delete_noop: IntCounter,
+    blob_sizes: Histogram,
     pub rtt_latency: Gauge,
 }
 
@@ -1527,6 +1535,7 @@ impl Blob for MetricsBlob {
             .await;
         if res.is_ok() {
             self.metrics.blob.set.bytes.inc_by(u64::cast_from(bytes));
+            self.metrics.blob.blob_sizes.observe(f64::cast_lossy(bytes));
         }
         res
     }

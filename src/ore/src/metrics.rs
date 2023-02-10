@@ -308,6 +308,17 @@ where
     }
 }
 
+impl MakeCollector for Histogram {
+    fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
+        assert!(mk_opts.buckets.is_some());
+        Self::with_opts(HistogramOpts {
+            common_opts: mk_opts.opts,
+            buckets: mk_opts.buckets.unwrap(),
+        })
+        .expect("defining a histogram")
+    }
+}
+
 impl MakeCollector for raw::HistogramVec {
     fn make_collector(mk_opts: MakeCollectorOpts) -> Self {
         assert!(mk_opts.buckets.is_some());
