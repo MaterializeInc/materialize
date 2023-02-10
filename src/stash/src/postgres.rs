@@ -997,7 +997,8 @@ impl Consolidator {
     }
 }
 
-/// Stash factory to use for tests that uses a random schema for a stash, which is re-used on all stash openings. The schema is dropped when this factory is dropped.
+/// Stash factory to use for tests that uses a random schema for a stash, which is re-used on all
+/// stash openings. The schema is dropped when this factory is dropped.
 pub struct DebugStashFactory {
     url: String,
     schema: String,
@@ -1006,7 +1007,8 @@ pub struct DebugStashFactory {
 }
 
 impl DebugStashFactory {
-    /// Returns a new factory that will generate a random schema one time, then use it on any opened Stash.
+    /// Returns a new factory that will generate a random schema one time, then use it on any
+    /// opened Stash.
     pub async fn try_new() -> Result<DebugStashFactory, StashError> {
         let url =
             std::env::var("COCKROACH_URL").expect("COCKROACH_URL environment variable is not set");
@@ -1034,12 +1036,18 @@ impl DebugStashFactory {
         })
     }
 
+    /// Returns a new factory that will generate a random schema one time, then use it on any
+    /// opened Stash.
+    ///
+    /// # Panics
+    /// Panics if it is unable to create a new factory.
     pub async fn new() -> DebugStashFactory {
         DebugStashFactory::try_new()
             .await
             .expect("unable to create debug stash factory")
     }
 
+    /// Returns a new Stash.
     pub async fn try_open_debug(&self) -> Result<Stash, StashError> {
         self.stash_factory
             .open(
@@ -1050,6 +1058,10 @@ impl DebugStashFactory {
             .await
     }
 
+    /// Returns a new Stash.
+    ///
+    /// # Panics
+    /// Panics if it is unable to create a new stash.
     pub async fn open_debug(&self) -> Stash {
         self.try_open_debug()
             .await
@@ -1070,7 +1082,7 @@ impl Drop for DebugStashFactory {
                 let (client, connection) = tokio_postgres::connect(&url, tls).await?;
                 mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
                     if let Err(e) = connection.await {
-                        tracing::error!("postgres stash connection error: {e}");
+                        std::panic::resume_unwind(Box::new(e));
                     }
                 });
                 client
@@ -1086,11 +1098,11 @@ impl Drop for DebugStashFactory {
         match result {
             Ok(result) => {
                 if let Err(e) = result {
-                    tracing::error!("unable to cleanup debug stash: {e}");
+                    std::panic::resume_unwind(Box::new(e));
                 }
             }
 
-            Err(_) => tracing::error!("unable to cleanup debug stash"),
+            Err(e) => std::panic::resume_unwind(e),
         }
     }
 }
