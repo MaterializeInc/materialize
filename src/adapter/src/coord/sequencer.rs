@@ -2850,11 +2850,11 @@ impl Coordinator {
                 let rows = trace
                     .into_iter()
                     .map(|entry| {
+                        // The trace would have to take over 584 years to overflow a u64.
+                        let span_duration =
+                            u64::try_from(entry.span_duration.as_nanos()).unwrap_or(u64::MAX);
                         Row::pack_slice(&[
-                            Datum::from(
-                                // The trace would have to take over 584 years to overflow a u64.
-                                u64::try_from(entry.duration.as_nanos()).unwrap_or(u64::MAX),
-                            ),
+                            Datum::from(span_duration),
                             Datum::from(entry.path.as_str()),
                             Datum::from(entry.plan.as_str()),
                         ])

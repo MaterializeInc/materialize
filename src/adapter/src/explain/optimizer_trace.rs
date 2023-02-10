@@ -163,13 +163,15 @@ impl OptimizerTrace {
                 .map(|mut entry| match fast_path_plan {
                     Some(fast_path_plan) if !context.config.no_fast_path => Ok(TraceEntry {
                         instant: entry.instant,
-                        duration: entry.duration,
+                        span_duration: entry.span_duration,
+                        full_duration: entry.full_duration,
                         path: entry.path,
                         plan: fast_path_plan.clone(),
                     }),
                     _ => Ok(TraceEntry {
                         instant: entry.instant,
-                        duration: entry.duration,
+                        span_duration: entry.span_duration,
+                        full_duration: entry.full_duration,
                         path: entry.path,
                         plan: Explainable::new(&mut entry.plan).explain(format, context)?,
                     }),
@@ -192,7 +194,8 @@ impl OptimizerTrace {
                 .into_iter()
                 .map(|entry| TraceEntry {
                     instant: entry.instant,
-                    duration: entry.duration,
+                    span_duration: entry.span_duration,
+                    full_duration: entry.full_duration,
                     path: entry.path,
                     plan: entry.plan.to_string(),
                 })
