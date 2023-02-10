@@ -91,4 +91,4 @@ To connect to Materialize using [DataGrip](https://www.jetbrains.com/help/datagr
 As we work on extending the coverage of `pg_catalog` in Materialize {{% gh 9720 %}}, you must [turn off automatic database introspection](https://intellij-support.jetbrains.com/hc/en-us/community/posts/360010694760/comments/360003100820) in DataGrip to connect.
 {{< /note >}}
 
-<img width="1131" alt="DataGrip Materialize Connection Details" src="https://user-images.githubusercontent.com/21223421/217556108-e61ff518-a475-489a-b382-c8caf4fecbf4.png">
+<img width="1131" alt="DataGrip Materialize Connection Details" src="https://user-images.githubusercontent.com/21223421/218108169-302c8597-35a9-4dce-b16d-050f49538b9e.png">
