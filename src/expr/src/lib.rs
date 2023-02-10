@@ -90,6 +90,8 @@ mod relation;
 mod scalar;
 
 pub mod explain;
+#[cfg(feature = "test_util")]
+pub mod test_util;
 pub mod virtual_syntax;
 pub mod visit;
 

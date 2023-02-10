@@ -45,11 +45,13 @@ serde_json = "1.0.89"
 serde_regex = "1.1.0"
 sha1 = "0.10.5"
 sha2 = "0.10.6"
+syn = { version = "2.0.18", features = ["full"], optional = true }
+proc-macro2 = { version = "1.0.47", features = ["span-locations"], optional = true }
 tracing = "0.1.37"
 uncased = "0.9.7"
-uuid = {version = "1.2.2", features = ["v5"]}
+uuid = { version = "1.2.2", features = ["v5"] }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
+proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
@@ -65,3 +67,12 @@ protobuf-src = "1.1.0"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+
+[features]
+default = ["test_util"]
+test_util = ["syn/full", "proc-macro2/span-locations"]
+
+[[test]]
+name = "test_mir_parser"
+path = "tests/test_mir_parser.rs"
+required-features = ["test_util"]
