@@ -534,6 +534,31 @@ SELECT a::text AS t FROM int4range_values EXCEPT SELECT column1::text FROM (VALU
 ----
 NULL
 
+#
+# int4range upper, lower
+query TT
+SELECT DISTINCT lower(a), upper(a) FROM int4range_values;
+----
+NULL
+NULL
+NULL
+1
+NULL
+2
+1
+NULL
+2
+NULL
+0
+1
+0
+2
+-1
+1
+-1
+2
+
+
 # test that lower and upper roundtrip through range constructor function
 query T
 SELECT
@@ -1676,6 +1701,31 @@ SELECT a::text AS t FROM int8range_values EXCEPT SELECT column1::text FROM (VALU
 ----
 NULL
 
+#
+# int8range upper, lower
+query TT
+SELECT DISTINCT lower(a), upper(a) FROM int8range_values;
+----
+NULL
+NULL
+NULL
+1
+NULL
+2
+1
+NULL
+2
+NULL
+0
+1
+0
+2
+-1
+1
+-1
+2
+
+
 # test that lower and upper roundtrip through range constructor function
 query T
 SELECT
@@ -2711,6 +2761,28 @@ empty
 [1970-01-02,)
 [1970-01-02,)
 NULL
+
+#
+# daterange upper, lower
+query TT
+SELECT DISTINCT lower(a), upper(a) FROM daterange_values;
+----
+NULL
+NULL
+NULL
+1970-01-01
+NULL
+1970-01-02
+1970-01-01
+NULL
+1970-01-02
+NULL
+1969-12-31
+1970-01-01
+1969-12-31
+1970-01-02
+1970-01-01
+1970-01-02
 
 # test that lower and upper roundtrip through range constructor function
 query T
@@ -3847,6 +3919,22 @@ SELECT a::text AS t FROM numrange_values EXCEPT SELECT column1::text FROM (VALUE
 ) t;
 ----
 NULL
+
+#
+# numrange upper, lower
+query TT
+SELECT DISTINCT lower(a), upper(a) FROM numrange_values;
+----
+NULL
+NULL
+NULL
+1
+1
+NULL
+0
+0
+-1
+1
 
 # test that lower and upper roundtrip through range constructor function
 query T
