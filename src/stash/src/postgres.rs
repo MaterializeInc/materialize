@@ -997,7 +997,7 @@ impl Consolidator {
     }
 }
 
-/// Stash factory to use for tests that allow creating multiple stashes.
+/// Stash factory to use for tests that uses a random schema for a stash, which is re-used on all stash openings. The schema is dropped when this factory is dropped.
 pub struct DebugStashFactory {
     url: String,
     schema: String,
