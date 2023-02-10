@@ -37,8 +37,11 @@ class Query:
         return m.group("name") if m else "anonoymous"
 
     def explain(self, timing: bool) -> str:
-        """Prepends 'EXPLAIN (TIMING {timing}) PLAN FOR' to the query."""
-        return "\n".join([f"EXPLAIN (TIMING {bool(timing)}) PLAN FOR", self.query])
+        """Prepends 'EXPLAIN PLAN ... FOR' to the query."""
+        if timing:
+            return "\n".join([f"EXPLAIN PLAN WITH(timing) FOR", self.query])
+        else:
+            return "\n".join([f"EXPLAIN PLAN FOR", self.query])
 
 
 class ExplainOutput:
@@ -50,17 +53,11 @@ class ExplainOutput:
     def __str__(self) -> str:
         return self.output
 
-    def decorrelation_time(self) -> Optional[np.timedelta64]:
-        """Optionally, returns the decorrelation_time for an 'EXPLAIN (TIMING true)' output."""
-        p = r"Decorrelation time\: (?P<time>[0-9]{2}\:[0-9]{2}\:[0-9]{2}\.[0-9]+)"
-        m = re.search(p, self.output, re.MULTILINE)
-        return util.str_to_ns(m.group("time")) if m else None
-
     def optimization_time(self) -> Optional[np.timedelta64]:
-        """Optionally, returns the optimization_time time for an 'EXPLAIN (TIMING true)' output."""
-        p = r"Optimization time\: (?P<time>[0-9]{2}\:[0-9]{2}\:[0-9]{2}\.[0-9]+)"
+        """Optionally, returns the optimization_time time for an 'EXPLAIN WITH(timing)' output."""
+        p = r"Optimization time\: (?P<time>\S+)"
         m = re.search(p, self.output, re.MULTILINE)
-        return util.str_to_ns(m.group("time")) if m else None
+        return util.duration_to_timedelta(m["time"]) if m else None
 
 
 class Database:

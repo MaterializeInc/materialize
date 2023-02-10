@@ -155,6 +155,7 @@ def init(
 @click.option("--db-host", **Opt.db_host)
 @click.option("--db-user", **Opt.db_user)
 @click.option("--db-pass", **Opt.db_pass)
+@click.option("--db-require-ssl", **Opt.db_require_ssl)
 def run(
     scenario: Scenario,
     samples: int,
