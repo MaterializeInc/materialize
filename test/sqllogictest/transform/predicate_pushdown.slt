@@ -405,14 +405,20 @@ SELECT a * 5 FROM cte WHERE a = 5
 ----
 Explained Query:
   Project (#1)
-    Filter (#0 = 5)
-      Map (25)
-        Threshold
-          Union
-            Project (#0)
+    Map (25)
+      Threshold
+        Union
+          Project (#0)
+            Filter (#0 = 5)
               Get materialize.public.x
-            Negate
+          Negate
+            Filter (#0 = 5)
               Get materialize.public.y
+
+Source materialize.public.x
+  filter=((#0 = 5))
+Source materialize.public.y
+  filter=((#0 = 5))
 
 EOF
 
@@ -422,22 +428,31 @@ EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT a FROM y as y, LATERAL(SELECT u FROM x WHERE y.a = x.a LIMIT 5) WHERE a IN (41, 42);
 ----
 Explained Query:
-  Project (#0)
-    Join on=(#0 = #1) type=differential
-      ArrangeBy keys=[[#0]]
-        Filter ((#0 = 41) OR (#0 = 42))
-          Get materialize.public.y
-      ArrangeBy keys=[[#0]]
-        Filter ((#0 = 41) OR (#0 = 42))
+  Return
+    Project (#0)
+      Join on=(#0 = #1) type=differential
+        ArrangeBy keys=[[#0]]
+          Get l0
+        ArrangeBy keys=[[#0]]
           TopK group_by=[#0] limit=5 monotonic=false
             Project (#0)
               Join on=(#0 = #1) type=differential
                 ArrangeBy keys=[[#0]]
                   Distinct group_by=[#0]
-                    Get materialize.public.y
+                    Get l0
                 ArrangeBy keys=[[#0]]
                   Project (#0)
-                    Get materialize.public.x
+                    Filter ((#0 = 41) OR (#0 = 42))
+                      Get materialize.public.x
+  With
+    cte l0 =
+      Filter ((#0 = 41) OR (#0 = 42))
+        Get materialize.public.y
+
+Source materialize.public.x
+  filter=(((#0 = 41) OR (#0 = 42)))
+Source materialize.public.y
+  filter=(((#0 = 41) OR (#0 = 42)))
 
 EOF
 
