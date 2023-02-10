@@ -77,18 +77,18 @@ Download and install the [PostgreSQL installer](https://www.postgresql.org/downl
 
 ## DBeaver
 
-To connect to Materialize using [DBeaver](https://dbeaver.com/docs/wiki/), follow the documentation to [create a connection](https://dbeaver.com/docs/wiki/Create-Connection/) and use the **PostgreSQL database driver** with the credentials provided in the UI for your Materialize region.
+To connect to Materialize using [DBeaver](https://dbeaver.com/docs/wiki/), follow the documentation to [create a connection](https://dbeaver.com/docs/wiki/Create-Connection/) and use the **PostgreSQL database driver** with the credentials provided in the Materialize UI.
+
+<br>
 
 <img width="1314" alt="DBeaver Materialize Connection Details" src="https://user-images.githubusercontent.com/23521087/209447654-11a51e45-b68f-4e11-8e82-9036d8f7aed8.png">
 
 ## DataGrip
 
-To connect to Materialize using [DataGrip](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html), follow the documentation to [create a connection](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html) and use the **PostgreSQL database driver** with the credentials provided in the UI for your Materialize region.
+To connect to Materialize using [DataGrip](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html), follow the documentation to [create a connection](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html) and use the **PostgreSQL database driver** with the credentials provided in the Materialize UI.
+
+{{< note >}}
+As we work on extending the coverage of `pg_catalog` in Materialize {{% gh 9720 %}}, you must [turn off automatic database introspection](https://intellij-support.jetbrains.com/hc/en-us/community/posts/360010694760/comments/360003100820) in DataGrip to connect.
+{{< /note >}}
 
 <img width="1131" alt="DataGrip Materialize Connection Details" src="https://user-images.githubusercontent.com/21223421/217556108-e61ff518-a475-489a-b382-c8caf4fecbf4.png">
-
-As some [system tables](https://github.com/MaterializeInc/materialize/issues/9720) are not yet implemented in Materialize, turn off automatic database introspection in DataGrip:
-
-- Go to the data source properties
-- Click the _Options_ tab
-- Uncheck _Auto sync_ option and click _OK_
