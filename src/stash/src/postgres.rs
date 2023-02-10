@@ -1006,6 +1006,7 @@ pub struct DebugStashFactory {
 }
 
 impl DebugStashFactory {
+    /// Returns a new factory that will generate a random schema one time, then use it on any opened Stash.
     pub async fn try_new() -> Result<DebugStashFactory, StashError> {
         let url =
             std::env::var("COCKROACH_URL").expect("COCKROACH_URL environment variable is not set");
