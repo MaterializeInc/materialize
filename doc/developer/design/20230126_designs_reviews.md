@@ -1,4 +1,4 @@
-- Feature name: designs_revisited
+- Feature name: designs-revisited
 - Associated issues: None
 - Associated PRs: #17482
 
@@ -21,7 +21,7 @@ To address this, we analyze the current shortcomings and propose updates to the 
 We aim at creating a design process that is lightweight, captures reviews and specific snapshots in time, is open, while providing a clear benefit to engineers.
 Let's break down these aspects.
 
-A design review process needs to empower engineers to focus on the task at hands.
+A design review process needs to empower engineers to focus on the task at hand.
 It helps to talk about goals, how they fit into the product roadmap, and outline solutions.
 An engineer can present different solutions, and it's expected that new alternatives come up while working on a design.
 Explaining trade-offs helps to motivate a specific solution.
@@ -35,7 +35,7 @@ This ensures that we uphold a high standard, and it increases the visibility of 
 Designs in Notion do not achieve this goal.
 
 The most important aspect is that this process provides a benefit to the engineer and the company.
-It allows to create confidence that their work fits into the overall architecture and that dependencies are surfaced.
+It allows us to create confidence that their work fits into the overall architecture and that dependencies are surfaced.
 Additionally, a good design document serves as a point-in-time documentation, helping others understand trade-offs and seemingly odd choices.
 
 # Reference explanation
@@ -48,6 +48,7 @@ This raises the question of why we did not follow it recently.
 To address this, we propose the following steps, some of which are part of the change around this document:
 * Revisit the design doc [README](./README.md) to make expectations clearer.
 * Update the [pull request template](/.github/pull_request_template.md) to include a step reminding engineers to think about design documents.
+* Update the [template](./00000000_template.md) to match what we're outlining in this design.
 
 Specifically, the current interpretation of design documents is to write one for large changes, where it is not clear what large means.
 Instead, we propose that each change should come with a design doc unless it is small enough to be non-contentious or immediately clear what needs to be done.
@@ -67,7 +68,7 @@ Notable examples for RFC-style processes follow:
 * Ember's design process follows Rust's process, but is less formal.
 
 One alternative is to not change the current design doc process and leave it as-is, which defaults to engineers creating designs in Notion.
-The benefit is that we don't add (percieved) overhead, at the expense of the problems mentioned here.
+The benefit is that we don't add (perceived) overhead, but at the expense of the problems mentioned here.
 Specifically, it doesn't capture discussions well, and does not permit external users to understand design choices.
 
 ## RFC-style process
