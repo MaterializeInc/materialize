@@ -6573,22 +6573,23 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 mod tests {
     use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet};
+    use std::iter;
 
     use mz_controller::clusters::ClusterId;
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_ore::collections::CollectionExt;
-    use mz_ore::now::NOW_ZERO;
+    use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
     use mz_sql::catalog::CatalogDatabase;
     use mz_sql::names;
     use mz_sql::names::{
-        ObjectQualifiers, PartialObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier,
-        SchemaSpecifier,
+        DatabaseId, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
+        ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
     };
     use mz_sql::plan::StatementContext;
     use mz_sql::DEFAULT_SCHEMA;
     use mz_sql_parser::ast::Expr;
-    use mz_stash::Stash;
+    use mz_stash::DebugStashFactory;
 
     use crate::catalog::{
         Catalog, CatalogItem, Index, MaterializedView, Op, Table, SYSTEM_CONN_ID,
@@ -6675,7 +6676,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_catalog_revision() {
-        Stash::with_debug_stash(move |stash| async move {
+        let debug_stash_factory = DebugStashFactory::new().await;
+        {
+            let stash = debug_stash_factory.open_debug().await;
             let mut catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
                 .await
                 .expect("unable to open debug catalog");
@@ -6694,21 +6697,15 @@ mod tests {
                 .await
                 .expect("failed to transact");
             assert_eq!(catalog.transient_revision(), 2);
-            drop(catalog);
-
-            // TODO: Test that re-opening the same stash resets the
-            // transient_revision to 1. The current debug stash implementation
-            // doesn't allow for stash reuse.
-
-            /*
+        }
+        {
+            let stash = debug_stash_factory.open_debug().await;
             let catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
                 .await
-                .unwrap();
+                .expect("unable to open debug catalog");
+            // Re-opening the same stash resets the transient_revision to 1.
             assert_eq!(catalog.transient_revision(), 1);
-            */
-        })
-        .await
-        .expect("unable to open debug stash");
+        }
     }
 
     #[tokio::test]
@@ -7515,5 +7512,66 @@ mod tests {
             async {}
         })
         .await;
+    }
+
+    // Test that if a large catalog item is somehow committed, then we can still load the catalog.
+    #[tokio::test]
+    async fn test_large_catalog_item() {
+        let view_def = "CREATE VIEW \"materialize\".\"public\".\"v\" AS SELECT 1 FROM (SELECT 1";
+        let column = ", 1";
+        let view_def_size = view_def.bytes().count();
+        let column_size = column.bytes().count();
+        let column_count =
+            (mz_sql_parser::parser::MAX_STATEMENT_BATCH_SIZE - view_def_size) / column_size + 1;
+        let columns = iter::repeat(column).take(column_count).join("");
+        let create_sql = format!("{view_def}{columns})");
+        let create_sql_check = create_sql.clone();
+        assert!(mz_sql_parser::parser::parse_statements(&create_sql).is_ok());
+        assert!(mz_sql_parser::parser::parse_statements_with_limit(&create_sql).is_err());
+
+        let debug_stash_factory = DebugStashFactory::new().await;
+        let id = GlobalId::User(1);
+        {
+            let stash = debug_stash_factory.open_debug().await;
+            let mut catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
+                .await
+                .expect("unable to open debug catalog");
+            let item = catalog
+                .state()
+                .parse_view_item(create_sql)
+                .expect("unable to parse view");
+            catalog
+                .transact(
+                    SYSTEM_TIME().into(),
+                    None,
+                    vec![Op::CreateItem {
+                        item,
+                        name: QualifiedObjectName {
+                            qualifiers: ObjectQualifiers {
+                                database_spec: ResolvedDatabaseSpecifier::Id(DatabaseId::new(1)),
+                                schema_spec: SchemaSpecifier::Id(SchemaId::new(3)),
+                            },
+                            item: "v".to_string(),
+                        },
+                        oid: 1,
+                        id,
+                    }],
+                    |_catalog| Ok(()),
+                )
+                .await
+                .expect("failed to transact");
+        }
+        {
+            let stash = debug_stash_factory.open_debug().await;
+            let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
+                .await
+                .expect("unable to open debug catalog");
+            let view = catalog.get_entry(&id);
+            assert_eq!("v", view.name.item);
+            match &view.item {
+                CatalogItem::View(view) => assert_eq!(create_sql_check, view.create_sql),
+                item => panic!("expected view, got {}", item.typ()),
+            }
+        }
     }
 }

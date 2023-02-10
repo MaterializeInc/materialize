@@ -444,32 +444,9 @@ impl Stash {
         F: FnOnce(Stash) -> Fut,
         Fut: Future<Output = T>,
     {
-        let url =
-            std::env::var("COCKROACH_URL").expect("COCKROACH_URL environment variable is not set");
-        let rng: usize = rand::thread_rng().gen();
-        let schema = format!("schema_{rng}");
-        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
-
-        let (client, connection) = tokio_postgres::connect(&url, tls.clone()).await?;
-        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
-            if let Err(e) = connection.await {
-                tracing::error!("postgres stash connection error: {}", e);
-            }
-        });
-        client
-            .batch_execute(&format!("CREATE SCHEMA {schema}"))
-            .await?;
-
-        let factory = StashFactory::new(&MetricsRegistry::new());
-        let stash = factory.open(url, Some(schema.clone()), tls).await?;
-        let res = f(stash).await;
-
-        // Ignore errors when dropping, better to return `res`.
-        let _ = client
-            .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
-            .await;
-
-        Ok(res)
+        let factory = DebugStashFactory::try_new().await?;
+        let stash = factory.try_open_debug().await?;
+        Ok(f(stash).await)
     }
 
     /// Verifies stash invariants. Should only be called by tests.
@@ -1017,5 +994,115 @@ impl Consolidator {
         );
         self.client = Some(client);
         Ok(())
+    }
+}
+
+/// Stash factory to use for tests that uses a random schema for a stash, which is re-used on all
+/// stash openings. The schema is dropped when this factory is dropped.
+pub struct DebugStashFactory {
+    url: String,
+    schema: String,
+    tls: MakeTlsConnector,
+    stash_factory: StashFactory,
+}
+
+impl DebugStashFactory {
+    /// Returns a new factory that will generate a random schema one time, then use it on any
+    /// opened Stash.
+    pub async fn try_new() -> Result<DebugStashFactory, StashError> {
+        let url =
+            std::env::var("COCKROACH_URL").expect("COCKROACH_URL environment variable is not set");
+        let rng: usize = rand::thread_rng().gen();
+        let schema = format!("schema_{rng}");
+        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
+
+        let (client, connection) = tokio_postgres::connect(&url, tls.clone()).await?;
+        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+            if let Err(e) = connection.await {
+                tracing::error!("postgres stash connection error: {e}");
+            }
+        });
+        client
+            .batch_execute(&format!("CREATE SCHEMA {schema}"))
+            .await?;
+
+        let stash_factory = StashFactory::new(&MetricsRegistry::new());
+
+        Ok(DebugStashFactory {
+            url,
+            schema,
+            tls,
+            stash_factory,
+        })
+    }
+
+    /// Returns a new factory that will generate a random schema one time, then use it on any
+    /// opened Stash.
+    ///
+    /// # Panics
+    /// Panics if it is unable to create a new factory.
+    pub async fn new() -> DebugStashFactory {
+        DebugStashFactory::try_new()
+            .await
+            .expect("unable to create debug stash factory")
+    }
+
+    /// Returns a new Stash.
+    pub async fn try_open_debug(&self) -> Result<Stash, StashError> {
+        self.stash_factory
+            .open(
+                self.url.clone(),
+                Some(self.schema.clone()),
+                self.tls.clone(),
+            )
+            .await
+    }
+
+    /// Returns a new Stash.
+    ///
+    /// # Panics
+    /// Panics if it is unable to create a new stash.
+    pub async fn open_debug(&self) -> Stash {
+        self.try_open_debug()
+            .await
+            .expect("unable to open debug stash")
+    }
+}
+
+impl Drop for DebugStashFactory {
+    fn drop(&mut self) {
+        let url = self.url.clone();
+        let schema = self.schema.clone();
+        let tls = self.tls.clone();
+        let result = std::thread::spawn(move || {
+            let async_runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            async_runtime.block_on(async {
+                let (client, connection) = tokio_postgres::connect(&url, tls).await?;
+                mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+                    if let Err(e) = connection.await {
+                        std::panic::resume_unwind(Box::new(e));
+                    }
+                });
+                client
+                    .batch_execute(&format!("DROP SCHEMA {} CASCADE", &schema))
+                    .await?;
+                Ok::<_, StashError>(())
+            })
+        })
+        // Note that we are joining on a tokio task here, which blocks the current runtime from making other progress on the current worker thread.
+        // Because this only happens on shutdown and is only used in tests, we have determined that its okay
+        .join();
+
+        match result {
+            Ok(result) => {
+                if let Err(e) = result {
+                    std::panic::resume_unwind(Box::new(e));
+                }
+            }
+
+            Err(e) => std::panic::resume_unwind(e),
+        }
     }
 }
