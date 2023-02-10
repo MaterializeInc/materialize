@@ -71,6 +71,9 @@ pub struct Metrics {
     /// Metrics for auditing persist usage
     pub audit: UsageAuditMetrics,
 
+    /// Metrics for the persist sink.
+    pub sink: SinkMetrics,
+
     /// Metrics for S3-backed blob implementation
     pub s3_blob: S3BlobMetrics,
     /// Metrics for Postgres-backed consensus implementation
@@ -107,6 +110,7 @@ impl Metrics {
             state: StateMetrics::new(registry),
             shards: ShardsMetrics::new(registry),
             audit: UsageAuditMetrics::new(registry),
+            sink: SinkMetrics::new(registry),
             s3_blob: S3BlobMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
             _vecs: vecs,
@@ -1338,6 +1342,31 @@ impl UsageAuditMetrics {
             blob_count: registry.register(metric!(
                 name: "mz_persist_audit_blob_count",
                 help: "count of all blobs",
+            )),
+        }
+    }
+}
+
+/// Metrics for the persist sink. (While this lies slightly outside the usual
+/// abstraction boundary of the client, it's convenient to manage them together.
+#[derive(Debug)]
+pub struct SinkMetrics {
+    /// Number of small batches that were forwarded to the central append operator
+    pub forwarded_batches: Counter,
+    /// Number of updates that were forwarded to the centralized append operator
+    pub forwarded_updates: Counter,
+}
+
+impl SinkMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        SinkMetrics {
+            forwarded_batches: registry.register(metric!(
+                name: "mz_persist_sink_forwarded_batches",
+                help: "number of batches forwarded to the central append operator",
+            )),
+            forwarded_updates: registry.register(metric!(
+                name: "mz_persist_sink_forwarded_updates",
+                help: "number of updates forwarded to the central append operator",
             )),
         }
     }

@@ -1025,6 +1025,7 @@ where
                                             write.builder(lower)
                                         });
                                         for (data, time, diff) in contents {
+                                            persist_client.metrics().sink.forwarded_updates.inc();
                                             builder.add(&SourceData(data), &(), &time, &diff).await.expect("invalid usage");
                                         }
                                     }
@@ -1096,6 +1097,7 @@ where
                     let (_lower, upper) = &done_batch_metadata;
                     let batch = builder.finish(upper.clone()).await.expect("invalid usage");
                     batches.push(batch);
+                    persist_client.metrics().sink.forwarded_batches.inc();
                 }
 
                 trace!(
