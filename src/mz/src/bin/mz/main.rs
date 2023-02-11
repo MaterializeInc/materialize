@@ -81,8 +81,6 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::str::FromStr;
-
 use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
 use secrets::SecretCommand;
@@ -161,8 +159,7 @@ enum Commands {
 
     /// Show commands to interact with secrets
     Secret {
-        #[clap(possible_values = CloudProviderRegion::variants())]
-        cloud_provider_region: Option<String>,
+        cloud_provider_region: Option<CloudProviderRegion>,
 
         #[clap(subcommand)]
         command: SecretCommand,
@@ -170,8 +167,7 @@ enum Commands {
 
     /// Connect to a region using a SQL shell
     Shell {
-        #[clap(possible_values = CloudProviderRegion::variants())]
-        cloud_provider_region: Option<String>,
+        cloud_provider_region: Option<CloudProviderRegion>,
     },
 }
 
@@ -196,8 +192,7 @@ enum AppPasswordSubcommand {
 enum RegionCommand {
     /// Enable a region.
     Enable {
-        #[clap(possible_values = CloudProviderRegion::variants())]
-        cloud_provider_region: String,
+        cloud_provider_region: CloudProviderRegion,
         #[clap(long, hide = true)]
         version: Option<String>,
         #[clap(long, hide = true)]
@@ -206,15 +201,13 @@ enum RegionCommand {
     /// Disable a region.
     #[clap(hide = true)]
     Disable {
-        #[clap(possible_values = CloudProviderRegion::variants())]
-        cloud_provider_region: String,
+        cloud_provider_region: CloudProviderRegion,
     },
     /// List all enabled regions.
     List,
     /// Display a region's status.
     Status {
-        #[clap(possible_values = CloudProviderRegion::variants())]
-        cloud_provider_region: String,
+        cloud_provider_region: CloudProviderRegion,
     },
 }
 
@@ -322,7 +315,6 @@ async fn main() -> Result<()> {
                 version,
                 environmentd_extra_arg,
             } => {
-                let cloud_provider_region = CloudProviderRegion::from_str(&cloud_provider_region)?;
                 let mut profile = config.get_profile()?;
 
                 let valid_profile = profile.validate(&profile_name, &client).await?;
@@ -360,7 +352,6 @@ async fn main() -> Result<()> {
             RegionCommand::Disable {
                 cloud_provider_region,
             } => {
-                let cloud_provider_region = CloudProviderRegion::from_str(&cloud_provider_region)?;
                 let profile = config.get_profile()?;
 
                 let valid_profile = profile.validate(&profile_name, &client).await?;
@@ -400,8 +391,6 @@ async fn main() -> Result<()> {
             RegionCommand::Status {
                 cloud_provider_region,
             } => {
-                let cloud_provider_region = CloudProviderRegion::from_str(&cloud_provider_region)?;
-
                 let profile = config.get_profile()?;
 
                 let valid_profile = profile.validate(&profile_name, &client).await?;
@@ -427,9 +416,7 @@ async fn main() -> Result<()> {
             let profile = config.get_profile()?;
 
             let cloud_provider_region = match cloud_provider_region {
-                Some(ref cloud_provider_region) => {
-                    CloudProviderRegion::from_str(cloud_provider_region)?
-                }
+                Some(cloud_provider_region) => cloud_provider_region,
                 None => profile
                     .get_default_region()
                     .context("no region specified and no default region set")?,
@@ -448,9 +435,7 @@ async fn main() -> Result<()> {
             let profile = config.get_profile()?;
 
             let cloud_provider_region = match cloud_provider_region {
-                Some(ref cloud_provider_region) => {
-                    CloudProviderRegion::from_str(cloud_provider_region)?
-                }
+                Some(cloud_provider_region) => cloud_provider_region,
                 None => profile
                     .get_default_region()
                     .context("no region specified and no default region set")?,
