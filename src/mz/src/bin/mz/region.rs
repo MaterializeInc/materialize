@@ -7,8 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{Context, Result};
-use url::Url;
+use anyhow::Result;
 
 use mz::api::{CloudProviderAndRegion, Environment};
 use mz::configuration::ValidProfile;
@@ -49,29 +48,16 @@ pub(crate) fn print_environment_status(
     } else {
         println!("Healthy:\t\tno");
     }
-    println!(
-        "SQL address: \t\t{}",
-        &environment.environmentd_pgwire_address
-            [0..environment.environmentd_pgwire_address.len() - 5]
-    );
 
     println!(
         "HTTPS address: \t\thttps://{}",
         &environment.environmentd_https_address
             [0..environment.environmentd_https_address.len() - 4]
     );
-
-    let mut url = Url::parse(&format!(
-        "postgres://{}",
-        &environment.environmentd_pgwire_address
-    ))
-    .with_context(|| "Parsing URL.")?;
-
-    url.set_username(valid_profile.profile.get_email()).unwrap();
-    url.set_path("materialize");
-    url.set_query(Some("sslmode=require"));
-
-    println!("Connection string: \t{}", url.as_str());
+    println!(
+        "SQL connection string: \t{}",
+        environment.sql_url(valid_profile)
+    );
 
     Ok(())
 }
