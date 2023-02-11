@@ -306,6 +306,8 @@ async fn main() -> Result<()> {
 
                 let token = vault.store(&profile, &email, api_token)?;
                 config.create_or_update_profile(endpoint, profile, email, token)
+            } else {
+                println!("Already logged in. Rerun with --force to reauthenticate.")
             }
         }
 
