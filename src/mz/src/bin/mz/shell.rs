@@ -20,29 +20,10 @@ use mz::configuration::ValidProfile;
 /// Shell command
 /// ----------------------------
 
-/// Parse host and port from the pgwire URL
-pub(crate) fn parse_pgwire(envrionment: &Environment) -> (&str, &str) {
-    let host = &envrionment.environmentd_pgwire_address
-        [..envrionment.environmentd_pgwire_address.len() - 5];
-    let port =
-        &envrionment.environmentd_pgwire_address[envrionment.environmentd_pgwire_address.len() - 4
-            ..envrionment.environmentd_pgwire_address.len()];
-
-    (host, port)
-}
-
 /// Runs psql as a subprocess command
 fn run_psql_shell(valid_profile: ValidProfile<'_>, environment: &Environment) -> Result<()> {
-    let (host, port) = parse_pgwire(environment);
-
     let error = Command::new("psql")
-        .arg("-U")
-        .arg(valid_profile.profile.get_email())
-        .arg("-h")
-        .arg(host)
-        .arg("-p")
-        .arg(port)
-        .arg("materialize")
+        .arg(environment.sql_url(&valid_profile).to_string())
         .env("PGPASSWORD", valid_profile.app_password)
         .exec();
 
@@ -54,18 +35,9 @@ pub(crate) fn check_environment_health(
     valid_profile: &ValidProfile<'_>,
     environment: &Environment,
 ) -> Result<bool> {
-    let (host, port) = parse_pgwire(environment);
-
     let status = Command::new("pg_isready")
-        .arg("-U")
-        .arg(valid_profile.profile.get_email())
-        .arg("-h")
-        .arg(host)
-        .arg("-p")
-        .arg(port)
+        .arg(environment.sql_url(valid_profile).to_string())
         .env("PGPASSWORD", valid_profile.app_password.clone())
-        .arg("-d")
-        .arg("materialize")
         .arg("-q")
         .output()
         .context("failed to execute pg_isready")?

@@ -14,6 +14,7 @@ use anyhow::{bail, ensure, Context, Result};
 use reqwest::{Client, Error};
 use serde::de::{Unexpected, Visitor};
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::configuration::ValidProfile;
 use crate::utils::RequestBuilderExt;
@@ -112,6 +113,23 @@ pub struct Region {
 pub struct Environment {
     pub environmentd_pgwire_address: String,
     pub environmentd_https_address: String,
+}
+
+impl Environment {
+    pub fn sql_url(&self, profile: &ValidProfile) -> Url {
+        let mut url = Url::parse(&format!("postgres://{}", &self.environmentd_pgwire_address))
+            .expect("url known to be valid");
+        url.set_username(profile.profile.get_email()).unwrap();
+        url.set_path("materialize");
+        if let Some(cert_file) = openssl_probe::probe().cert_file {
+            url.query_pairs_mut()
+                .append_pair("sslmode", "verify-full")
+                .append_pair("sslrootcert", &cert_file.to_string_lossy());
+        } else {
+            url.query_pairs_mut().append_pair("sslmode", "require");
+        }
+        url
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
