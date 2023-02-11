@@ -12,7 +12,6 @@ use std::str::FromStr;
 
 use anyhow::{bail, ensure, Context, Result};
 use reqwest::{Client, Error};
-use serde::de::{Unexpected, Visitor};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -20,18 +19,16 @@ use crate::configuration::ValidProfile;
 use crate::utils::RequestBuilderExt;
 
 /// Cloud providers and regions available.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum CloudProviderRegion {
+    #[serde(rename = "aws/us-east-1")]
     AwsUsEast1,
+    #[serde(rename = "aws/eu-west-1")]
     AwsEuWest1,
 }
 
 /// Implementation to name the possible values and parse every option.
 impl CloudProviderRegion {
-    pub fn variants() -> [&'static str; 2] {
-        ["aws/us-east-1", "aws/eu-west-1"]
-    }
-
     /// Return the region name inside a cloud provider.
     pub fn region_name(self) -> &'static str {
         match self {
@@ -54,51 +51,11 @@ impl FromStr for CloudProviderRegion {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        match s {
+        match s.to_lowercase().as_str() {
             "aws/us-east-1" => Ok(CloudProviderRegion::AwsUsEast1),
             "aws/eu-west-1" => Ok(CloudProviderRegion::AwsEuWest1),
             _ => bail!("Unknown region {}", s),
         }
-    }
-}
-
-struct CloudProviderRegionVisitor;
-
-impl<'de> Visitor<'de> for CloudProviderRegionVisitor {
-    type Value = CloudProviderRegion;
-
-    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        CloudProviderRegion::from_str(v).map_err(|_| {
-            E::invalid_value(
-                Unexpected::Str(v),
-                &format!("{:?}", CloudProviderRegion::variants()).as_str(),
-            )
-        })
-    }
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(formatter, "{:?}", CloudProviderRegion::variants())
-    }
-}
-
-impl<'de> Deserialize<'de> for CloudProviderRegion {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_str(CloudProviderRegionVisitor)
-    }
-}
-
-impl Serialize for CloudProviderRegion {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
     }
 }
 
