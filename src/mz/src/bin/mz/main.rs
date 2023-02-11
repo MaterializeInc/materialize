@@ -88,30 +88,29 @@ use once_cell::sync::Lazy;
 use secrets::SecretCommand;
 use serde::Deserialize;
 use utils::new_client;
-use vault::Vault;
 
+use mz::api::{
+    disable_region_environment, enable_region_environment, get_provider_by_region_name,
+    get_provider_region_environment, get_region_environment, list_cloud_providers, list_regions,
+    CloudProviderRegion,
+};
+use mz::configuration::{Configuration, Endpoint, WEB_DOCS_URL};
+use mz::vault::Vault;
 use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cli::CliConfig;
 
-use crate::configuration::{Configuration, Endpoint, WEB_DOCS_URL};
 use crate::login::{generate_api_token, login_with_browser, login_with_console};
 use crate::password::list_passwords;
-use crate::region::{
-    disable_region_environment, enable_region_environment, get_provider_by_region_name,
-    get_provider_region_environment, get_region_environment, list_cloud_providers, list_regions,
-    print_environment_status, print_region_enabled, CloudProviderRegion,
-};
+use crate::region::{print_environment_status, print_region_enabled};
 use crate::shell::{check_environment_health, shell};
 use crate::utils::run_loading_spinner;
 
-mod configuration;
 mod login;
 mod password;
 mod region;
 mod secrets;
 mod shell;
 mod utils;
-mod vault;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 
@@ -220,26 +219,6 @@ enum RegionCommand {
 }
 
 /// Internal types, struct and enums
-#[derive(Debug, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct Region {
-    environment_controller_url: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct Environment {
-    environmentd_pgwire_address: String,
-    environmentd_https_address: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct CloudProvider {
-    region: String,
-    region_controller_url: String,
-    provider: String,
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -254,11 +233,6 @@ struct BrowserAPIToken {
     email: String,
     client_id: String,
     secret: String,
-}
-
-struct CloudProviderAndRegion {
-    cloud_provider: CloudProvider,
-    region: Option<Region>,
 }
 
 #[tokio::main]

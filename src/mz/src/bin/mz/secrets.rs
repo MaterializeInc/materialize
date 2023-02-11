@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{fmt::Display, fs::read_to_string};
+use std::fmt::Display;
+use std::fs::read_to_string;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -15,10 +16,8 @@ use postgres_protocol::escape::{escape_identifier, escape_literal};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    configuration::ValidProfile,
-    region::{get_provider_region_environment, CloudProviderRegion},
-};
+use mz::api::{get_provider_region_environment, CloudProviderRegion};
+use mz::configuration::ValidProfile;
 
 #[derive(Debug, Subcommand)]
 pub enum SecretCommand {

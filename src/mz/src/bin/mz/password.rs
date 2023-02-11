@@ -9,10 +9,13 @@
 
 use std::collections::BTreeMap;
 
-use crate::FronteggAppPassword;
-use crate::{configuration::ValidProfile, utils::RequestBuilderExt};
 use anyhow::{Context, Result};
 use reqwest::Client;
+
+use mz::configuration::ValidProfile;
+use mz::utils::RequestBuilderExt;
+
+use crate::FronteggAppPassword;
 
 /// Get Frontegg API tokens using an access token
 pub(crate) async fn list_passwords(

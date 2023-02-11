@@ -9,11 +9,9 @@
 
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
-use reqwest::{Client, ClientBuilder, RequestBuilder};
+use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, USER_AGENT};
+use reqwest::{Client, ClientBuilder};
 use std::time::Duration;
-
-use crate::configuration::FronteggAuth;
 
 /// Create a standard client with common
 /// header values for all requests.
@@ -26,19 +24,6 @@ pub fn new_client() -> Result<Client> {
         .default_headers(headers)
         .build()
         .context("failed to create client")
-}
-
-/// Extgension methods for building API requests
-pub(crate) trait RequestBuilderExt {
-    /// Authenticate the client with frontegg
-    fn authenticate(self, auth: &FronteggAuth) -> Self;
-}
-
-impl RequestBuilderExt for RequestBuilder {
-    fn authenticate(self, auth: &FronteggAuth) -> Self {
-        let authorization = format!("Bearer {}", auth.access_token);
-        self.header(AUTHORIZATION, &authorization)
-    }
 }
 
 /// Trim lines. Useful when reading input data.
