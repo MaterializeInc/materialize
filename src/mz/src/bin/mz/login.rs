@@ -17,9 +17,10 @@ use axum::{extract::Query, response::IntoResponse, routing::get, Router};
 use reqwest::Client;
 use tokio::sync::broadcast::{channel, Sender};
 
-use crate::configuration::{Endpoint, FronteggAPIToken, FronteggAuth};
-use crate::utils::{trim_newline, RequestBuilderExt};
+use mz::configuration::{Endpoint, FronteggAPIToken, FronteggAuth};
+use mz::utils::RequestBuilderExt;
 
+use crate::utils::trim_newline;
 use crate::BrowserAPIToken;
 
 /// Request handler for the server waiting the browser API token creation

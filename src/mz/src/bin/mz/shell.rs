@@ -7,13 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::configuration::ValidProfile;
-use crate::region::{get_provider_region_environment, CloudProviderRegion};
-use crate::Environment;
-use anyhow::{Context, Ok, Result};
-use reqwest::Client;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
+
+use anyhow::{Context, Ok, Result};
+use reqwest::Client;
+
+use mz::api::{get_provider_region_environment, CloudProviderRegion, Environment};
+use mz::configuration::ValidProfile;
 
 /// ----------------------------
 /// Shell command
