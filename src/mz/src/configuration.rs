@@ -41,10 +41,13 @@ impl Endpoint {
     }
 
     /// Returns the URL for the OAuth token exchange.
-    pub fn web_login_url(&self, profile_name: &str) -> Url {
+    pub fn web_login_url(&self, profile_name: &str, port: u16) -> Url {
         let mut url = self.with_path(&["account", "login"]);
         let mut query_pairs = url.query_pairs_mut();
-        query_pairs.append_pair("redirectUrl", "/access/cli");
+        query_pairs.append_pair(
+            "redirectUrl",
+            &format!("/access/cli?redirectUri=http://localhost:{port}"),
+        );
         query_pairs.append_pair("profile", profile_name);
         drop(query_pairs);
         url

@@ -9,13 +9,14 @@
 
 use std::collections::BTreeMap;
 use std::io::Write;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use anyhow::{bail, Context, Ok, Result};
 use axum::http::StatusCode;
 use axum::{extract::Query, response::IntoResponse, routing::get, Router};
 use reqwest::Client;
-use tokio::sync::broadcast::{channel, Sender};
+use tokio::select;
+use tokio::sync::mpsc::{self, UnboundedSender};
 
 use mz::configuration::{Endpoint, FronteggAPIToken, FronteggAuth};
 use mz::utils::RequestBuilderExt;
@@ -32,15 +33,10 @@ async fn request(
         secret,
         client_id,
     }): Query<BrowserAPIToken>,
-    tx: Sender<Option<(String, FronteggAPIToken)>>,
+    tx: UnboundedSender<(String, FronteggAPIToken)>,
 ) -> impl IntoResponse {
-    if !secret.is_empty() {
-        tx.send(Some((email, FronteggAPIToken { client_id, secret })))
-            .unwrap();
-    } else {
-        tx.send(None).unwrap();
-    }
-
+    tx.send((email, FronteggAPIToken { client_id, secret }))
+        .unwrap();
     (StatusCode::OK, "You can now close the tab.")
 }
 
@@ -49,31 +45,24 @@ pub(crate) async fn login_with_browser(
     endpoint: &Endpoint,
     profile_name: &str,
 ) -> Result<(String, FronteggAPIToken)> {
+    // Bind a web server to a local port to receive the app password.
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let app = Router::new().route("/", get(|body| request(body, tx)));
+    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
+    let server = axum::Server::bind(&addr).serve(app.into_make_service());
+    let port = server.local_addr().port();
+
     // Open the browser to login user.
-    let url = endpoint.web_login_url(profile_name).to_string();
+    let url = endpoint.web_login_url(profile_name, port).to_string();
     if let Err(err) = open::that(&url) {
         bail!("An error occurred when opening '{}': {}", url, err)
     }
 
-    // Start the server to handle the request response
-    let (tx, mut result) = channel(1);
-    let mut close = tx.subscribe();
-    let app = Router::new().route("/", get(|body| request(body, tx)));
-    mz_ore::task::spawn(|| "server_task", async {
-        let addr = SocketAddr::from(([127, 0, 0, 1], 8808));
-        axum::Server::bind(&addr)
-            .serve(app.into_make_service())
-            .with_graceful_shutdown(async move {
-                close.recv().await.ok();
-            })
-            .await
-    });
-
-    result
-        .recv()
-        .await
-        .context("failed to retrive new profile")?
-        .context("failed to login via browser")
+    // Wait for the browser to send the app password to our server.
+    select! {
+        _ = server => unreachable!("server should not shut down"),
+        result = rx.recv() => result.context("failed to login via browser"),
+    }
 }
 
 /// Generates an API token using an access token
