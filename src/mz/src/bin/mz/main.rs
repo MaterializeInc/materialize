@@ -82,6 +82,7 @@
 // END LINT CONFIG
 
 use anyhow::{Context, Result};
+use clap::AppSettings;
 use once_cell::sync::Lazy;
 use secrets::SecretCommand;
 use serde::Deserialize;
@@ -166,8 +167,14 @@ enum Commands {
     },
 
     /// Connect to a region using a SQL shell
+    #[clap(setting = AppSettings::TrailingVarArg, setting = AppSettings::AllowLeadingHyphen)]
     Shell {
+        // Select to a particular region
+        #[clap(long)]
         cloud_provider_region: Option<CloudProviderRegion>,
+        // Pass extra arguments to psql
+        #[clap(multiple = true, last = true)]
+        psql_extra_args: Vec<String>,
     },
 }
 
@@ -433,6 +440,7 @@ async fn main() -> Result<()> {
 
         Commands::Shell {
             cloud_provider_region,
+            psql_extra_args,
         } => {
             let profile = config.get_profile()?;
 
@@ -445,9 +453,14 @@ async fn main() -> Result<()> {
 
             let valid_profile = profile.validate(&profile_name, &client).await?;
 
-            shell(client, valid_profile, cloud_provider_region)
-                .await
-                .with_context(|| "Running shell")?;
+            shell(
+                client,
+                valid_profile,
+                cloud_provider_region,
+                psql_extra_args,
+            )
+            .await
+            .with_context(|| "Running shell")?;
         }
     }
 

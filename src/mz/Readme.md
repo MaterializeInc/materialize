@@ -117,11 +117,24 @@ mz region status aws/us-east-1
 
 ### Shell
 
-Connect to a Materialize region and run your SQL:
+Connect and interact with your Materialize database:
 
 ```bash
-mz shell aws/us-east-1
+mz shell
 ```
+
+Connect to a particular region:
+
+```bash
+mz shell --cloud-provider-region aws/us-east-1
+```
+
+Pass extra arguments to `psql`:
+
+```bash
+mz shell -l --csv
+```
+
 
 ### Help
 

@@ -21,11 +21,16 @@ use mz::configuration::ValidProfile;
 /// ----------------------------
 
 /// Runs psql as a subprocess command
-fn run_psql_shell(valid_profile: ValidProfile<'_>, environment: &Environment) -> Result<()> {
+fn run_psql_shell(
+    valid_profile: ValidProfile<'_>,
+    environment: &Environment,
+    psql_extra_args: Vec<String>,
+) -> Result<()> {
     let error = Command::new("psql")
         .arg(environment.sql_url(&valid_profile).to_string())
         // Enable query timing output by default.
         .args(["-c", "\\timing", "-f", "-"])
+        .args(psql_extra_args)
         .env("PGPASSWORD", valid_profile.app_password)
         .exec();
 
@@ -54,11 +59,12 @@ pub(crate) async fn shell(
     client: Client,
     valid_profile: ValidProfile<'_>,
     cloud_provider_region: CloudProviderRegion,
+    psql_args: Vec<String>,
 ) -> Result<()> {
     let environment =
         get_provider_region_environment(&client, &valid_profile, &cloud_provider_region)
             .await
             .context("Retrieving cloud provider region.")?;
 
-    run_psql_shell(valid_profile, &environment)
+    run_psql_shell(valid_profile, &environment, psql_args)
 }
