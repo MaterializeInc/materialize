@@ -358,6 +358,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         connection_context,
         tracing_handle,
         storage_usage_collection_interval: config.storage_usage_collection_interval,
+        storage_usage_retention_period: None,
         segment_api_key: None,
         egress_ips: vec![],
         aws_account_id: None,

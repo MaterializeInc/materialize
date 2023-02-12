@@ -860,6 +860,7 @@ impl RunnerInner {
             connection_context,
             tracing_handle: TracingHandle::disabled(),
             storage_usage_collection_interval: Duration::from_secs(3600),
+            storage_usage_retention_period: None,
             segment_api_key: None,
             egress_ips: vec![],
             aws_account_id: None,
