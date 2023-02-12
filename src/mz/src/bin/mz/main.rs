@@ -85,7 +85,7 @@ use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
 use secrets::SecretCommand;
 use serde::Deserialize;
-use utils::new_client;
+use utils::{new_client, ascii_validator};
 
 use mz::api::{
     disable_region_environment, enable_region_environment, get_provider_by_region_name,
@@ -122,7 +122,7 @@ static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.semver_version().to_strin
 )]
 struct Args {
     /// The configuration profile to use.
-    #[clap(long)]
+    #[clap(long, validator = ascii_validator)]
     profile: Option<String>,
     #[clap(subcommand)]
     command: Commands,

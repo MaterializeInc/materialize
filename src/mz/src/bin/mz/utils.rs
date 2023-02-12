@@ -53,3 +53,20 @@ pub(crate) fn run_loading_spinner(message: String) -> ProgressBar {
 
     progress_bar
 }
+
+// Define a validator function that accepts only ASCII letters, digits, underscores, and dashes
+pub(crate) fn ascii_validator(val: &str) -> Result<(), String> {
+    // Iterate over the arg value
+    for c in val.chars() {
+        // Check if the character is an ASCII letter or digit
+        if !c.is_ascii_alphanumeric() {
+            // If not, check if it is an underscore or dash
+            if c != '_' && c != '-' {
+                // If not, return Err with a message
+                return Err(String::from("The value must contain only ASCII letters, digits, underscores, and dashes"));
+            }
+        }
+    }
+    // If all characters are valid, return Ok
+    Ok(())
+}
