@@ -81,10 +81,11 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use once_cell::sync::Lazy;
 use secrets::SecretCommand;
 use serde::Deserialize;
+use tokio::time::Instant;
 use utils::new_client;
 
 use mz::api::{
@@ -101,7 +102,7 @@ use crate::login::{generate_api_token, login_with_browser, login_with_console};
 use crate::password::list_passwords;
 use crate::region::{print_environment_status, print_region_enabled};
 use crate::shell::{check_environment_health, shell};
-use crate::utils::run_loading_spinner;
+use crate::utils::{parse_timeout, run_loading_spinner};
 
 mod login;
 mod password;
@@ -197,6 +198,12 @@ enum RegionCommand {
         version: Option<String>,
         #[clap(long, hide = true)]
         environmentd_extra_arg: Vec<String>,
+        #[clap(short, long)]
+        /// Skips checking that the region is healthy after enabling it
+        no_wait_healthy: bool,
+        #[clap(short, long, parse(try_from_str = parse_timeout))]
+        /// Sets a timeout in seconds to wait the region to be healthy
+        timeout: std::time::Duration,
     },
     /// Disable a region.
     #[clap(hide = true)]
@@ -316,6 +323,8 @@ async fn main() -> Result<()> {
                 cloud_provider_region,
                 version,
                 environmentd_extra_arg,
+                no_wait_healthy,
+                timeout,
             } => {
                 let mut profile = config.get_profile()?;
 
@@ -341,9 +350,18 @@ async fn main() -> Result<()> {
                     .await
                     .with_context(|| "Retrieving environment data.")?;
 
-                loop {
-                    if check_environment_health(&valid_profile, &environment)? {
-                        break;
+                if !no_wait_healthy {
+                    let start = Instant::now();
+
+                    loop {
+                        let now = Instant::now();
+                        let elapsed = now.checked_duration_since(start + timeout);
+
+                        if elapsed.is_some() {
+                            bail!(String::from("Timeout expired enabling region."));
+                        } else if check_environment_health(&valid_profile, &environment)? {
+                            break;
+                        }
                     }
                 }
 
