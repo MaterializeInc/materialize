@@ -85,7 +85,7 @@ use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
 use secrets::SecretCommand;
 use serde::Deserialize;
-use utils::{new_client, ascii_validator};
+use utils::{ascii_validator, new_client};
 
 use mz::api::{
     disable_region_environment, enable_region_environment, get_provider_by_region_name,
