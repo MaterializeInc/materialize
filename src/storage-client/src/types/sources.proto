@@ -214,7 +214,8 @@ message ProtoPostgresSourcePublicationDetails {
 
 message ProtoLoadGeneratorSourceConnection {
     oneof generator {
-        ProtoCounterLoadGenerator counter = 1;
+        reserved 1;
+        ProtoCounterLoadGenerator counter = 6;
         google.protobuf.Empty auction = 3;
         ProtoTpchLoadGenerator tpch = 4;
         google.protobuf.Empty datums = 5;
