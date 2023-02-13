@@ -329,12 +329,7 @@ pub async fn run_fail_sql(
     let expected_hint = cmd.expected_hint.map(ErrorMatcher::Contains);
 
     let query = &cmd.query;
-
-    if let Some(stmt) = &stmt {
-        print_query(query, Some(stmt));
-    } else {
-        print_query(query, None);
-    }
+    print_query(query, stmt.as_ref());
 
     let should_retry = match &stmt {
         // Do not retry statements that could not be parsed
@@ -470,16 +465,11 @@ async fn try_run_fail_sql(
 
 pub fn print_query(query: &str, stmt: Option<&Statement<Raw>>) {
     use Statement::*;
-    if let Some(stmt) = stmt {
-        match &stmt {
-            CreateSecret(_) => {
-                println!("> CREATE SECRET [query truncated on purpose as to not reveal the secret in the log]");
-                return;
-            }
-            _ => {}
-        }
+    if let Some(CreateSecret(_)) = stmt {
+        println!("> CREATE SECRET [query truncated on purpose so as to not reveal the secret in the log]");
+    } else {
+        println!("> {}", query)
     }
-    println!("> {}", query)
 }
 
 pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error> {
