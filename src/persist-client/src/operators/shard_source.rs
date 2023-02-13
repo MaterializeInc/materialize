@@ -380,7 +380,7 @@ where
             while inflight_bytes >= max_inflight_bytes {
                 // We can never get here when flow control is disabled, as we are not tracking
                 // in-flight bytes in this case.
-                assert_eq!(flow_control_bytes, None);
+                assert!(flow_control_bytes.is_some());
 
                 // Get an upper bound until which we should produce data
                 let flow_control_upper = match flow_control_input.next().await {

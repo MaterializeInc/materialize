@@ -88,6 +88,8 @@ pub struct ComputeState {
     pub command_history: ComputeCommandHistory,
     /// Max size in bytes of any result.
     pub max_result_size: u32,
+    /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
+    pub dataflow_max_inflight_bytes: usize,
     /// Metrics for this replica.
     pub metrics: ComputeMetrics,
 }
@@ -157,13 +159,20 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     fn handle_update_configuration(&mut self, params: ComputeParameters) {
         info!("Applying configuration update: {params:?}");
 
-        if let Some(v) = params.max_result_size {
+        let ComputeParameters {
+            max_result_size,
+            dataflow_max_inflight_bytes,
+            persist,
+        } = params;
+
+        if let Some(v) = max_result_size {
             self.compute_state.max_result_size = v;
         }
+        if let Some(v) = dataflow_max_inflight_bytes {
+            self.compute_state.dataflow_max_inflight_bytes = v;
+        }
 
-        params
-            .persist
-            .apply(self.compute_state.persist_clients.cfg())
+        persist.apply(self.compute_state.persist_clients.cfg())
     }
 
     fn handle_create_dataflows(

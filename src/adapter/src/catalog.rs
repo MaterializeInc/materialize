@@ -5862,6 +5862,7 @@ impl Catalog {
         let config = self.system_config();
         ComputeParameters {
             max_result_size: Some(config.max_result_size()),
+            dataflow_max_inflight_bytes: Some(config.dataflow_max_inflight_bytes()),
             persist: self.persist_config(),
         }
     }

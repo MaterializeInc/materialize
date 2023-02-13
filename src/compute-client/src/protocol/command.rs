@@ -481,6 +481,8 @@ pub struct ComputeParameters {
     /// [`PeekResponse::Error`]: super::response::PeekResponse::Error
     /// [`SubscribeBatch::updates`]: super::response::SubscribeBatch::updates
     pub max_result_size: Option<u32>,
+    /// The maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
+    pub dataflow_max_inflight_bytes: Option<usize>,
     /// Persist client configuration.
     pub persist: PersistParameters,
 }
@@ -488,10 +490,19 @@ pub struct ComputeParameters {
 impl ComputeParameters {
     /// Update the parameter values with the set ones from `other`.
     pub fn update(&mut self, other: ComputeParameters) {
-        if let Some(v) = other.max_result_size {
-            self.max_result_size = Some(v);
+        let ComputeParameters {
+            max_result_size,
+            dataflow_max_inflight_bytes,
+            persist,
+        } = other;
+
+        if max_result_size.is_some() {
+            self.max_result_size = max_result_size;
         }
-        self.persist.update(other.persist);
+        if dataflow_max_inflight_bytes.is_some() {
+            self.dataflow_max_inflight_bytes = dataflow_max_inflight_bytes;
+        }
+        self.persist.update(persist);
     }
 
     /// Return whether all parameters are unset.
@@ -504,6 +515,7 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
     fn into_proto(&self) -> ProtoComputeParameters {
         ProtoComputeParameters {
             max_result_size: self.max_result_size.into_proto(),
+            dataflow_max_inflight_bytes: self.dataflow_max_inflight_bytes.into_proto(),
             persist: Some(self.persist.into_proto()),
         }
     }
@@ -511,6 +523,7 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
     fn from_proto(proto: ProtoComputeParameters) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             max_result_size: proto.max_result_size.into_rust()?,
+            dataflow_max_inflight_bytes: proto.dataflow_max_inflight_bytes.into_rust()?,
             persist: proto
                 .persist
                 .into_rust_if_some("ProtoComputeParameters::persist")?,
