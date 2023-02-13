@@ -10,9 +10,11 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
+use std::iter::Peekable;
 use std::marker::PhantomData;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 use std::ops::{Deref, DerefMut};
+use std::slice;
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
@@ -199,6 +201,49 @@ impl<T: Ord> Ord for HollowBatch<T> {
                 other_len,
                 other_runs,
             ))
+    }
+}
+
+impl<T> HollowBatch<T> {
+    pub(crate) fn runs(&self) -> HollowBatchRunIter<T> {
+        HollowBatchRunIter {
+            batch: self,
+            inner: self.runs.iter().peekable(),
+            emitted_implicit: false,
+        }
+    }
+}
+
+pub(crate) struct HollowBatchRunIter<'a, T> {
+    batch: &'a HollowBatch<T>,
+    inner: Peekable<slice::Iter<'a, usize>>,
+    emitted_implicit: bool,
+}
+
+impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
+    type Item = &'a [HollowBatchPart];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.batch.parts.is_empty() {
+            return None;
+        }
+
+        if !self.emitted_implicit {
+            self.emitted_implicit = true;
+            return Some(match self.inner.peek() {
+                None => &self.batch.parts,
+                Some(run_end) => &self.batch.parts[0..**run_end],
+            });
+        }
+
+        if let Some(run_start) = self.inner.next() {
+            return Some(match self.inner.peek() {
+                Some(run_end) => &self.batch.parts[*run_start..**run_end],
+                None => &self.batch.parts[*run_start..],
+            });
+        }
+
+        None
     }
 }
 
