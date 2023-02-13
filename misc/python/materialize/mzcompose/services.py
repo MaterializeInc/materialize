@@ -695,6 +695,8 @@ class Testdrive(Service):
         materialize_params: Dict[str, str] = {},
         kafka_url: str = "kafka:9092",
         kafka_default_partitions: Optional[int] = None,
+        kafka_args: Optional[str] = None,
+        schema_registry_url: str = "http://schema-registry:8081",
         no_reset: bool = False,
         default_timeout: str = "120s",
         seed: Optional[int] = None,
@@ -737,7 +739,7 @@ class Testdrive(Service):
             entrypoint = [
                 "testdrive",
                 f"--kafka-addr={kafka_url}",
-                "--schema-registry-url=http://schema-registry:8081",
+                f"--schema-registry-url={schema_registry_url}",
                 f"--materialize-url={materialize_url}",
                 f"--materialize-internal-url={materialize_url_internal}",
             ]
