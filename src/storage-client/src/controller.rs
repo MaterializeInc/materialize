@@ -1357,6 +1357,13 @@ where
         let dependency_since = self.determine_dependency_since(&[from_id])?;
         self.install_read_capabilities(&[from_id], dependency_since.clone())?;
 
+        debug!(
+            sink_id = id.to_string(),
+            from_id = from_id.to_string(),
+            acquired_since = ?dependency_since,
+            "prepare_export: sink acquired read holds"
+        );
+
         Ok(CreateExportToken {
             id,
             from_id,
@@ -1367,11 +1374,17 @@ where
     fn cancel_prepare_export(
         &mut self,
         CreateExportToken {
-            id: _,
+            id,
             from_id,
             acquired_since,
         }: CreateExportToken<T>,
     ) {
+        debug!(
+            sink_id = id.to_string(),
+            from_id = from_id.to_string(),
+            acquired_since = ?acquired_since,
+            "cancel_prepare_export: sink releasing read holds",
+        );
         self.remove_read_capabilities(acquired_since, &[from_id]);
     }
 
@@ -1460,6 +1473,14 @@ where
                 .await?
                 .initial_as_of
                 .maybe_fast_forward(&acquired_since);
+
+            debug!(
+                sink_id = id.to_string(),
+                from_id = from_id.to_string(),
+                acquired_since = ?acquired_since,
+                initial_as_of = ?as_of,
+                "create_exports: creating sink"
+            );
 
             self.state.exports.insert(
                 id,
