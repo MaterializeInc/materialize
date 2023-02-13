@@ -178,10 +178,13 @@ impl TimelyConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClusterReplicaLocation {
     /// The network addresses of the cluster control endpoints for each process in
-    /// the replica.
+    /// the replica. Connections from the controller to these addresses
+    /// are sent commands, and send responses back.
     pub ctl_addrs: Vec<String>,
     /// The network addresses of the dataflow (Timely) endpoints for
-    /// each process in the replica.
+    /// each process in the replica. These are used for _internal_
+    /// networking, that is, timely worker communicating messages
+    /// between themselves.
     pub dataflow_addrs: Vec<String>,
     /// The workers per process in the replica.
     pub workers: usize,

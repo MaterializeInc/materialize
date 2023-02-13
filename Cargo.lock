@@ -3630,7 +3630,7 @@ dependencies = [
 
 [[package]]
 name = "mz-compute"
-version = "0.38.0-dev"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4797,7 +4797,7 @@ dependencies = [
 
 [[package]]
 name = "mz-storage"
-version = "0.38.0-dev"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-compression",
