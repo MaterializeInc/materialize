@@ -65,6 +65,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-resource-limits",
         "test-invalid-compute-reuse",
         "pg-snapshot-resumption",
+        "pg-snapshot-partial-failure",
         "test-system-table-indexes",
         "test-replica-targeted-subscribe-abort",
         "test-compute-reconciliation-reuse",
