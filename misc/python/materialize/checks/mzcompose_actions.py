@@ -69,7 +69,8 @@ class UseClusterdCompute(MzcomposeAction):
             """
             DROP CLUSTER REPLICA default.r1;
             CREATE CLUSTER REPLICA default.r1
-                STORAGECTL ADDRESS 'clusterd_compute_1:2100',
+                STORAGECTL ADDRESSES ['clusterd_compute_1:2100'],
+                STORAGE ADDRESSES ['clusterd_compute_1:2103'],
                 COMPUTECTL ADDRESSES ['clusterd_compute_1:2101'],
                 COMPUTE ADDRESSES ['clusterd_compute_1:2102'],
                 WORKERS 1;
@@ -103,7 +104,6 @@ class StartClusterdCompute(MzcomposeAction):
                         "--secrets-reader=process",
                         "--secrets-reader-process-dir=/mzdata/secrets",
                     ],
-                    storage_workers=None,
                 )
             else:
                 clusterd = Clusterd(

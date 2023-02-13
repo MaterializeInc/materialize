@@ -17,6 +17,8 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.25"
 mz-build-info = { path = "../build-info" }
+mz-cluster = { path = "../cluster" }
+mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["async", "tracing_"] }

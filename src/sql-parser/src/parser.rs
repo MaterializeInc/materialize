@@ -3158,13 +3158,13 @@ impl<'a> Parser<'a> {
 
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[
-            ADDRESSES,
             AVAILABILITY,
             COMPUTE,
             COMPUTECTL,
             IDLE,
             INTROSPECTION,
             SIZE,
+            STORAGE,
             STORAGECTL,
             WORKERS,
         ])? {
@@ -3190,9 +3190,13 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             },
             SIZE => ReplicaOptionName::Size,
+            STORAGE => {
+                self.expect_keyword(ADDRESSES)?;
+                ReplicaOptionName::StorageAddresses
+            }
             STORAGECTL => {
-                self.expect_keyword(ADDRESS)?;
-                ReplicaOptionName::StoragectlAddress
+                self.expect_keyword(ADDRESSES)?;
+                ReplicaOptionName::StoragectlAddresses
             }
             WORKERS => ReplicaOptionName::Workers,
             _ => unreachable!(),

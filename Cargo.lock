@@ -3529,6 +3529,74 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-cluster"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytesize",
+ "clap",
+ "crossbeam-channel",
+ "dec",
+ "differential-dataflow",
+ "futures",
+ "mz-build-info",
+ "mz-cluster-client",
+ "mz-compute-client",
+ "mz-expr",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-pid-file",
+ "mz-repr",
+ "mz-service",
+ "mz-storage-client",
+ "mz-timely-util",
+ "once_cell",
+ "prometheus",
+ "scopeguard",
+ "serde",
+ "smallvec",
+ "timely",
+ "tokio",
+ "tracing",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-cluster-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures",
+ "http",
+ "itertools",
+ "mz-ore",
+ "mz-proto",
+ "once_cell",
+ "prometheus",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
+ "tracing",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-clusterd"
 version = "0.44.0-dev"
 dependencies = [
@@ -3540,6 +3608,7 @@ dependencies = [
  "mz-alloc",
  "mz-build-info",
  "mz-cloud-resources",
+ "mz-cluster",
  "mz-compute",
  "mz-compute-client",
  "mz-http-util",
@@ -3573,6 +3642,8 @@ dependencies = [
  "dogsdogsdogs",
  "futures",
  "mz-build-info",
+ "mz-cluster",
+ "mz-cluster-client",
  "mz-compute-client",
  "mz-expr",
  "mz-ore",
@@ -3610,6 +3681,7 @@ dependencies = [
  "http",
  "itertools",
  "mz-build-info",
+ "mz-cluster-client",
  "mz-expr",
  "mz-orchestrator",
  "mz-ore",
@@ -3651,6 +3723,7 @@ dependencies = [
  "differential-dataflow",
  "futures",
  "mz-build-info",
+ "mz-cluster-client",
  "mz-compute-client",
  "mz-orchestrator",
  "mz-ore",
@@ -4752,6 +4825,7 @@ dependencies = [
  "mz-build-info",
  "mz-ccsr",
  "mz-cloud-resources",
+ "mz-cluster",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
@@ -4813,6 +4887,7 @@ dependencies = [
  "mz-build-info",
  "mz-ccsr",
  "mz-cloud-resources",
+ "mz-cluster-client",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
