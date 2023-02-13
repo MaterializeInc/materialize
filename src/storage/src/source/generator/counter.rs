@@ -17,7 +17,10 @@ pub struct Counter {
     /// How many values will be emitted
     /// before old ones are retracted, or `None` for
     /// an append-only collection.
-    pub max_cardinality: Option<usize>,
+    ///
+    /// This is verified by the planner to be nonnegative. We encode it as
+    /// an `i64` to make the code in `Counter::by_seed` simpler.
+    pub max_cardinality: Option<i64>,
 }
 
 impl Generator for Counter {
@@ -44,9 +47,7 @@ impl Generator for Counter {
                 // NB: we could get rid of this allocation with
                 // judicious use of itertools::Either, if it were
                 // important to highly optimize this code path.
-                let counter: i64 = counter.try_into().expect("counter too big");
                 if let Some(to_retract) = to_retract {
-                    let to_retract: i64 = to_retract.try_into().expect("to_retract too big");
                     vec![
                         (
                             0,

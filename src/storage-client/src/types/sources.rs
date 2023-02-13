@@ -35,7 +35,6 @@ use timely::scheduling::ActivateOnDrop;
 use uuid::Uuid;
 
 use mz_expr::{MirScalarExpr, PartitionId};
-use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
@@ -2156,7 +2155,10 @@ pub enum LoadGenerator {
         /// How many values will be emitted
         /// before old ones are retracted, or `None` for
         /// an append-only collection.
-        max_cardinality: Option<usize>,
+        ///
+        /// This is verified by the planner to be nonnegative. We encode it as
+        /// an `i64` to make the code in `Counter::by_seed` simpler.
+        max_cardinality: Option<i64>,
     },
     Datums,
     Tpch {
@@ -2194,7 +2196,7 @@ impl LoadGenerator {
                 }
                 DataEncodingInner::RowCodec(desc)
             }
-            LoadGenerator::Counter { max_cardinality: _ } => DataEncodingInner::RowCodec(
+            LoadGenerator::Counter { .. } => DataEncodingInner::RowCodec(
                 RelationDesc::empty().with_column("counter", ScalarType::Int64.nullable(false)),
             ),
             LoadGenerator::Tpch { .. } => DataEncodingInner::RowCodec(RelationDesc::empty()),
@@ -2390,7 +2392,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                 LoadGenerator::Auction => ProtoGenerator::Auction(()),
                 LoadGenerator::Counter { max_cardinality } => {
                     ProtoGenerator::Counter(ProtoCounterLoadGenerator {
-                        max_cardinality: max_cardinality.clone().map(u64::cast_from),
+                        max_cardinality: *max_cardinality,
                     })
                 }
                 LoadGenerator::Tpch {
@@ -2420,9 +2422,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
             load_generator: match generator {
                 ProtoGenerator::Auction(()) => LoadGenerator::Auction,
                 ProtoGenerator::Counter(ProtoCounterLoadGenerator { max_cardinality }) => {
-                    LoadGenerator::Counter {
-                        max_cardinality: max_cardinality.map(usize::cast_from),
-                    }
+                    LoadGenerator::Counter { max_cardinality }
                 }
                 ProtoGenerator::Tpch(ProtoTpchLoadGenerator {
                     count_supplier,

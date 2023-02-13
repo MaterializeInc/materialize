@@ -32,14 +32,18 @@ materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accou
 
 # Check that non-append-only `COUNTER` sources reach the proper size
 
-> CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 47, TICK INTERVAL '0.1s') WITH (SIZE '1')
+> CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s') WITH (SIZE '1')
 
 > SELECT count(*) FROM counter
-47
+8
 
 # Now make sure it doesn't change
 > SELECT mz_internal.mz_sleep(1)
 <null>
 
 > SELECT count(*) FROM counter
-47
+8
+
+# Check that negative max cardinalities are rejected
+! CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (MAX CARDINALITY -1) WITH (SIZE '1')
+Contains: unsupported max cardinality

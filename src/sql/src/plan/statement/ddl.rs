@@ -25,7 +25,7 @@ use tracing::warn;
 use mz_controller::clusters::DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS;
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
-use mz_ore::cast::{self, CastFrom, TryCastFrom};
+use mz_ore::cast::{self, TryCastFrom};
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
@@ -1205,7 +1205,7 @@ generate_extracted_config!(
     LoadGeneratorOption,
     (TickInterval, Interval),
     (ScaleFactor, f64),
-    (MaxCardinality, u64)
+    (MaxCardinality, i64)
 );
 
 pub(crate) fn load_generator_ast_to_generator(
@@ -1224,9 +1224,12 @@ pub(crate) fn load_generator_ast_to_generator(
             let LoadGeneratorOptionExtracted {
                 max_cardinality, ..
             } = options.to_vec().try_into()?;
-            LoadGenerator::Counter {
-                max_cardinality: max_cardinality.map(usize::cast_from),
+            if let Some(max_cardinality) = max_cardinality {
+                if max_cardinality < 0 {
+                    sql_bail!("unsupported max cardinality {max_cardinality}");
+                }
             }
+            LoadGenerator::Counter { max_cardinality }
         }
         mz_sql_parser::ast::LoadGenerator::Datums => LoadGenerator::Datums,
         mz_sql_parser::ast::LoadGenerator::Tpch => {
