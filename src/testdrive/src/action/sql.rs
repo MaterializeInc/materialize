@@ -26,7 +26,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_pgrepr::{Interval, Jsonb, Numeric, UInt2, UInt4, UInt8};
-use mz_sql_parser::ast::Statement;
+use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::action::{ControlFlow, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedError, SqlOutput};
@@ -44,9 +44,6 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         // TODO(benesch): one day we'll support SQL queries where order matters.
         expected_rows.sort();
     }
-
-    let query = &cmd.query;
-    print_query(query);
 
     let should_retry = match &stmt {
         // Do not retry FETCH statements as subsequent executions are likely
@@ -75,6 +72,9 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | SetVariable(_) => false,
         _ => true,
     };
+
+    let query = &cmd.query;
+    print_query(query, Some(&stmt));
 
     let state = &state;
     let expected_output = &cmd.expected_output;
@@ -329,7 +329,12 @@ pub async fn run_fail_sql(
     let expected_hint = cmd.expected_hint.map(ErrorMatcher::Contains);
 
     let query = &cmd.query;
-    print_query(query);
+
+    if let Some(stmt) = &stmt {
+        print_query(query, Some(stmt));
+    } else {
+        print_query(query, None);
+    }
 
     let should_retry = match &stmt {
         // Do not retry statements that could not be parsed
@@ -463,8 +468,18 @@ async fn try_run_fail_sql(
     }
 }
 
-pub fn print_query(query: &str) {
-    println!("> {}", query);
+pub fn print_query(query: &str, stmt: Option<&Statement<Raw>>) {
+    use Statement::*;
+    if let Some(stmt) = stmt {
+        match &stmt {
+            CreateSecret(_) => {
+                println!("> CREATE SECRET [query truncated on purpose as to not reveal the secret in the log]");
+                return;
+            }
+            _ => {}
+        }
+    }
+    println!("> {}", query)
 }
 
 pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error> {

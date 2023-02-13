@@ -321,7 +321,7 @@ impl State {
         {
             let db_name: String = row.get(0);
             let query = format!("DROP DATABASE {}", db_name);
-            sql::print_query(&query);
+            sql::print_query(&query, None);
             self.pgclient.batch_execute(&query).await.context(format!(
                 "resetting materialize state: DROP DATABASE {}",
                 db_name,
@@ -342,7 +342,7 @@ impl State {
                     continue;
                 }
                 let query = format!("DROP ROLE {}", role_name);
-                sql::print_query(&query);
+                sql::print_query(&query, None);
                 self.pgclient.batch_execute(&query).await.context(format!(
                     "resetting materialize state: DROP ROLE {}",
                     role_name,
