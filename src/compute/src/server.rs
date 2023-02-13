@@ -612,6 +612,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     persist_clients: Arc::clone(&self.persist_clients),
                     command_history: ComputeCommandHistory::default(),
                     max_result_size: u32::MAX,
+                    dataflow_max_inflight_bytes: usize::MAX,
                     metrics: self.compute_metrics.clone(),
                 });
             }
