@@ -2390,7 +2390,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                 LoadGenerator::Auction => ProtoGenerator::Auction(()),
                 LoadGenerator::Counter { max_cardinality } => {
                     ProtoGenerator::Counter(ProtoCounterLoadGenerator {
-                        max_cardinality: max_cardinality.clone().map(|u| u64::cast_from(u)),
+                        max_cardinality: max_cardinality.clone().map(u64::cast_from),
                     })
                 }
                 LoadGenerator::Tpch {
@@ -2421,7 +2421,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                 ProtoGenerator::Auction(()) => LoadGenerator::Auction,
                 ProtoGenerator::Counter(ProtoCounterLoadGenerator { max_cardinality }) => {
                     LoadGenerator::Counter {
-                        max_cardinality: max_cardinality.map(|u| usize::cast_from(u)),
+                        max_cardinality: max_cardinality.map(usize::cast_from),
                     }
                 }
                 ProtoGenerator::Tpch(ProtoTpchLoadGenerator {

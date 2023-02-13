@@ -1225,7 +1225,7 @@ pub(crate) fn load_generator_ast_to_generator(
                 max_cardinality, ..
             } = options.to_vec().try_into()?;
             LoadGenerator::Counter {
-                max_cardinality: max_cardinality.map(|u| usize::cast_from(u)),
+                max_cardinality: max_cardinality.map(usize::cast_from),
             }
         }
         mz_sql_parser::ast::LoadGenerator::Datums => LoadGenerator::Datums,
