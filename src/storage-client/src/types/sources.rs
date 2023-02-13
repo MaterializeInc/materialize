@@ -35,6 +35,7 @@ use timely::scheduling::ActivateOnDrop;
 use uuid::Uuid;
 
 use mz_expr::{MirScalarExpr, PartitionId};
+use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
@@ -2151,7 +2152,12 @@ impl SourceConnection for LoadGeneratorSourceConnection {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum LoadGenerator {
     Auction,
-    Counter,
+    Counter {
+        /// How many values will be emitted
+        /// before old ones are retracted, or `None` for
+        /// an append-only collection.
+        max_cardinality: Option<usize>,
+    },
     Datums,
     Tpch {
         count_supplier: i64,
@@ -2188,7 +2194,7 @@ impl LoadGenerator {
                 }
                 DataEncodingInner::RowCodec(desc)
             }
-            LoadGenerator::Counter => DataEncodingInner::RowCodec(
+            LoadGenerator::Counter { max_cardinality: _ } => DataEncodingInner::RowCodec(
                 RelationDesc::empty().with_column("counter", ScalarType::Int64.nullable(false)),
             ),
             LoadGenerator::Tpch { .. } => DataEncodingInner::RowCodec(RelationDesc::empty()),
@@ -2246,7 +2252,7 @@ impl LoadGenerator {
                         .with_key(vec![0]),
                 ),
             ],
-            LoadGenerator::Counter => vec![],
+            LoadGenerator::Counter { max_cardinality: _ } => vec![],
             LoadGenerator::Datums => vec![],
             LoadGenerator::Tpch { .. } => {
                 let identifier = ScalarType::Int64.nullable(false);
@@ -2382,7 +2388,11 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
         ProtoLoadGeneratorSourceConnection {
             generator: Some(match &self.load_generator {
                 LoadGenerator::Auction => ProtoGenerator::Auction(()),
-                LoadGenerator::Counter => ProtoGenerator::Counter(()),
+                LoadGenerator::Counter { max_cardinality } => {
+                    ProtoGenerator::Counter(ProtoCounterLoadGenerator {
+                        max_cardinality: max_cardinality.clone().map(|u| u64::cast_from(u)),
+                    })
+                }
                 LoadGenerator::Tpch {
                     count_supplier,
                     count_part,
@@ -2409,7 +2419,11 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
         Ok(LoadGeneratorSourceConnection {
             load_generator: match generator {
                 ProtoGenerator::Auction(()) => LoadGenerator::Auction,
-                ProtoGenerator::Counter(()) => LoadGenerator::Counter,
+                ProtoGenerator::Counter(ProtoCounterLoadGenerator { max_cardinality }) => {
+                    LoadGenerator::Counter {
+                        max_cardinality: max_cardinality.map(|u| usize::cast_from(u)),
+                    }
+                }
                 ProtoGenerator::Tpch(ProtoTpchLoadGenerator {
                     count_supplier,
                     count_part,

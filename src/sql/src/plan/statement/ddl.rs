@@ -25,7 +25,7 @@ use tracing::warn;
 use mz_controller::clusters::DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS;
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
-use mz_ore::cast::{self, TryCastFrom};
+use mz_ore::cast::{self, CastFrom, TryCastFrom};
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
@@ -1204,7 +1204,8 @@ pub fn plan_create_subsource(
 generate_extracted_config!(
     LoadGeneratorOption,
     (TickInterval, Interval),
-    (ScaleFactor, f64)
+    (ScaleFactor, f64),
+    (MaxCardinality, u64)
 );
 
 pub(crate) fn load_generator_ast_to_generator(
@@ -1219,7 +1220,14 @@ pub(crate) fn load_generator_ast_to_generator(
 > {
     let load_generator = match loadgen {
         mz_sql_parser::ast::LoadGenerator::Auction => LoadGenerator::Auction,
-        mz_sql_parser::ast::LoadGenerator::Counter => LoadGenerator::Counter,
+        mz_sql_parser::ast::LoadGenerator::Counter => {
+            let LoadGeneratorOptionExtracted {
+                max_cardinality, ..
+            } = options.to_vec().try_into()?;
+            LoadGenerator::Counter {
+                max_cardinality: max_cardinality.map(|u| usize::cast_from(u)),
+            }
+        }
         mz_sql_parser::ast::LoadGenerator::Datums => LoadGenerator::Datums,
         mz_sql_parser::ast::LoadGenerator::Tpch => {
             let LoadGeneratorOptionExtracted { scale_factor, .. } = options.to_vec().try_into()?;
@@ -1263,7 +1271,7 @@ pub(crate) fn load_generator_ast_to_generator(
         let name = FullObjectName {
             database: RawDatabaseSpecifier::Name("mz_load_generators".to_owned()),
             schema: match load_generator {
-                LoadGenerator::Counter => "counter".into(),
+                LoadGenerator::Counter { .. } => "counter".into(),
                 LoadGenerator::Auction => "auction".into(),
                 LoadGenerator::Datums => "datums".into(),
                 LoadGenerator::Tpch { .. } => "tpch".into(),

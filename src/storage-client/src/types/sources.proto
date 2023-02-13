@@ -214,7 +214,7 @@ message ProtoPostgresSourcePublicationDetails {
 
 message ProtoLoadGeneratorSourceConnection {
     oneof generator {
-        google.protobuf.Empty counter = 1;
+        ProtoCounterLoadGenerator counter = 1;
         google.protobuf.Empty auction = 3;
         ProtoTpchLoadGenerator tpch = 4;
         google.protobuf.Empty datums = 5;
@@ -226,6 +226,9 @@ message ProtoTestScriptSourceConnection {
     string desc_json = 1;
 }
 
+message ProtoCounterLoadGenerator {
+    optional uint64 max_cardinality = 1;
+}
 
 message ProtoTpchLoadGenerator {
     int64 count_supplier = 1;

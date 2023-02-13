@@ -2812,7 +2812,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_load_generator_option(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[SCALE, TICK])? {
+        let name = match self.expect_one_of_keywords(&[SCALE, TICK, MAX])? {
             SCALE => {
                 self.expect_keyword(FACTOR)?;
                 LoadGeneratorOptionName::ScaleFactor
@@ -2820,6 +2820,10 @@ impl<'a> Parser<'a> {
             TICK => {
                 self.expect_keyword(INTERVAL)?;
                 LoadGeneratorOptionName::TickInterval
+            }
+            MAX => {
+                self.expect_keyword(CARDINALITY)?;
+                LoadGeneratorOptionName::MaxCardinality
             }
             _ => unreachable!(),
         };

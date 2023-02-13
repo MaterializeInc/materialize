@@ -29,3 +29,16 @@ users         subsource      <null>
 # Show that AST of subsource contains REFERENCES option
 > SHOW CREATE SOURCE accounts
 materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accounts\" (\"id\" \"pg_catalog\".\"int8\" NOT NULL, \"org_id\" \"pg_catalog\".\"int8\" NOT NULL, \"balance\" \"pg_catalog\".\"int8\" NOT NULL, UNIQUE (\"id\")) WITH (REFERENCES = true)"
+
+# Check that non-append-only `COUNTER` sources reach the proper size
+
+> CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 47, TICK INTERVAL '0.1s') WITH (SIZE '1')
+
+> SELECT count(*) FROM counter
+47
+
+# Now make sure it doesn't change
+> SELECT mz_internal.mz_sleep(1)
+
+> SELECT count(*) FROM counter
+47
