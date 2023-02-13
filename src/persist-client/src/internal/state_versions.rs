@@ -279,13 +279,16 @@ impl StateVersions {
                 shard_metrics
                     .update_count
                     .set(u64::cast_from(new_state.num_updates()));
-                let (largest_batch_size, encoded_batch_size) = new_state.batch_size_metrics();
+                let size_metrics = new_state.size_metrics();
                 shard_metrics
                     .largest_batch_size
-                    .set(u64::cast_from(largest_batch_size));
+                    .set(u64::cast_from(size_metrics.largest_batch_bytes));
                 shard_metrics
-                    .encoded_batch_size
-                    .set(u64::cast_from(encoded_batch_size));
+                    .usage_current_state_batches_bytes
+                    .set(u64::cast_from(size_metrics.state_batches_bytes));
+                shard_metrics
+                    .usage_current_state_rollups_bytes
+                    .set(u64::cast_from(size_metrics.state_rollups_bytes));
                 shard_metrics
                     .seqnos_held
                     .set(u64::cast_from(new_state.seqnos_held()));
@@ -647,7 +650,7 @@ impl StateVersions {
             Bytes::from(buf)
         });
         shard_metrics
-            .encoded_rollup_size
+            .latest_rollup_size
             .set(u64::cast_from(buf.len()));
         EncodedRollup {
             shard_id: state.shard_id,
@@ -1003,6 +1006,7 @@ struct ReferencedBlobValidator<T> {
     inc_rollups: BTreeSet<HollowRollup>,
 }
 
+#[cfg(debug_assertions)]
 impl<T> Default for ReferencedBlobValidator<T> {
     fn default() -> Self {
         Self {
@@ -1014,6 +1018,7 @@ impl<T> Default for ReferencedBlobValidator<T> {
     }
 }
 
+#[cfg(debug_assertions)]
 impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
     fn add_inc_blob(&mut self, x: HollowBlobRef<'_, T>) {
         match x {

@@ -133,7 +133,7 @@ impl PersistClientCache {
         Ok(consensus)
     }
 
-    pub(crate) async fn open_blob(
+    async fn open_blob(
         &self,
         blob_uri: String,
     ) -> Result<Arc<dyn Blob + Send + Sync>, ExternalError> {

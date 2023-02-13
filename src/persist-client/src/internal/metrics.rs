@@ -1040,7 +1040,6 @@ pub struct ShardsMetrics {
     encoded_diff_size: mz_ore::metrics::IntCounterVec,
     batch_part_count: mz_ore::metrics::UIntGaugeVec,
     update_count: mz_ore::metrics::UIntGaugeVec,
-    encoded_batch_size: mz_ore::metrics::UIntGaugeVec,
     largest_batch_size: mz_ore::metrics::UIntGaugeVec,
     seqnos_held: mz_ore::metrics::UIntGaugeVec,
     gc_seqno_held_parts: mz_ore::metrics::UIntGaugeVec,
@@ -1048,6 +1047,11 @@ pub struct ShardsMetrics {
     gc_finished: mz_ore::metrics::IntCounterVec,
     compaction_applied: mz_ore::metrics::IntCounterVec,
     cmd_succeeded: mz_ore::metrics::IntCounterVec,
+    usage_current_state_batches_bytes: mz_ore::metrics::UIntGaugeVec,
+    usage_current_state_rollups_bytes: mz_ore::metrics::UIntGaugeVec,
+    usage_referenced_not_current_state_bytes: mz_ore::metrics::UIntGaugeVec,
+    usage_not_leaked_not_referenced_bytes: mz_ore::metrics::UIntGaugeVec,
+    usage_leaked_bytes: mz_ore::metrics::UIntGaugeVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1100,11 +1104,6 @@ impl ShardsMetrics {
                 help: "count of updates by shard",
                 var_labels: ["shard"],
             )),
-            encoded_batch_size: registry.register(metric!(
-                name: "mz_persist_shard_encoded_batch_size",
-                help: "total encoded batch size by shard",
-                var_labels: ["shard"],
-            )),
             largest_batch_size: registry.register(metric!(
                 name: "mz_persist_shard_largest_batch_size",
                 help: "largest encoded batch size by shard",
@@ -1138,6 +1137,31 @@ impl ShardsMetrics {
             cmd_succeeded: registry.register(metric!(
                 name: "mz_persist_shard_cmd_succeeded",
                 help: "count of commands succeeded by shard",
+                var_labels: ["shard"],
+            )),
+            usage_current_state_batches_bytes: registry.register(metric!(
+                name: "mz_persist_shard_usage_current_state_batches_bytes",
+                help: "data in batches/parts referenced by current version of state",
+                var_labels: ["shard"],
+            )),
+            usage_current_state_rollups_bytes: registry.register(metric!(
+                name: "mz_persist_shard_usage_current_state_rollups_bytes",
+                help: "data in rollups referenced by current version of state",
+                var_labels: ["shard"],
+            )),
+            usage_referenced_not_current_state_bytes: registry.register(metric!(
+                name: "mz_persist_shard_usage_referenced_not_current_state_bytes",
+                help: "data referenced only by a previous version of state",
+                var_labels: ["shard"],
+            )),
+            usage_not_leaked_not_referenced_bytes: registry.register(metric!(
+                name: "mz_persist_shard_usage_not_leaked_not_referenced_bytes",
+                help: "data written by an active writer but not referenced by any version of state",
+                var_labels: ["shard"],
+            )),
+            usage_leaked_bytes: registry.register(metric!(
+                name: "mz_persist_shard_usage_leaked_bytes",
+                help: "data reclaimable by a leaked blob detector",
                 var_labels: ["shard"],
             )),
             shards,
@@ -1184,15 +1208,20 @@ pub struct ShardMetrics {
     pub shard_id: ShardId,
     pub since: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     pub upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    pub encoded_rollup_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub largest_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub latest_rollup_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub encoded_diff_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub batch_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub encoded_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub largest_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub gc_seqno_held_parts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub gc_live_diffs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub usage_current_state_batches_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub usage_current_state_rollups_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub usage_referenced_not_current_state_bytes:
+        DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub usage_not_leaked_not_referenced_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub usage_leaked_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub gc_finished: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub compaction_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub cmd_succeeded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
@@ -1209,7 +1238,7 @@ impl ShardMetrics {
             upper: shards_metrics
                 .upper
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
-            encoded_rollup_size: shards_metrics
+            latest_rollup_size: shards_metrics
                 .encoded_rollup_size
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             encoded_diff_size: shards_metrics
@@ -1220,9 +1249,6 @@ impl ShardMetrics {
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             update_count: shards_metrics
                 .update_count
-                .get_delete_on_drop_gauge(vec![shard.clone()]),
-            encoded_batch_size: shards_metrics
-                .encoded_batch_size
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             largest_batch_size: shards_metrics
                 .largest_batch_size
@@ -1244,7 +1270,22 @@ impl ShardMetrics {
                 .get_delete_on_drop_counter(vec![shard.clone()]),
             cmd_succeeded: shards_metrics
                 .cmd_succeeded
-                .get_delete_on_drop_counter(vec![shard]),
+                .get_delete_on_drop_counter(vec![shard.clone()]),
+            usage_current_state_batches_bytes: shards_metrics
+                .usage_current_state_batches_bytes
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            usage_current_state_rollups_bytes: shards_metrics
+                .usage_current_state_rollups_bytes
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            usage_referenced_not_current_state_bytes: shards_metrics
+                .usage_referenced_not_current_state_bytes
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            usage_not_leaked_not_referenced_bytes: shards_metrics
+                .usage_not_leaked_not_referenced_bytes
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            usage_leaked_bytes: shards_metrics
+                .usage_leaked_bytes
+                .get_delete_on_drop_gauge(vec![shard]),
         }
     }
 
@@ -1272,10 +1313,21 @@ pub struct UsageAuditMetrics {
     pub blob_bytes: UIntGauge,
     /// Count of all blobs
     pub blob_count: UIntGauge,
+    /// Time spent fetching blob metadata
+    pub step_blob_metadata: Counter,
+    /// Time spent fetching state versions
+    pub step_state: Counter,
+    /// Time spent doing math
+    pub step_math: Counter,
 }
 
 impl UsageAuditMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
+        let step_timings: CounterVec = registry.register(metric!(
+                name: "mz_persist_audit_step_seconds",
+                help: "time spent on individual steps of audit",
+                var_labels: ["step"],
+        ));
         UsageAuditMetrics {
             blob_batch_part_bytes: registry.register(metric!(
                 name: "mz_persist_audit_blob_batch_part_bytes",
@@ -1301,6 +1353,9 @@ impl UsageAuditMetrics {
                 name: "mz_persist_audit_blob_count",
                 help: "count of all blobs",
             )),
+            step_blob_metadata: step_timings.with_label_values(&["blob_metadata"]),
+            step_state: step_timings.with_label_values(&["state"]),
+            step_math: step_timings.with_label_values(&["math"]),
         }
     }
 }

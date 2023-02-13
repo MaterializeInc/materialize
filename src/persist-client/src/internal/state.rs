@@ -1081,8 +1081,22 @@ where
         self.collections.trace.num_updates()
     }
 
-    pub fn batch_size_metrics(&self) -> (usize, usize) {
-        self.collections.trace.batch_size_metrics()
+    pub fn size_metrics(&self) -> StateSizeMetrics {
+        let mut ret = StateSizeMetrics::default();
+        self.map_blobs(|x| match x {
+            HollowBlobRef::Batch(x) => {
+                let mut batch_size = 0;
+                for x in x.parts.iter() {
+                    batch_size += x.encoded_size_bytes;
+                }
+                ret.largest_batch_bytes = std::cmp::max(ret.largest_batch_bytes, batch_size);
+                ret.state_batches_bytes += batch_size;
+            }
+            HollowBlobRef::Rollup(x) => {
+                ret.state_rollups_bytes += x.encoded_size_bytes.unwrap_or_default()
+            }
+        });
+        ret
     }
 
     pub fn latest_rollup(&self) -> (&SeqNo, &HollowRollup) {
@@ -1258,6 +1272,13 @@ where
             f(HollowBlobRef::Rollup(x));
         }
     }
+}
+
+#[derive(Debug, Default)]
+pub struct StateSizeMetrics {
+    pub largest_batch_bytes: usize,
+    pub state_batches_bytes: usize,
+    pub state_rollups_bytes: usize,
 }
 
 #[derive(Default)]
