@@ -1051,23 +1051,18 @@ where
                         current_upper.borrow_mut().clone_from(&batch_upper);
                     }
                     Err(mismatch) => {
-                        // TODO(in later pr): panic
-
-                        // Clean up in case we didn't manage to append the
+                        // _Best effort_ Clean up in case we didn't manage to append the
                         // batches to persist.
                         for (batch, _) in batches {
                             batch.delete().await;
                         }
-                        tracing::info!(
+                        panic!(
                             "persist_sink({}): invalid upper! \
                                 Tried to append batch ({:?} -> {:?}) but upper \
                                 is {:?}. This is not a problem, it just means \
                                 someone else was faster than us. We will try \
                                 again with a new batch description.",
-                            collection_id,
-                            batch_lower,
-                            batch_upper,
-                            mismatch.current,
+                            collection_id, batch_lower, batch_upper, mismatch.current,
                         );
                     }
                 }
