@@ -39,6 +39,7 @@ materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accou
 
 # Now make sure it doesn't change
 > SELECT mz_internal.mz_sleep(1)
+<null>
 
 > SELECT count(*) FROM counter
 47
