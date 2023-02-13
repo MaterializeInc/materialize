@@ -205,7 +205,7 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     let mut client = Retry::default()
-        .clamp_backoff(Duration::from_secs(32))
+        .clamp_backoff(Duration::from_secs(1))
         .retry_async(|state| {
             let dests = addrs
                 .clone()
