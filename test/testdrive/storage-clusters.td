@@ -29,6 +29,9 @@ contains:only one of IN CLUSTER or SIZE can be set
 # Creating a source in an empty, zero-replica cluster should work.
 > CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER
 
+! ALTER SOURCE loadgen SET (SIZE = '1')
+contains:cannot change the size of a source or sink created with IN CLUSTER
+
 # Create indexes and materialized views in a storage cluster is banned.
 ! CREATE INDEX bad IN CLUSTER storage ON t (a)
 contains:cannot create this kind of item in a cluster that contains sources or sinks
@@ -126,6 +129,9 @@ bb
   FROM view1
   INTO KAFKA CONNECTION kafka (TOPIC 'sink1-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
+
+! ALTER SINK sink1 SET (SIZE = '1')
+contains:cannot change the size of a source or sink created with IN CLUSTER
 
 > CREATE SINK sink2
   IN CLUSTER storage
