@@ -905,12 +905,15 @@ Materialize maintains four correctness guarantees.
    Materialize sends an acknowledgement for (*e.g., the commit of an offset by a
    Kafka source, the acknowledgement of an LSN by a PostgresSQL source, etcetera*),
    will be saved in durable storage.
-5. *Materialize respects the compaction frontier of its sources.* This means
-   that on source creation Materialize queries and puts a read hold on the
-   `initial_since` frontier of the upstream system and sets the initial since
-   *of the collection in Materialize* to be `{reclock(t) for t in
-   initial_since}`. Informally, this prevents users from reading a collection
-   for a source where the contents describe a state that never happened.
+5. *Materialize respects the compaction frontier of its sources, to the extent
+   permitted by the upstream system.* This means that on source creation
+   Materialize queries and puts a read hold on the `initial_since` frontier of
+   the upstream system and sets the initial since *of the collection in
+   Materialize* to be `{reclock(t) for t in initial_since}`. Informally, this
+   prevents users from reading a collection for a source where the contents
+   describe a state that never happened. Note that not all source types support
+   read holds. In those cases Materialize will try to stay ahead of compaction
+   in a best-effort basis.
 
 ## Discussion
 
