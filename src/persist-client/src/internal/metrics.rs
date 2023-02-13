@@ -1181,20 +1181,18 @@ impl ShardsMetrics {
 
 #[derive(Debug)]
 pub struct ShardMetrics {
-    pub(crate) shard_id: ShardId,
-    since: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    encoded_rollup_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    encoded_diff_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    batch_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    encoded_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    largest_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) gc_seqno_held_parts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) gc_live_diffs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    // These are already counted elsewhere in aggregate, so delete them if we
-    // remove per-shard labels.
+    pub shard_id: ShardId,
+    pub since: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub encoded_rollup_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub encoded_diff_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub batch_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub encoded_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub largest_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub gc_seqno_held_parts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub gc_live_diffs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub gc_finished: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub compaction_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub cmd_succeeded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
@@ -1256,42 +1254,6 @@ impl ShardMetrics {
 
     pub fn set_upper<T: Codec64>(&self, upper: &Antichain<T>) {
         self.upper.set(encode_ts_metric(upper))
-    }
-
-    pub fn set_encoded_rollup_size(&self, encoded_rollup_size: usize) {
-        self.encoded_rollup_size
-            .set(u64::cast_from(encoded_rollup_size))
-    }
-
-    pub fn inc_encoded_diff_size(&self, encoded_diff_size: usize) {
-        self.encoded_diff_size
-            .inc_by(u64::cast_from(encoded_diff_size))
-    }
-
-    pub fn set_batch_part_count(&self, batch_count: usize) {
-        self.batch_part_count.set(u64::cast_from(batch_count))
-    }
-
-    pub fn set_gc_seqno_held_parts(&self, parts: usize) {
-        self.gc_seqno_held_parts.set(u64::cast_from(parts))
-    }
-
-    pub fn set_update_count(&self, update_count: usize) {
-        self.update_count.set(u64::cast_from(update_count))
-    }
-
-    pub fn set_encoded_batch_size(&self, encoded_batch_size: usize) {
-        self.encoded_batch_size
-            .set(u64::cast_from(encoded_batch_size))
-    }
-
-    pub fn set_largest_batch_size(&self, largest_batch_size: usize) {
-        self.largest_batch_size
-            .set(u64::cast_from(largest_batch_size))
-    }
-
-    pub fn set_seqnos_held(&self, seqnos_held: usize) {
-        self.seqnos_held.set(u64::cast_from(seqnos_held))
     }
 }
 

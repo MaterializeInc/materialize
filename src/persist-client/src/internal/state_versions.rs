@@ -18,6 +18,7 @@ use std::time::SystemTime;
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::cast::CastFrom;
 use mz_persist::location::{
     Atomicity, Blob, Consensus, Indeterminate, SeqNo, VersionedData, SCAN_ALL,
 };
@@ -272,13 +273,25 @@ impl StateVersions {
 
                 shard_metrics.set_since(new_state.since());
                 shard_metrics.set_upper(new_state.upper());
-                shard_metrics.set_batch_part_count(new_state.batch_part_count());
-                shard_metrics.set_update_count(new_state.num_updates());
+                shard_metrics
+                    .batch_part_count
+                    .set(u64::cast_from(new_state.batch_part_count()));
+                shard_metrics
+                    .update_count
+                    .set(u64::cast_from(new_state.num_updates()));
                 let (largest_batch_size, encoded_batch_size) = new_state.batch_size_metrics();
-                shard_metrics.set_largest_batch_size(largest_batch_size);
-                shard_metrics.set_encoded_batch_size(encoded_batch_size);
-                shard_metrics.set_seqnos_held(new_state.seqnos_held());
-                shard_metrics.inc_encoded_diff_size(payload_len);
+                shard_metrics
+                    .largest_batch_size
+                    .set(u64::cast_from(largest_batch_size));
+                shard_metrics
+                    .encoded_batch_size
+                    .set(u64::cast_from(encoded_batch_size));
+                shard_metrics
+                    .seqnos_held
+                    .set(u64::cast_from(new_state.seqnos_held()));
+                shard_metrics
+                    .encoded_diff_size
+                    .inc_by(u64::cast_from(payload_len));
                 Ok(Ok(()))
             }
             Err(live_diffs) => {
@@ -633,7 +646,9 @@ impl StateVersions {
             state.encode(&mut buf);
             Bytes::from(buf)
         });
-        shard_metrics.set_encoded_rollup_size(buf.len());
+        shard_metrics
+            .encoded_rollup_size
+            .set(u64::cast_from(buf.len()));
         EncodedRollup {
             shard_id: state.shard_id,
             seqno: state.seqno,
