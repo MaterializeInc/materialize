@@ -303,8 +303,10 @@ impl ShouldHalt for StorageError {
         match self {
             StorageError::UpdateBeyondUpper(_)
             | StorageError::ReadBeforeSince(_)
-            | StorageError::InvalidUppers(_) => true,
+            | StorageError::InvalidUppers(_)
+            | StorageError::InvalidUsage(_) => true,
             StorageError::SourceIdReused(_)
+            | StorageError::SinkIdReused(_)
             | StorageError::IdentifierMissing(_)
             | StorageError::ClientError(_)
             | StorageError::DataflowError(_) => false,

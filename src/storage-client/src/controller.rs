@@ -775,6 +775,9 @@ pub enum StorageError {
     /// The source identifier was re-created after having been dropped,
     /// or installed with a different description.
     SourceIdReused(GlobalId),
+    /// The sink identifier was re-created after having been dropped, or
+    /// installed with a different description.
+    SinkIdReused(GlobalId),
     /// The source identifier is not present.
     IdentifierMissing(GlobalId),
     /// The update contained in the appended batch was at a timestamp equal or beyond the batch's upper
@@ -789,12 +792,16 @@ pub enum StorageError {
     IOError(StashError),
     /// Dataflow was not able to process a request
     DataflowError(DataflowError),
+    /// The controller API was used in some invalid way. This usually indicates
+    /// a bug.
+    InvalidUsage(String),
 }
 
 impl Error for StorageError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::SourceIdReused(_) => None,
+            Self::SinkIdReused(_) => None,
             Self::IdentifierMissing(_) => None,
             Self::UpdateBeyondUpper(_) => None,
             Self::ReadBeforeSince(_) => None,
@@ -802,6 +809,7 @@ impl Error for StorageError {
             Self::ClientError(_) => None,
             Self::IOError(err) => Some(err),
             Self::DataflowError(err) => Some(err),
+            Self::InvalidUsage(_) => None,
         }
     }
 }
@@ -813,6 +821,10 @@ impl fmt::Display for StorageError {
             Self::SourceIdReused(id) => write!(
                 f,
                 "source identifier was re-created after having been dropped: {id}"
+            ),
+            Self::SinkIdReused(id) => write!(
+                f,
+                "sink identifier was re-created after having been dropped: {id}"
             ),
             Self::IdentifierMissing(id) => write!(f, "collection identifier is not present: {id}"),
             Self::UpdateBeyondUpper(id) => {
@@ -834,6 +846,7 @@ impl fmt::Display for StorageError {
             Self::ClientError(err) => write!(f, "underlying client error: {:#}", err),
             Self::IOError(err) => write!(f, "failed to read or write state: {err}"),
             Self::DataflowError(err) => write!(f, "dataflow failed to process request: {err}"),
+            Self::InvalidUsage(err) => write!(f, "invalid usage: {err}"),
         }
     }
 }
@@ -1379,16 +1392,19 @@ where
             } = export;
 
             if dedup_hashmap.insert(id, desc).is_some() {
-                // TODO: These should ne SinkIdReused, right?
-                return Err(StorageError::SourceIdReused(*id));
+                return Err(StorageError::SinkIdReused(*id));
             }
             if let Ok(export) = self.export(*id) {
                 if &export.description != desc {
-                    return Err(StorageError::SourceIdReused(*id));
+                    return Err(StorageError::SinkIdReused(*id));
                 }
             }
             if desc.sink.from != *from_id {
-                return Err(StorageError::SourceIdReused(*id));
+                return Err(StorageError::InvalidUsage(format!(
+                    "sink {id} was prepared using from_id {from_id}, \
+                    but is now presented with from_id {}",
+                    desc.sink.from
+                )));
             }
         }
 
