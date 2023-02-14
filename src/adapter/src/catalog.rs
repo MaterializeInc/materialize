@@ -1599,9 +1599,7 @@ pub struct Ingestion {
     pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub cluster_id: ClusterId,
     /// The ID of this collection's remap/progress collection.
-    // TODO: This can be converted to a `GlobalId` in v0.45, i.e. once we no
-    // longer need to maintain upgrade compatibility with the version prior to
-    // subsources being introduced.
+    // MIGRATION: v0.44 This can be converted to a `GlobalId` in v0.46
     pub remap_collection_id: Option<GlobalId>,
 }
 

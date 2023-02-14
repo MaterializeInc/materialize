@@ -619,11 +619,11 @@ pub trait ResumptionFrontierCalculator<T> {
 /// The subset of [`CollectionMetadata`] that must be durable stored.
 #[derive(Arbitrary, Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize)]
 pub struct DurableCollectionMetadata {
-    // This field can be deleted in a future version of Materialize because we
-    // are moving the relationship between a collection and its remap shard into
-    // a relationship between a collection and its remap collection, i.e. we
-    // will use another collection's data shard as our remap shard, rendering
-    // this mapping duplicative.
+    // MIGRATION: v0.44 This field can be deleted in a future version of
+    // Materialize because we are moving the relationship between a collection
+    // and its remap shard into a relationship between a collection and its
+    // remap collection, i.e. we will use another collection's data shard as our
+    // remap shard, rendering this mapping duplicative.
     pub remap_shard: Option<ShardId>,
     pub data_shard: ShardId,
 }
