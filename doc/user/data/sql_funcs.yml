@@ -712,6 +712,11 @@
       The `include_implicit` parameter controls whether implicit schemas like
       `mz_catalog` and `pg_catalog` are included in the output.
     unmaterializable: true
+  - signature: 'current_setting(setting_name: text[, missing_ok: bool]) -> text'
+    description: >-
+      Returns the value of the named setting or error if it does not exist.
+      If `missing_ok` is true, return NULL if it does not exist.
+    unmaterializable: true
   - signature: 'obj_description(oid: oid, catalog: text) -> text'
     description: PostgreSQL compatibility shim. Currently always returns `NULL`.
   - signature: 'pg_backend_pid() -> int'

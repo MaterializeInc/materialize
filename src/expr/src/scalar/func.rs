@@ -83,6 +83,7 @@ pub enum UnmaterializableFunc {
     PgBackendPid,
     PgPostmasterStartTime,
     Version,
+    ViewableVariables,
 }
 
 impl UnmaterializableFunc {
@@ -107,6 +108,11 @@ impl UnmaterializableFunc {
             UnmaterializableFunc::PgBackendPid => ScalarType::Int32.nullable(false),
             UnmaterializableFunc::PgPostmasterStartTime => ScalarType::TimestampTz.nullable(false),
             UnmaterializableFunc::Version => ScalarType::String.nullable(false),
+            UnmaterializableFunc::ViewableVariables => ScalarType::Map {
+                value_type: Box::new(ScalarType::String),
+                custom_id: None,
+            }
+            .nullable(false),
         }
     }
 }
@@ -130,6 +136,7 @@ impl fmt::Display for UnmaterializableFunc {
             UnmaterializableFunc::PgBackendPid => f.write_str("pg_backend_pid"),
             UnmaterializableFunc::PgPostmasterStartTime => f.write_str("pg_postmaster_start_time"),
             UnmaterializableFunc::Version => f.write_str("version"),
+            UnmaterializableFunc::ViewableVariables => f.write_str("viewable_variables"),
         }
     }
 }
@@ -141,6 +148,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
             UnmaterializableFunc::CurrentDatabase => CurrentDatabase(()),
             UnmaterializableFunc::CurrentSchemasWithSystem => CurrentSchemasWithSystem(()),
             UnmaterializableFunc::CurrentSchemasWithoutSystem => CurrentSchemasWithoutSystem(()),
+            UnmaterializableFunc::ViewableVariables => CurrentSetting(()),
             UnmaterializableFunc::CurrentTimestamp => CurrentTimestamp(()),
             UnmaterializableFunc::CurrentUser => CurrentUser(()),
             UnmaterializableFunc::MzEnvironmentId => MzEnvironmentId(()),
@@ -166,6 +174,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
                     Ok(UnmaterializableFunc::CurrentSchemasWithoutSystem)
                 }
                 CurrentTimestamp(()) => Ok(UnmaterializableFunc::CurrentTimestamp),
+                CurrentSetting(()) => Ok(UnmaterializableFunc::ViewableVariables),
                 CurrentUser(()) => Ok(UnmaterializableFunc::CurrentUser),
                 MzEnvironmentId(()) => Ok(UnmaterializableFunc::MzEnvironmentId),
                 MzNow(()) => Ok(UnmaterializableFunc::MzNow),

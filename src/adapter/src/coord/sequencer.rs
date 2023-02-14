@@ -65,8 +65,9 @@ use crate::catalog::builtin::{
     PG_CATALOG_SCHEMA,
 };
 use crate::catalog::{
-    self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, SerializedReplicaLocation,
-    StorageSinkConnectionState, LINKED_CLUSTER_REPLICA_NAME, SYSTEM_USER,
+    self, Catalog, CatalogItem, CatalogState, Cluster, Connection, DataSourceDesc,
+    SerializedReplicaLocation, StorageSinkConnectionState, LINKED_CLUSTER_REPLICA_NAME,
+    SYSTEM_USER,
 };
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::appends::{BuiltinTableUpdateSource, Deferred, DeferredPlan, PendingWriteTxn};
@@ -1908,12 +1909,7 @@ impl Coordinator {
         session: &Session,
     ) -> Result<ExecuteResponse, AdapterError> {
         Ok(send_immediate_rows(
-            session
-                .vars()
-                .iter()
-                .chain(self.catalog.system_config().iter())
-                .filter(|v| !v.experimental() && v.visible(session.user()))
-                .filter(|v| v.safe() || self.catalog.unsafe_mode())
+            Self::viewable_variables(self.catalog.state(), session)
                 .map(|v| {
                     Row::pack_slice(&[
                         Datum::String(v.name()),
@@ -1923,6 +1919,19 @@ impl Coordinator {
                 })
                 .collect(),
         ))
+    }
+
+    /// Returns the viewable session and system variables.
+    pub(crate) fn viewable_variables<'a>(
+        catalog: &'a CatalogState,
+        session: &'a Session,
+    ) -> impl Iterator<Item = &'a dyn Var> {
+        session
+            .vars()
+            .iter()
+            .chain(catalog.system_config().iter())
+            .filter(|v| !v.experimental() && v.visible(session.user()))
+            .filter(|v| v.safe() || catalog.unsafe_mode())
     }
 
     fn sequence_show_variable(
