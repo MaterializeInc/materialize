@@ -1955,6 +1955,7 @@ where
         while let Some(key) = updates.keys().rev().next().cloned() {
             let mut update = updates.remove(&key).unwrap();
             if let Ok(collection) = self.collection_mut(key) {
+                let current_read_capabilities = collection.read_capabilities.frontier().to_owned();
                 for (time, diff) in update.iter() {
                     assert!(
                         collection.read_capabilities.count_for(time) + diff >= 0,
@@ -1963,6 +1964,17 @@ where
                         update,
                         collection.read_capabilities
                     );
+
+                    if collection.read_capabilities.count_for(time) + diff > 0 {
+                        assert!(
+                            current_read_capabilities.less_equal(time),
+                            "update {:?} for collection {key} is trying to \
+                            install read capabilities before the current \
+                            frontier of read capabilities, read capabilities before applying: {:?}",
+                            update,
+                            collection.read_capabilities
+                        );
+                    }
                 }
 
                 let changes = collection.read_capabilities.update_iter(update.drain());
@@ -2272,26 +2284,6 @@ where
         let mut changes = ChangeBatch::new();
         for time in read_capability.iter() {
             changes.update(time.clone(), 1);
-        }
-
-        // This is lifted out of `update_read_capabilitie` because it seems that
-        // the compute controller is currently trying to acquire read holds for
-        // times that are not beyond the current frontier of
-        // `read_capabilities`.
-        for id in storage_dependencies {
-            let collection = self.collection(id.clone())?;
-            let current_read_capabilities = collection.read_capabilities.frontier().to_owned();
-
-            for time in read_capability.iter() {
-                assert!(
-                    current_read_capabilities.less_equal(time),
-                    "trying to acquire hold on {:?} for collection {id} is trying to \
-                    install read capabilities before the current \
-                    frontier of read capabilities, read capabilities before applying: {:?}",
-                    read_capability,
-                    collection.read_capabilities
-                );
-            }
         }
 
         let mut storage_read_updates = storage_dependencies
