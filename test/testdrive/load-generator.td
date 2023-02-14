@@ -50,11 +50,11 @@ contains: unsupported max cardinality
 
 > CREATE SOURCE counter3 FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 0) WITH (SIZE '1')
 
-> SELECT count(*) FROM counter
+> SELECT count(*) FROM counter3
 0
 
 > SELECT mz_internal.mz_sleep(1)
 <null>
 
-> SELECT count(*) FROM counter
+> SELECT count(*) FROM counter3
 0
