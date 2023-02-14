@@ -184,7 +184,7 @@ fn normalize_create_secrets(
 // Rewrites all subsource references to be qualified by their IDs, which is the
 // mechanism by which `DeferredObjectName` differentiates between user input and
 // created objects.
-// TODO: delete in version v0.45 (released in v0.43 + 1 additional release)
+// MIGRATION: v0.44 This can be deleted v0.46
 fn progress_collection_rewrite(
     cat: &ConnCatalog<'_>,
     tx: &mut Transaction<'_>,
