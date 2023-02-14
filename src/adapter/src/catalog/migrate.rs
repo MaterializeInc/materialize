@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use mz_ore::collections::CollectionExt;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement};
-use mz_sql::plan::Params;
+use mz_sql::plan::{Params, PlanContext};
 
 use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};
 
@@ -155,7 +155,13 @@ fn normalize_create_secrets(
     if matches!(stmt, mz_sql::ast::Statement::CreateSecret(..)) {
         // Resolve Statement<Raw> to Statement<Aug>.
         let (resolved_stmt, _depends_on) = mz_sql::names::resolve(cat, stmt.clone())?;
-        let plan = mz_sql::plan::plan(None, cat, resolved_stmt, &Params::empty())?;
+        // Ok to use `PlanContext::zero()` because wall time is never used.
+        let plan = mz_sql::plan::plan(
+            Some(&PlanContext::zero()),
+            cat,
+            resolved_stmt,
+            &Params::empty(),
+        )?;
         let create_secret_plan = match plan {
             mz_sql::plan::Plan::CreateSecret(plan) => plan,
             _ => unreachable!("create secret statement can only plan into create secret plan"),
