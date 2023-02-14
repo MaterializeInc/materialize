@@ -697,10 +697,12 @@ where
                         if collection_id.is_user() {
                             trace!(
                                 "persist_sink {collection_id}/{shard_id}: \
-                                    wrote batch from worker {}: ({:?}, {:?})",
+                                    wrote batch from worker {}: ({:?}, {:?}),
+                                    containing {:?}",
                                 worker_index,
                                 batch_lower,
                                 batch_upper,
+                                batch_builder.metrics
                             );
                         }
                         batch_tokens.push(HollowBatchAndMetadata {
