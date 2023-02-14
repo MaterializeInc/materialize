@@ -1710,14 +1710,27 @@ where
         while let Some(key) = updates.keys().rev().next().cloned() {
             let mut update = updates.remove(&key).unwrap();
             if let Ok(collection) = self.collection_mut(key) {
+                let current_read_capabilities = collection.read_capabilities.frontier().to_owned();
+
                 for (time, diff) in update.iter() {
                     assert!(
                         collection.read_capabilities.count_for(time) + diff >= 0,
-                        "updates {:?} for collection {key} would lead to negative \
+                        "update {:?} for collection {key} would lead to negative \
                         read capabilities, read capabilities before applying: {:?}",
                         update,
                         collection.read_capabilities
                     );
+
+                    if collection.read_capabilities.count_for(time) + diff > 0 {
+                        assert!(
+                            current_read_capabilities.less_equal(time),
+                            "update {:?} for collection {key} is trying to \
+                            install read capabilities before the current \
+                            frontier of read capabilities, read capabilities before applying: {:?}",
+                            update,
+                            collection.read_capabilities
+                        );
+                    }
                 }
 
                 let changes = collection.read_capabilities.update_iter(update.drain());
