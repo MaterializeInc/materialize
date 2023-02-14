@@ -37,7 +37,7 @@ class CheckDatabaseCreate(Check):
         return Testdrive(
             dedent(
                 """
-                > SHOW DATABASES like 'to_be_created%';
+                > SHOW DATABASES LIKE 'to_be_created%';
                 to_be_created1
                 to_be_created2
 
