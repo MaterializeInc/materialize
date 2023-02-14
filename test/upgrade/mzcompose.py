@@ -203,6 +203,7 @@ def test_upgrade_from_version(
             "testdrive",
             "--no-reset",
             f"--var=upgrade-from-version={from_version}",
+            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
             temp_dir,
             seed,
             f"check-{style}from-{version_glob}-{filter}.td",

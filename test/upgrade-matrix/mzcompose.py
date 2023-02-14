@@ -64,7 +64,7 @@ SERVICES = [
         entrypoint_extra=[
             "--var=replicas=1",
             f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}",
+            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
         ],
     ),
 ]
