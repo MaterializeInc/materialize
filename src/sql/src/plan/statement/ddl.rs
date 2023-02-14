@@ -38,7 +38,7 @@ use mz_sql_parser::ast::{
     AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceStatement,
     AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
     CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredObjectName, SetVariableValue, SshConnectionOption, UnresolvedObjectName,
+    DeferredObjectName, SetVariableValue, SshConnectionOption, UnresolvedObjectName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -84,7 +84,7 @@ use crate::ast::{
     PostgresConnectionOption, PostgresConnectionOptionName, ProtobufSchema, QualifiedReplica,
     ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName,
     SourceIncludeMetadata, SourceIncludeMetadataType, SshConnectionOptionName, Statement,
-    TableConstraint, UnresolvedDatabaseName, Value, ViewDefinition,
+    TableConstraint, UnresolvedDatabaseName, ViewDefinition,
 };
 use crate::catalog::{
     CatalogCluster, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
@@ -2677,7 +2677,10 @@ pub fn plan_create_secret(
     } = &stmt;
 
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.to_owned())?)?;
-    let create_sql = normalize::create_statement(scx, Statement::CreateSecret(stmt.clone()))?;
+    let mut create_sql_statement = stmt.clone();
+    create_sql_statement.value = Expr::Value(Value::String("********".to_string()));
+    let create_sql =
+        normalize::create_statement(scx, Statement::CreateSecret(create_sql_statement))?;
     let secret_as = query::plan_secret_as(scx, value.clone())?;
 
     let secret = Secret {
@@ -2685,12 +2688,9 @@ pub fn plan_create_secret(
         secret_as,
     };
 
-    let full_name = scx.catalog.resolve_full_name(&name);
-
     Ok(Plan::CreateSecret(CreateSecretPlan {
         name,
         secret,
-        full_name,
         if_not_exists: *if_not_exists,
     }))
 }

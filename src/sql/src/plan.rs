@@ -340,7 +340,6 @@ pub struct CreateConnectionPlan {
 pub struct CreateSecretPlan {
     pub name: QualifiedObjectName,
     pub secret: Secret,
-    pub full_name: FullObjectName,
     pub if_not_exists: bool,
 }
 

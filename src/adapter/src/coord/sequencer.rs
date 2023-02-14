@@ -1220,7 +1220,6 @@ impl Coordinator {
         let CreateSecretPlan {
             name,
             mut secret,
-            full_name,
             if_not_exists,
         } = plan;
 
@@ -1229,7 +1228,7 @@ impl Coordinator {
         let id = self.catalog.allocate_user_id().await?;
         let oid = self.catalog.allocate_oid()?;
         let secret = catalog::Secret {
-            create_sql: format!("CREATE SECRET {} AS '********'", full_name),
+            create_sql: secret.create_sql,
         };
 
         self.secrets_controller.ensure(id, &payload).await?;
