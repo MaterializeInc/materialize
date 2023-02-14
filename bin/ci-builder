@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-NIGHTLY_RUST_DATE=2023-01-03
+NIGHTLY_RUST_DATE=2023-02-14
 
 cd "$(dirname "$0")/.."
 

@@ -128,9 +128,9 @@ def main() -> int:
             return build_retcode
 
         if args.release:
-            path = ROOT / "target" / "release" / args.program
+            path = ROOT / "target" / "x86_64-unknown-linux-gnu" / "release" / args.program
         else:
-            path = ROOT / "target" / "debug" / args.program
+            path = ROOT / "target" / "x86_64-unknown-linux-gnu" / "debug" / args.program
 
         if args.disable_mac_codesigning:
             if sys.platform != "darwin":
@@ -299,6 +299,7 @@ def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
         command += ["--timings"]
     if args.no_default_features:
         command += ["--no-default-features"]
+    command += ["-Zbuild-std", "--target", "x86_64-unknown-linux-gnu"]
     return command
 
 

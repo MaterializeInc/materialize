@@ -21,7 +21,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 #
 # Furthermore, as of August 2022, some engineers are using profiling tools, e.g.
 # `heaptrack`, that only work with the system allocator.
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+[target.'cfg(not(target_os = "linux"))'.dependencies]
 mz-prof = { path = "../prof" }
 # According to jemalloc developers, `background_threads` should always be
 # enabled, except in "esoteric" situations that don't apply to Materialize

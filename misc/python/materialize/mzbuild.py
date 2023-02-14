@@ -213,7 +213,7 @@ class CargoPreImage(PreImage):
             flags += "release"
         if self.rd.coverage:
             flags += "coverage"
-        if self.rd.sanitizer:
+        if self.rd.sanitizer or True:
             flags += "sanitizer"
         flags.sort()
         return ",".join(flags)
@@ -242,9 +242,11 @@ class CargoBuild(CargoPreImage):
                 "-Clink-arg=-Wl,--warn-unresolved-symbols",
             ]
             self.channel = "nightly"
-        if rd.sanitizer:
+        if rd.sanitizer or True:
             self.rustflags += [
-                "-Zsanitizer=address,undefined,leak,thread",
+                # error: `-Zsanitizer=address` is incompatible with `-Zsanitizer=leak` 
+                #"-Zsanitizer=address,leak,thread",
+                "-Zsanitizer=thread",
                 # LLVM CFI can be enabled with -Zsanitizer=cfi and requires LTO (i.e., -Clto).
                 #"-Zsanitizer=cfi,kcfi",
                 # MemorySanitizer requires all program code to be instrumented.
@@ -252,11 +254,7 @@ class CargoBuild(CargoPreImage):
                 # -fsanitize=memory option. Failing to achieve that will result
                 # in false positive reports.
                 #"-Zsanitizer=memory",
-                "--Zsanitizer-memory-track-origins",
-                # It is strongly recommended to combine sanitizers with
-                # recompiled and instrumented standard library, for example
-                # using cargo -Zbuild-std functionality.
-                "-Zbuild-std"
+                "-Zsanitizer-memory-track-origins",
             ]
             self.channel = "nightly"
         if len(self.bins) == 0 and len(self.examples) == 0:
@@ -271,6 +269,13 @@ class CargoBuild(CargoPreImage):
             cargo_build.extend(["--bin", bin])
         for example in self.examples:
             cargo_build.extend(["--example", example])
+
+        # TODO: Fails to build
+        #if self.rd.sanitizer:
+        #    # It is strongly recommended to combine sanitizers with
+        #    # recompiled and instrumented standard library, for example
+        #    # using cargo -Zbuild-std functionality.
+        #    cargo_build.extend(["-Zbuild-std"])
 
         if self.rd.release_mode:
             cargo_build.append("--release")
@@ -646,7 +651,7 @@ class ResolvedImage:
 
         self_hash.update(f"arch={self.image.rd.arch}".encode())
         self_hash.update(f"coverage={self.image.rd.coverage}".encode())
-        self_hash.update(f"sanitizer={self.image.rd.sanitizer}".encode())
+        self_hash.update(f"sanitizer={self.image.rd.sanitizer or True}".encode())
 
         full_hash = hashlib.sha1()
         full_hash.update(self_hash.digest())
