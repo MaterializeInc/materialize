@@ -126,16 +126,13 @@ obtain a snapshot of `RAW` to re-create that state.
 In order to solve this we will need to decompose `Q_mfp` into three parts: `Q_safemfp`,
 `Q_temporal_filter`, `Q_final_projection`
 
-<aside>
-💡 To understand the following decomposition it is important to keep in mind that all temporal
-predicates are internally converted into expressions that produce a candidate timestamp either the
-lower or upper bound of the validity period. For example, the predicate `expr <= mz_now()` will get
-converted into just the expression `expr` and will be stored in a `lower_bounds` list. To calculate
-the lower and upper bounds of the validity period of a row during a temporal MFP evaluation all the
-lower bound expressions are evaluated and the maximum is selected and all the upper bound
-expressions are evaluated and minimum is selected.
-
-</aside>
+> 💡 To understand the following decomposition it is important to keep in mind that all temporal
+> predicates are internally converted into expressions that produce a candidate timestamp either the
+> lower or upper bound of the validity period. For example, the predicate `expr <= mz_now()` will
+> get converted into just the expression `expr` and will be stored in a `lower_bounds` list. To
+> calculate the lower and upper bounds of the validity period of a row during a temporal MFP
+> evaluation all the lower bound expressions are evaluated and the maximum is selected and all the
+> upper bound expressions are evaluated and minimum is selected.
 
 The goal of the decomposition is to come up with a `Q_safemfp` that contains no temporal filters,
 performs the maximum amount of mapping and filtering, and retains enough information to later run
