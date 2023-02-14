@@ -47,6 +47,7 @@ Bigint
 Boolean
 Both
 Bpchar
+Broken
 Broker
 Brokers
 Bucket

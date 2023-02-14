@@ -491,6 +491,7 @@ pub struct ExplainPlan {
     pub stage: ExplainStage,
     pub format: ExplainFormat,
     pub config: ExplainConfig,
+    pub no_errors: bool,
     pub explainee: mz_repr::explain::Explainee,
 }
 

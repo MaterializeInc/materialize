@@ -5677,6 +5677,8 @@ impl<'a> Parser<'a> {
             self.expect_keyword(FOR)?;
         }
 
+        let no_errors = self.parse_keyword(BROKEN);
+
         // VIEW name | MATERIALIZED VIEW name | query
         let explainee = if self.parse_keyword(VIEW) {
             Explainee::View(self.parse_raw_name()?)
@@ -5690,6 +5692,7 @@ impl<'a> Parser<'a> {
             stage: stage.unwrap_or(ExplainStage::OptimizedPlan),
             config_flags,
             format,
+            no_errors,
             explainee,
         }))
     }
