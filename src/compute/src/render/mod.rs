@@ -207,9 +207,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     );
                     let flow_control = FlowControl {
                         progress_stream: flow_control_input,
-                        // TODO: Enable flow control with a sensible limit value. This is currently
-                        // blocked by a bug in `persist_source` (#16995).
-                        max_inflight_bytes: usize::MAX,
+                        max_inflight_bytes: compute_state.dataflow_max_inflight_bytes,
                     };
 
                     // Note: For correctness, we require that sources only emit times advanced by

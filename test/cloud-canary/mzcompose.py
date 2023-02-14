@@ -15,7 +15,7 @@ import urllib.parse
 import pg8000
 
 from materialize.mzcompose import Composition, _wait_for_pg
-from materialize.mzcompose.services import Materialized, Mz, Testdrive
+from materialize.mzcompose.services import Cockroach, Materialized, Mz, Testdrive
 from materialize.ui import UIError
 
 REGION = "aws/us-east-1"
@@ -25,7 +25,16 @@ APP_PASSWORD = os.environ["NIGHTLY_CANARY_APP_PASSWORD"]
 VERSION = "devel-" + os.environ["BUILDKITE_COMMIT"]
 
 SERVICES = [
-    Materialized(image=f"materialize/materialized:{VERSION}"),
+    Cockroach(setup_materialize=True),
+    Materialized(
+        # We use materialize/environmentd and not materialize/materialized here
+        # in order to ensure a perfect match to the container that should be
+        # deployed to the cloud
+        image=f"materialize/environmentd:{VERSION}",
+        external_cockroach=True,
+        persist_blob_url="file:///mzdata/persist/blob",
+        options=["--orchestrator-process-secrets-directory=/mzdata/secrets"],
+    ),
     Testdrive(),
     Mz(
         region=REGION,

@@ -9,18 +9,18 @@
 
 //! An interactive dataflow server.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::thread::Thread;
 
-use anyhow::anyhow;
 use timely::communication::initialize::WorkerGuards;
-use tokio::sync::mpsc;
 
-use mz_ore::metrics::MetricsRegistry;
+use mz_cluster::server::TimelyContainerRef;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
-use mz_service::local::LocalClient;
 use mz_storage_client::client::StorageClient;
+use mz_storage_client::client::{StorageCommand, StorageResponse};
 use mz_storage_client::types::connections::ConnectionContext;
+use timely::worker::Worker as TimelyWorker;
 
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
@@ -28,19 +28,19 @@ use crate::storage_state::Worker;
 use crate::DecodeMetrics;
 
 /// Configures a dataflow server.
+#[derive(Clone)]
 pub struct Config {
-    /// The number of worker threads to spawn.
-    pub workers: usize,
-    /// The Timely configuration
-    pub timely_config: timely::Config,
     /// Function to get wall time now.
     pub now: NowFn,
-    /// Metrics registry through which dataflow metrics will be reported.
-    pub metrics_registry: MetricsRegistry,
     /// Configuration for source and sink connection.
     pub connection_context: ConnectionContext,
-    /// `persist` client cache.
-    pub persist_clients: Arc<PersistClientCache>,
+
+    /// Metrics for sources.
+    pub source_metrics: SourceBaseMetrics,
+    /// Metrics for sinks.
+    pub sink_metrics: SinkBaseMetrics,
+    /// Metrics for decoding.
+    pub decode_metrics: DecodeMetrics,
 }
 
 /// A handle to a running dataflow server.
@@ -52,76 +52,66 @@ pub struct Server {
 
 /// Initiates a timely dataflow computation, processing storage commands.
 pub fn serve(
-    config: Config,
-) -> Result<(Server, impl Fn() -> Box<dyn StorageClient>), anyhow::Error> {
-    assert!(config.workers > 0);
-
+    generic_config: mz_cluster::server::ClusterConfig,
+    now: NowFn,
+    connection_context: ConnectionContext,
+) -> Result<
+    (
+        TimelyContainerRef<StorageCommand, StorageResponse, Thread>,
+        impl Fn() -> Box<dyn StorageClient>,
+    ),
+    anyhow::Error,
+> {
     // Various metrics related things.
-    let source_metrics = SourceBaseMetrics::register_with(&config.metrics_registry);
-    let sink_metrics = SinkBaseMetrics::register_with(&config.metrics_registry);
-    let decode_metrics = DecodeMetrics::register_with(&config.metrics_registry);
-    // Bundle metrics to conceal complexity.
-    let metrics_bundle = (source_metrics, sink_metrics, decode_metrics);
+    let source_metrics = SourceBaseMetrics::register_with(&generic_config.metrics_registry);
+    let sink_metrics = SinkBaseMetrics::register_with(&generic_config.metrics_registry);
+    let decode_metrics = DecodeMetrics::register_with(&generic_config.metrics_registry);
 
-    let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
-        .map(|_| crossbeam_channel::unbounded())
-        .unzip();
-    let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
+    let config = Config {
+        now,
+        connection_context,
+        source_metrics,
+        sink_metrics,
+        decode_metrics,
+    };
 
-    let tokio_executor = tokio::runtime::Handle::current();
-    let now = config.now;
+    let (timely_container, client_builder) = mz_cluster::server::serve::<
+        Config,
+        StorageCommand,
+        StorageResponse,
+    >(generic_config, config)?;
+    let client_builder = {
+        move || {
+            let client: Box<dyn StorageClient> = client_builder();
+            client
+        }
+    };
 
-    let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
-        let timely_worker_index = timely_worker.index();
+    Ok((timely_container, client_builder))
+}
 
-        // ensure tokio primitives are available on timely workers
-        let _tokio_guard = tokio_executor.enter();
-
-        let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
-            .take()
-            .unwrap();
-        let (source_metrics, sink_metrics, decode_metrics) = metrics_bundle.clone();
-        let persist_clients = Arc::clone(&config.persist_clients);
-        let mut worker = Worker::new(
+impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Config {
+    type Activatable = std::thread::Thread;
+    fn build_and_run<A: timely::communication::Allocate>(
+        config: Self,
+        timely_worker: &mut TimelyWorker<A>,
+        client_rx: crossbeam_channel::Receiver<(
+            crossbeam_channel::Receiver<StorageCommand>,
+            tokio::sync::mpsc::UnboundedSender<StorageResponse>,
+            crossbeam_channel::Sender<std::thread::Thread>,
+        )>,
+        persist_clients: Arc<PersistClientCache>,
+    ) {
+        Worker::new(
             timely_worker,
             client_rx,
-            decode_metrics,
-            source_metrics,
-            sink_metrics,
-            now.clone(),
-            config.connection_context.clone(),
+            config.decode_metrics,
+            config.source_metrics,
+            config.sink_metrics,
+            config.now.clone(),
+            config.connection_context,
             persist_clients,
-        );
-        worker.run();
-    })
-    .map_err(|e| anyhow!("{}", e))?;
-    let worker_threads = worker_guards
-        .guards()
-        .iter()
-        .map(|g| g.thread().clone())
-        .collect::<Vec<_>>();
-    let client_builder = move || {
-        let (command_txs, command_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
-            .map(|_| crossbeam_channel::unbounded())
-            .unzip();
-        let (response_txs, response_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
-            .map(|_| mpsc::unbounded_channel())
-            .unzip();
-        for (client_tx, channels) in client_txs
-            .iter()
-            .zip(command_rxs.into_iter().zip(response_txs))
-        {
-            client_tx
-                .send(channels)
-                .expect("worker should not drop first");
-        }
-        let client =
-            LocalClient::new_partitioned(response_rxs, command_txs, worker_threads.clone());
-        let client: Box<dyn StorageClient> = Box::new(client);
-        client
-    };
-    let server = Server {
-        _worker_guards: worker_guards,
-    };
-    Ok((server, client_builder))
+        )
+        .run();
+    }
 }

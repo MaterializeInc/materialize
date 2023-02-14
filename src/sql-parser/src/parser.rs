@@ -2812,7 +2812,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_load_generator_option(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[SCALE, TICK])? {
+        let name = match self.expect_one_of_keywords(&[SCALE, TICK, MAX])? {
             SCALE => {
                 self.expect_keyword(FACTOR)?;
                 LoadGeneratorOptionName::ScaleFactor
@@ -2820,6 +2820,10 @@ impl<'a> Parser<'a> {
             TICK => {
                 self.expect_keyword(INTERVAL)?;
                 LoadGeneratorOptionName::TickInterval
+            }
+            MAX => {
+                self.expect_keyword(CARDINALITY)?;
+                LoadGeneratorOptionName::MaxCardinality
             }
             _ => unreachable!(),
         };
@@ -3158,13 +3162,13 @@ impl<'a> Parser<'a> {
 
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[
-            ADDRESSES,
             AVAILABILITY,
             COMPUTE,
             COMPUTECTL,
             IDLE,
             INTROSPECTION,
             SIZE,
+            STORAGE,
             STORAGECTL,
             WORKERS,
         ])? {
@@ -3190,9 +3194,13 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             },
             SIZE => ReplicaOptionName::Size,
+            STORAGE => {
+                self.expect_keyword(ADDRESSES)?;
+                ReplicaOptionName::StorageAddresses
+            }
             STORAGECTL => {
-                self.expect_keyword(ADDRESS)?;
-                ReplicaOptionName::StoragectlAddress
+                self.expect_keyword(ADDRESSES)?;
+                ReplicaOptionName::StoragectlAddresses
             }
             WORKERS => ReplicaOptionName::Workers,
             _ => unreachable!(),

@@ -19,22 +19,23 @@ use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use mz_build_info::BuildInfo;
+use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_service::client::GenericClient;
 
 use crate::logging::LoggingConfig;
 use crate::metrics::ReplicaMetrics;
-use crate::protocol::command::{ComputeCommand, ComputeStartupEpoch, TimelyConfig};
+use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
-use super::{ComputeReplicaLocation, ReplicaId};
+use super::ReplicaId;
 
 /// Replica-specific configuration.
 #[derive(Clone, Debug)]
 pub(super) struct ReplicaConfig {
-    pub location: ComputeReplicaLocation,
+    pub location: ClusterReplicaLocation,
     pub logging: LoggingConfig,
     pub idle_arrangement_merge_effort: u32,
 }
@@ -67,7 +68,7 @@ where
         id: ReplicaId,
         build_info: &'static BuildInfo,
         config: ReplicaConfig,
-        epoch: ComputeStartupEpoch,
+        epoch: ClusterStartupEpoch,
         metrics: ReplicaMetrics,
     ) -> Self {
         // Launch a task to handle communication with the replica
@@ -128,7 +129,7 @@ struct ReplicaTask<T> {
     response_tx: UnboundedSender<ComputeResponse<T>>,
     /// A number (technically, pair of numbers) identifying this incarnation of the replica.
     /// The semantics of this don't matter, except that it must strictly increase.
-    epoch: ComputeStartupEpoch,
+    epoch: ClusterStartupEpoch,
     /// Replica metrics
     metrics: ReplicaMetrics,
 }
@@ -152,11 +153,11 @@ where
 
         tracing::info!("starting replica task for {replica_id}");
 
-        let addrs = config.location.computectl_addrs;
+        let addrs = config.location.ctl_addrs;
         let timely_config = TimelyConfig {
             workers: config.location.workers,
             process: 0,
-            addresses: config.location.compute_addrs,
+            addresses: config.location.dataflow_addrs,
             idle_arrangement_merge_effort: config.idle_arrangement_merge_effort,
         };
         let cmd_spec = CommandSpecialization {
@@ -204,7 +205,7 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     let mut client = Retry::default()
-        .clamp_backoff(Duration::from_secs(32))
+        .clamp_backoff(Duration::from_secs(1))
         .retry_async(|state| {
             let dests = addrs
                 .clone()
@@ -268,7 +269,7 @@ where
 struct CommandSpecialization {
     logging_config: LoggingConfig,
     timely_config: TimelyConfig,
-    epoch: ComputeStartupEpoch,
+    epoch: ClusterStartupEpoch,
 }
 
 impl CommandSpecialization {

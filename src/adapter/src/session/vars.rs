@@ -378,6 +378,16 @@ const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
     safe: true,
 };
 
+/// The maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
+const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("dataflow_max_inflight_bytes"),
+    value: &usize::MAX,
+    description: "The maximum number of in-flight bytes emitted by persist_sources feeding \
+                  dataflows (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Boolean flag indicating that the remote configuration was synchronized at
 /// least once with the persistent [SessionVars].
 pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
@@ -1042,6 +1052,9 @@ pub struct SystemVars {
     persist_blob_target_size: SystemVar<usize>,
     persist_compaction_minimum_timeout: SystemVar<Duration>,
 
+    // dataflow configuration
+    dataflow_max_inflight_bytes: SystemVar<usize>,
+
     // misc
     metrics_retention: SystemVar<Duration>,
 
@@ -1069,6 +1082,7 @@ impl Default for SystemVars {
             allowed_cluster_replica_sizes: SystemVar::new(&ALLOWED_CLUSTER_REPLICA_SIZES),
             persist_blob_target_size: SystemVar::new(&PERSIST_BLOB_TARGET_SIZE),
             persist_compaction_minimum_timeout: SystemVar::new(&PERSIST_COMPACTION_MINIMUM_TIMEOUT),
+            dataflow_max_inflight_bytes: SystemVar::new(&DATAFLOW_MAX_INFLIGHT_BYTES),
             metrics_retention: SystemVar::new(&METRICS_RETENTION),
             mock_audit_event_timestamp: SystemVar::new(&MOCK_AUDIT_EVENT_TIMESTAMP),
         }
@@ -1079,7 +1093,7 @@ impl SystemVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 19] = [
+        let vars: [&dyn Var; 20] = [
             &self.config_has_synced_once,
             &self.max_aws_privatelink_connections,
             &self.max_tables,
@@ -1097,6 +1111,7 @@ impl SystemVars {
             &self.allowed_cluster_replica_sizes,
             &self.persist_blob_target_size,
             &self.persist_compaction_minimum_timeout,
+            &self.dataflow_max_inflight_bytes,
             &self.metrics_retention,
             &self.mock_audit_event_timestamp,
         ];
@@ -1161,6 +1176,8 @@ impl SystemVars {
             Ok(&self.persist_blob_target_size)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
             Ok(&self.persist_compaction_minimum_timeout)
+        } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
+            Ok(&self.dataflow_max_inflight_bytes)
         } else if name == METRICS_RETENTION.name {
             Ok(&self.metrics_retention)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
@@ -1214,6 +1231,8 @@ impl SystemVars {
             self.persist_blob_target_size.is_default(value)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
             self.persist_compaction_minimum_timeout.is_default(value)
+        } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
+            self.dataflow_max_inflight_bytes.is_default(value)
         } else if name == METRICS_RETENTION.name {
             self.metrics_retention.is_default(value)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
@@ -1276,6 +1295,8 @@ impl SystemVars {
             self.persist_blob_target_size.set(value)
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
             self.persist_compaction_minimum_timeout.set(value)
+        } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
+            self.dataflow_max_inflight_bytes.set(value)
         } else if name == METRICS_RETENTION.name {
             self.metrics_retention.set(value)
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
@@ -1333,6 +1354,8 @@ impl SystemVars {
             Ok(self.persist_blob_target_size.reset())
         } else if name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name {
             Ok(self.persist_compaction_minimum_timeout.reset())
+        } else if name == DATAFLOW_MAX_INFLIGHT_BYTES.name {
+            Ok(self.dataflow_max_inflight_bytes.reset())
         } else if name == METRICS_RETENTION.name {
             Ok(self.metrics_retention.reset())
         } else if name == MOCK_AUDIT_EVENT_TIMESTAMP.name {
@@ -1425,6 +1448,11 @@ impl SystemVars {
     /// Returns the `persist_compaction_minimum_timeout` configuration parameter.
     pub fn persist_compaction_minimum_timeout(&self) -> Duration {
         *self.persist_compaction_minimum_timeout.value()
+    }
+
+    /// Returns the `dataflow_max_inflight_bytes` configuration parameter.
+    pub fn dataflow_max_inflight_bytes(&self) -> usize {
+        *self.dataflow_max_inflight_bytes.value()
     }
 
     /// Returns the `metrics_retention` configuration parameter.
@@ -2272,7 +2300,9 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
 
 /// Returns whether the named variable is a compute configuration parameter.
 pub(crate) fn is_compute_config_var(name: &str) -> bool {
-    name == MAX_RESULT_SIZE.name() || is_persist_config_var(name)
+    name == MAX_RESULT_SIZE.name()
+        || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
+        || is_persist_config_var(name)
 }
 
 /// Returns whether the named variable is a storage configuration parameter.

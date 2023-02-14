@@ -25,7 +25,6 @@
 
 Access
 Acks
-Address
 Addresses
 All
 Alter
@@ -53,6 +52,7 @@ Brokers
 Bucket
 By
 Bytes
+Cardinality
 Cascade
 Case
 Cast
@@ -323,6 +323,7 @@ Ssl
 Start
 Stdin
 Stdout
+Storage
 Storagectl
 Strategy
 String

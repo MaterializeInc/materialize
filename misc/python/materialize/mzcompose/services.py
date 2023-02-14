@@ -166,7 +166,6 @@ class Clusterd(Service):
         environment_extra: List[str] = [],
         memory: Optional[str] = None,
         options: List[str] = [],
-        storage_workers: Optional[int] = Materialized.Size.DEFAULT_SIZE,
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -175,9 +174,6 @@ class Clusterd(Service):
         ]
 
         command = []
-
-        if storage_workers:
-            command += [f"--storage-workers={storage_workers}"]
 
         command += options
 

@@ -840,14 +840,16 @@ impl Coordinator {
             // the lowest number of configured replicas for this cluster.
             let (compute, location) = match replica_config {
                 mz_sql::plan::ReplicaConfig::Unmanaged {
-                    storagectl_addr,
+                    storagectl_addrs,
+                    storage_addrs,
                     computectl_addrs,
                     compute_addrs,
                     workers,
                     compute,
                 } => {
                     let location = SerializedReplicaLocation::Unmanaged {
-                        storagectl_addr,
+                        storagectl_addrs,
+                        storage_addrs,
                         computectl_addrs,
                         compute_addrs,
                         workers,
@@ -965,14 +967,16 @@ impl Coordinator {
         // Choose default AZ if necessary
         let (compute, location) = match config {
             mz_sql::plan::ReplicaConfig::Unmanaged {
-                storagectl_addr,
+                storagectl_addrs,
+                storage_addrs,
                 computectl_addrs,
                 compute_addrs,
                 workers,
                 compute,
             } => {
                 let location = SerializedReplicaLocation::Unmanaged {
-                    storagectl_addr,
+                    storagectl_addrs,
+                    storage_addrs,
                     computectl_addrs,
                     compute_addrs,
                     workers,
@@ -4064,22 +4068,28 @@ impl Coordinator {
         config: &SourceSinkClusterConfig,
     ) -> Result<Vec<catalog::Op>, AdapterError> {
         let mut ops = vec![];
-        if let Some(linked_cluster) = self.catalog.get_linked_cluster(linked_object_id) {
-            for id in linked_cluster.replicas_by_id.keys() {
-                let drop_ops = self
-                    .catalog
-                    .drop_cluster_replica_ops(&[(linked_cluster.id, *id)], &mut BTreeSet::new());
-                ops.extend(drop_ops);
+        match self.catalog.get_linked_cluster(linked_object_id) {
+            None => {
+                coord_bail!("cannot change the size of a source or sink created with IN CLUSTER");
             }
-            let size = match config {
-                SourceSinkClusterConfig::Linked { size } => size.clone(),
-                SourceSinkClusterConfig::Undefined => self.default_linked_cluster_size()?,
-                SourceSinkClusterConfig::Existing { .. } => {
-                    coord_bail!("cannot change the cluster of a source or sink")
+            Some(linked_cluster) => {
+                for id in linked_cluster.replicas_by_id.keys() {
+                    let drop_ops = self.catalog.drop_cluster_replica_ops(
+                        &[(linked_cluster.id, *id)],
+                        &mut BTreeSet::new(),
+                    );
+                    ops.extend(drop_ops);
                 }
-            };
-            self.create_linked_cluster_replica_op(linked_cluster.id, size, &mut ops)
-                .await?;
+                let size = match config {
+                    SourceSinkClusterConfig::Linked { size } => size.clone(),
+                    SourceSinkClusterConfig::Undefined => self.default_linked_cluster_size()?,
+                    SourceSinkClusterConfig::Existing { .. } => {
+                        coord_bail!("cannot change the cluster of a source or sink")
+                    }
+                };
+                self.create_linked_cluster_replica_op(linked_cluster.id, size, &mut ops)
+                    .await?;
+            }
         }
         Ok(ops)
     }

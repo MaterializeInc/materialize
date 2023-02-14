@@ -87,6 +87,7 @@ use secrets::SecretCommand;
 use serde::Deserialize;
 use tokio::time::Instant;
 use utils::new_client;
+use utils::{ascii_validator, new_client};
 
 use mz::api::{
     disable_region_environment, enable_region_environment, get_provider_by_region_name,
@@ -123,7 +124,7 @@ static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.semver_version().to_strin
 )]
 struct Args {
     /// The configuration profile to use.
-    #[clap(long)]
+    #[clap(long, validator = ascii_validator)]
     profile: Option<String>,
     #[clap(subcommand)]
     command: Commands,

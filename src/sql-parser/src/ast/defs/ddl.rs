@@ -1118,6 +1118,7 @@ impl_display!(LoadGenerator);
 pub enum LoadGeneratorOptionName {
     ScaleFactor,
     TickInterval,
+    MaxCardinality,
 }
 
 impl AstDisplay for LoadGeneratorOptionName {
@@ -1125,6 +1126,7 @@ impl AstDisplay for LoadGeneratorOptionName {
         f.write_str(match self {
             LoadGeneratorOptionName::ScaleFactor => "SCALE FACTOR",
             LoadGeneratorOptionName::TickInterval => "TICK INTERVAL",
+            LoadGeneratorOptionName::MaxCardinality => "MAX CARDINALITY",
         })
     }
 }
