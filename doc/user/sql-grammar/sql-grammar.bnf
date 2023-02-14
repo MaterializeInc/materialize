@@ -106,6 +106,7 @@ create_source_load_generator ::=
 load_generator_option ::=
     'TICK INTERVAL' interval
     | 'SCALE FACTOR' scale_factor
+    | 'MAX CARDINALITY' max_cardinality
 create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('IN CLUSTER' cluster_name)?
