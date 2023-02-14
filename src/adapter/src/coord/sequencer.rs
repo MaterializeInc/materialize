@@ -3262,7 +3262,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog.for_session(session);
         let values = mz_sql::plan::plan_copy_from(session.pcx(), &catalog, id, columns, rows)?;
-        let values = self.view_optimizer.optimize(values.lower())?;
+        let values = self.view_optimizer.optimize(values.lower()?)?;
         // Copied rows must always be constants.
         self.sequence_insert_constant(session, id, values.into_inner())
     }
