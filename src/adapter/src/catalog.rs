@@ -12,6 +12,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -3274,7 +3275,8 @@ impl Catalog {
         c: &Catalog,
     ) -> Result<Catalog, Error> {
         let mut c = c.clone();
-        let mut awaiting_dependencies: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
+        let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
+        let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
         let mut items: VecDeque<_> = tx.loaded_items().into_iter().collect();
         while let Some((id, name, def)) = items.pop_front() {
             let d_c = def.clone();
@@ -3296,10 +3298,30 @@ impl Catalog {
                 }
                 // If we were missing a dependency, wait for it to be added.
                 Err(AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep))) => {
-                    awaiting_dependencies
+                    awaiting_id_dependencies
                         .entry(missing_dep)
                         .or_default()
                         .push((id, name, def));
+                    continue;
+                }
+                // If we were missing a dependency, wait for it to be added.
+                Err(AdapterError::PlanError(plan::PlanError::Catalog(
+                    SqlCatalogError::UnknownItem(missing_dep),
+                ))) => {
+                    match GlobalId::from_str(&missing_dep) {
+                        Ok(id) => {
+                            awaiting_id_dependencies
+                                .entry(id)
+                                .or_default()
+                                .push((id, name, def));
+                        }
+                        Err(_) => {
+                            awaiting_name_dependencies
+                                .entry(missing_dep)
+                                .or_default()
+                                .push((id, name, def));
+                        }
+                    }
                     continue;
                 }
                 Err(e) => {
@@ -3309,17 +3331,45 @@ impl Catalog {
                 }
             };
             let oid = c.allocate_oid()?;
-            c.state.insert_item(id, oid, name, item);
-            if let Some(dependent_items) = awaiting_dependencies.remove(&id) {
+
+            // Enqueue any items waiting on this dependency.
+            if let Some(dependent_items) = awaiting_id_dependencies.remove(&id) {
                 items.extend(dependent_items);
             }
+            let full_name = c.resolve_full_name(&name, None);
+            if let Some(dependent_items) = awaiting_name_dependencies.remove(&full_name.to_string())
+            {
+                items.extend(dependent_items);
+            }
+
+            c.state.insert_item(id, oid, name, item);
         }
 
-        assert!(
-            awaiting_dependencies.is_empty(),
-            "the following dependencies were never filled {:?}",
-            awaiting_dependencies
-        );
+        // Error on any unsatisfied dependencies.
+        if let Some((missing_dep, mut dependents)) = awaiting_id_dependencies.into_iter().next() {
+            let (id, name, _def) = dependents.remove(0);
+            return Err(Error::new(ErrorKind::Corruption {
+                detail: format!(
+                    "failed to deserialize item {} ({}): {}",
+                    id,
+                    name,
+                    AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep))
+                ),
+            }));
+        }
+
+        if let Some((missing_dep, mut dependents)) = awaiting_name_dependencies.into_iter().next() {
+            let (id, name, _def) = dependents.remove(0);
+            return Err(Error::new(ErrorKind::Corruption {
+                detail: format!(
+                    "failed to deserialize item {} ({}): {}",
+                    id,
+                    name,
+                    AdapterError::SqlCatalog(SqlCatalogError::UnknownItem(missing_dep))
+                ),
+            }));
+        }
+
         c.transient_revision = 1;
         Ok(c)
     }
