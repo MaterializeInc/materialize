@@ -117,7 +117,7 @@ each `Row` the temporal filter will calculate a `lower_ts` or an `upper_ts` or b
 timestamps will be entirely dependent on the expression the user typed. This is best depicted in
 this diagram:
 
-![Temporal filter application](static/temporal_filters.png)
+![Temporal filter application](https://github.com/MaterializeInc/materialize/raw/9c79faf5d58b3a97b11f982fa4f6e7736c864922/doc/developer/design/static/temporal_filters.png)
 
 This is a problem because we have related the updates of the collection at some time `t` to the
 contents of the collection before `t`, and if we were to restart execution we wouldn’t be able to
