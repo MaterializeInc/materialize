@@ -63,11 +63,12 @@ class RepositoryDetails:
         cargo_workspace: The `cargo.Workspace` associated with the repository.
     """
 
-    def __init__(self, root: Path, arch: Arch, release_mode: bool, coverage: bool):
+    def __init__(self, root: Path, arch: Arch, release_mode: bool, coverage: bool, sanitizer: bool):
         self.root = root
         self.arch = arch
         self.release_mode = release_mode
         self.coverage = coverage
+        self.sanitizer = sanitizer
         self.cargo_workspace = cargo.Workspace(root)
 
     def cargo(
@@ -205,13 +206,15 @@ class CargoPreImage(PreImage):
         }
 
     def extra(self) -> str:
-        # Cargo images depend on the release mode and whether coverage is
-        # enabled.
+        # Cargo images depend on the release mode and whether coverage or
+        # sanitizer is enabled.
         flags: List[str] = []
         if self.rd.release_mode:
             flags += "release"
         if self.rd.coverage:
             flags += "coverage"
+        if self.rd.sanitizer:
+            flags += "sanitizer"
         flags.sort()
         return ",".join(flags)
 
@@ -237,6 +240,23 @@ class CargoBuild(CargoPreImage):
                 # warnings about unresolved symbols and hope it all works out.
                 # See: https://github.com/nix-rust/nix/issues/1116
                 "-Clink-arg=-Wl,--warn-unresolved-symbols",
+            ]
+            self.channel = "nightly"
+        if rd.sanitizer:
+            self.rustflags += [
+                "-Zsanitizer=address,undefined,leak,thread",
+                # LLVM CFI can be enabled with -Zsanitizer=cfi and requires LTO (i.e., -Clto).
+                #"-Zsanitizer=cfi,kcfi",
+                # MemorySanitizer requires all program code to be instrumented.
+                # C/C++ dependencies need to be recompiled using Clang with
+                # -fsanitize=memory option. Failing to achieve that will result
+                # in false positive reports.
+                #"-Zsanitizer=memory",
+                "--Zsanitizer-memory-track-origins",
+                # It is strongly recommended to combine sanitizers with
+                # recompiled and instrumented standard library, for example
+                # using cargo -Zbuild-std functionality.
+                "-Zbuild-std"
             ]
             self.channel = "nightly"
         if len(self.bins) == 0 and len(self.examples) == 0:
@@ -626,6 +646,7 @@ class ResolvedImage:
 
         self_hash.update(f"arch={self.image.rd.arch}".encode())
         self_hash.update(f"coverage={self.image.rd.coverage}".encode())
+        self_hash.update(f"sanitizer={self.image.rd.sanitizer}".encode())
 
         full_hash = hashlib.sha1()
         full_hash.update(self_hash.digest())
@@ -696,6 +717,7 @@ class Repository:
         arch: The CPU architecture to build for.
         release_mode: Whether to build the repository in release mode.
         coverage: Whether to enable code coverage instrumentation.
+        sanitizer: Whether to enable sanitizer mode.
 
     Attributes:
         images: A mapping from image name to `Image` for all contained images.
@@ -708,8 +730,9 @@ class Repository:
         arch: Arch = Arch.host(),
         release_mode: bool = True,
         coverage: bool = False,
+        sanitizer: bool = False,
     ):
-        self.rd = RepositoryDetails(root, arch, release_mode, coverage)
+        self.rd = RepositoryDetails(root, arch, release_mode, coverage, sanitizer)
         self.images: Dict[str, Image] = {}
         self.compositions: Dict[str, Path] = {}
         for (path, dirs, files) in os.walk(self.root, topdown=True):
@@ -758,6 +781,8 @@ class Repository:
             `release_mode` repository attribute.
           * The `--coverage` booelan option to control the `coverage` repository
             attribute.
+          * The `--sanitizer` booelan option to control the `sanitizer`
+            repository attribute.
 
         Use `Repository.from_arguments` to construct a repository from the
         parsed command-line arguments.
@@ -780,6 +805,11 @@ class Repository:
             action="store_true",
         )
         parser.add_argument(
+            "--sanitizer",
+            help="whether to enable sanitizers",
+            action="store_true",
+        )
+        parser.add_argument(
             "--arch",
             default=Arch.host(),
             help="the CPU architecture to build for",
@@ -795,7 +825,8 @@ class Repository:
         `Repository.install_arguments`.
         """
         return cls(
-            root, release_mode=args.release, coverage=args.coverage, arch=args.arch
+            root, release_mode=args.release, coverage=args.coverage,
+            sanitizer=args.sanitizer, arch=args.arch
         )
 
     @property
