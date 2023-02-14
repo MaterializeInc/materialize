@@ -40,6 +40,10 @@ buildkite-agent artifact upload ps-aux.log
 docker ps -a --no-trunc > docker-ps-a.log
 buildkite-agent artifact upload docker-ps-a.log
 
+docker exec zippy-cockroach-1 cockroach debug zip --insecure crdb-debug.zip || true
+docker cp zippy-cockroach-1:/cockroach/crdb-debug.zip . || true
+buildkite-agent artifact upload crdb-debug.zip || true
+
 # docker-compose kill may fail attempting to kill containers
 # that have just exited on their own because of the
 # "shared-fate" mechanism employed by Mz clusters
