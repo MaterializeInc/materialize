@@ -229,3 +229,46 @@ transitively depended on by `MirRelationExpr`.
 > behavior so I would shy away from options 1 and 3. Stabilizing `MirScalarExpr` seems tractable
 > given its simplicity so I would go for option 2 unless an amazing option 5 appears. Input from
 > COMPUTE folks would be helpful here.
+
+### Transformation re-optimization
+
+In the previous section we discussed how a query `Q` can be broken down into a `Q_mfp` and `Q_expr`
+where `Q_mfp` must stay fixed as Materialize evolves. This penalizes early adopters with potentially
+worse optimizations and potentially worse cost savings. This section discusses how we could take
+advantage of future improvements to the planner and optimizer in the context of source
+transformations.
+
+#### Optimizer improvements
+
+First, let's consider improvements to the optimizer which operates on the `Mir` level. Suppose that
+some version `v1` of Materialize processes a source transformation query into a `Q_mfp_v1` and
+`Q_expr_v1` pair. As described in the previous section this will result in persisting the durable
+collection `Q_mfp_v1(RAW)`, whose schema will entirely depend on the optimizations that the `v1`
+optimizer will perform. Now let's say that version `v2` gets released that has more optimizations
+that would have resulted a better (`Q_mfp_v2`, `Q_expr_v2`) pair. Unfortunately we cannot use these
+query fragments as-is, because to do that we'd have to calculate `Q_mfp_v2(RAW)` on a snapshot, but
+the snapshot isn't available.
+
+What we can do instead is to leave `Q_mfp_v1` fixed and compute `(Q_mfp_v2, Q_expr_v2) =
+optimizer_v2(Q_expr_v1)`. In other words, we can re-optimize the part of the query that *has* access
+to a snapshot. If such re-optimization yields a non-trivial MFP then it means that the new version
+of Materialize managed to push down more parts of the query and we can now create a
+`C_intermediate_v2` by stitching together `Q_mfp_v2(C_intermediate)` and `Q_mfp_v2(Q_mfp_v1(RAW))`.
+
+In order to be able to re-optimize it is crucial that `MirRelationExpr` and the data structures it
+transitively depends on get stabilized so that future versions of Materialize can understand the
+semantics of `Q_expr_v1`.
+
+#### Planner improvements
+
+Materialize currently performs a limited set of optimizations at the `Hir` level but more may be
+written in the future (e.g the QGM effort). My understanding of what we have today is that the only
+way that we could reap this kind of improvements after the fact would be to not lower the provided
+query `Q` to `Mir` for storage, but instead perform predicate push-down at the SQL level. For
+example, if given a SQL query `Q` we could come up with a `Q_hir_mfp` and a `Q_hir_expr` where
+`Q_hir_mfp` is guaranteed to be optimized to an `MFP` then every version of materialize could be
+re-running its optimizations in the respective parts and progressively moving computation from
+`Q_hir_expr` into `Q_hir_mfp`. However, this seems like a huge lift and potentially not worth
+blocking this feature on.
+
+> Input from COMPUTE folks on other approaches for re-optimization would be helpful here.
