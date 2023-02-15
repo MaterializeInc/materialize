@@ -22,6 +22,10 @@ fi
 
 echo "system uptime: $(cut -f1 -d' ' /proc/uptime)"
 
+ci_collapsed_heading "journalctl: Purging logs ..."
+sudo journalctl --rotate
+sudo journalctl --vacuum-time=1s
+
 ci_collapsed_heading "kind: Make sure kind is running..."
 bin/ci-builder run stable test/cloudtest/setup
 

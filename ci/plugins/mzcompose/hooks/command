@@ -25,6 +25,10 @@ if read_list BUILDKITE_PLUGIN_MZCOMPOSE_ARGS; then
     done
 fi
 
+ci_collapsed_heading "journalctl: Purging logs ..."
+sudo journalctl --rotate
+sudo journalctl --vacuum-time=1s
+
 echo "system uptime: $(cut -f1 -d' ' /proc/uptime)"
 
 # Sometimes build cancellations prevent us from properly cleaning up the last
