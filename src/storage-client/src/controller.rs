@@ -1539,17 +1539,9 @@ where
     }
 
     fn drop_sources_unvalidated(&mut self, identifiers: Vec<GlobalId>) {
-        for id in identifiers.iter() {
-            let collection = match self.collection(id.clone()) {
-                Ok(collection) => collection,
-                Err(_) => continue,
-            };
-
-            let read_capability = collection.read_capabilities.frontier().to_owned();
-            let storage_dependencies = collection.storage_dependencies.clone();
-            self.remove_read_capabilities(read_capability, &storage_dependencies);
-        }
-
+        // We don't explicitly call `remove_read_capabilities`! Downgrading the
+        // frontier of the source to `[]` (the empty Antichain), will propagate
+        // to the storage dependencies.
         let policies = identifiers
             .into_iter()
             .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
