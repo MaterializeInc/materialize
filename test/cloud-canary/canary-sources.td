@@ -7,13 +7,34 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> DROP SOURCE IF EXISTS source1 CASCADE;
+# The free tier of Confluent Cloud does not alow for programatic
+# topic creation
+# $ kafka-create-topic topic=bytes
 
-> CREATE SOURCE source1 FROM LOAD GENERATOR COUNTER WITH (SIZE '3xsmall');
+$ kafka-ingest format=bytes key-terminator=: key-format=bytes topic=bytes repeat=1000
+abc:abc
 
-> CREATE MATERIALIZED VIEW source_view1 AS SELECT COUNT(*) AS cnt FROM source1;
+> DROP SOURCE IF EXISTS bytes CASCADE;
+> DROP CONNECTION IF EXISTS kafka_conn;
+> DROP SECRET IF EXISTS confluent_username
+> DROP SECRET IF EXISTS confluent_password
 
-> SELECT cnt > 0 FROM source_view1;
+> CREATE SECRET confluent_username AS '${arg.confluent-api-key}';
+
+> CREATE SECRET confluent_password AS '${arg.confluent-api-secret}';
+
+> CREATE CONNECTION kafka_conn TO KAFKA (
+  BROKER '${testdrive.kafka-addr}',
+  SASL MECHANISMS = 'PLAIN',
+  SASL USERNAME = SECRET confluent_username,
+  SASL PASSWORD = SECRET confluent_password
+  );
+
+> CREATE SOURCE bytes
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bytes-${testdrive.seed}')
+  FORMAT BYTES
+  ENVELOPE NONE
+  WITH (SIZE '3xsmall');
+
+> SELECT COUNT(*) > 0 from bytes
 true
-
-> DROP SOURCE source1 CASCADE;
