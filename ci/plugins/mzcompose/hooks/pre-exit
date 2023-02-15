@@ -19,25 +19,6 @@ run() {
     bin/ci-builder run stable bin/mzcompose --mz-quiet --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
-run logs --no-color > services.log
-buildkite-agent artifact upload services.log
-
-# shellcheck disable=SC2024
-sudo journalctl --merge > journalctl-merge.log
-buildkite-agent artifact upload journalctl-merge.log
-
-netstat -ant > netstat-ant.log
-buildkite-agent artifact upload netstat-ant.log
-
-netstat -panelot > netstat-panelot.log
-buildkite-agent artifact upload netstat-panelot.log
-
-ps aux > ps-aux.log
-buildkite-agent artifact upload ps-aux.log
-
-docker ps -a --no-trunc > docker-ps-a.log
-buildkite-agent artifact upload docker-ps-a.log
-
 # docker-compose kill may fail attempting to kill containers
 # that have just exited on their own because of the
 # "shared-fate" mechanism employed by Mz clusters

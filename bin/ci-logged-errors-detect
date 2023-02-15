@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
@@ -8,10 +8,8 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+#
+# ci-logged-errors-detect - Detect errors in log files during CI and find
+# associated open Github issues in Materialize repository.
 
-set -euo pipefail
-
-. misc/shlib/shlib.bash
-
-ci_unimportant_heading "cloudtest: Resetting..."
-bin/ci-builder run stable test/cloudtest/reset
+exec "$(dirname "$0")"/pyactivate -m materialize.cli.ci_logged_errors_detect "$@"

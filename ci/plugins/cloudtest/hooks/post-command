@@ -1,0 +1,41 @@
+#!/bin/bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+set -euo pipefail
+
+. misc/shlib/shlib.bash
+
+kubectl() {
+    bin/ci-builder run stable kubectl --context=kind-cloudtest "$@"
+}
+
+ci_unimportant_heading "cloudtest: Uploading logs..."
+for pod in $(kubectl get pods -o name | grep -v -E 'kubernetes|minio|cockroach|redpanda'); do
+  kubectl logs --prefix=true "$pod" &>> kubectl-get-logs.log || true
+  kubectl logs --previous --prefix=true "$pod" &>> kubectl-get-logs-previous.log || true
+done
+kubectl get events > kubectl-get-events.log || true
+kubectl get all > kubectl-get-all.log || true
+kubectl describe all > kubectl-describe-all.log || true
+
+# shellcheck disable=SC2024
+sudo journalctl --merge > journalctl-merge.log
+
+ARTIFACTS=(kubectl-*.log journalctl-merge.log)
+for ARTIFACT in "${ARTIFACTS[@]}"; do
+  buildkite-agent artifact upload "$ARTIFACT"
+done
+
+bin/ci-builder run stable bin/ci-logged-errors-detect "${ARTIFACTS[@]}"
+LOGGED_ERRORS_ARTIFACT="junit_${BUILDKITE_STEP_KEY}_logged_errors_${BUILDKITE_STEP_ID}.xml"
+if [ -f "$LOGGED_ERRORS_ARTIFACT" ]; then
+  buildkite-agent artifact upload "$LOGGED_ERRORS_ARTIFACT"
+fi
