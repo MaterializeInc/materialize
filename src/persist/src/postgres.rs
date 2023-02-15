@@ -227,10 +227,7 @@ impl PostgresConsensus {
             .build()
             .expect("postgres connection pool built with incorrect parameters");
 
-        let mut client = pool.get().await?;
-
-        let tx = client.transaction().await?;
-        tx.batch_execute(SCHEMA).await?;
+        let client = pool.get().await?;
 
         // The `consensus` table creates and deletes rows at a high frequency, generating many
         // tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
@@ -239,10 +236,13 @@ impl PostgresConsensus {
         //
         // See: https://github.com/MaterializeInc/materialize/issues/13975
         // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
-        tx.batch_execute("ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;")
+        client
+            .batch_execute(&format!(
+                "{}; {}",
+                SCHEMA, "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;"
+            ))
             .await?;
 
-        tx.commit().await?;
         Ok(PostgresConsensus {
             pool,
             metrics: config.metrics,
