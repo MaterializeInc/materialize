@@ -148,6 +148,7 @@ fn csr_url_path_rewrite(stmt: &mut mz_sql::ast::Statement<Raw>) {
 // ****************************************************************************
 
 /// Add normalization to all CREATE SECRET statements.
+// TODO: Released in version 0.44; delete at any later release.
 fn normalize_create_secrets(
     cat: &ConnCatalog,
     stmt: &mut mz_sql::ast::Statement<Raw>,
