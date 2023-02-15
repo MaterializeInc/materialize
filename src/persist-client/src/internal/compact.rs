@@ -10,9 +10,7 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt::Debug;
-use std::iter::Peekable;
 use std::marker::PhantomData;
-use std::slice::Iter;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -557,19 +555,19 @@ where
     fn order_runs(req: &CompactReq<T>) -> Vec<(&Description<T>, &[HollowBatchPart])> {
         let total_number_of_runs = req.inputs.iter().map(|x| x.runs.len() + 1).sum::<usize>();
 
-        let mut batch_runs = Vec::with_capacity(req.inputs.len());
-        for batch in &req.inputs {
-            batch_runs.push((&batch.desc, batch.runs()));
-        }
+        let mut batch_runs: VecDeque<_> = req
+            .inputs
+            .iter()
+            .map(|batch| (&batch.desc, batch.runs()))
+            .collect();
 
         let mut ordered_runs = Vec::with_capacity(total_number_of_runs);
-        while batch_runs.len() > 0 {
-            for (desc, runs) in batch_runs.iter_mut() {
-                if let Some(run) = runs.next() {
-                    ordered_runs.push((*desc, run));
-                }
+
+        while let Some((desc, mut runs)) = batch_runs.pop_front() {
+            if let Some(run) = runs.next() {
+                ordered_runs.push((desc, run));
+                batch_runs.push_back((desc, runs));
             }
-            batch_runs.retain_mut(|(_, iter)| iter.inner.peek().is_some());
         }
 
         ordered_runs
@@ -766,49 +764,6 @@ impl Timings {
             .steps
             .heap_population_seconds
             .inc_by(heap_population.as_secs_f64());
-    }
-}
-
-impl<T> HollowBatch<T> {
-    pub(crate) fn runs(&self) -> HollowBatchRunIter<T> {
-        HollowBatchRunIter {
-            batch: self,
-            inner: self.runs.iter().peekable(),
-            emitted_implicit: false,
-        }
-    }
-}
-
-pub(crate) struct HollowBatchRunIter<'a, T> {
-    batch: &'a HollowBatch<T>,
-    inner: Peekable<Iter<'a, usize>>,
-    emitted_implicit: bool,
-}
-
-impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
-    type Item = &'a [HollowBatchPart];
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.batch.parts.is_empty() {
-            return None;
-        }
-
-        if !self.emitted_implicit {
-            self.emitted_implicit = true;
-            return Some(match self.inner.peek() {
-                None => &self.batch.parts,
-                Some(run_end) => &self.batch.parts[0..**run_end],
-            });
-        }
-
-        if let Some(run_start) = self.inner.next() {
-            return Some(match self.inner.peek() {
-                Some(run_end) => &self.batch.parts[*run_start..**run_end],
-                None => &self.batch.parts[*run_start..],
-            });
-        }
-
-        None
     }
 }
 
