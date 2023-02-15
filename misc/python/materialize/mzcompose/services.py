@@ -436,13 +436,19 @@ class Cockroach(Service):
     def __init__(
         self,
         name: str = "cockroach",
+        aliases: List[str] = ["cockroach"],
         image: Optional[str] = None,
+        command: Optional[List[str]] = None,
         setup_materialize: bool = True,
+        healthcheck: Optional[Dict[str, str]] = None,
     ):
         volumes = []
 
         if image is None:
             image = f"cockroachdb/cockroach:{Cockroach.DEFAULT_COCKROACH_TAG}"
+
+        if command is None:
+            command = ["start-single-node", "--insecure"]
 
         if setup_materialize:
             path = os.path.relpath(
@@ -450,21 +456,28 @@ class Cockroach(Service):
                 loader.composition_path,
             )
             volumes += [f"{path}:/docker-entrypoint-initdb.d/setup_materialize.sql"]
-        super().__init__(
-            name=name,
-            config={
-                "image": image,
-                "ports": [26257],
-                "command": ["start-single-node", "--insecure"],
-                "volumes": volumes,
-                "init": True,
-                "healthcheck": {
+
+        if healthcheck is None:
+            healthcheck = (
+                {
                     # init_success is a file created by the Cockroach container entrypoint
                     "test": "[ -f init_success ] && curl --fail 'http://localhost:8080/health?ready=1'",
                     "timeout": "5s",
                     "interval": "1s",
                     "start_period": "30s",
                 },
+            )
+
+        super().__init__(
+            name=name,
+            config={
+                "image": image,
+                "networks": {"default": {"aliases": aliases}},
+                "ports": [26257],
+                "command": command,
+                "volumes": volumes,
+                "init": True,
+                "healthcheck": healthcheck,
             },
         )
 
