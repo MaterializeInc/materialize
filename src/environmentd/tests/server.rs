@@ -670,6 +670,80 @@ fn test_storage_usage_collection_interval_timestamps() {
 }
 
 #[test]
+fn test_old_storage_usage_records_are_reaped_on_restart() {
+    mz_ore::test::init_logging();
+
+    let data_dir = tempfile::tempdir().unwrap();
+    let collection_interval = Duration::from_secs(1);
+    let retention_period = Duration::from_millis(1100);
+    let config = util::Config::default()
+        .with_storage_usage_collection_interval(collection_interval)
+        .with_storage_usage_retention_period(retention_period)
+        .data_directory(data_dir.path());
+
+    {
+        let server = util::start_server(config.clone()).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        // Create a table with no data, which should have some overhead and therefore some storage usage
+        client
+            .batch_execute("CREATE TABLE usage_test (a int)")
+            .unwrap();
+
+        // Wait for initial storage usage collection, to be sure records are present.
+        let initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
+            client
+                    .query_one(
+                        "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::integer FROM mz_internal.mz_storage_usage_by_shard;",
+                        &[],
+                    )
+                    .map_err(|e| e.to_string()).unwrap()
+                    .try_get::<_, i32>(0)
+                    .map_err(|e| e.to_string())
+        }).expect("Could not fetch initial timestamp");
+
+        let initial_server_usage_records = client
+            .query_one(
+                "SELECT COUNT(*)::integer AS number
+                     FROM mz_internal.mz_storage_usage_by_shard",
+                &[],
+            )
+            .unwrap()
+            .try_get::<_, i32>(0)
+            .expect("Could not get initial count of records");
+
+        info!(%initial_timestamp, %initial_server_usage_records);
+        assert!(
+            initial_server_usage_records >= 1,
+            "No initial server usage records!"
+        );
+    };
+
+    // Wait, start a new server, and assert that the previous storage records have been reaped
+    std::thread::sleep(retention_period);
+
+    {
+        let server = util::start_server(config).unwrap();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+
+        let subsequent_server_usage_records = client
+            .query_one(
+                "SELECT COUNT(*)::integer AS number
+                     FROM mz_internal.mz_storage_usage_by_shard",
+                &[],
+            )
+            .unwrap()
+            .try_get::<_, i32>(0)
+            .expect("Could not get subsequent count of records");
+
+        info!(%subsequent_server_usage_records);
+        assert_eq!(
+            subsequent_server_usage_records, 0,
+            "Records were not reaped!"
+        );
+    };
+}
+
+#[test]
 fn test_default_cluster_sizes() {
     let config = util::Config::default()
         .with_builtin_cluster_replica_size("1".to_string())
