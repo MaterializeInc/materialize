@@ -126,5 +126,5 @@ fn main() {
             ],
             &[".."],
         )
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 }

@@ -116,7 +116,7 @@ struct Args {
     ///
     /// Passing `--var foo=bar` will create a variable named `arg.foo` with the
     /// value `bar`. Can be specified multiple times to set multiple variables.
-    #[clap(long, value_name = "NAME=VALUE")]
+    #[clap(long, env = "VAR", use_delimiter = true, value_name = "NAME=VALUE")]
     var: Vec<String>,
     /// A random number to distinguish each testdrive run.
     #[clap(long, value_name = "N")]
@@ -223,7 +223,7 @@ struct Args {
     kafka_default_partitions: usize,
     /// Arbitrary rdkafka options for testdrive to use when connecting to the
     /// Kafka broker.
-    #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
+    #[clap(long, env = "KAFKA_OPTION", use_delimiter=true, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
     kafka_option: Vec<(String, String)>,
     /// URL of the schema registry that testdrive will connect to.
     #[clap(long, value_name = "URL", default_value = "http://localhost:8081")]
