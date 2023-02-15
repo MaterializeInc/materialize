@@ -1188,7 +1188,7 @@ where
             let data_shard_since = since_handle.since().clone();
             let dependency_since = self.determine_dependency_since(&storage_dependencies)?;
             let combined_since = data_shard_since.join(&dependency_since);
-            self.install_read_capabilities(&storage_dependencies, combined_since.clone())?;
+            self.install_read_capabilities(&storage_dependencies, write.upper().clone())?;
 
             let collection_state = CollectionState::new(
                 description.clone(),
