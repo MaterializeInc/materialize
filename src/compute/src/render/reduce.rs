@@ -1396,7 +1396,14 @@ where
                             | (
                                 AggregateFunc::SumUInt64,
                                 Accum::SimpleNumber { accum, .. },
-                            ) => Datum::from(*accum),
+                            ) => {
+                                if accum.is_negative() {
+                                    warn!("[customer-data] ReduceAccumulable observed a negative sum \
+                                        accumulation over an unsigned type: {aggr:?}: {accum:?} in dataflow {debug_name}");
+                                    soft_assert_or_log!(false, "Invalid negative unsigned aggregation in ReduceAccumulable");
+                                }
+                                Datum::from(*accum)
+                            }
                             (
                                 AggregateFunc::SumFloat32,
                                 Accum::Float {

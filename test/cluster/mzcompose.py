@@ -59,6 +59,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-github-15799",
         "test-github-15930",
         "test-github-15496",
+        "test-github-17510",
         "test-remote-storage",
         "test-drop-default-cluster",
         "test-upsert",
@@ -577,6 +578,91 @@ def workflow_test_github_15496(c: Composition) -> None:
         # ensure that an error was put into the logs
         c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
         assert "Mismatched aggregates for key in ReduceCollation" in c1.stdout
+
+
+def workflow_test_github_17510(c: Composition) -> None:
+    """
+    Test that sum aggregations over uint2 and uint4 types do not produce a panic, but
+    rather a SQL-level error when faced with invalid accumulations due to too many
+    retractions in a source. Additionally, we verify that in these cases, an adequate
+    error message is written to the logs.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/17510.
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Clusterd(
+            name="clusterd_nopanic",
+            environment_extra=[
+                "MZ_SOFT_ASSERTIONS=0",
+            ],
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("clusterd_nopanic")
+
+        # set up a test cluster and run a testdrive regression script
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (
+                r1 (
+                    STORAGECTL ADDRESSES ['clusterd_nopanic:2100'],
+                    STORAGE ADDRESSES ['clusterd_no_panic:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd_nopanic:2101'],
+                    COMPUTE ADDRESSES ['clusterd_nopanic:2102'],
+                    WORKERS 2
+                )
+            );
+            -- Set data for test up
+            SET cluster = cluster1;
+            CREATE TABLE base (data2 uint2, data4 uint4, data8 uint8, diff bigint);
+            CREATE MATERIALIZED VIEW data AS
+              SELECT data2, data4, data8
+              FROM base, repeat_row(diff);
+            CREATE MATERIALIZED VIEW sum_types AS
+              SELECT SUM(data2) AS sum2, SUM(data4) AS sum4, SUM(data8) AS sum8
+              FROM data;
+            INSERT INTO base VALUES (1, 1, 1, 1);
+            INSERT INTO base VALUES (1, 1, 1, -1), (1, 1, 1, -1);
+            """
+        )
+        c.testdrive(
+            dedent(
+                f"""
+            > SET cluster = cluster1;
+
+            # Run a queries that would generate panics before the fix.
+
+            ! SELECT SUM(data2) FROM data;
+            contains:uint8 out of range
+
+            ! SELECT SUM(data4) FROM data;
+            contains:uint8 out of range
+
+            # The following statement succeeds with a negative accumulation,
+            # which is the behavior introduced in https://github.com/MaterializeInc/materialize/pull/16852
+            > SELECT SUM(data8) FROM data;
+            -1
+
+            # Ensure that the output types for uint sums are unaffected.
+            > SELECT c.name, c.type
+              FROM mz_materialized_views mv
+                   JOIN mz_columns c USING (id)
+              WHERE mv.name = 'sum_types'
+              ORDER BY c.type, c.name;
+            sum8 numeric
+            sum2 uint8
+            sum4 uint8
+            """
+            )
+        )
+
+        # ensure that an error was put into the logs
+        c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
+        assert "Invalid negative unsigned aggregation in ReduceAccumulable" in c1.stdout
 
 
 def workflow_test_upsert(c: Composition) -> None:
