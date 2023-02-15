@@ -154,6 +154,8 @@ class KillClusterdStorage(Scenario):
     def actions(self) -> List[Action]:
         return [
             StartMz(),
+            StartClusterdCompute(),
+            UseClusterdCompute(),
             Initialize(self.checks()),
             KillClusterdStorageAction(),
             Manipulate(self.checks(), phase=1),
