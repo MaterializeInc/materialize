@@ -132,7 +132,7 @@ miss the original update from `RAW` and we will fail to produce the differential
 would have produced had we not crashed.
 
 In order to solve this we will need to decompose `Q_mfp` into three parts: `Q_safemfp`,
-`Q_temporal_filter`, `Q_final_projection`
+`Q_expiration`, and `Q_final`
 
 > 💡 To understand the following decomposition it is important to keep in mind that all temporal
 > predicates are internally converted into expressions that produce a candidate timestamp for either
@@ -152,16 +152,38 @@ recover the original validity period. We can define the three parts like so:
    `MirScalarExpr`s. One that calculates the maximum of all the lower bound exprs and one that
    calculates the minimum of all the upper bound exprs. Effectively, we will precompute the validity
    period and store it as two additional timestamp columns at the end of the original row.
-2. `Q_temporal_filter` will contain two trivial temporal predicates:
-    1. `lower_ts <= mz_now()`
-    2. `mz_now() <= upper_ts`
-3. `Q_final_projection` will be simply throwing away the two last columns (`lower_ts` and
-   `upper_ts`) of the row
+2. `Q_expiration` will contain the temporal predicate `mz_now() <= upper_ts` which ensures each
+   record is retracted at the upper bound of its validity period.
+3. `Q_final` will contain the temporal predicate `lower_ts <= mz_now()` and a projection that hides
+   the last two columns, which contain the two timestamps of the validity period. This will ensure
+   that records are only inserted at the lower bound of their validity period and that `Q_expr` will
+   see rows with the correct schema.
 
 Given this decomposition we can now define the ingestion as:
 
-1. `C_intermediate = PERSIST(Q_temporal_filter(Q_safemfp(RAW)))`
-2. `C = PERSIST(Q_expr(Q_final_projection(Q_temporal_filter(C_intermediate))))`
+1. `C_intermediate = PERSIST(Q_expiration(Q_safemfp(RAW)))`
+2. `C = PERSIST(Q_expr(Q_final(C_intermediate)))`
+
+With these equations we have accomplished the goal of doing as much work as possible before the
+first persist operator while requiring no past state from `RAW` to resume. To see why that is the
+case, let's describe the state needed by the `Q_expiration` operator. The state of `Q_expiration` at
+time `t` is the set of records `(row, t_record, diff)` for which `t_record <= t && t <
+upper_ts(Q_mfp(row))`. In other words, for every timestamp it needs to remember all past records
+that expire after that timestamp.
+
+If we now look at the output of `Q_safemfp` we see that it converts a `(row, t_record, diff)` update
+to `((row, lower_ts, upper_ts), t_record, diff)` update. Additionally, `Q_expiration` will transform
+each `((row, lower_ts, upper_ts), t_record, diff)` update into two:
+
+1. `((row, lower_ts, upper_ts), t_record, diff)`
+2. `((row, lower_ts, upper_ts), upper_ts, -diff)`
+
+Given the above we can see that at the beginning of an ingestion execution `Q_expiration` can
+recover its in-memory state at time `t` by taking a snapshot of `C_intermediate` (not `RAW`) at time
+`t`, which is available because it is stored in persist! This is because any record that may expire
+in the future is maintained until the end of its validity period and `Q_mfp` has preserved the
+previously computed timestamps. This technique is similar to how the `UPSERT` envelope recovers its
+state from its output.
 
 ### Planner/Optimizer/Data structure stabilization
 
