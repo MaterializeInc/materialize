@@ -542,6 +542,7 @@ impl Coordinator {
         }
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => {
+                let mut source_ids = Vec::with_capacity(sources.len());
                 for (source_id, source) in sources {
                     let source_status_collection_id =
                         Some(self.catalog.resolve_builtin_storage_collection(
@@ -602,12 +603,15 @@ impl Coordinator {
                         .await
                         .unwrap_or_terminate("cannot fail to create collections");
 
-                    self.initialize_storage_read_policies(
-                        vec![source_id],
-                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                    )
-                    .await;
+                    source_ids.push(source_id);
                 }
+
+                self.initialize_storage_read_policies(
+                    source_ids,
+                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                )
+                .await;
+
                 Ok(ExecuteResponse::CreatedSource)
             }
             Err(AdapterError::Catalog(catalog::Error {
