@@ -45,8 +45,10 @@ pub struct TraceEntry<T> {
     /// Used to impose global sorting when merging multiple `TraceEntry`
     /// arrays in a single array.
     pub instant: std::time::Instant,
-    /// The time it took to run this optimization step.
-    pub duration: std::time::Duration,
+    /// The duration since the start of the enclosing span.
+    pub span_duration: std::time::Duration,
+    /// The duration since the start of the top-level span seen by the `PlanTrace`.
+    pub full_duration: std::time::Duration,
     /// Ancestor chain of span names (root is first, parent is last).
     pub path: String,
     /// The plan produced this step.
@@ -190,13 +192,14 @@ impl<T: Clone + 'static> PlanTrace<T> {
     /// prefix of its value.
     fn push(&self, plan: &T) {
         let times = self.times.lock().expect("times shouldn't be poisoned");
-        if let Some(span_start) = times.last() {
+        if let (Some(full_start), Some(span_start)) = (times.first(), times.last()) {
             if let Some(current_path) = self.current_path() {
                 let mut entries = self.entries.lock().expect("entries shouldn't be poisoned");
                 let time = std::time::Instant::now();
                 entries.push(TraceEntry {
                     instant: time,
-                    duration: time.duration_since(*span_start),
+                    span_duration: time.duration_since(*span_start),
+                    full_duration: time.duration_since(*full_start),
                     path: current_path,
                     plan: plan.clone(),
                 });

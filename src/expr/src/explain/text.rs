@@ -49,6 +49,11 @@ where
             self.context.used_indexes.fmt_text(f, &mut ctx)?;
         }
 
+        if self.context.config.timing {
+            writeln!(f, "")?;
+            writeln!(f, "Optimization time: {:?}", self.context.duration)?;
+        }
+
         Ok(())
     }
 }
@@ -68,6 +73,10 @@ where
                 plan.annotations.clone(),
                 self.context.config,
             );
+
+            if no > 0 {
+                writeln!(f, "")?;
+            }
 
             writeln!(f, "{}{}:", ctx.indent, id)?;
             ctx.indented(|ctx| {
@@ -98,6 +107,11 @@ where
         if !self.context.used_indexes.is_empty() {
             writeln!(f, "")?;
             self.context.used_indexes.fmt_text(f, &mut ctx)?;
+        }
+
+        if self.context.config.timing {
+            writeln!(f, "")?;
+            writeln!(f, "Optimization time: {:?}", self.context.duration)?;
         }
 
         Ok(())

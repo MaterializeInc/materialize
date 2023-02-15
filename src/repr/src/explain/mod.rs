@@ -149,6 +149,7 @@ pub struct ExplainConfig {
     /// Show the `non_negative` in the explanation if it is supported by the backing IR.
     pub non_negative: bool,
     /// Show the slow path plan even if a fast path plan was created. Useful for debugging.
+    /// Enforced if `timing` is set.
     pub no_fast_path: bool,
     /// Don't normalize plans before explaining them.
     pub raw_plans: bool,
@@ -156,10 +157,28 @@ pub struct ExplainConfig {
     pub raw_syntax: bool,
     /// Show the `subtree_size` attribute in the explanation if it is supported by the backing IR.
     pub subtree_size: bool,
-    /// Print optimization timings (currently unsupported).
+    /// Print optimization timings.
     pub timing: bool,
     /// Show the `type` attribute in the explanation.
     pub types: bool,
+}
+
+impl Default for ExplainConfig {
+    fn default() -> Self {
+        Self {
+            arity: false,
+            join_impls: true,
+            keys: false,
+            linear_chains: false,
+            non_negative: false,
+            no_fast_path: true,
+            raw_plans: true,
+            raw_syntax: true,
+            subtree_size: false,
+            timing: false,
+            types: false,
+        }
+    }
 }
 
 impl ExplainConfig {
@@ -183,7 +202,7 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             keys: flags.remove("keys"),
             linear_chains: flags.remove("linear_chains") && !flags.contains("raw_plans"),
             non_negative: flags.remove("non_negative"),
-            no_fast_path: flags.remove("no_fast_path"),
+            no_fast_path: flags.remove("no_fast_path") || flags.contains("timing"),
             raw_plans: flags.remove("raw_plans"),
             raw_syntax: flags.remove("raw_syntax"),
             subtree_size: flags.remove("subtree_size"),
