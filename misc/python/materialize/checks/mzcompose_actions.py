@@ -47,7 +47,13 @@ class StartMz(MzcomposeAction):
         with c.override(mz):
             c.up("materialized")
 
-        for config_param in ["max_tables", "max_sources"]:
+        for config_param in [
+            "max_tables",
+            "max_sinks",
+            "max_sources",
+            "max_materialized_views",
+            "max_secrets",
+        ]:
             c.sql(
                 f"ALTER SYSTEM SET {config_param} TO 1000",
                 user="mz_system",

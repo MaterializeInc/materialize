@@ -25,6 +25,7 @@ from materialize.checks.drop_table import *  # noqa: F401 F403
 from materialize.checks.error import *  # noqa: F401 F403
 from materialize.checks.float_types import *  # noqa: F401 F403
 from materialize.checks.having import *  # noqa: F401 F403
+from materialize.checks.identifiers import *  # noqa: F401 F403
 from materialize.checks.insert_select import *  # noqa: F401 F403
 from materialize.checks.join_implementations import *  # noqa: F401 F403
 from materialize.checks.join_types import *  # noqa: F401 F403
