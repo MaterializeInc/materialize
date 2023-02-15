@@ -65,7 +65,7 @@ Return // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "()
   Project (#0..=#4, #2) // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "()" }
     Join on=(#2 = #5) type=differential // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "()" }
       implementation
-        %1:l0[#2] » %0:l0[#2]KA
+        %0:l0[#2]KA » %1:l0[#2]KA
       Get l0 // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
       Get l0 // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
 With
