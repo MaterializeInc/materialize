@@ -28,8 +28,8 @@ use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
 };
 use mz_controller::clusters::{
-    ClusterConfig, ClusterId, ReplicaAllocation, ReplicaConfig, ReplicaId, ReplicaLogging,
-    DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
+    ClusterConfig, ClusterId, CreateReplicaConfig, ReplicaAllocation, ReplicaConfig, ReplicaId,
+    ReplicaLogging, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
 };
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
@@ -749,7 +749,12 @@ impl Coordinator {
             let role = cluster.role();
             let replica_config = cluster.replicas_by_id[&replica_id].config.clone();
 
-            replicas_to_start.push((cluster_id, replica_id, role, replica_config));
+            replicas_to_start.push(CreateReplicaConfig {
+                cluster_id,
+                replica_id,
+                role,
+                config: replica_config,
+            });
         }
 
         self.controller

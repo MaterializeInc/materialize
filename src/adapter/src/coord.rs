@@ -87,7 +87,9 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_client::types::dataflows::DataflowDescription;
-use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterId, ReplicaId};
+use mz_controller::clusters::{
+    ClusterConfig, ClusterEvent, ClusterId, CreateReplicaConfig, ReplicaId,
+};
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
@@ -642,7 +644,12 @@ impl Coordinator {
             )?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 let role = instance.role();
-                replicas_to_start.push((instance.id, replica_id, role, replica.config));
+                replicas_to_start.push(CreateReplicaConfig {
+                    cluster_id: instance.id,
+                    replica_id,
+                    role,
+                    config: replica.config,
+                });
             }
         }
         self.controller.create_replicas(replicas_to_start).await?;
