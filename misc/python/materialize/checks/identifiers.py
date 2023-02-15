@@ -57,10 +57,7 @@ class Identifiers(Check):
     # Under MIT license, Copyright (c) 2015-2020 Max Woolf
     IDENTS = [
         {
-            # TODO: Enable when fixed, Expected identifier, found operator "-"
-            # https://github.com/MaterializeInc/materialize/issues/17665
-            "db": "db1",
-            # "db": "-1",
+            "db": "-1",
             "schema": "0",
             "type": "1",
             "table": "2",
@@ -71,10 +68,7 @@ class Identifiers(Check):
             "source_view": "7",
             "kafka_conn": "8",
             "csr_conn": "9",
-            # TODO: Enable when fixed, Expected AS, found number ".10"
-            # https://github.com/MaterializeInc/materialize/issues/17665
-            "secret": "secret1",
-            # "secret": "10",
+            "secret": "10",
             "secret_value": "11",
             "mv0": "12",
             "mv1": "13",
@@ -86,10 +80,7 @@ class Identifiers(Check):
         },
         # Disabled because of timeouts, revisit if we want to accept longer runtime
         # {
-        #     # TODO: Enable when fixed, Expected identifier, found operator "-"
-        #     # https://github.com/MaterializeInc/materialize/issues/17665
-        #     "db": "db2",
-        #     # "db": "-1.0",
+        #     "db": "-1.0",
         #     "schema": "0.0",
         #     "type": "1.0",
         #     "table": "2.0",
@@ -100,10 +91,7 @@ class Identifiers(Check):
         #     "source_view": "7.0",
         #     "kafka_conn": "8.0",
         #     "csr_conn": "9.0",
-        #     # TODO: Enable when fixed, Expected AS, found number ".10"
-        #     # https://github.com/MaterializeInc/materialize/issues/17665
-        #     "secret": "secret2",
-        #     # "secret": "10.0",
+        #     "secret": "10.0",
         #     "secret_value": "11.0",
         #     "mv0": "12.0",
         #     "mv1": "13.0",
@@ -114,10 +102,7 @@ class Identifiers(Check):
         #     "alias": "18.0",
         # },
         {
-            # TODO: Enable when fixed, unexpected character in input:
-            # https://github.com/MaterializeInc/materialize/issues/17665
-            "db": "db3",
-            # "db": "\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f^?",
+            "db": "\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f^?",
             "schema": ",./;'[]\\-=",
             "type": '<>?:"{}|_+',
             "table": '<>?:"{}|_+',
@@ -139,10 +124,7 @@ class Identifiers(Check):
             "alias": "₀₁₂",
         },
         {
-            # TODO: Enable when fixed
-            # https://github.com/MaterializeInc/materialize/issues/17665
-            "db": "db4",
-            # "db": "찦차를 타고 온 펲시맨과 쑛다리 똠방각하",
+            "db": "찦차를 타고 온 펲시맨과 쑛다리 똠방각하",
             "schema": "田中さんにあげて下さい",
             "type": "パーティーへ行かないか",
             "table": "和製漢語",
@@ -153,10 +135,7 @@ class Identifiers(Check):
             "source_view": "𐐜 𐐔𐐇𐐝𐐀𐐡𐐇𐐓 𐐙𐐊𐐡𐐝𐐓/𐐝𐐇𐐗𐐊𐐤𐐔 𐐒𐐋𐐗 𐐒𐐌 𐐜 𐐡𐐀𐐖𐐇𐐤𐐓𐐝 𐐱𐑂 𐑄 𐐔𐐇𐐝𐐀𐐡𐐇𐐓 𐐏𐐆𐐅𐐤𐐆𐐚𐐊𐐡𐐝𐐆𐐓𐐆",
             "kafka_conn": "表ポあA鷗ŒéＢ逍Üßªąñ丂㐀𠀀",
             "csr_conn": "Ⱥ",
-            # TODO: Enable when fixed, Expected AS, found identifier "ヽ༼ຈل͜ຈ༽ﾉ"
-            # https://github.com/MaterializeInc/materialize/issues/17665
-            "secret": "secret4",
-            # "secret": "ヽ༼ຈل͜ຈ༽ﾉ ヽ༼ຈل͜ຈ༽ﾉ",
+            "secret": "ヽ༼ຈل͜ຈ༽ﾉ ヽ༼ຈل͜ຈ༽ﾉ",
             "secret_value": "(｡◕ ∀ ◕｡)",
             "mv0": "Ṱ̺̺o͞ ̷i̲̬n̝̗v̟̜o̶̙kè͚̮ ̖t̝͕h̼͓e͇̣ ̢̼h͚͎i̦̲v̻͍e̺̭-m̢iͅn̖̺d̵̼ ̞̥r̛̗e͙p͠r̼̞e̺̠s̘͇e͉̥ǹ̬͎t͍̬i̪̱n͠g̴͉ ͏͉c̬̟h͡a̫̻o̫̟s̗̦.̨̹",
             "mv1": "I̗̘n͇͇v̮̫ok̲̫i̖͙n̡̻g̲͈ ̰t͔̦h̞̲e̢̤ ͍̬f̴̘è͖ẹ̥̩l͖͔i͓͚n͖͍g͍ ̨o͚̪f̘̣ ̖̘c҉͔h̵̤á̗̼o̼̣s̱͈.̛̖",
@@ -168,10 +147,7 @@ class Identifiers(Check):
         },
         # Disabled because of timeouts, revisit if we want to accept longer runtime
         # {
-        #     # TODO: Enable when fixed
-        #     # https://github.com/MaterializeInc/materialize/issues/17665
-        #     "db": "db5",
-        #     # "db": "❤️ 💔 💌 💕 💞 💓 💗 💖 💘 💝 💟 💜 💛 💚 💙",
+        #     "db": "❤️ 💔 💌 💕 💞 💓 💗 💖 💘 💝 💟 💜 💛 💚 💙",
         #     "schema": "😍",
         #     "type": "👩🏽",
         #     "table": "👨‍🦰 👨🏿‍🦰 👨‍🦱 👨🏿‍🦱 🦹🏿‍♂️",
@@ -193,10 +169,7 @@ class Identifiers(Check):
         #     "alias": "1#INF",
         # },
         # {
-        #     # TODO: Enable when fixed
-        #     # https://github.com/MaterializeInc/materialize/issues/17665
-        #     "db": "db6",
-        #     # "db": "ﺚﻣ ﻦﻔﺳ ﺲﻘﻄﺗ ﻮﺑﺎﻠﺘﺣﺪﻳﺩ،, ﺝﺰﻳﺮﺘﻳ ﺏﺎﺴﺘﺧﺩﺎﻣ ﺄﻧ ﺪﻧﻭ. ﺇﺫ ﻪﻧﺍ؟ ﺎﻠﺴﺗﺍﺭ ﻮﺘﻨﺼﻴﺑ ﻙﺎﻧ. ﺄﻬّﻟ ﺎﻴﻃﺎﻠﻳﺍ، ﺏﺮﻴﻃﺎﻨﻳﺍ-ﻑﺮﻨﺳﺍ ﻕﺩ ﺄﺧﺫ. ﺲﻠﻴﻣﺎﻧ، ﺈﺘﻓﺎﻘﻳﺓ ﺐﻴﻧ ﻡﺍ, ﻱﺬﻛﺭ ﺎﻠﺣﺩﻭﺩ ﺄﻳ ﺐﻋﺩ, ﻢﻋﺎﻤﻟﺓ ﺏﻮﻠﻧﺩﺍ، ﺍﻺﻃﻼﻗ ﻊﻟ ﺈﻳﻭ.",
+        #     "db": "ﺚﻣ ﻦﻔﺳ ﺲﻘﻄﺗ ﻮﺑﺎﻠﺘﺣﺪﻳﺩ،, ﺝﺰﻳﺮﺘﻳ ﺏﺎﺴﺘﺧﺩﺎﻣ ﺄﻧ ﺪﻧﻭ. ﺇﺫ ﻪﻧﺍ؟ ﺎﻠﺴﺗﺍﺭ ﻮﺘﻨﺼﻴﺑ ﻙﺎﻧ. ﺄﻬّﻟ ﺎﻴﻃﺎﻠﻳﺍ، ﺏﺮﻴﻃﺎﻨﻳﺍ-ﻑﺮﻨﺳﺍ ﻕﺩ ﺄﺧﺫ. ﺲﻠﻴﻣﺎﻧ، ﺈﺘﻓﺎﻘﻳﺓ ﺐﻴﻧ ﻡﺍ, ﻱﺬﻛﺭ ﺎﻠﺣﺩﻭﺩ ﺄﻳ ﺐﻋﺩ, ﻢﻋﺎﻤﻟﺓ ﺏﻮﻠﻧﺩﺍ، ﺍﻺﻃﻼﻗ ﻊﻟ ﺈﻳﻭ.",
         #     "schema": "בְּרֵאשִׁית, בָּרָא אֱלֹהִים, אֵת הַשָּמַיִם, וְאֵת הָאָרֶץ",
         #     "type": "הָיְתָהtestﺎﻠﺼﻔﺣﺎﺗ ﺎﻠﺘّﺣﻮﻟ",
         #     "table": "﷽",
