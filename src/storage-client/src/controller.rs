@@ -1145,16 +1145,7 @@ where
                     )
                     .await;
 
-                let storage_dependencies = description.get_storage_dependencies();
-
-                let cs = CollectionState::new(
-                    description.clone(),
-                    since_handle.since().clone(),
-                    write.upper().clone(),
-                    storage_dependencies,
-                    metadata.clone(),
-                );
-                Ok::<_, anyhow::Error>((id, description, write, since_handle, cs))
+                Ok::<_, anyhow::Error>((id, description, write, since_handle, metadata))
             })
             // Poll each future for each collection concurrently, maximum of 50 at a time.
             .buffer_unordered(50)
@@ -1176,14 +1167,24 @@ where
         let mut to_create = Vec::with_capacity(to_register.len());
         // This work mutates the controller state, so must be done serially. Because there
         // is no io-bound work, its very fast.
-        for (id, description, write, since_handle, collection_state) in to_register {
+        for (id, description, write, since_handle, metadata) in to_register {
+            let storage_dependencies = description.get_storage_dependencies();
+
+            let data_shard_since = since_handle.since().clone();
+            let dependency_since = self.determine_dependency_since(&storage_dependencies)?;
+            let combined_since = data_shard_since.join(&dependency_since);
+            self.install_read_capabilities(&storage_dependencies, combined_since.clone())?;
+
+            let collection_state = CollectionState::new(
+                description.clone(),
+                combined_since,
+                write.upper().clone(),
+                storage_dependencies,
+                metadata.clone(),
+            );
+
             self.state.persist_write_handles.register(id, write);
             self.state.persist_read_handles.register(id, since_handle);
-
-            self.install_read_capabilities(
-                &collection_state.storage_dependencies,
-                collection_state.read_capabilities.frontier().to_owned(),
-            )?;
 
             self.state.collections.insert(id, collection_state);
 
