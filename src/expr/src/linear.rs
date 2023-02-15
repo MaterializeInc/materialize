@@ -17,7 +17,7 @@ use mz_repr::{Datum, Row};
 
 use self::proto_map_filter_project::ProtoPredicate;
 use crate::visit::Visit;
-use crate::{MirRelationExpr, MirScalarExpr};
+use crate::{AggregateFunc, MirRelationExpr, MirScalarExpr};
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.linear.rs"));
 
@@ -329,6 +329,50 @@ impl MapFilterProject {
             MirRelationExpr::Project { input, outputs } => {
                 let (mfp, expr) = Self::extract_from_expression(input);
                 (mfp.project(outputs.iter().cloned()), expr)
+            }
+            MirRelationExpr::Reduce {
+                input: _,
+                group_key,
+                aggregates,
+                monotonic: _,
+                expected_group_size: _,
+            } => {
+                // Check if we have an unsigned aggregation and add an appropriate cast here
+                // when the output is expected to be unsigned. This is done since rendering
+                // needs to accumulate to a signed number to deal with retractions, and we do
+                // not want to panic there.
+                let unsigned_sums = aggregates
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, agg)| {
+                        agg.func == AggregateFunc::SumUInt16 || agg.func == AggregateFunc::SumUInt32
+                    })
+                    .collect::<Vec<_>>();
+                if unsigned_sums.len() > 0 {
+                    // First, we map the cast expressions.
+                    let key_arity = group_key.len();
+                    let casts = unsigned_sums
+                        .iter()
+                        .map(|(idx, _agg)| MirScalarExpr::CallUnary {
+                            func: crate::UnaryFunc::CastNumericToUint64(
+                                crate::func::CastNumericToUint64,
+                            ),
+                            expr: Box::new(MirScalarExpr::Column(key_arity + idx)),
+                        })
+                        .collect::<Vec<_>>();
+                    let mfp = Self::new(expr.arity()).map(casts.into_iter());
+
+                    // Then, we create a projection keeping only the cast values.
+                    let mut outputs = (0..expr.arity()).collect::<Vec<_>>();
+                    let mut offset = 0;
+                    for (idx, _) in unsigned_sums {
+                        outputs[key_arity + idx] = expr.arity() + offset;
+                        offset += 1;
+                    }
+                    (mfp.project(outputs.into_iter()), expr)
+                } else {
+                    (Self::new(expr.arity()), expr)
+                }
             }
             x => (Self::new(x.arity()), x),
         }

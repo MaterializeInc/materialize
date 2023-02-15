@@ -1392,8 +1392,8 @@ where
                             | (
                                 AggregateFunc::SumUInt32,
                                 Accum::SimpleNumber { accum, .. },
-                            ) => Datum::UInt64(u64::try_from(*accum).unwrap_or_else(|_| panic!("Invalid accumulated result {accum} for unsigned function in dataflow {debug_name}"))),
-                            (
+                            )
+                            | (
                                 AggregateFunc::SumUInt64,
                                 Accum::SimpleNumber { accum, .. },
                             ) => Datum::from(*accum),
