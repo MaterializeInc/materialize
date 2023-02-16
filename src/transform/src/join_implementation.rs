@@ -428,7 +428,7 @@ mod delta_queries {
             }
 
             // Convert the order information into specific (input, key, characteristics) information.
-            let orders = orders
+            let mut orders = orders
                 .into_iter()
                 .map(|o| {
                     o.into_iter()
@@ -439,8 +439,14 @@ mod delta_queries {
                 .collect::<Vec<_>>();
 
             // Implement arrangements in each of the inputs.
-            let lifted_mfp =
+            let (lifted_mfp, lifted_projections) =
                 super::implement_arrangements(inputs, available, orders.iter().flatten());
+
+            // Permute `order` to compensate for projections being lifted as part of
+            // the mfp lifting in `implement_arrangements`.
+            orders
+                .iter_mut()
+                .for_each(|order| super::permute_order(order, &lifted_projections));
 
             *implementation = JoinImplementation::DeltaQuery(orders);
 
@@ -540,10 +546,20 @@ mod differential {
                     .collect::<Vec<_>>()
             };
 
-            let (start, start_key, start_characteristics) = order[0].clone();
+            let (start, mut start_key, start_characteristics) = order[0].clone();
 
             // Implement arrangements in each of the inputs.
-            let lifted_mfp = super::implement_arrangements(inputs, available, order.iter());
+            let (lifted_mfp, lifted_projections) =
+                super::implement_arrangements(inputs, available, order.iter());
+
+            // Permute `start_key` and `order` to compensate for projections being lifted as part of
+            // the mfp lifting in `implement_arrangements`.
+            if let Some(proj) = &lifted_projections[start] {
+                start_key.iter_mut().for_each(|k| {
+                    k.permute(proj);
+                });
+            }
+            super::permute_order(&mut order, &lifted_projections);
 
             // now that the starting arrangement has been implemented,
             // remove it from `order` so `order` only contains information
@@ -577,7 +593,7 @@ fn implement_arrangements<'a>(
     needed_arrangements: impl Iterator<
         Item = &'a (usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>),
     >,
-) -> MapFilterProject {
+) -> (MapFilterProject, Vec<Option<Vec<usize>>>) {
     // Collect needed arrangements by source index.
     let mut needed = vec![Vec::new(); inputs.len()];
     for (index, key, _characteristics) in needed_arrangements {
@@ -585,6 +601,7 @@ fn implement_arrangements<'a>(
     }
 
     let mut lifted_mfps = vec![None; inputs.len()];
+    let mut lifted_projections = vec![None; inputs.len()];
 
     // Transform inputs[index] based on needed and available arrangements.
     // Specifically, lift intervening mfps if all arrangements exist.
@@ -605,17 +622,18 @@ fn implement_arrangements<'a>(
         while let MirRelationExpr::ArrangeBy { input: inner, .. } = &mut inputs[index] {
             inputs[index] = inner.take_dangerous();
         }
-        if !needed.is_empty() {
-            // If a mfp was lifted in order to install the arrangement, permute
-            // the arrangement.
-            if let Some(lifted_mfp) = &lifted_mfps[index] {
-                let (_, _, project) = lifted_mfp.as_map_filter_project();
-                for arrangement_key in needed.iter_mut() {
-                    for k in arrangement_key.iter_mut() {
-                        k.permute(&project);
-                    }
+        // If a mfp was lifted in order to install the arrangement, permute the arrangement and
+        // save the lifted projection.
+        if let Some(lifted_mfp) = &lifted_mfps[index] {
+            let (_, _, project) = lifted_mfp.as_map_filter_project();
+            for arrangement_key in needed.iter_mut() {
+                for k in arrangement_key.iter_mut() {
+                    k.permute(&project);
                 }
             }
+            lifted_projections[index] = Some(project);
+        }
+        if !needed.is_empty() {
             inputs[index] = MirRelationExpr::arrange_by(inputs[index].take_dangerous(), needed);
         }
     }
@@ -648,10 +666,14 @@ fn implement_arrangements<'a>(
             combined_project.extend(new_join_mapper.global_columns(index));
         }
     }
-    combined_mfp
-        .map(combined_map)
-        .filter(combined_filter)
-        .project(combined_project)
+
+    (
+        combined_mfp
+            .map(combined_map)
+            .filter(combined_filter)
+            .project(combined_project),
+        lifted_projections,
+    )
 }
 
 fn install_lifted_mfp(
@@ -685,6 +707,21 @@ fn install_lifted_mfp(
         *new_join = new_join.clone().map(map).filter(filter).project(project);
     }
     Ok(())
+}
+
+/// Permute the keys in `order` to compensate for projections being lifted from inputs.
+/// `lifted_projections` has an optional projection for each input.
+fn permute_order(
+    order: &mut Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)>,
+    lifted_projections: &Vec<Option<Vec<usize>>>,
+) {
+    order.iter_mut().for_each(|(index, key, _)| {
+        key.iter_mut().for_each(|kc| {
+            if let Some(proj) = &lifted_projections[*index] {
+                kc.permute(proj);
+            }
+        })
+    })
 }
 
 fn optimize_orders(
