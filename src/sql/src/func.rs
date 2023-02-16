@@ -1882,6 +1882,11 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Float64) => UnaryFunc::CeilFloat64(func::CeilFloat64), 2308;
             params!(Numeric) => UnaryFunc::CeilNumeric(func::CeilNumeric), 1711;
         },
+        "ceiling" => Scalar {
+            params!(Float32) => UnaryFunc::CeilFloat32(func::CeilFloat32), oid::FUNC_CEILING_F32_OID;
+            params!(Float64) => UnaryFunc::CeilFloat64(func::CeilFloat64), 2320;
+            params!(Numeric) => UnaryFunc::CeilNumeric(func::CeilNumeric), 2167;
+        },
         "char_length" => Scalar {
             params!(String) => UnaryFunc::CharLength(func::CharLength), 1381;
         },
