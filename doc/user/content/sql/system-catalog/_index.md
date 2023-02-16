@@ -12,12 +12,6 @@ menu:
 disable_list: true
 ---
 
-{{< warning >}}
-Views that directly reference these objects cannot include `NATURAL JOIN` or
-`*` expressions. Instead, project the required columns and convert all `NATURAL JOIN`s
-to `USING` joins.
-{{< /warning >}}
-
 Materialize exposes a system catalog that contains metadata about the running
 Materialize instance.
 
