@@ -473,7 +473,7 @@ class Cockroach(Service):
             config={
                 "image": image,
                 "networks": {"default": {"aliases": aliases}},
-                "ports": [26257],
+                "ports": [26257, 8080],
                 "command": command,
                 "volumes": volumes,
                 "init": True,

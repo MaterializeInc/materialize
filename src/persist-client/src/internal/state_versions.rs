@@ -23,7 +23,7 @@ use mz_persist::location::{
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
-use tracing::{debug, debug_span, instrument, trace, warn, Instrument};
+use tracing::{debug, debug_span, info, instrument, trace, warn, Instrument};
 
 use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::encoding::UntypedState;
@@ -255,7 +255,7 @@ impl StateVersions {
         .instrument(debug_span!("apply_unbatched_cmd::cas", payload_len))
         .await
         .map_err(|err| {
-            debug!("apply_unbatched_cmd {} errored: {}", cmd_name, err);
+            info!("apply_unbatched_cmd {} errored: {}", cmd_name, err);
             err
         })?;
 

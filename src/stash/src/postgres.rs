@@ -646,6 +646,7 @@ impl Stash {
                 Err(_elapsed) => {
                     self.client = None;
                     info!("tokio-postgres stash timeout, retry attempt {attempt}");
+                    attempt += 1;
                     retry.next().await;
                 }
             }
