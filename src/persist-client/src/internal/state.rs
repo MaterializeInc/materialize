@@ -256,6 +256,13 @@ pub struct HollowRollup {
     pub encoded_size_bytes: Option<usize>,
 }
 
+/// A pointer to a blob stored externally.
+#[derive(Debug)]
+pub enum HollowBlobRef<'a, T> {
+    Batch(&'a HollowBatch<T>),
+    Rollup(&'a HollowRollup),
+}
+
 /// A sentinel for a state transition that was a no-op.
 ///
 /// Critically, this also indicates that the no-op state transition was not
@@ -1074,8 +1081,22 @@ where
         self.collections.trace.num_updates()
     }
 
-    pub fn batch_size_metrics(&self) -> (usize, usize) {
-        self.collections.trace.batch_size_metrics()
+    pub fn size_metrics(&self) -> StateSizeMetrics {
+        let mut ret = StateSizeMetrics::default();
+        self.map_blobs(|x| match x {
+            HollowBlobRef::Batch(x) => {
+                let mut batch_size = 0;
+                for x in x.parts.iter() {
+                    batch_size += x.encoded_size_bytes;
+                }
+                ret.largest_batch_bytes = std::cmp::max(ret.largest_batch_bytes, batch_size);
+                ret.state_batches_bytes += batch_size;
+            }
+            HollowBlobRef::Rollup(x) => {
+                ret.state_rollups_bytes += x.encoded_size_bytes.unwrap_or_default()
+            }
+        });
+        ret
     }
 
     pub fn latest_rollup(&self) -> (&SeqNo, &HollowRollup) {
@@ -1242,6 +1263,22 @@ where
             None
         }
     }
+
+    pub(crate) fn map_blobs<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
+        self.collections
+            .trace
+            .map_batches(|x| f(HollowBlobRef::Batch(x)));
+        for x in self.collections.rollups.values() {
+            f(HollowBlobRef::Rollup(x));
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct StateSizeMetrics {
+    pub largest_batch_bytes: usize,
+    pub state_batches_bytes: usize,
+    pub state_rollups_bytes: usize,
 }
 
 #[derive(Default)]

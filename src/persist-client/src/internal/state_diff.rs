@@ -24,8 +24,9 @@ use tracing::debug;
 use crate::critical::CriticalReaderId;
 use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
-    CriticalReaderState, HollowBatch, HollowRollup, LeasedReaderState, ProtoStateField,
-    ProtoStateFieldDiffType, ProtoStateFieldDiffs, State, StateCollections, WriterState,
+    CriticalReaderState, HollowBatch, HollowBlobRef, HollowRollup, LeasedReaderState,
+    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, State, StateCollections,
+    WriterState,
 };
 use crate::internal::trace::{FueledMergeRes, Trace};
 use crate::read::LeasedReaderId;
@@ -167,6 +168,30 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         diff_field_single(from_trace.since(), to_trace.since(), &mut diffs.since);
         diff_field_spine(from_trace, to_trace, &mut diffs.spine);
         diffs
+    }
+
+    pub(crate) fn map_blob_inserts<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
+        for spine_diff in self.spine.iter() {
+            match &spine_diff.val {
+                StateFieldValDiff::Insert(()) => {
+                    f(HollowBlobRef::Batch(&spine_diff.key));
+                }
+                StateFieldValDiff::Update((), ()) => {
+                    // No-op. Logically, we've removed and reinserted the same
+                    // key. We don't see this in practice, so it could also
+                    // easily be a panic, if necessary.
+                }
+                StateFieldValDiff::Delete(()) => {} // No-op
+            }
+        }
+        for rollups_diff in self.rollups.iter() {
+            match &rollups_diff.val {
+                StateFieldValDiff::Insert(x) | StateFieldValDiff::Update(_, x) => {
+                    f(HollowBlobRef::Rollup(x));
+                }
+                StateFieldValDiff::Delete(_) => {} // No-op
+            }
+        }
     }
 
     #[cfg(any(test, debug_assertions))]
