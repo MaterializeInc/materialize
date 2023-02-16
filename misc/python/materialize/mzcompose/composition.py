@@ -667,6 +667,7 @@ class Composition:
         check: bool = True,
         workdir: str | None = None,
         env_extra: dict[str, str] = {},
+        respect_entrypoint: bool = True,
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
 
@@ -690,6 +691,7 @@ class Composition:
             *(
                 self.compose["services"][service]["entrypoint"]
                 if "entrypoint" in self.compose["services"][service]
+                and respect_entrypoint
                 else []
             ),
             *args,

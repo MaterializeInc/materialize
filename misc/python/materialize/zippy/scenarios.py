@@ -28,6 +28,7 @@ from materialize.zippy.kafka_capabilities import Envelope
 from materialize.zippy.minio_actions import MinioRestart, MinioStart
 from materialize.zippy.mz_actions import (
     KillClusterd,
+    MzDumpMemory,
     MzRestart,
     MzStart,
     MzStartParameterized,
@@ -83,6 +84,9 @@ class Scenario:
             BackupAndRestore,
             ValidateAll(),
         ]
+
+    def run_always(self) -> list[ActionOrFactory]:
+        return [MzDumpMemory]
 
 
 class KafkaSources(Scenario):
