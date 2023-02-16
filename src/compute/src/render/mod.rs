@@ -260,93 +260,66 @@ pub fn build_compute_dataflow<A: Allocate>(
             .chain(flow_control_probe)
             .collect();
 
+        // If there exists a recursive expression, we'll need to use a non-region scope,
+        // in order to support additional timestamp coordinates for iteration.
         if recursive {
-            scope.clone().iterative::<usize, _, _>(|region| {
-                let mut context =
-                    crate::render::context::Context::for_dataflow_in(&dataflow, region.clone());
+            scope
+                .clone()
+                .iterative::<PointStamp<usize>, _, _>(|region| {
+                    let mut context =
+                        crate::render::context::Context::for_dataflow_in(&dataflow, region.clone());
 
-                for (id, (oks, errs)) in imported_sources.into_iter() {
-                    let bundle = crate::render::CollectionBundle::from_collections(
-                        oks.enter(region),
-                        errs.enter(region),
-                    );
-                    // Associate collection bundle with the source identifier.
-                    context.insert_id(id, bundle);
-                }
-
-                // Import declared indexes into the rendering context.
-                for (idx_id, idx) in &dataflow.index_imports {
-                    let export_ids = dataflow.export_ids().collect();
-                    context.import_index(compute_state, &mut tokens, export_ids, *idx_id, &idx.0);
-                }
-
-                // Build declared objects.
-                let mut any_letrec = false;
-                for object in dataflow.objects_to_build {
-                    if let Plan::LetRec { ids, values, body } = object.plan {
-                        assert!(!any_letrec, "Cannot render multiple instances of LetRec");
-                        any_letrec = true;
-                        // Build declared objects.
-                        // It is important that we only use the `Variable` until the object is bound.
-                        // At that point, all subsequent uses should have access to the object itself.
-                        let mut variables = BTreeMap::new();
-                        for id in ids.iter() {
-                            use differential_dataflow::operators::iterate::Variable;
-
-                            let oks_v = Variable::new(region, Product::new(Default::default(), 1));
-                            let err_v = Variable::new(region, Product::new(Default::default(), 1));
-
-                            context.insert_id(
-                                Id::Local(*id),
-                                CollectionBundle::from_collections(
-                                    oks_v.consolidate(),
-                                    err_v.consolidate(),
-                                ),
-                            );
-                            variables.insert(Id::Local(*id), (oks_v, err_v));
-                        }
-                        for (id, value) in ids.into_iter().zip(values.into_iter()) {
-                            let bundle = context.render_plan(value);
-                            // We need to ensure that the raw collection exists, but do not have enough information
-                            // here to cause that to happen.
-                            let (oks, err) = bundle.collection.clone().unwrap();
-                            context.insert_id(Id::Local(id), bundle);
-                            let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
-                            oks_v.set(&oks);
-                            err_v.set(&err);
-                        }
-
-                        let bundle = context.render_plan(*body);
-                        context.insert_id(Id::Global(object.id), bundle);
-                    } else {
-                        context.build_object(object);
+                    for (id, (oks, errs)) in imported_sources.into_iter() {
+                        let bundle = crate::render::CollectionBundle::from_collections(
+                            oks.enter(region),
+                            errs.enter(region),
+                        );
+                        // Associate collection bundle with the source identifier.
+                        context.insert_id(id, bundle);
                     }
-                }
 
-                // Export declared indexes.
-                for (idx_id, imports, idx) in indexes {
-                    context.export_index_iterative(
-                        compute_state,
-                        &mut tokens,
-                        imports,
-                        idx_id,
-                        &idx,
-                        output_probes.clone(),
-                    );
-                }
+                    // Import declared indexes into the rendering context.
+                    for (idx_id, idx) in &dataflow.index_imports {
+                        let export_ids = dataflow.export_ids().collect();
+                        context.import_index(
+                            compute_state,
+                            &mut tokens,
+                            export_ids,
+                            *idx_id,
+                            &idx.0,
+                        );
+                    }
 
-                // Export declared sinks.
-                for (sink_id, imports, sink) in sinks {
-                    context.export_sink(
-                        compute_state,
-                        &mut tokens,
-                        imports,
-                        sink_id,
-                        &sink,
-                        output_probes.clone(),
-                    );
-                }
-            });
+                    // Build declared objects.
+                    for object in dataflow.objects_to_build {
+                        let bundle = context.render_recursive_plan(0, object.plan);
+                        context.insert_id(Id::Global(object.id), bundle);
+                    }
+
+                    // Export declared indexes.
+                    for (idx_id, imports, idx) in indexes {
+                        context.export_index_iterative(
+                            compute_state,
+                            &mut tokens,
+                            imports,
+                            idx_id,
+                            &idx,
+                            output_probes.clone(),
+                        );
+                    }
+
+                    // Export declared sinks.
+                    for (sink_id, imports, sink) in sinks {
+                        context.export_sink(
+                            compute_state,
+                            &mut tokens,
+                            imports,
+                            sink_id,
+                            &sink,
+                            output_probes.clone(),
+                        );
+                    }
+                });
         } else {
             scope.clone().region_named(&build_name, |region| {
                 let mut context =
@@ -616,6 +589,77 @@ where
     }
 }
 
+use differential_dataflow::dynamic::pointstamp::PointStamp;
+
+impl<G> Context<G, Row>
+where
+    G: Scope<Timestamp = Product<mz_repr::Timestamp, PointStamp<usize>>>,
+{
+    /// Renders a plan to a differential dataflow, producing the collection of results.
+    ///
+    /// This method allows for `plan` to contain a `LetRec` variant at its root, and is planned
+    /// in the context of `level` pre-existing iteration coordinates.
+    ///
+    /// This method recursively descends `LetRec` nodes, establishing nested scopes for each 
+    /// and establishing the appropriate recursive dependencies among the bound variables.
+    /// Once non-`LetRec` nodes are reached it calls in to `render_plan` which will error if
+    /// furher `LetRec` variants are found.
+    ///
+    /// The method requires that all variables conclude with a physical representation that
+    /// contains a collection (i.e. a non-arrangement), and it will panic otherwise.
+    pub fn render_recursive_plan(&mut self, level: usize, plan: Plan) -> CollectionBundle<G, Row> {
+        if let Plan::LetRec { ids, values, body } = plan {
+            // It is important that we only use the `Variable` until the object is bound.
+            // At that point, all subsequent uses should have access to the object itself.
+            let mut variables = BTreeMap::new();
+            for id in ids.iter() {
+                use differential_dataflow::operators::iterate::Variable;
+
+                use differential_dataflow::dynamic::feedback_summary;
+                let inner = feedback_summary::<usize>(level + 1, 1);
+                let oks_v = Variable::new(
+                    &mut self.scope,
+                    Product::new(Default::default(), inner.clone()),
+                );
+                let err_v = Variable::new(&mut self.scope, Product::new(Default::default(), inner));
+
+                self.insert_id(
+                    Id::Local(*id),
+                    CollectionBundle::from_collections(oks_v.consolidate(), err_v.consolidate()),
+                );
+                variables.insert(Id::Local(*id), (oks_v, err_v));
+            }
+            // Now render each of the bindings.
+            for (id, value) in ids.iter().zip(values.into_iter()) {
+                let bundle = self.render_recursive_plan(level + 1, value);
+                // We need to ensure that the raw collection exists, but do not have enough information
+                // here to cause that to happen.
+                let (oks, err) = bundle.collection.clone().unwrap();
+                self.insert_id(Id::Local(*id), bundle);
+                let (oks_v, err_v) = variables.remove(&Id::Local(*id)).unwrap();
+                oks_v.set(&oks);
+                err_v.set(&err);
+            }
+            // Now extract each of the bindings into the outer scope.
+            for id in ids.into_iter() {
+                let bundle = self.remove_id(Id::Local(id)).unwrap();
+                let (oks, err) = bundle.collection.unwrap();
+                self.insert_id(
+                    Id::Local(id),
+                    CollectionBundle::from_collections(
+                        oks.leave_dynamic(level + 1),
+                        err.leave_dynamic(level + 1),
+                    ),
+                );
+            }
+
+            self.render_recursive_plan(level, *body)
+        } else {
+            self.render_plan(plan)
+        }
+    }
+}
+
 impl<G> Context<G, Row>
 where
     G: Scope,
@@ -716,7 +760,7 @@ where
                 body
             }
             Plan::LetRec { .. } => {
-                unimplemented!("Not yet implemented; sorry!");
+                unreachable!("LetRec should have been extracted and rendered");
             }
             Plan::Mfp {
                 input,
