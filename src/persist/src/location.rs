@@ -212,6 +212,14 @@ impl From<anyhow::Error> for ExternalError {
     }
 }
 
+impl From<tokio::time::error::Elapsed> for ExternalError {
+    fn from(x: tokio::time::error::Elapsed) -> Self {
+        ExternalError::Indeterminate(Indeterminate {
+            inner: anyhow::Error::new(x),
+        })
+    }
+}
+
 impl From<Error> for ExternalError {
     fn from(x: Error) -> Self {
         ExternalError::Indeterminate(Indeterminate {

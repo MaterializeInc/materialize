@@ -23,7 +23,7 @@ use mz_persist::location::{
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
-use tracing::{debug, debug_span, trace, warn, Instrument};
+use tracing::{debug, debug_span, instrument, trace, warn, Instrument};
 
 use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::encoding::UntypedState;
@@ -209,6 +209,7 @@ impl StateVersions {
     /// `current`.
     ///
     /// May be called on uninitialized shards.
+    #[instrument(level = "debug", skip_all)]
     pub async fn try_compare_and_set_current<K, V, T, D>(
         &self,
         cmd_name: &str,

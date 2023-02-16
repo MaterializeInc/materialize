@@ -31,11 +31,12 @@ use std::fmt::Formatter;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::debug;
+use tracing::{debug, debug_span, info, instrument, Instrument};
 
 use crate::error::Error;
 use crate::location::{Consensus, ExternalError, SeqNo, VersionedData, SCAN_ALL};
 use crate::metrics::PostgresConsensusMetrics;
+use crate::timeout::TimeoutExt;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS consensus (
@@ -45,6 +46,8 @@ CREATE TABLE IF NOT EXISTS consensus (
     PRIMARY KEY(shard, sequence_number)
 );
 ";
+
+const TIMEOUT: Duration = Duration::from_secs(1);
 
 impl ToSql for SeqNo {
     fn to_sql(
@@ -171,6 +174,7 @@ impl PostgresConsensus {
     /// named `shard`.
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
         let pg_config: Config = config.url.parse()?;
+        info!("Postgres Config: {:?}", pg_config);
         let tls = make_tls(&pg_config)?;
 
         let manager = Manager::from_config(
@@ -189,7 +193,7 @@ impl PostgresConsensus {
             .post_create(Hook::async_fn(move |client, _| {
                 connections_created.inc();
                 Box::pin(async move {
-                    debug!("opened new consensus postgres connection");
+                    info!("opened new consensus postgres connection");
                     client.batch_execute(
                         "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
                     ).await.map_err(|e| HookError::Abort(HookErrorCause::Backend(e)))
@@ -260,9 +264,14 @@ impl PostgresConsensus {
         Ok(())
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn get_connection(&self) -> Result<Object, PoolError> {
         let start = Instant::now();
-        let res = self.pool.get().await;
+        let res = self
+            .pool
+            .get()
+            .instrument(debug_span!("postgres::get_connection"))
+            .await;
         self.metrics
             .connpool_acquire_seconds
             .inc_by(start.elapsed().as_secs_f64());
@@ -336,6 +345,7 @@ fn make_tls(config: &Config) -> Result<MakeTlsConnector, anyhow::Error> {
 
 #[async_trait]
 impl Consensus for PostgresConsensus {
+    #[instrument(level = "debug", skip_all)]
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
@@ -358,6 +368,7 @@ impl Consensus for PostgresConsensus {
         }))
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn compare_and_set(
         &self,
         key: &str,
@@ -386,14 +397,31 @@ impl Consensus for PostgresConsensus {
                        WHERE shard = $1
                        ORDER BY sequence_number DESC LIMIT 1) = $4;
             "#;
-            let client = self.get_connection().await?;
-            let statement = client.prepare_cached(q).await?;
-            client
-                .execute(
-                    &statement,
-                    &[&key, &new.seqno, &new.data.as_ref(), &expected],
-                )
-                .await?
+            // let client = self.get_connection().await?;
+            // let statement = client
+            //     .prepare_cached(q)
+            //     .instrument(debug_span!("postgres::prepare_statement"))
+            //     .await?;
+            // client
+            //     .execute(
+            //         &statement,
+            //         &[&key, &new.seqno, &new.data.as_ref(), &expected],
+            //     )
+            //     .instrument(debug_span!("postgres::compare_and_set"))
+            //     .await?
+            async {
+                let client = self.get_connection().await?;
+                let statement = client.prepare_cached(q).await?;
+                let result = client
+                    .execute(
+                        &statement,
+                        &[&key, &new.seqno, &new.data.as_ref(), &expected],
+                    )
+                    .await?;
+                Ok::<u64, ExternalError>(result)
+            }
+            .timeout(TIMEOUT)
+            .await??
         } else {
             // Insert the new row as long as no other row exists for the same shard.
             let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
@@ -401,11 +429,21 @@ impl Consensus for PostgresConsensus {
                          SELECT * FROM consensus WHERE shard = $1
                      )
                      ON CONFLICT DO NOTHING";
-            let client = self.get_connection().await?;
-            let statement = client.prepare_cached(q).await?;
-            client
-                .execute(&statement, &[&key, &new.seqno, &new.data.as_ref()])
-                .await?
+            // let client = self.get_connection().await?;
+            // let statement = client.prepare_cached(q).await?;
+            // client
+            //     .execute(&statement, &[&key, &new.seqno, &new.data.as_ref()])
+            //     .await?
+            async {
+                let client = self.get_connection().await?;
+                let statement = client.prepare_cached(q).await?;
+                let result = client
+                    .execute(&statement, &[&key, &new.seqno, &new.data.as_ref()])
+                    .await?;
+                Ok::<u64, ExternalError>(result)
+            }
+            .timeout(TIMEOUT)
+            .await??
         };
 
         if result == 1 {
@@ -418,11 +456,15 @@ impl Consensus for PostgresConsensus {
             // 2. All operations that modify the (seqno, data) can only increase
             //    the sequence number.
             let from = expected.map_or_else(SeqNo::minimum, |x| x.next());
-            let current = self.scan(key, from, SCAN_ALL).await?;
+            let current = self
+                .scan(key, from, SCAN_ALL)
+                .instrument(debug_span!("postgres::scan_after_cas_failure"))
+                .await?;
             Ok(Err(current))
         }
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn scan(
         &self,
         key: &str,
@@ -455,6 +497,7 @@ impl Consensus for PostgresConsensus {
         Ok(results)
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
         let q = "DELETE FROM consensus
                 WHERE shard = $1 AND sequence_number < $2 AND

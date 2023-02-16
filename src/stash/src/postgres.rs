@@ -601,9 +601,10 @@ impl Stash {
         let mut attempt: u64 = 0;
         loop {
             // Execute the operation in a transaction or savepoint.
-            match self.transact_inner(&f).await {
-                Ok(r) => return Ok(r),
-                Err(e) => {
+            let f = tokio::time::timeout(Duration::from_secs(2), self.transact_inner(&f));
+            match f.await {
+                Ok(Ok(r)) => return Ok(r),
+                Ok(Err(e)) => {
                     // If this returns an error, close the connection to force a
                     // reconnect (and also not need to worry about any
                     // in-progress transaction state cleanup).
@@ -641,6 +642,11 @@ impl Stash {
                         }
                         _ => return Err(e),
                     }
+                }
+                Err(_elapsed) => {
+                    self.client = None;
+                    info!("tokio-postgres stash timeout, retry attempt {attempt}");
+                    retry.next().await;
                 }
             }
         }

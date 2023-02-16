@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose import Composition
-from materialize.mzcompose.services import Cockroach, Materialized, Testdrive
+from materialize.mzcompose.services import Cockroach, Materialized, Testdrive, Service
 
 COCKROACH_HEALTHCHECK_DISABLED = {
     "test": "/bin/true",
@@ -23,12 +23,24 @@ SERVICES = [
             "cockroach1": {"condition": "service_healthy"},
             "cockroach2": {"condition": "service_healthy"},
             "cockroach3": {"condition": "service_healthy"},
+            "jaeger": {"condition": "service_healthy"},
         },
         options=[
-            "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
-            "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
-            "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
+            "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter&connect_timeout=2",
+            "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage&connect_timeout=2",
+            "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus&connect_timeout=2",
+            "--opentelemetry-endpoint=http://jaeger:4317/"
         ],
+    ),
+    Service(
+        "jaeger",
+        {
+            "image": "jaegertracing/all-in-one:1.36",
+            "ports": ["16686:16686", "4317:4317", "4318:4318", 14268, 14250],
+            "command": ["--collector.grpc-server.max-message-size=16777216"],
+            "environment": ["COLLECTOR_OTLP_ENABLED=true"],
+            "allow_host_ports": True,
+        },
     ),
     Cockroach(
         setup_materialize=True,
@@ -74,7 +86,7 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    c.up("cockroach1", "cockroach2", "cockroach3")
+    c.up("cockroach1", "cockroach2", "cockroach3", "jaeger")
 
     c.exec("cockroach1", "cockroach", "init", "--insecure", "--host=localhost:26257")
     c.exec(
