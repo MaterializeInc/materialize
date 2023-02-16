@@ -38,7 +38,7 @@ use mz_sql_parser::ast::{
     AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceStatement,
     AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
     CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredObjectName, SshConnectionOption, UnresolvedObjectName, Value,
+    DeferredObjectName, SetVariableTo, SshConnectionOption, UnresolvedObjectName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -115,8 +115,6 @@ use crate::plan::{
     Plan, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink, Source,
     SourceSinkClusterConfig, Table, Type, View,
 };
-
-use super::scl;
 
 pub fn describe_create_database(
     _: &StatementContext,
@@ -3920,8 +3918,13 @@ pub fn plan_alter_system_set(
     AlterSystemSetStatement { name, to }: AlterSystemSetStatement,
 ) -> Result<Plan, PlanError> {
     let name = name.to_string();
-    let value = scl::plan_set_variable_to(to)?;
-    Ok(Plan::AlterSystemSet(AlterSystemSetPlan { name, value }))
+    Ok(Plan::AlterSystemSet(AlterSystemSetPlan {
+        name,
+        value: match to {
+            SetVariableTo::Default => None,
+            SetVariableTo::Values(_) => Some(to.to_ast_string_stable()),
+        },
+    }))
 }
 
 pub fn describe_alter_system_reset(

@@ -121,10 +121,22 @@ ALTER SYSTEM SET max_replicas_per_cluster = 100
 #> CREATE CLUSTER REPLICA c1.r2 SIZE '1'
 
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET allowed_cluster_replica_sizes = '2', '4'
+ALTER SYSTEM SET allowed_cluster_replica_sizes = '2', 4
 
 > SHOW allowed_cluster_replica_sizes
-"'2', '4'"
+"\"2\", \"4\""
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET allowed_cluster_replica_sizes = "2, 4"
+
+> SHOW allowed_cluster_replica_sizes
+"\"2, 4\""
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET allowed_cluster_replica_sizes = '2, 4'
+
+> SHOW allowed_cluster_replica_sizes
+"\"2, 4\""
 
 ! CREATE CLUSTER REPLICA c1.r3 SIZE '1'
 contains:unknown cluster replica size 1

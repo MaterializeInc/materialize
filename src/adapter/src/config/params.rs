@@ -111,10 +111,14 @@ impl SynchronizedParameters {
             // It's OK to call `unwrap_or(false)` here because for fixed `name`
             // and `value` an error in `self.is_default(name, value)` implies
             // the same error in `self.system_vars.set(name, value)`.
+
             let modified = if self.system_vars.is_default(name, value).unwrap_or(false) {
                 self.system_vars.reset(name)
             } else {
-                self.system_vars.set(name, value)
+                match mz_sql::plan::parse_set_variable_value(value) {
+                    Ok(values) => self.system_vars.set(name, &values),
+                    Err(err) => Err(err.into()),
+                }
             };
             match modified {
                 Ok(true) => {

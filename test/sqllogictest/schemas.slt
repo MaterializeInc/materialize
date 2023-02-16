@@ -31,12 +31,12 @@ show search_path
 foo
 
 statement ok
-SET search_path = 'bar', foo, "blah"
+SET search_path = 'ba r', foo, 'x, y', "a, b"
 
 query T
 show search_path
 ----
-bar, foo, blah
+"ba r", foo, "x, y", "a, b"
 
 query T
 SELECT current_schema()
