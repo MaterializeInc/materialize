@@ -244,7 +244,7 @@ impl JoinImplementation {
                             }
                         }
                         MirRelationExpr::Reduce { group_key, .. } => {
-                            // The first `keys.len()` columns form an arrangement key.
+                            // The first `group_key.len()` columns form an arrangement key.
                             available_arrangements[index]
                                 .push((0..group_key.len()).map(MirScalarExpr::Column).collect());
                         }
@@ -272,13 +272,13 @@ impl JoinImplementation {
                             .all(|k| k.support().iter().all(|c| reverse_project.contains_key(c)))
                     });
                     // Permute arrangements so columns reference what is after the MFP.
-                    for key_set in available_arrangements[index].iter_mut() {
-                        for key in key_set.iter_mut() {
-                            key.permute_map(&reverse_project);
+                    for key in available_arrangements[index].iter_mut() {
+                        for k in key.iter_mut() {
+                            k.permute_map(&reverse_project);
                         }
                     }
                     // Currently we only support using arrangements all of whose
-                    // keys can be found in some equivalence.
+                    // key components can be found in some equivalence.
                     // Note: because `order_input` currently only finds arrangements
                     // with exact key matches, the code below can be removed with no
                     // change in behavior, but this is being kept for a future
@@ -340,8 +340,7 @@ mod index_map {
     }
 
     impl IndexMap<'_> {
-        /// Creates a new index map with knowledge of the provided global
-        /// indexes.
+        /// Creates a new index map with knowledge of the provided global indexes.
         pub fn new(global: &dyn IndexOracle) -> IndexMap {
             IndexMap {
                 local: BTreeMap::new(),
@@ -349,8 +348,7 @@ mod index_map {
             }
         }
 
-        /// Adds a local index on the specified collection with the specified
-        /// key.
+        /// Adds a local index on the specified collection with the specified key.
         pub fn add_local(&mut self, id: LocalId, key: Vec<MirScalarExpr>) {
             self.local.entry(id).or_default().push(key)
         }
@@ -429,13 +427,13 @@ mod delta_queries {
                 )));
             }
 
-            // Convert the order information into specific (input, keys) information.
+            // Convert the order information into specific (input, key, characteristics) information.
             let orders = orders
                 .into_iter()
                 .map(|o| {
                     o.into_iter()
                         .skip(1)
-                        .map(|(c, k, r)| (r, k, Some(c)))
+                        .map(|(c, key, r)| (r, key, Some(c)))
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
@@ -529,7 +527,7 @@ mod differential {
                         ))
                     })?
                     .into_iter()
-                    .map(|(c, k, r)| (r, k, Some(c)))
+                    .map(|(c, key, r)| (r, key, Some(c)))
                     .collect::<Vec<_>>()
             } else {
                 // if max_min_characteristics is None, then there must only be
@@ -538,7 +536,7 @@ mod differential {
                 orders
                     .remove(0)
                     .into_iter()
-                    .map(|(c, k, r)| (r, k, Some(c)))
+                    .map(|(c, key, r)| (r, key, Some(c)))
                     .collect::<Vec<_>>()
             };
 
@@ -612,9 +610,9 @@ fn implement_arrangements<'a>(
             // the arrangement.
             if let Some(lifted_mfp) = &lifted_mfps[index] {
                 let (_, _, project) = lifted_mfp.as_map_filter_project();
-                for arr in needed.iter_mut() {
-                    for key in arr.iter_mut() {
-                        key.permute(&project);
+                for arrangement_key in needed.iter_mut() {
+                    for k in arrangement_key.iter_mut() {
+                        k.permute(&project);
                     }
                 }
             }
@@ -690,11 +688,11 @@ fn install_lifted_mfp(
 }
 
 fn optimize_orders(
-    equivalences: &[Vec<MirScalarExpr>],
-    available: &[Vec<Vec<MirScalarExpr>>],
-    unique_keys: &[Vec<Vec<usize>>],
-    filters: &[FilterCharacteristics],
-    input_mapper: &JoinInputMapper,
+    equivalences: &[Vec<MirScalarExpr>], // join equivalences: inside a Vec, the exprs are equivalent
+    available: &[Vec<Vec<MirScalarExpr>>], // available arrangements per input
+    unique_keys: &[Vec<Vec<usize>>],     // unique keys per input
+    filters: &[FilterCharacteristics],   // filter characteristics per input
+    input_mapper: &JoinInputMapper,      // join helper
 ) -> Vec<Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>> {
     let mut orderer = Orderer::new(equivalences, available, unique_keys, filters, input_mapper);
     (0..available.len())
@@ -869,7 +867,7 @@ impl<'a> Orderer<'a> {
                 });
                 let arranged = self.arrangements[start]
                     .iter()
-                    .find(|k| k == &&candidate_start_key)
+                    .find(|arrangement_key| arrangement_key == &&candidate_start_key)
                     .is_some();
                 start_tuple = (
                     JoinInputCharacteristics::new(
@@ -942,7 +940,7 @@ impl<'a> Orderer<'a> {
                                 self.bound[rel].sort();
 
                                 // Reconsider all available arrangements.
-                                for (pos, keys) in self.arrangements[rel].iter().enumerate() {
+                                for (pos, key) in self.arrangements[rel].iter().enumerate() {
                                     if !self.arrangement_active[rel].contains(&pos) {
                                         // TODO: support the restoration of the
                                         // following original lines, which have been
@@ -950,24 +948,24 @@ impl<'a> Orderer<'a> {
                                         // panic otherwise. The original line and comments
                                         // here are:
                                         // Determine if the arrangement is viable, which happens when the
-                                        // support of its keys are all bound.
-                                        // if keys.iter().all(|k| k.support().iter().all(|c| self.bound[*rel].contains(&ScalarExpr::Column(*c))) {
+                                        // support of its key is all bound.
+                                        // if key.iter().all(|k| k.support().iter().all(|c| self.bound[*rel].contains(&ScalarExpr::Column(*c))) {
 
                                         // Determine if the arrangement is viable,
-                                        // which happens when all its keys are bound.
-                                        if keys.iter().all(|k| self.bound[rel].contains(k)) {
+                                        // which happens when all its key components are bound.
+                                        if key.iter().all(|k| self.bound[rel].contains(k)) {
                                             self.arrangement_active[rel].push(pos);
                                             // TODO: This could be pre-computed, as it is independent of the order.
                                             let is_unique = self.unique_arrangement[rel][pos];
                                             self.priority_queue.push((
                                                 JoinInputCharacteristics::new(
                                                     is_unique,
-                                                    keys.len(),
+                                                    key.len(),
                                                     true,
                                                     self.filters[rel].clone(),
                                                     rel,
                                                 ),
-                                                keys.clone(),
+                                                key.clone(),
                                                 rel,
                                             ));
                                         }
