@@ -47,16 +47,16 @@ class UpgradeEntireMz(Scenario):
         print(f"Upgrading from tag {self.tag()}")
         return [
             StartMz(tag=self.tag()),
-            Initialize(self.checks),
-            Manipulate(self.checks, phase=1),
+            Initialize(self.checks()),
+            Manipulate(self.checks(), phase=1),
             KillMz(),
             StartMz(tag=None),
-            Manipulate(self.checks, phase=2),
-            Validate(self.checks),
+            Manipulate(self.checks(), phase=2),
+            Validate(self.checks()),
             # A second restart while already on the new version
             KillMz(),
             StartMz(tag=None),
-            Validate(self.checks),
+            Validate(self.checks()),
         ]
 
 
@@ -84,8 +84,8 @@ class UpgradeClusterdComputeLast(Scenario):
             StartMz(tag=last_version),
             StartClusterdCompute(tag=last_version),
             UseClusterdCompute(),
-            Initialize(self.checks),
-            Manipulate(self.checks, phase=1),
+            Initialize(self.checks()),
+            Manipulate(self.checks(), phase=1),
             KillMz(),
             StartMz(tag=None),
             # No useful work can be done while clusterd is old-version
@@ -96,12 +96,12 @@ class UpgradeClusterdComputeLast(Scenario):
             Sleep(10),
             KillClusterdCompute(),
             StartClusterdCompute(tag=None),
-            Manipulate(self.checks, phase=2),
-            Validate(self.checks),
+            Manipulate(self.checks(), phase=2),
+            Validate(self.checks()),
             # A second restart while already on the new version
             KillMz(),
             StartMz(tag=None),
-            Validate(self.checks),
+            Validate(self.checks()),
         ]
 
 
@@ -113,8 +113,8 @@ class UpgradeClusterdComputeFirst(Scenario):
             StartMz(tag=last_version),
             StartClusterdCompute(tag=last_version),
             UseClusterdCompute(),
-            Initialize(self.checks),
-            Manipulate(self.checks, phase=1),
+            Initialize(self.checks()),
+            Manipulate(self.checks(), phase=1),
             KillClusterdCompute(),
             StartClusterdCompute(tag=None),
             # No useful work can be done while clusterd is new-version
@@ -125,9 +125,9 @@ class UpgradeClusterdComputeFirst(Scenario):
             Sleep(10),
             KillMz(),
             StartMz(tag=None),
-            Manipulate(self.checks, phase=2),
-            Validate(self.checks),
+            Manipulate(self.checks(), phase=2),
+            Validate(self.checks()),
             KillMz(),
             StartMz(tag=None),
-            Validate(self.checks),
+            Validate(self.checks()),
         ]
