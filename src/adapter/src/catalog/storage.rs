@@ -1558,13 +1558,11 @@ impl<'a> Transaction<'a> {
     }
 
     /// Upserts persisted system configuration `name` to `value`.
-    pub fn upsert_system_config(&mut self, name: &str, value: &str) -> Result<(), Error> {
+    pub fn upsert_system_config(&mut self, name: &str, value: String) -> Result<(), Error> {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
-        let value = ServerConfigurationValue {
-            value: value.to_string(),
-        };
+        let value = ServerConfigurationValue { value };
         self.system_configurations.set(key, Some(value))?;
         Ok(())
     }

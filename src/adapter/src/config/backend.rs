@@ -52,6 +52,9 @@ impl SystemParameterBackend {
     /// Pull the current values for all [SynchronizedParameters] from the
     /// [SystemParameterBackend].
     pub async fn pull(&mut self, params: &mut SynchronizedParameters) {
+        // TODO: It'd be an improvement to not flatten multi-valued settings and
+        // instead return them in their original form so we don't have to call
+        // parse_set_variable_value to split them back.
         let show_all = Statement::Show(ShowStatement::ShowVariable(ShowVariableStatement {
             variable: Ident::from("ALL"),
         }));

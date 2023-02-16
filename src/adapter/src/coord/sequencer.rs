@@ -18,7 +18,6 @@ use anyhow::anyhow;
 use futures::future::BoxFuture;
 
 use maplit::btreeset;
-use mz_ore::collections::CollectionExt;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::{event, warn, Level};
@@ -3820,14 +3819,8 @@ impl Coordinator {
         let update_storage_config = session::vars::is_storage_config_var(&name);
         let update_metrics_retention = name == session::vars::METRICS_RETENTION.name();
         let op = match value {
-            VariableValue::Values(values) => {
-                if values.len() != 1 {
-                    coord_bail!("ALTER SYSTEM ... SET takes only one argument");
-                }
-                let value = values.into_element();
-                catalog::Op::UpdateSystemConfiguration { name, value }
-            }
-            VariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
+            Some(value) => catalog::Op::UpdateSystemConfiguration { name, value },
+            None => catalog::Op::ResetSystemConfiguration { name },
         };
         self.catalog_transact(Some(session), vec![op]).await?;
         if update_compute_config {

@@ -879,7 +879,8 @@ impl CatalogState {
         name: &str,
         value: &str,
     ) -> Result<bool, AdapterError> {
-        self.system_configuration.set(name, value)
+        let values = plan::parse_set_variable_value(value)?;
+        self.system_configuration.set(name, &values)
     }
 
     /// Reset system configuration `name`.
@@ -5193,7 +5194,7 @@ impl Catalog {
                     )?;
                 }
                 Op::UpdateSystemConfiguration { name, value } => {
-                    tx.upsert_system_config(&name, &value)?;
+                    tx.upsert_system_config(&name, value.clone())?;
                     catalog_action(
                         state,
                         builtin_table_updates,

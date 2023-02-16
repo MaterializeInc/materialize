@@ -13,6 +13,7 @@
 //! like `DISCARD` and `SET`.
 
 use mz_sql_parser::ast::{SetVariableTo, SetVariableValue, Value};
+use mz_sql_parser::parser::ParserError;
 use uncased::UncasedStr;
 
 use mz_repr::adt::interval::Interval;
@@ -54,6 +55,22 @@ pub fn plan_set_variable(
         value,
         local,
     }))
+}
+
+/// Split a single string into what would be parsed by `SET v TO <string>` into
+/// multpile values.
+pub fn parse_set_variable_value(value: &str) -> Result<Vec<String>, PlanError> {
+    let parsed = mz_sql_parser::parser::parse_set_variable_to(value)?;
+    match plan_set_variable_to(parsed)? {
+        // This is an awkward error, but makes the types work well for how this
+        // function is called (which is only by system var things).
+        VariableValue::Default => Err(ParserError {
+            message: "unexpected SET DEFAULT".into(),
+            pos: 0,
+        }
+        .into()),
+        VariableValue::Values(values) => Ok(values),
+    }
 }
 
 pub fn plan_set_variable_to(to: SetVariableTo) -> Result<VariableValue, PlanError> {
