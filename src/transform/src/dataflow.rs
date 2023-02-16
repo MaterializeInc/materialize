@@ -38,12 +38,12 @@ pub fn optimize_dataflow(
     indexes: &dyn IndexOracle,
 ) -> Result<(), TransformError> {
     // Inline views that are used in only one other view.
-    inline_views(dataflow)?;
+    //inline_views(dataflow)?;
 
     // Logical optimization pass after view inlining
-    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_optimizer())?;
+    //optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_optimizer())?;
 
-    optimize_dataflow_filters(dataflow)?;
+    //optimize_dataflow_filters(dataflow)?;
     // TODO: when the linear operator contract ensures that propagated
     // predicates are always applied, projections and filters can be removed
     // from where they come from. Once projections and filters can be removed,
@@ -54,14 +54,14 @@ pub fn optimize_dataflow(
 
     // A smaller logical optimization pass after projections and filters are
     // pushed down across views.
-    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_cleanup_pass())?;
+    //optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_cleanup_pass())?;
 
     // Physical optimization pass
     optimize_dataflow_relations(dataflow, indexes, &Optimizer::physical_optimizer())?;
 
-    optimize_dataflow_monotonic(dataflow)?;
+    //optimize_dataflow_monotonic(dataflow)?;
 
-    optimize_dataflow_index_imports(dataflow, indexes)?;
+    //optimize_dataflow_index_imports(dataflow, indexes)?;
 
     mz_repr::explain::trace_plan(dataflow);
 

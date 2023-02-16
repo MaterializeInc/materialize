@@ -398,57 +398,57 @@ impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     pub fn logical_optimizer() -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            Box::new(crate::normalize::Normalize::new()),
-            // 1. Structure-agnostic cleanup
-            Box::new(crate::topk_elision::TopKElision),
-            Box::new(crate::nonnull_requirements::NonNullRequirements::default()),
-            // 2. Collapse constants, joins, unions, and lets as much as possible.
-            // TODO: lift filters/maps to maximize ability to collapse
-            // things down?
-            Box::new(crate::Fixpoint {
-                limit: 100,
-                transforms: vec![Box::new(crate::FuseAndCollapse::default())],
-            }),
-            // 3. Structure-aware cleanup that needs to happen before ColumnKnowledge
-            Box::new(crate::threshold_elision::ThresholdElision),
-            // 4. Move predicate information up and down the tree.
-            //    This also fixes the shape of joins in the plan.
-            Box::new(crate::Fixpoint {
-                limit: 100,
-                transforms: vec![
-                    // Predicate pushdown sets the equivalence classes of joins.
-                    Box::new(crate::predicate_pushdown::PredicatePushdown::default()),
-                    // Lifts the information `!isnull(col)`
-                    Box::new(crate::nonnullable::NonNullable),
-                    // Lifts the information `col = literal`
-                    // TODO (#6613): this also tries to lift `!isnull(col)` but
-                    // less well than the previous transform. Eliminate
-                    // redundancy between the two transforms.
-                    Box::new(crate::column_knowledge::ColumnKnowledge::default()),
-                    // Lifts the information `col1 = col2`
-                    Box::new(crate::demand::Demand::default()),
-                    Box::new(crate::FuseAndCollapse::default()),
-                ],
-            }),
-            // 5. Reduce/Join simplifications.
-            Box::new(crate::Fixpoint {
-                limit: 100,
-                transforms: vec![
-                    Box::new(crate::semijoin_idempotence::SemijoinIdempotence),
-                    // Pushes aggregations down
-                    Box::new(crate::reduction_pushdown::ReductionPushdown),
-                    // Replaces reduces with maps when the group keys are
-                    // unique with maps
-                    Box::new(crate::reduce_elision::ReduceElision),
-                    // Converts `Cross Join {Constant(Literal) + Input}` to
-                    // `Map {Cross Join (Input, Constant()), Literal}`.
-                    // Join fusion will clean this up to `Map{Input, Literal}`
-                    Box::new(crate::literal_lifting::LiteralLifting::default()),
-                    // Identifies common relation subexpressions.
-                    Box::new(crate::cse::relation_cse::RelationCSE::new(false)),
-                    Box::new(crate::FuseAndCollapse::default()),
-                ],
-            }),
+            //Box::new(crate::normalize::Normalize::new()),
+            //// 1. Structure-agnostic cleanup
+            //Box::new(crate::topk_elision::TopKElision),
+            //Box::new(crate::nonnull_requirements::NonNullRequirements::default()),
+            //// 2. Collapse constants, joins, unions, and lets as much as possible.
+            //// TODO: lift filters/maps to maximize ability to collapse
+            //// things down?
+            //Box::new(crate::Fixpoint {
+            //    limit: 100,
+            //    transforms: vec![Box::new(crate::FuseAndCollapse::default())],
+            //}),
+            //// 3. Structure-aware cleanup that needs to happen before ColumnKnowledge
+            //Box::new(crate::threshold_elision::ThresholdElision),
+            //// 4. Move predicate information up and down the tree.
+            ////    This also fixes the shape of joins in the plan.
+            //Box::new(crate::Fixpoint {
+            //    limit: 100,
+            //    transforms: vec![
+            //        // Predicate pushdown sets the equivalence classes of joins.
+            //        Box::new(crate::predicate_pushdown::PredicatePushdown::default()),
+            //        // Lifts the information `!isnull(col)`
+            //        Box::new(crate::nonnullable::NonNullable),
+            //        // Lifts the information `col = literal`
+            //        // TODO (#6613): this also tries to lift `!isnull(col)` but
+            //        // less well than the previous transform. Eliminate
+            //        // redundancy between the two transforms.
+            //        Box::new(crate::column_knowledge::ColumnKnowledge::default()),
+            //        // Lifts the information `col1 = col2`
+            //        Box::new(crate::demand::Demand::default()),
+            //        Box::new(crate::FuseAndCollapse::default()),
+            //    ],
+            //}),
+            //// 5. Reduce/Join simplifications.
+            //Box::new(crate::Fixpoint {
+            //    limit: 100,
+            //    transforms: vec![
+            //        Box::new(crate::semijoin_idempotence::SemijoinIdempotence),
+            //        // Pushes aggregations down
+            //        Box::new(crate::reduction_pushdown::ReductionPushdown),
+            //        // Replaces reduces with maps when the group keys are
+            //        // unique with maps
+            //        Box::new(crate::reduce_elision::ReduceElision),
+            //        // Converts `Cross Join {Constant(Literal) + Input}` to
+            //        // `Map {Cross Join (Input, Constant()), Literal}`.
+            //        // Join fusion will clean this up to `Map{Input, Literal}`
+            //        Box::new(crate::literal_lifting::LiteralLifting::default()),
+            //        // Identifies common relation subexpressions.
+            //        Box::new(crate::cse::relation_cse::RelationCSE::new(false)),
+            //        Box::new(crate::FuseAndCollapse::default()),
+            //    ],
+            //}),
         ];
         Self {
             name: "logical",
@@ -470,30 +470,30 @@ impl Optimizer {
             //   Filters from the Gets;
             // - there is no RelationCSE between this LiteralConstraints and JoinImplementation,
             //   because that could move an IndexedFilter behind a Get.
-            Box::new(crate::literal_constraints::LiteralConstraints),
-            Box::new(crate::Fixpoint {
-                limit: 100,
-                transforms: vec![
-                    // The last RelationCSE before JoinImplementation should be with
-                    // inline_mfp = true.
-                    Box::new(crate::join_implementation::JoinImplementation::default()),
-                    Box::new(crate::column_knowledge::ColumnKnowledge::default()),
-                    Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
-                    Box::new(crate::demand::Demand::default()),
-                    Box::new(crate::literal_lifting::LiteralLifting::default()),
-                ],
-            }),
-            Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
-            // Identifies common relation subexpressions.
-            Box::new(crate::cse::relation_cse::RelationCSE::new(false)),
-            Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
-            // Remove threshold operators which have no effect.
-            // Must be done at the very end of the physical pass, because before
-            // that (at least at the moment) we cannot be sure that all trees
-            // are simplified equally well so they are structurally almost
-            // identical. Check the `threshold_elision.slt` tests that fail if
-            // you remove this transform for examples.
-            Box::new(crate::threshold_elision::ThresholdElision),
+            //Box::new(crate::literal_constraints::LiteralConstraints),
+            //Box::new(crate::Fixpoint {
+            //    limit: 100,
+            //    transforms: vec![
+            //        // The last RelationCSE before JoinImplementation should be with
+            //        // inline_mfp = true.
+            //        Box::new(crate::join_implementation::JoinImplementation::default()),
+            //        Box::new(crate::column_knowledge::ColumnKnowledge::default()),
+            //        Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
+            //        Box::new(crate::demand::Demand::default()),
+            //        Box::new(crate::literal_lifting::LiteralLifting::default()),
+            //    ],
+            //}),
+            //Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
+            //// Identifies common relation subexpressions.
+            //Box::new(crate::cse::relation_cse::RelationCSE::new(false)),
+            //Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
+            //// Remove threshold operators which have no effect.
+            //// Must be done at the very end of the physical pass, because before
+            //// that (at least at the moment) we cannot be sure that all trees
+            //// are simplified equally well so they are structurally almost
+            //// identical. Check the `threshold_elision.slt` tests that fail if
+            //// you remove this transform for examples.
+            //Box::new(crate::threshold_elision::ThresholdElision),
         ];
         Self {
             name: "physical",
