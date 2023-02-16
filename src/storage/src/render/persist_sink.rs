@@ -136,19 +136,17 @@ where
             return;
         }
 
-        // Pause the source to prevent committing the snapshot
-        let mut should_pause = false;
+        // Whether or not we should pause the source
+        // to prevent committing the snapshot.
+        let mut pg_snapshot_pause = false;
         (|| {
             fail::fail_point!("pg_snapshot_pause", |val| {
-                should_pause = val.map_or(false, |index| {
+                pg_snapshot_pause = val.map_or(false, |index| {
                     let index: usize = index.parse().unwrap();
                     index == output_index
                 });
             });
         })();
-        if should_pause {
-            futures::future::pending().await
-        }
 
         while let Some(event) = input.next().await {
             match event {
@@ -223,6 +221,18 @@ where
                             *current_upper.borrow_mut() = input_upper.clone();
                             // wait for more data or a new input frontier
                             continue;
+                        }
+
+                        // We evaluate this above to avoid checking an environment variable
+                        // in a hot loop. Note that we only pause before we emit
+                        // non-empty batches, because we do want to bump the upper
+                        // with empty ones before we start ingesting the snapshot.
+                        //
+                        // This is a fairly complex failure case we need to check
+                        // see `test/cluster/pg-snapshot-partial-failure` for more
+                        // information.
+                        if pg_snapshot_pause {
+                            futures::future::pending().await
                         }
 
                         // `current_upper` tracks the last known upper
