@@ -10,7 +10,6 @@
 > ALTER SECRET secret2 RENAME TO secret3;
 
 > SHOW SECRETS;
-1.00
 pgpass
 secret1
 secret3
