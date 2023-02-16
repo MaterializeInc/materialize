@@ -354,4 +354,3 @@ We will update `DROP <object>` so that it revokes all privileges on `<object>`.
 - What do privileges look like for system objects? Probably everyone should get `SELECT` permission by default.
 - Do we want to change `DROP OWNED` so that it drops databases and clusters?
 - What are security labels in PostgreSQL and do we want them?
-    
