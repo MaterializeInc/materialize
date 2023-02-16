@@ -46,9 +46,12 @@ the subsection headers, tables, and SQL statements.
 - [`DROP OWNED`](https://www.postgresql.org/docs/current/sql-drop-owned.html)
 
 #### Implementation
+- [`acl.h`](https://github.com/postgres/postgres/blob/master/src/include/utils/acl.h)
+- [`acl.c`](https://github.com/postgres/postgres/blob/master/src/backend/utils/adt/acl.c)
+- [`aclchk_internal`](https://github.com/postgres/postgres/blob/master/src/include/utils/aclchk_internal.h)
+- [`aclcheck.c`](https://github.com/postgres/postgres/blob/master/src/backend/catalog/aclchk.c)
 
-https://github.com/postgres/postgres/blob/master/src/backend/catalog/aclchk.c
-Note: There may be more, but this is a good starting point.
+- Note: There may be more, but this is a good starting point.
 
 ### Phase 1 - Attributes
 
